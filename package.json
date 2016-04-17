@@ -1,0 +1,26 @@
+{
+    "name": "wurst",
+    "displayName": "wurst",
+    "description": "Language support for Wurst.",
+    "version": "0.0.1",
+    "publisher": "Peter",
+    "engines": {
+        "vscode": "^1.0.0"
+    },
+    "categories": [
+        "Languages"
+    ],
+    "contributes": {
+        "languages": [{
+            "id": "wurst",
+            "aliases": ["Wurst", "wurst"],
+            "extensions": [".wurst",".jurst"],
+            "configuration": "./wurst.configuration.json"
+        }],
+        "grammars": [{
+            "language": "wurst",
+            "scopeName": "source.wurst",
+            "path": "./syntaxes/wurst.tmLanguage"
+        }]
+    }
+}

@@ -14,6 +14,18 @@ enum ServerState {
 }
 
 
+interface RequestPacket {
+	sequenceNr: number;
+	path: string;
+	data: any;
+}
+
+interface ResponsePacket {
+	sequenceNr: number;
+	response: any;
+}
+
+
 export class WurstServer {
     
     private _state: ServerState = ServerState.Stopped;
@@ -30,10 +42,21 @@ export class WurstServer {
     // the file path of the solution
     private _solutionPath: string;
     
+	
+	// the maximum sequence number sent to the server
+	private _maxSeqNr: number = 0;
+	
+	private _activeRequests: { [seq: number]: { onSuccess: Function; onError: Function; } } = {};
+	
+	
     constructor() {
         this._channel = window.createOutputChannel("Wurst Log")
     }
     
+	public isRunning() {
+		return this._state == ServerState.Started;
+	}
+	
     public start(solutionPath: string): Promise<void> {
 		if (!this._start) {
 			this._start = this._doStart(solutionPath);
@@ -55,7 +78,8 @@ export class WurstServer {
           detached: false  
         };
         let process = spawn(java, ["-jar", wurstJar, "-languageServer"], spawnOptions)
-        
+        this._serverProcess = process;
+		
         process.on('error', (err) => {
             console.log("could not start server: " + err)
             vscode.window.showInformationMessage('Could not start server: ' + err);
@@ -73,12 +97,16 @@ export class WurstServer {
             console.log(`child process exited with code ${code}`);
         });
         
-        console.log("Server started...")
-        
+		// TODO actually it is not yet started, should wait for some message?
+        console.log(`Server started ${this._serverProcess.pid}!`)
+        this._state = ServerState.Started
+		
+		
 		return Promise.resolve<void>(undefined);
 	}
     
     public stop(): Promise<void> {
+		console.log(`Stopping server ${this._serverProcess.pid} ...`)
 
 		let ret: Promise<void>;
 
@@ -111,10 +139,48 @@ export class WurstServer {
 			this._start = null;
 			this._serverProcess = null;
             this._state = ServerState.Stopped;
+			console.log("Stopped Server.")
 			return;
 		});
 	}
     
+	public updateBuffer(fileName: string, documentContent: string): Promise<void> {
+		// TODO
+		console.log(`updating buffer for ${fileName} to ${documentContent}`)
+		return Promise.resolve(undefined);
+	}
+	
+	public filesChanged(fileName: string): Promise<void> {
+		// TODO
+		console.log(`filesChanged: ${fileName}`)
+		
+		this.sendRequest('fileChanged', fileName);
+		
+		return Promise.resolve(undefined);
+	}
+	
+	
+	
+	public sendRequest(path: string, data: any): Promise<any> {
+		
+		const requestPacket: RequestPacket = {
+			sequenceNr: ++this._maxSeqNr,
+			path: path,
+			data: data
+		};
+		
+		return new Promise<any>((resolve, reject) => {
+			
+			this._activeRequests[requestPacket.sequenceNr] = {
+				onSuccess: value => resolve(value),
+				onError: err => reject(err)	
+			};
+			
+			// TODO maybe better to use version with callback?
+			this._serverProcess.stdin.write(JSON.stringify(requestPacket) + '\n');
+			
+		});
+	}
 
     
 }

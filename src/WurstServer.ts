@@ -6,6 +6,7 @@ import {dirname} from 'path';
 import {ReadLine, createInterface} from 'readline';
 import {Disposable, CancellationToken, OutputChannel, workspace, window} from 'vscode';
 import * as vscode from 'vscode';
+import {DiagnosticsProvider} from './features/diagnosticsProvider'
 
 enum ServerState {
 	Starting,
@@ -48,6 +49,7 @@ export class WurstServer {
 	
 	private _activeRequests: { [seq: number]: { onSuccess: Function; onError: Function; } } = {};
 	
+	private _diagnosticsProvider: DiagnosticsProvider;
 	
     constructor() {
         this._channel = window.createOutputChannel("Wurst Log")
@@ -85,8 +87,9 @@ export class WurstServer {
             vscode.window.showInformationMessage('Could not start server: ' + err);
         })
         
-        process.stdout.on('data', (data) => {
+        process.stdout.on('data', (data: string) => {
             console.log(`stdout: ${data}`);
+			this.handleStdout(data.toString());
         });
 
         process.stderr.on('data', (data) => {
@@ -97,9 +100,14 @@ export class WurstServer {
             console.log(`child process exited with code ${code}`);
         });
         
+		// send working directory
+		this.sendRequest('init', solutionPath);
+		
+		
 		// TODO actually it is not yet started, should wait for some message?
         console.log(`Server started ${this._serverProcess.pid}!`)
         this._state = ServerState.Started
+		
 		
 		
 		return Promise.resolve<void>(undefined);
@@ -146,7 +154,11 @@ export class WurstServer {
     
 	public updateBuffer(fileName: string, documentContent: string): Promise<void> {
 		// TODO
-		console.log(`updating buffer for ${fileName} to ${documentContent}`)
+		console.log(`updating buffer for ${fileName}`)
+		
+		this.sendRequest('reconcile', {filename: fileName, content: documentContent});
+		
+		
 		return Promise.resolve(undefined);
 	}
 	
@@ -155,6 +167,8 @@ export class WurstServer {
 		console.log(`filesChanged: ${fileName}`)
 		
 		this.sendRequest('fileChanged', fileName);
+		
+		//this._diagnosticsProvider.setError(fileName, []);
 		
 		return Promise.resolve(undefined);
 	}
@@ -182,5 +196,26 @@ export class WurstServer {
 		});
 	}
 
+
+	public setDiagnosticsProvider(dp: DiagnosticsProvider) {
+		this._diagnosticsProvider = dp;
+	}
+	
+	handleStdout(text: string) {
+		var lines = text.split(/\r?\n/);
+		lines.forEach(data =>  {
+			if (data.startsWith("{")) {
+				let blob = JSON.parse(data);
+				if (blob.eventName == "compilationResult") {
+					this.handleCompilationResult(blob.data);
+				}
+			}
+		});
+	}
+	
+	handleCompilationResult(data) {
+		let path = this._solutionPath + "/" + data.filename
+		this._diagnosticsProvider.setError(path, data.errors);
+	}
     
 }

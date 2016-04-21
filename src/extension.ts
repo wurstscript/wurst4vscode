@@ -8,6 +8,7 @@ import { LanguageClient, LanguageClientOptions, SettingMonitor, ServerOptions, T
 
 import {WurstServer} from './WurstServer';
 import forwardChanges from './features/changeForwarding'
+import {DiagnosticsProvider} from './features/diagnosticsProvider'
 
 export function activate(context: ExtensionContext) {
     console.log("Wurst extension activated!!")
@@ -36,5 +37,5 @@ export function activate(context: ExtensionContext) {
     
     context.subscriptions.push(forwardChanges(server))
     
-    
+    context.subscriptions.push(new DiagnosticsProvider(server))
 }

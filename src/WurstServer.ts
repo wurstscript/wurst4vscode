@@ -88,7 +88,6 @@ export class WurstServer {
         })
         
         process.stdout.on('data', (data: string) => {
-            console.log(`stdout: ${data}`);
 			this.handleStdout(data.toString());
         });
 
@@ -201,14 +200,31 @@ export class WurstServer {
 		this._diagnosticsProvider = dp;
 	}
 	
+	
+	private _stdOutBuffer: string = "";
 	handleStdout(text: string) {
-		var lines = text.split(/\r?\n/);
+		let lines = text.split(/\r?\n/);
+		if (lines.length == 0) {
+			return;
+		}
+		lines[0] = this._stdOutBuffer + lines[0];
+		let lastLine = lines[lines.length-1]; 
+		if (!lastLine.endsWith("\n")) {
+			this._stdOutBuffer = lastLine;
+			lines.pop();
+		} else {
+			this._stdOutBuffer = "";
+		}
+		
 		lines.forEach(data =>  {
 			if (data.startsWith("{")) {
+				console.log(`stdout json: ${data}`);
 				let blob = JSON.parse(data);
 				if (blob.eventName == "compilationResult") {
 					this.handleCompilationResult(blob.data);
 				}
+			} else {
+				console.log(`stdout: ${data}`);
 			}
 		});
 	}

@@ -25,10 +25,10 @@ export class DiagnosticsProvider {
     
     public setError(document: string, errors: any[]) {
         let diagnostics: Diagnostic[] = errors.map((err) => {
-            let startLine = Math.min(1, err.startLine-1);
-            let startColumn = Math.min(1, err.startColumn-1);
-            let endLine = Math.min(1, err.endLine-1);
-            let endColumn = Math.min(1, err.endColumn-1);
+            let startLine = Math.max(0, err.startLine-1);
+            let startColumn = Math.max(0, err.startColumn-1);
+            let endLine = Math.max(0, err.endLine-1);
+            let endColumn = Math.max(0, err.endColumn-1);
              return new Diagnostic(
                 new Range(
                     new Position(startLine,startColumn), 

@@ -1,7 +1,18 @@
 {
     "name": "wurst",
-    "displayName": "wurst",
+    "displayName": "Wurst language support",
     "description": "Language support for Wurst.",
+    "icon": "images/wursti_icon.png",
+    "license": "SEE LICENSE IN LICENSE.txt",
+    "bugs": {
+        "url": "https://github.com/peq/wurst4vscode/issues",
+        "email": "peter.peq@gmail.com"
+    },
+    "homepage": "https://github.com/peq/wurst4vscode",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/peq/wurst4vscode.git"
+    },
     "version": "0.0.1",
     "publisher": "Peter",
     "engines": {
@@ -29,7 +40,23 @@
         "commands": [{
             "command": "extension.sayHello",
             "title": "Hello World"
-        }]
+        }],
+        "configuration": {
+            "type": "object",
+            "title": "Wurst configuration",
+            "properties": {
+                "wurst.javaExecutable" : {
+                    "type": "string",
+                    "default": "java",
+                    "description": "The command to use for starting Java. You can change this if Java is not in your PATH."
+                },
+                "wurst.wurstJar": {
+                    "type": "string",
+                    "default": "/home/peter/work/WurstScript/Wurstpack/wurstscript/wurstscript.jar",
+                    "description": "The path to wurstscript.jar (in your WurstPack folder)"
+                }
+            }
+        }
     },
     "scripts": {
 		"vscode:prepublish": "node ./node_modules/vscode/bin/compile",

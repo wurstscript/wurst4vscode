@@ -3,6 +3,7 @@
 import {EventEmitter} from 'events';
 import {ChildProcess, exec, spawn, SpawnOptions} from 'child_process';
 import {dirname, isAbsolute} from 'path';
+import * as fs from 'fs';
 import {ReadLine, createInterface} from 'readline';
 import {Disposable, CancellationToken, OutputChannel, workspace, window} from 'vscode';
 import * as vscode from 'vscode';
@@ -71,45 +72,62 @@ export class WurstServer {
 		this._state = ServerState.Starting;
 		this._solutionPath = solutionPath;
 
+		let config = vscode.workspace.getConfiguration("wurst")
 
         // TODO make configurable
-        let java = "java"
-        let wurstJar = "/home/peter/work/WurstScript/Wurstpack/wurstscript/wurstscript.jar"
-         
-        let spawnOptions: SpawnOptions = {
-          detached: false  
-        };
-        let process = spawn(java, ["-jar", wurstJar, "-languageServer"], spawnOptions)
-        this._serverProcess = process;
-		
-        process.on('error', (err) => {
-            console.log("could not start server: " + err)
-            vscode.window.showInformationMessage('Could not start server: ' + err);
-        })
-        
-        process.stdout.on('data', (data: string) => {
-			this.handleStdout(data.toString());
-        });
+        let java = config.get<string>("javaExecutable")
+        let wurstJar = config.get<string>("wurstJar")
+		return new Promise<void>((resolve, reject) => {
+			fs.stat(wurstJar, (err, stats) => {
+				console.log(`stats: ${err}, ${stats}`);
+				if (err) {
+					let msg = `Could not find ${wurstJar}. Please configure 'wurst.wurstJar'.`
+					vscode.window.showErrorMessage(msg);
+					reject(msg);
+					return;
+				}
+				let spawnOptions: SpawnOptions = {
+					detached: false  
+				};
+				let process = spawn(java, ["-jar", wurstJar, "-languageServer"], spawnOptions)
+				this._serverProcess = process;
+				
+				process.on('error', (err) => {
+					let msg = `could not start server with command ${java} -jar ${wurstJar}. Try changing your settings for 'wurst.javaExecutable' or 'wurst.wurstJar'.`;
+					console.log(msg)
+					vscode.window.showErrorMessage(msg)
+					reject(msg);
+				})
+				
+				process.stdout.on('data', (data: string) => {
+					this.handleStdout(data.toString());
+				});
 
-        process.stderr.on('data', (data) => {
-            console.log(`stderr: ${data}`);
-        });
+				process.stderr.on('data', (data) => {
+					let msg = `There was a problem with running Wurst: ${data}`
+					console.log(`stderr: ${data}`);
+					vscode.window.showErrorMessage(msg);
+					reject(msg);
+				});
 
-        process.on('close', (code) => {
-            console.log(`child process exited with code ${code}`);
-        });
-        
-		// send working directory
-		this.sendRequest('init', solutionPath);
-		
-		
-		// TODO actually it is not yet started, should wait for some message?
-        console.log(`Server started ${this._serverProcess.pid}!`)
-        this._state = ServerState.Started
-		
-		
-		
-		return Promise.resolve<void>(undefined);
+				process.on('close', (code) => {
+					console.log(`child process exited with code ${code}`);
+				});
+				
+				
+				
+				
+				// TODO actually it is not yet started, should wait for some message?
+				console.log(`Server started ${this._serverProcess.pid}!`)
+				this._state = ServerState.Started
+				
+				// send working directory
+				this.sendRequest('init', solutionPath);
+				
+				// fulfil promise
+				resolve(undefined);
+			});
+		});
 	}
     
     public stop(): Promise<void> {
@@ -176,6 +194,10 @@ export class WurstServer {
 	
 	
 	public sendRequest(path: string, data: any): Promise<any> {
+		if (!this.isRunning()) {
+			console.log(`Server not running, could not handle ${path}.`);
+			return;
+		}
 		
 		const requestPacket: RequestPacket = {
 			sequenceNr: ++this._maxSeqNr,

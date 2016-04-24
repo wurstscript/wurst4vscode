@@ -1,18 +1,13 @@
 'use strict';
 
-
+import AbstractProvider from './abstractProvider';
 import {WurstServer} from '../WurstServer';
 import {TextDocument, Position, Location, CancellationToken, DefinitionProvider,
     Uri} from 'vscode';
 import * as vscode from 'vscode';
 
-export default class WurstDefinitionProvider implements DefinitionProvider {
+export default class WurstDefinitionProvider extends AbstractProvider implements DefinitionProvider {
 
-    private _server: WurstServer;
-
-    constructor(server: WurstServer) {
-        this._server = server;
-    }
 
 	public provideDefinition(document: TextDocument, position: Position, token: CancellationToken): Promise<Location> {
 

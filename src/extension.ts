@@ -9,6 +9,7 @@ import { LanguageClient, LanguageClientOptions, SettingMonitor, ServerOptions, T
 import {WurstServer} from './WurstServer';
 import forwardChanges from './features/changeForwarding'
 import WurstDefinitionProvider from './features/definitionProvider'
+import WurstHoverProvider from './features/hoverProvider'
 import {DiagnosticsProvider} from './features/diagnosticsProvider'
 
 export function activate(context: ExtensionContext) {
@@ -29,20 +30,25 @@ export function activate(context: ExtensionContext) {
     
     
     const server = new WurstServer();
-    server.start(workspace.rootPath);
+    let started = server.start(workspace.rootPath);
     
     // stop server on deactivate
 	context.subscriptions.push(new vscode.Disposable(() => {
        server.stop(); 
     }));
     
-    context.subscriptions.push(forwardChanges(server))
-    
-    context.subscriptions.push(new DiagnosticsProvider(server))
-    
-    context.subscriptions.push(
-        vscode.languages.registerDefinitionProvider('wurst', new WurstDefinitionProvider(server)));
-    
+    started.then(value => {
+        
+        context.subscriptions.push(forwardChanges(server))
+        
+        context.subscriptions.push(new DiagnosticsProvider(server))
+        
+        context.subscriptions.push(
+            vscode.languages.registerDefinitionProvider('wurst', new WurstDefinitionProvider(server)));
+            
+        context.subscriptions.push(
+            vscode.languages.registerHoverProvider('wurst', new WurstHoverProvider(server)));
+    });
     
     let config: LanguageConfiguration = {
         comments: {

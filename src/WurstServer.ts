@@ -2,7 +2,7 @@
 
 import {EventEmitter} from 'events';
 import {ChildProcess, exec, spawn, SpawnOptions} from 'child_process';
-import {dirname} from 'path';
+import {dirname, isAbsolute} from 'path';
 import {ReadLine, createInterface} from 'readline';
 import {Disposable, CancellationToken, OutputChannel, workspace, window} from 'vscode';
 import * as vscode from 'vscode';
@@ -174,6 +174,7 @@ export class WurstServer {
 	
 	
 	
+	
 	public sendRequest(path: string, data: any): Promise<any> {
 		
 		const requestPacket: RequestPacket = {
@@ -185,8 +186,14 @@ export class WurstServer {
 		return new Promise<any>((resolve, reject) => {
 			
 			this._activeRequests[requestPacket.sequenceNr] = {
-				onSuccess: value => resolve(value),
-				onError: err => reject(err)	
+				onSuccess: value => {
+					console.log(`onSuccess ${requestPacket.sequenceNr}`);
+					resolve(value);
+				},
+				onError: err => {
+					console.log(`onError ${requestPacket.sequenceNr}`);
+					reject(err);
+				}	
 			};
 			
 			// TODO maybe better to use version with callback?
@@ -222,6 +229,13 @@ export class WurstServer {
 				let blob = JSON.parse(data);
 				if (blob.eventName == "compilationResult") {
 					this.handleCompilationResult(blob.data);
+				} else if (blob.requestId) {
+					let reqId: number = blob.requestId;
+					let req = this._activeRequests[reqId];
+					delete this._activeRequests[reqId];
+					console.log(`responding to request ${reqId}`);
+					req.onSuccess(blob.data);
+					console.log(`responded to request ${reqId}`);
 				}
 			} else {
 				console.log(`stdout: ${data}`);
@@ -232,6 +246,17 @@ export class WurstServer {
 	handleCompilationResult(data) {
 		let path = this._solutionPath + "/" + data.filename
 		this._diagnosticsProvider.setError(path, data.errors);
+	}
+	
+	public uriForFilename(filename: string): vscode.Uri {
+		if (isAbsolute(filename)) {
+			return vscode.Uri.file(filename) 
+		}
+		return vscode.Uri.file(this._solutionPath + "/" + filename)
+	}
+	
+	public getPosition(line: number, column: number): vscode.Position {
+		return new vscode.Position(Math.max(0, line-1), Math.max(0, column-1));
 	}
     
 }

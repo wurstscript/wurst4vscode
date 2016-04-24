@@ -3,11 +3,12 @@
 import * as path from 'path';
 
 import * as vscode from 'vscode';
-import { workspace, Disposable, ExtensionContext } from 'vscode';
+import { workspace, Disposable, ExtensionContext, LanguageConfiguration } from 'vscode';
 import { LanguageClient, LanguageClientOptions, SettingMonitor, ServerOptions, TransportKind } from 'vscode-languageclient';
 
 import {WurstServer} from './WurstServer';
 import forwardChanges from './features/changeForwarding'
+import WurstDefinitionProvider from './features/definitionProvider'
 import {DiagnosticsProvider} from './features/diagnosticsProvider'
 
 export function activate(context: ExtensionContext) {
@@ -38,4 +39,27 @@ export function activate(context: ExtensionContext) {
     context.subscriptions.push(forwardChanges(server))
     
     context.subscriptions.push(new DiagnosticsProvider(server))
+    
+    context.subscriptions.push(
+        vscode.languages.registerDefinitionProvider('wurst', new WurstDefinitionProvider(server)));
+    
+    
+    let config: LanguageConfiguration = {
+        comments: {
+            lineComment: "//",
+            blockComment: ["/*","*/"]
+        },
+        brackets: [
+            ["{", "}"],
+            ["[", "]"],
+            ["(", ")"]
+        ],
+        indentationRules: {
+            increaseIndentPattern: /^\s*(if|while|for|function|class|module|interface)\s.*$/,
+            decreaseIndentPattern: /^\s*(else|end)\s.*$/,
+        } 
+    };
+    
+    vscode.languages.setLanguageConfiguration('wurst', config);
+    
 }

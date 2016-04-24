@@ -24,7 +24,7 @@
         "grammars": [{
             "language": "wurst",
             "scopeName": "source.wurst",
-            "path": "./syntaxes/wurst.tmLanguage"
+            "path": "./syntaxes/wurst.json"
         }],
         "commands": [{
             "command": "extension.sayHello",

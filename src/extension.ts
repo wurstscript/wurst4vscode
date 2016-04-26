@@ -10,6 +10,7 @@ import {WurstServer} from './WurstServer';
 import forwardChanges from './features/changeForwarding'
 import WurstDefinitionProvider from './features/definitionProvider'
 import WurstHoverProvider from './features/hoverProvider'
+import WurstCompletionItemProvider from './features/completionProvider'
 import {DiagnosticsProvider} from './features/diagnosticsProvider'
 
 export function activate(context: ExtensionContext) {
@@ -48,6 +49,11 @@ export function activate(context: ExtensionContext) {
             
         context.subscriptions.push(
             vscode.languages.registerHoverProvider('wurst', new WurstHoverProvider(server)));
+        
+        context.subscriptions.push(
+            vscode.languages.registerCompletionItemProvider('wurst', new WurstCompletionItemProvider(server))
+        );
+            
     });
     
     let config: LanguageConfiguration = {

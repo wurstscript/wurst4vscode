@@ -247,7 +247,6 @@ export class WurstServer {
 		
 		lines.forEach(data =>  {
 			if (data.startsWith("{")) {
-				console.log(`stdout json: ${data}`);
 				let blob = JSON.parse(data);
 				if (blob.eventName == "compilationResult") {
 					this.handleCompilationResult(blob.data);

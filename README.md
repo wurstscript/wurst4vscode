@@ -1,13 +1,28 @@
-# README
-## This is the README for your extension "wurst"
-You can author your README using Visual Studio Code.  Here are some useful editor keyboard shortcuts:
+# Wurst extension for Visual Studio Code
 
-* Split the editor (`Cmd+\` on OSX or `Ctrl+\` on Windows and Linux)
-* Toggle preview (`Shift+CMD+V` on OSX or `Shift+Ctrl+V` on Windows and Linux)
-* Press `Ctrl+Space` (Windows, Linux) or `Cmd+Space` (OSX) to see a list of Markdown snippets
+This is an experimental plugin for the [Wurst programming lagnuage](https://peq.github.io/WurstScript/). 
+It provides some basic features like autocomplete and jump to definition.
 
-### For more information
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
+## Setup
 
-**Enjoy!**
+
+Open your settings and set the property `wurst.wurstJar`  to the path of your `wurstscript.jar` in your Wurstpack. You need an up-to-date version of WurstScript for the plugin to work.
+You can also change the executable used for starting Java (the default is "java").
+
+Example configuration:
+
+    "wurst.wurstJar": "/home/peter/work/WurstScript/Wurstpack/wurstscript/wurstscript.jar",
+    "wurst.javaExecutable": "java",
+    "editor.insertSpaces": false
+
+
+## Features
+
+Note: The shortcuts below can be changed in the settings and might be different on your system.
+
+* Syntax highlighting
+* Shows errors and warnings while you type
+* Autocomplete after typing a dot or pressing `Ctrl+space`.
+* Parameter-info (press `Ctrl+shift+space`)
+* Goto declaration (`F12` or `Ctrl+leftclick`)
+* Some commands area available via the command palette (press `F1` and type "Wurst")

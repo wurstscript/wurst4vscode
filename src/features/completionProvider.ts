@@ -4,6 +4,7 @@ import {CompletionItemProvider, TextEdit, CompletionItem, CompletionItemKind, Ca
 import AbstractProvider from './abstractProvider';
 import {WurstServer} from '../WurstServer';
 import * as vscode from 'vscode';
+import {fromHtml, htmlToString} from './htmlFilter';
 
 export default class WurstCompletionItemProvider extends AbstractProvider implements CompletionItemProvider {
 
@@ -20,9 +21,10 @@ export default class WurstCompletionItemProvider extends AbstractProvider implem
            return response.map(completion => {
                console.log(`completion ${i++}`)
                let item = new CompletionItem(completion.label);
-               item.kind = CompletionItemKind.Class; // TODO
-               item.detail = completion.detail;
-               item.documentation = completion.documentation;
+               item.kind = CompletionItemKind[<string>completion.kind]; // TODO
+               
+               item.detail = htmlToString(completion.detail);
+               item.documentation = htmlToString(completion.documentation);
                //item.textEdit = this.convertTextEdit(completion.textEdit)
                item.insertText = completion.textEdit.newText;
                console.log(`completion ${item.label}!`);

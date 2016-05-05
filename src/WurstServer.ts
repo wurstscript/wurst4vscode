@@ -89,7 +89,7 @@ export class WurstServer {
 				let spawnOptions: SpawnOptions = {
 					detached: false  
 				};
-				let process = spawn(java, ["-jar", wurstJar, "-languageServer"], spawnOptions)
+				let process = spawn(java, ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005", "-jar", wurstJar, "-languageServer"], spawnOptions)
 				this._serverProcess = process;
 				
 				process.on('error', (err) => {

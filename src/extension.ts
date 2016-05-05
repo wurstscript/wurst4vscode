@@ -12,6 +12,7 @@ import WurstDefinitionProvider from './features/definitionProvider'
 import WurstHoverProvider from './features/hoverProvider'
 import WurstCompletionItemProvider from './features/completionProvider'
 import {DiagnosticsProvider} from './features/diagnosticsProvider'
+import WurstSignatureHelpProvider from './features/signatureHelpProvider'
 
 export function activate(context: ExtensionContext) {
     console.log("Wurst extension activated!!")
@@ -51,7 +52,11 @@ export function activate(context: ExtensionContext) {
             vscode.languages.registerHoverProvider('wurst', new WurstHoverProvider(server)));
         
         context.subscriptions.push(
-            vscode.languages.registerCompletionItemProvider('wurst', new WurstCompletionItemProvider(server))
+            vscode.languages.registerCompletionItemProvider('wurst', new WurstCompletionItemProvider(server), '.')
+        );
+        
+        context.subscriptions.push(
+            vscode.languages.registerSignatureHelpProvider('wurst', new WurstSignatureHelpProvider(server), '(', ',')
         );
             
     });

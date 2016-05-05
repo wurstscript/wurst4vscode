@@ -169,6 +169,17 @@ export class WurstServer {
 		});
 	}
     
+	public restart(solutionPath: string = this._solutionPath): Promise<void> {
+		if (solutionPath) {
+			return new Promise<void>((suc,rej) => {
+				this.stop().then(() => {
+					setTimeout(() => this.start(solutionPath).then(() => suc()), 1000)
+				});
+			});
+		}
+	}
+	
+	
 	public updateBuffer(fileName: string, documentContent: string): Promise<void> {
 		// TODO
 		console.log(`updating buffer for ${fileName}`)
@@ -222,6 +233,10 @@ export class WurstServer {
 			this._serverProcess.stdin.write(JSON.stringify(requestPacket) + '\n');
 			
 		});
+	}
+
+	public clean(): Promise<any> {
+		return this.sendRequest('clean', {});
 	}
 
 

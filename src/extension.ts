@@ -13,6 +13,7 @@ import WurstHoverProvider from './features/hoverProvider'
 import WurstCompletionItemProvider from './features/completionProvider'
 import {DiagnosticsProvider} from './features/diagnosticsProvider'
 import WurstSignatureHelpProvider from './features/signatureHelpProvider'
+import {registerCommands} from './features/commands'
 
 export function activate(context: ExtensionContext) {
     console.log("Wurst extension activated!!")
@@ -38,6 +39,8 @@ export function activate(context: ExtensionContext) {
 	context.subscriptions.push(new vscode.Disposable(() => {
        server.stop(); 
     }));
+    
+    context.subscriptions.push(registerCommands(server))
     
     started.then(value => {
         

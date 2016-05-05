@@ -37,10 +37,18 @@
             "scopeName": "source.wurst",
             "path": "./syntaxes/wurst.json"
         }],
-        "commands": [{
-            "command": "extension.sayHello",
-            "title": "Hello World"
-        }],
+        "commands": [
+            {
+                "command": "wurst.restart",
+                "title": "Restart wurst language service",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.clean",
+                "title": "Clean the Wurst workspace",
+                "category": "wurst"
+            }
+        ],
         "configuration": {
             "type": "object",
             "title": "Wurst configuration",

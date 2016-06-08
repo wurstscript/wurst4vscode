@@ -131,33 +131,36 @@ export class WurstServer {
 	}
     
     public stop(): Promise<void> {
-		console.log(`Stopping server ${this._serverProcess.pid} ...`)
+		
 
 		let ret: Promise<void>;
 
 		if (!this._serverProcess) {
 			// nothing to kill
 			ret = Promise.resolve<void>(undefined);
-
-		}
-        else if (process.platform === 'win32') {
-			// when killing a process in windows its child
-			// processes are *not* killed but become root
-			// processes. Therefore we use TASKKILL.EXE
-			ret = new Promise<void>((resolve, reject) => {
-				const killer = exec(`taskkill /F /T /PID ${this._serverProcess.pid}`, function (err, stdout, stderr) {
-					if (err) {
-						return reject(err);
-					}
+			console.log(`Server not running ...`)
+		} 
+        else { 
+			console.log(`Stopping server ${this._serverProcess.pid} ...`)
+			if (process.platform === 'win32') {
+				// when killing a process in windows its child
+				// processes are *not* killed but become root
+				// processes. Therefore we use TASKKILL.EXE
+				ret = new Promise<void>((resolve, reject) => {
+					const killer = exec(`taskkill /F /T /PID ${this._serverProcess.pid}`, function (err, stdout, stderr) {
+						if (err) {
+							return reject(err);
+						}
+					});
+					
+					killer.on('exit', resolve);
+					killer.on('error', reject);
 				});
-                
-				killer.on('exit', resolve);
-				killer.on('error', reject);
-			});
-		}
-        else {
-			this._serverProcess.kill('SIGTERM');
-			ret = Promise.resolve<void>(undefined);
+			}
+			else {
+				this._serverProcess.kill('SIGTERM');
+				ret = Promise.resolve<void>(undefined);
+			}
 		}
         
 		return ret.then(_ => {

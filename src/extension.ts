@@ -13,6 +13,7 @@ import WurstHoverProvider from './features/hoverProvider'
 import WurstCompletionItemProvider from './features/completionProvider'
 import {DiagnosticsProvider} from './features/diagnosticsProvider'
 import WurstSignatureHelpProvider from './features/signatureHelpProvider'
+import WurstDocumentHighlightProvider from './features/documentHighlightProvider'
 import {registerCommands} from './features/commands'
 
 export function activate(context: ExtensionContext) {
@@ -61,7 +62,11 @@ export function activate(context: ExtensionContext) {
         context.subscriptions.push(
             vscode.languages.registerSignatureHelpProvider('wurst', new WurstSignatureHelpProvider(server), '(', ',')
         );
-            
+
+         context.subscriptions.push(
+            vscode.languages.registerDocumentHighlightProvider('wurst', new WurstDocumentHighlightProvider(server))
+        );
+
     });
     
     let config: LanguageConfiguration = {

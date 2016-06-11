@@ -54,6 +54,13 @@
         }
       ]
     },
+    "preprocessor": {
+      "patterns": [
+        {
+          "match": "(@\\w+)\\b",
+        }
+      ]
+    },
     "comments": {
       "patterns": [
         {

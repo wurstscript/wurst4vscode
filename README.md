@@ -20,9 +20,9 @@ Example configuration:
     "editor.insertSpaces": false
 
 There are a few additional properties, mostly used for debugging:
-* wurst.debugMode : Enabling the debugmode makes the Wurst language server VM accessible for debugging on port 5005 (default: false)
-* wurst.hideExceptions : shows wurst exceptions in the editor if enabled (default: false)
-* wurst.javaExecutable : sets the command used to invoke java on your system (default: java)
+* __wurst.debugMode__ : Makes the Wurst VM accessible for debugging on port 5005 *(default: false)*
+* __wurst.hideExceptions__ : shows wurst exceptions in the editor if enabled *(default: false)*
+* __wurst.javaExecutable__ : sets the command used to invoke java on your system *(default: java)*
 
 ## Features
 

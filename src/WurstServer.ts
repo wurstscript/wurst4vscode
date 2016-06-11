@@ -29,37 +29,37 @@ interface ResponsePacket {
 
 
 export class WurstServer {
-    
+
     private _state: ServerState = ServerState.Stopped;
-    
+
     // ???
     private _channel: OutputChannel;
-    
+
     // the Process running Wurst (the .jar)
     protected _serverProcess: ChildProcess;
-    
+
     //???
     private _start: Promise<void>;
-    
+
     // the file path of the solution
     private _solutionPath: string;
-    
-	
+
+
 	// the maximum sequence number sent to the server
 	private _maxSeqNr: number = 0;
-	
+
 	private _activeRequests: { [seq: number]: { onSuccess: Function; onError: Function; } } = {};
-	
+
 	private _diagnosticsProvider: DiagnosticsProvider;
-	
+
     constructor() {
         this._channel = window.createOutputChannel("Wurst Log")
     }
-    
+
 	public isRunning() {
 		return this._state == ServerState.Started;
 	}
-	
+
     public start(solutionPath: string): Promise<void> {
 		if (!this._start) {
 			this._start = this._doStart(solutionPath);
@@ -77,28 +77,36 @@ export class WurstServer {
         // TODO make configurable
         let java = config.get<string>("javaExecutable")
         let wurstJar = config.get<string>("wurstJar")
+		let debugMode = config.get<boolean>("debugMode")
+		let hideExceptions = config.get<boolean>("hideExceptions")
 		return new Promise<void>((resolve, reject) => {
 			fs.stat(wurstJar, (err, stats) => {
 				console.log(`stats: ${err}, ${stats}`);
 				if (err) {
-					let msg = `Could not find ${wurstJar}. Please configure 'wurst.wurstJar'.`
+					let msg = `Could not find ${wurstJar}. Please configure 'wurst.wurstJar' in your settings.json`
+
 					vscode.window.showErrorMessage(msg);
+
 					reject(msg);
 					return;
 				}
 				let spawnOptions: SpawnOptions = {
-					detached: false  
+					detached: false
 				};
-				let process = spawn(java, ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005", "-jar", wurstJar, "-languageServer"], spawnOptions)
+				let args = ["-jar", wurstJar, "-languageServer"]
+				if (debugMode == true) {
+					args = ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005"].concat(args);
+				}
+				let process = spawn(java, args, spawnOptions)
 				this._serverProcess = process;
-				
+
 				process.on('error', (err) => {
 					let msg = `could not start server with command ${java} -jar ${wurstJar}. Try changing your settings for 'wurst.javaExecutable' or 'wurst.wurstJar'.`;
 					console.log(msg)
 					vscode.window.showErrorMessage(msg)
 					reject(msg);
 				})
-				
+
 				process.stdout.on('data', (data: string) => {
 					this.handleStdout(data.toString());
 				});
@@ -106,32 +114,34 @@ export class WurstServer {
 				process.stderr.on('data', (data) => {
 					let msg = `There was a problem with running Wurst: ${data}`
 					console.log(`stderr: ${data}`);
-					vscode.window.showErrorMessage(msg);
+					if (!hideExceptions) {
+						vscode.window.showErrorMessage(msg);
+					}
 					reject(msg);
 				});
 
 				process.on('close', (code) => {
 					console.log(`child process exited with code ${code}`);
 				});
-				
-				
-				
-				
+
+
+
+
 				// TODO actually it is not yet started, should wait for some message?
 				console.log(`Server started ${this._serverProcess.pid}!`)
 				this._state = ServerState.Started
-				
+
 				// send working directory
 				this.sendRequest('init', solutionPath);
-				
+
 				// fulfil promise
 				resolve(undefined);
 			});
 		});
 	}
-    
+
     public stop(): Promise<void> {
-		
+
 
 		let ret: Promise<void>;
 
@@ -139,8 +149,8 @@ export class WurstServer {
 			// nothing to kill
 			ret = Promise.resolve<void>(undefined);
 			console.log(`Server not running ...`)
-		} 
-        else { 
+		}
+        else {
 			console.log(`Stopping server ${this._serverProcess.pid} ...`)
 			if (process.platform === 'win32') {
 				// when killing a process in windows its child
@@ -152,7 +162,7 @@ export class WurstServer {
 							return reject(err);
 						}
 					});
-					
+
 					killer.on('exit', resolve);
 					killer.on('error', reject);
 				});
@@ -162,7 +172,7 @@ export class WurstServer {
 				ret = Promise.resolve<void>(undefined);
 			}
 		}
-        
+
 		return ret.then(_ => {
 			this._start = null;
 			this._serverProcess = null;
@@ -171,56 +181,56 @@ export class WurstServer {
 			return;
 		});
 	}
-    
+
 	public restart(solutionPath: string = this._solutionPath): Promise<void> {
 		if (solutionPath) {
-			return new Promise<void>((suc,rej) => {
+			return new Promise<void>((suc, rej) => {
 				this.stop().then(() => {
 					setTimeout(() => this.start(solutionPath).then(() => suc()), 1000)
 				});
 			});
 		}
 	}
-	
-	
+
+
 	public updateBuffer(fileName: string, documentContent: string): Promise<void> {
 		// TODO
 		console.log(`updating buffer for ${fileName}`)
-		
-		this.sendRequest('reconcile', {filename: fileName, content: documentContent});
-		
-		
+
+		this.sendRequest('reconcile', { filename: fileName, content: documentContent });
+
+
 		return Promise.resolve(undefined);
 	}
-	
+
 	public filesChanged(fileName: string): Promise<void> {
 		// TODO
 		console.log(`filesChanged: ${fileName}`)
-		
+
 		this.sendRequest('fileChanged', fileName);
-		
+
 		//this._diagnosticsProvider.setError(fileName, []);
-		
+
 		return Promise.resolve(undefined);
 	}
-	
-	
-	
-	
+
+
+
+
 	public sendRequest(path: string, data: any): Promise<any> {
 		if (!this.isRunning()) {
 			console.log(`Server not running, could not handle ${path}.`);
 			return;
 		}
-		
+
 		const requestPacket: RequestPacket = {
 			sequenceNr: ++this._maxSeqNr,
 			path: path,
 			data: data
 		};
-		
+
 		return new Promise<any>((resolve, reject) => {
-			
+
 			this._activeRequests[requestPacket.sequenceNr] = {
 				onSuccess: value => {
 					console.log(`onSuccess ${requestPacket.sequenceNr}`);
@@ -229,12 +239,12 @@ export class WurstServer {
 				onError: err => {
 					console.log(`onError ${requestPacket.sequenceNr}`);
 					reject(err);
-				}	
+				}
 			};
-			
+
 			// TODO maybe better to use version with callback?
 			this._serverProcess.stdin.write(JSON.stringify(requestPacket) + '\n');
-			
+
 		});
 	}
 
@@ -246,8 +256,8 @@ export class WurstServer {
 	public setDiagnosticsProvider(dp: DiagnosticsProvider) {
 		this._diagnosticsProvider = dp;
 	}
-	
-	
+
+
 	private _stdOutBuffer: string = "";
 	handleStdout(text: string) {
 		let lines = text.split(/\r?\n/);
@@ -255,15 +265,15 @@ export class WurstServer {
 			return;
 		}
 		lines[0] = this._stdOutBuffer + lines[0];
-		let lastLine = lines[lines.length-1]; 
+		let lastLine = lines[lines.length - 1];
 		if (!lastLine.endsWith("\n")) {
 			this._stdOutBuffer = lastLine;
 			lines.pop();
 		} else {
 			this._stdOutBuffer = "";
 		}
-		
-		lines.forEach(data =>  {
+
+		lines.forEach(data => {
 			if (data.startsWith("{")) {
 				let blob = JSON.parse(data);
 				if (blob.eventName == "compilationResult") {
@@ -281,21 +291,21 @@ export class WurstServer {
 			}
 		});
 	}
-	
+
 	handleCompilationResult(data) {
 		let path = this._solutionPath + "/" + data.filename
 		this._diagnosticsProvider.setError(path, data.errors);
 	}
-	
+
 	public uriForFilename(filename: string): vscode.Uri {
 		if (isAbsolute(filename)) {
-			return vscode.Uri.file(filename) 
+			return vscode.Uri.file(filename)
 		}
 		return vscode.Uri.file(this._solutionPath + "/" + filename)
 	}
-	
+
 	public getPosition(line: number, column: number): vscode.Position {
-		return new vscode.Position(Math.max(0, line-1), Math.max(0, column-1));
+		return new vscode.Position(Math.max(0, line - 1), Math.max(0, column - 1));
 	}
-    
+
 }

@@ -1,20 +1,28 @@
 # Wurst extension for Visual Studio Code
 
-This is an experimental plugin for the [Wurst programming lagnuage](https://peq.github.io/WurstScript/). 
+This is an experimental plugin for the [Wurst programming language](https://peq.github.io/WurstScript/). 
 It provides some basic features like autocomplete and jump to definition.
 
 ## Setup
 
+Open your _settings.json_ and set the property `wurst.wurstJar` to the path a `wurstscript.jar`. 
+You can either use the one from your Wurstpack or download the latest one [here](http://peeeq.de/hudson/job/Wurst/lastSuccessfulBuild/artifact/downloads/wurstscript.jar)
 
-Open your settings and set the property `wurst.wurstJar`  to the path of your `wurstscript.jar` in your Wurstpack. You need an up-to-date version of WurstScript for the plugin to work.
-You can also change the executable used for starting Java (the default is "java").
+Minimal configuration:
+
+    "wurst.wurstJar": "/home/peter/work/WurstScript/Wurstpack/wurstscript/wurstscript.jar"
 
 Example configuration:
 
     "wurst.wurstJar": "/home/peter/work/WurstScript/Wurstpack/wurstscript/wurstscript.jar",
     "wurst.javaExecutable": "java",
+    "wurst.debugMode": "true",
     "editor.insertSpaces": false
 
+There are a few additional properties, mostly used for debugging:
+* wurst.debugMode : Enabling the debugmode makes the Wurst language server VM accessible for debugging on port 5005 (default: false)
+* wurst.hideExceptions : shows wurst exceptions in the editor if enabled (default: false)
+* wurst.javaExecutable : sets the command used to invoke java on your system (default: java)
 
 ## Features
 

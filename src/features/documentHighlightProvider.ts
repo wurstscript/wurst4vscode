@@ -16,10 +16,8 @@ export default class WurstDocumentHighlightProvider extends AbstractSupport impl
         return fut.then(response => {
 			if (response && Array.isArray(response)) {
 				let map = response.map(WurstDocumentHighlightProvider._asDocumentHighlight);
-				console.log("Returning Map" + map)
 				return map;
 			}
-			console.log("Returning empty");
 			return {};
         });
 	}

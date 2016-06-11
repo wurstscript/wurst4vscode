@@ -56,7 +56,17 @@
                 "wurst.javaExecutable" : {
                     "type": "string",
                     "default": "java",
-                    "description": "The command to use for starting Java. You can change this if Java is not in your PATH."
+                    "description": "The command to use for starting Java. You can change this if Java is not in your PATH"
+                },
+                "wurst.debugMode" : {
+                    "type": "boolean",
+                    "default": "false",
+                    "description": "Enabling the debugmode will make the VM available for debugging on port 5005"
+                },
+                "wurst.hideExceptions" : {
+                    "type": "boolean",
+                    "default": "true",
+                    "description": "Turn this off to see Wurst Exceptions as vscode notifications"
                 },
                 "wurst.wurstJar": {
                     "type": "string",

@@ -58,6 +58,7 @@
       "patterns": [
         {
           "match": "(@\\w+)\\b",
+          "name": "storage.modifier.wurst"
         }
       ]
     },

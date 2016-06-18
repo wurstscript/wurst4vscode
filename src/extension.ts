@@ -14,6 +14,7 @@ import WurstCompletionItemProvider from './features/completionProvider'
 import {DiagnosticsProvider} from './features/diagnosticsProvider'
 import WurstSignatureHelpProvider from './features/signatureHelpProvider'
 import WurstDocumentHighlightProvider from './features/documentHighlightProvider'
+import WurstReferenceProvider from './features/referenceProvider'
 import {registerCommands} from './features/commands'
 
 export function activate(context: ExtensionContext) {
@@ -63,8 +64,12 @@ export function activate(context: ExtensionContext) {
             vscode.languages.registerSignatureHelpProvider('wurst', new WurstSignatureHelpProvider(server), '(', ',')
         );
 
-         context.subscriptions.push(
+        context.subscriptions.push(
             vscode.languages.registerDocumentHighlightProvider('wurst', new WurstDocumentHighlightProvider(server))
+        );
+
+        context.subscriptions.push(
+            vscode.languages.registerReferenceProvider('wurst', new WurstReferenceProvider(server))
         );
 
     });

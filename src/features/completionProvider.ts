@@ -5,6 +5,7 @@ import AbstractProvider from './abstractProvider';
 import {WurstServer} from '../WurstServer';
 import * as vscode from 'vscode';
 import {fromHtml, htmlToString} from './htmlFilter';
+import {convertRange} from './positionHelper';
 
 export default class WurstCompletionItemProvider extends AbstractProvider implements CompletionItemProvider {
 
@@ -46,16 +47,8 @@ export default class WurstCompletionItemProvider extends AbstractProvider implem
     }
     
     private convertTextEdit(te): TextEdit {
-        return TextEdit.replace(this.convertRange(te.range), te.newText);
+        return TextEdit.replace(convertRange(te.range), te.newText);
     }
     
-    private convertRange(r): Range {
-        let range = new Range(this.convertPos(r.start), this.convertPos(r.end));
-        console.log(`converted ${r} to ${range}...`)
-        return range;
-    }
-    
-    private convertPos(p): Position {
-        return new Position(p.line, p.column);
-    }
+
 }

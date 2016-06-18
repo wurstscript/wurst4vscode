@@ -2,6 +2,7 @@
 
 import AbstractSupport from './abstractProvider';
 import {WurstServer} from '../WurstServer';
+import {convertRange} from './positionHelper';
 import {DocumentHighlightProvider, DocumentHighlight, DocumentHighlightKind, CancellationToken, TextDocument, Position, Range} from 'vscode';
 
 export default class WurstDocumentHighlightProvider extends AbstractSupport implements DocumentHighlightProvider {
@@ -11,7 +12,8 @@ export default class WurstDocumentHighlightProvider extends AbstractSupport impl
             filename: document.fileName,
             buffer: document.getText(),
             line: position.line + 1,
-            column: position.character + 1
+            column: position.character + 1,
+            global: false
         });
         return fut.then(response => {
 			if (response && Array.isArray(response)) {
@@ -23,16 +25,8 @@ export default class WurstDocumentHighlightProvider extends AbstractSupport impl
 	}
 
 	private static _asDocumentHighlight(getUsages: any): DocumentHighlight {
-		return new DocumentHighlight(WurstDocumentHighlightProvider.convertRange(getUsages.range), DocumentHighlightKind.Read);
+		return new DocumentHighlight(convertRange(getUsages.range), DocumentHighlightKind.Read);
 	}
 
-	private static convertRange(r): Range {
-        let range = new Range(WurstDocumentHighlightProvider.convertPos(r.start), WurstDocumentHighlightProvider.convertPos(r.end));
-        console.log(`converted ${r} to ${range}...`)
-        return range;
-    }
 
-	private static convertPos(p): Position {
-        return new Position(p.line, p.column);
-    }
 }

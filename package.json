@@ -29,7 +29,7 @@
         "languages": [{
             "id": "wurst",
             "aliases": ["Wurst", "wurst"],
-            "extensions": [".wurst",".jurst"],
+            "extensions": [".wurst",".jurst",".j"],
             "configuration": "./wurst.configuration.json"
         }],
         "grammars": [{
@@ -46,6 +46,11 @@
             {
                 "command": "wurst.clean",
                 "title": "Clean the Wurst workspace",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.startmap",
+                "title": "Run a Wurst map",
                 "category": "wurst"
             }
         ],
@@ -72,6 +77,11 @@
                     "type": "string",
                     "default": "/home/peter/work/WurstScript/Wurstpack/wurstscript/wurstscript.jar",
                     "description": "The path to wurstscript.jar (in your WurstPack folder)"
+                },
+                "wurst.wc3path": {
+                    "type": "string",
+                    "default": null,
+                    "description": "The path to your Frozen Throne installation directory."
                 }
             }
         }

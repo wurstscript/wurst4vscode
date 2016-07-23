@@ -50,5 +50,9 @@ export class DiagnosticsProvider {
             return DiagnosticSeverity.Warning;
         }
     }
+
+    public clean() {
+        this._diagnostics.clear();
+    }
     
 }

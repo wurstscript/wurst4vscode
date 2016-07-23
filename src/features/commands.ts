@@ -6,8 +6,9 @@ import * as vscode from 'vscode';
 
 
 export function registerCommands(server: WurstServer): vscode.Disposable {
-	let d1 = vscode.commands.registerCommand('wurst.restart', () => server.restart());
-	let d2 = vscode.commands.registerCommand('wurst.clean', () => server.clean());
-    
-	return vscode.Disposable.from(d1, d2);
+	return vscode.Disposable.from(
+		vscode.commands.registerCommand('wurst.restart', () => server.restart()),
+		vscode.commands.registerCommand('wurst.clean', () => server.clean()),
+		vscode.commands.registerCommand('wurst.startmap', (args: any[]) => server.startmap(args))
+	);
 }

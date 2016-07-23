@@ -249,9 +249,33 @@ export class WurstServer {
 	}
 
 	public clean(): Promise<any> {
+		this._diagnosticsProvider.clean();
 		return this.sendRequest('clean', {});
 	}
 
+	public startmap(args): PromiseLike<any> {
+		let config = vscode.workspace.getConfiguration("wurst");
+		let wc3path = config.get<string>("wc3path");
+		if (!wc3path) {
+			return Promise.reject("Warcraft path not set (change 'wurst.wc3path' in your settings).");
+		}
+
+		let mapPromise: Thenable<string>;
+		if (args && args.length > 0) {
+			mapPromise = new Promise(args[0]);
+		} else {
+			let items = workspace.findFiles('*.w3x', null, 10)
+				.then(uris => uris.map(uri => uri.path))
+			mapPromise = window.showQuickPick(items)
+		}
+
+		return mapPromise.then(path => 
+			this.sendRequest('runmap', {
+				'mappath': path, 
+				"wc3path": wc3path 
+			}));
+
+	}
 
 	public setDiagnosticsProvider(dp: DiagnosticsProvider) {
 		this._diagnosticsProvider = dp;

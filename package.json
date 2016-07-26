@@ -14,7 +14,7 @@
         "url": "https://github.com/peq/wurst4vscode.git"
     },
     "version": "0.0.2",
-    "publisher": "Peter",
+    "publisher": "peterzeller",
     "engines": {
         "vscode": "^1.0.0"
     },

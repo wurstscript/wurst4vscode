@@ -52,6 +52,8 @@ export class WurstServer {
 
 	private _diagnosticsProvider: DiagnosticsProvider;
 
+	private static _lastMapConfig: string;
+
     constructor() {
         this._channel = window.createOutputChannel("Wurst Log")
     }
@@ -253,6 +255,22 @@ export class WurstServer {
 		return this.sendRequest('clean', {});
 	}
 
+	public startlast(): PromiseLike<any> {
+		let config = vscode.workspace.getConfiguration("wurst");
+		let wc3path = config.get<string>("wc3path");
+		if (!wc3path) {
+			return Promise.reject("Warcraft path not set (change 'wurst.wc3path' in your settings).");
+		}
+		if (WurstServer._lastMapConfig == null) {
+			return Promise.reject("You havn't run a map yet!");
+		}
+		return this.sendRequest('runmap', {
+			'mappath': WurstServer._lastMapConfig,
+			"wc3path": wc3path
+		}
+		)
+	}
+
 	public startmap(args): PromiseLike<any> {
 		let config = vscode.workspace.getConfiguration("wurst");
 		let wc3path = config.get<string>("wc3path");
@@ -265,15 +283,22 @@ export class WurstServer {
 			mapPromise = new Promise(args[0]);
 		} else {
 			let items = workspace.findFiles('*.w3x', null, 10)
+				.then(uris => uris.sort(function(a, b) {
+					return fs.statSync(b.fsPath).mtime.getTime() - 
+							fs.statSync(a.fsPath).mtime.getTime();
+				}))
 				.then(uris => uris.map(uri => uri.path))
 			mapPromise = window.showQuickPick(items)
 		}
 
-		return mapPromise.then(path => 
-			this.sendRequest('runmap', {
-				'mappath': path, 
-				"wc3path": wc3path 
-			}));
+		return mapPromise.then(path => {
+			WurstServer._lastMapConfig = path;
+			return this.sendRequest('runmap', {
+				'mappath': path,
+				"wc3path": wc3path
+			}
+			)
+		});
 
 	}
 

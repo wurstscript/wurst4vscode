@@ -52,6 +52,11 @@
                 "command": "wurst.startmap",
                 "title": "Run a Wurst map",
                 "category": "wurst"
+            },
+            {
+                "command": "wurst.startlast",
+                "title": "Run the last map again",
+                "category": "wurst"
             }
         ],
         "configuration": {

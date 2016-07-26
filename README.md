@@ -16,7 +16,7 @@ Example configuration:
 
     "wurst.wurstJar": "/home/peter/work/WurstScript/Wurstpack/wurstscript/wurstscript.jar",
     "wurst.javaExecutable": "java",
-    "wurst.debugMode": "true",
+    "wurst.debugMode": true,
     "editor.insertSpaces": false
 
 There are a few additional properties, mostly used for debugging:

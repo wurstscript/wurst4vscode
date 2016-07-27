@@ -26,9 +26,22 @@ export default class WurstCompletionItemProvider extends AbstractProvider implem
                
                item.detail = htmlToString(completion.detail);
                item.documentation = htmlToString(completion.documentation);
+               item.sortText = parseFloat(completion.rating).toFixed(5)
                //item.textEdit = this.convertTextEdit(completion.textEdit)
                item.insertText = completion.textEdit.newText;
                console.log(`completion ${item.label}!`);
+               let params = completion.parameters;
+               if (params && params.length > 0) {
+                   // create template for arguments
+                   // text inside {{ }} is like a placeholder for the snippet
+                   // and users can switch between the positions using tab
+                   let paramSnippets = [];
+                   for (let i in params) {
+                       let param = params[i];
+                       paramSnippets.push('{{' + param.name + '}}')
+                   }
+                   item.insertText = item.insertText + '(' + paramSnippets.join(', ') + '){{}}';
+               }
                /*
                let range = item.textEdit.range; 
                if (range.start.line != range.end.line) {

@@ -264,11 +264,7 @@ export class WurstServer {
 		if (WurstServer._lastMapConfig == null) {
 			return Promise.reject("You havn't run a map yet!");
 		}
-		return this.sendRequest('runmap', {
-			'mappath': WurstServer._lastMapConfig,
-			"wc3path": wc3path
-		}
-		)
+		return this.startMapIntern(WurstServer._lastMapConfig, wc3path);
 	}
 
 	public startmap(args): PromiseLike<any> {
@@ -293,13 +289,22 @@ export class WurstServer {
 
 		return mapPromise.then(path => {
 			WurstServer._lastMapConfig = path;
-			return this.sendRequest('runmap', {
-				'mappath': path,
-				"wc3path": wc3path
-			}
-			)
+			return this.startMapIntern(path, wc3path);
 		});
 
+	}
+
+	private startMapIntern(mappath: string, wc3path: string) {
+		return this.sendRequest('runmap', {
+				'mappath': mappath,
+				"wc3path": wc3path
+			})
+			.then(res => {
+				if (res != "ok") {
+					return Promise.reject(res);
+				}
+				return Promise.resolve(res);
+			});
 	}
 
 	public setDiagnosticsProvider(dp: DiagnosticsProvider) {

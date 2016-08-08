@@ -307,6 +307,23 @@ export class WurstServer {
 			});
 	}
 
+
+	public tests(mode: 'all'|'file'|'func') {
+		let data: any = {}
+		if (mode != 'all') {
+			data.filename = window.activeTextEditor.document.fileName
+		}
+		if (mode == 'func') {
+			let sel = window.activeTextEditor.selection
+			if (sel) {
+				data.line = sel.start.line
+				data.column = sel.start.character
+			}
+		}
+
+		return this.sendRequest('runtests', data)	
+	}
+
 	public setDiagnosticsProvider(dp: DiagnosticsProvider) {
 		this._diagnosticsProvider = dp;
 	}
@@ -339,11 +356,21 @@ export class WurstServer {
 					console.log(`responding to request ${reqId}`);
 					req.onSuccess(blob.data);
 					console.log(`responded to request ${reqId}`);
+				} else if (blob.consoleOutputMessage) {
+					this.consolePrint(blob.consoleOutputMessage);
 				}
 			} else {
 				console.log(`stdout: ${data}`);
 			}
 		});
+	}
+
+
+	var 
+
+	private consolePrint(msg) {
+		this._channel.append(msg)
+		this._channel.show(true)
 	}
 
 	handleCompilationResult(data) {

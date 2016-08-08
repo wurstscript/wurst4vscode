@@ -57,8 +57,29 @@
                 "command": "wurst.startlast",
                 "title": "Run the last map again",
                 "category": "wurst"
+            },
+            {
+                "command": "wurst.tests",
+                "title": "Run all unit tests",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.tests_file",
+                "title": "Run unit tests in current file",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.tests_func",
+                "title": "Run unit test under cursor",
+                "category": "wurst"
             }
         ],
+        "keybindings": {
+            "command": "wurst.tests_file",
+            "key": "ctrl+f1",
+            "mac": "cmd+f1",
+            "when": "editorTextFocus"
+        },
         "configuration": {
             "type": "object",
             "title": "Wurst configuration",

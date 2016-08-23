@@ -34,3 +34,22 @@ Note: The shortcuts below can be changed in the settings and might be different 
 * Parameter-info (press `Ctrl+shift+space`)
 * Goto declaration (`F12` or `Ctrl+leftclick`)
 * Some commands area available via the command palette (press `F1` and type "Wurst")
+
+
+## Developer information
+
+If you want to build the extension yourself:
+
+1. First install 
+    - Node.js (newer than 4.3.1)
+    - Npm  (newer 2.14.12)
+2. clone the project from [GitHub](https://github.com/peq/wurst4vscode).
+3. Change to the project directory (e.g. `cd wurst4vscode`)
+4. Run `npm i`
+5. Open the project in Visual Studio Code (`code .`)
+6. Press `F5` to debug (it should start a new vscode window with Wurst enabled)
+
+To publish the extension to the Extension Marketplace use `vsce publish` as described in the [vsce - Publishing Tool Reference](https://code.visualstudio.com/docs/tools/vscecli). 
+
+
+

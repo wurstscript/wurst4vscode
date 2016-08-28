@@ -5,7 +5,7 @@ import {ChildProcess, exec, spawn, SpawnOptions} from 'child_process';
 import {dirname, isAbsolute} from 'path';
 import * as fs from 'fs';
 import {ReadLine, createInterface} from 'readline';
-import {Disposable, CancellationToken, OutputChannel, workspace, window} from 'vscode';
+import {Disposable, CancellationToken, OutputChannel, workspace, window, StatusBarItem, StatusBarAlignment} from 'vscode';
 import * as vscode from 'vscode';
 import {DiagnosticsProvider} from './features/diagnosticsProvider'
 
@@ -54,6 +54,8 @@ export class WurstServer {
 
 	private static _lastMapConfig: string;
 
+	private _statusBarItem: StatusBarItem;
+
     constructor() {
         this._channel = window.createOutputChannel("Wurst Log")
     }
@@ -69,6 +71,45 @@ export class WurstServer {
 		return this._start;
 	}
 
+	private getStatusBarItem(): StatusBarItem {
+		if (!this._statusBarItem) {
+			this._statusBarItem = window.createStatusBarItem(StatusBarAlignment.Left);
+		}
+		return this._statusBarItem;
+	}
+
+	private showProgress<T>(task: string, promise: Promise<T>): Promise<T> {
+		let sbi = window.createStatusBarItem(StatusBarAlignment.Left);
+		sbi.text = task;
+		sbi.show();
+
+		// stolen from https://github.com/6/braille-pattern-cli-loading-indicator/blob/master/index.js
+		var loadingIcons = ['⡿','⣟','⣯','⣷','⣾','⣽','⣻','⢿'];
+		var i = 0;
+		function updateText() {
+			sbi.text = loadingIcons[i] + " " + task;
+			i = (i + 1) % loadingIcons.length;
+		}
+		updateText();
+
+		var intervalID = setInterval(updateText, 50);
+
+		promise.then((val) => { 
+				sbi.hide();
+				sbi.dispose();
+				clearInterval(intervalID);
+			},
+			(reason) => {
+				sbi.hide();
+				sbi.dispose();
+				clearInterval(intervalID);
+			}
+		);		
+
+
+		return promise;
+	}
+
 	private _doStart(solutionPath: string): Promise<void> {
 
 		this._state = ServerState.Starting;
@@ -81,7 +122,7 @@ export class WurstServer {
         let wurstJar = config.get<string>("wurstJar")
 		let debugMode = config.get<boolean>("debugMode")
 		let hideExceptions = config.get<boolean>("hideExceptions")
-		return new Promise<void>((resolve, reject) => {
+		let resultPromise = new Promise<void>((resolve, reject) => {
 			fs.stat(wurstJar, (err, stats) => {
 				console.log(`stats: ${err}, ${stats}`);
 				if (err) {
@@ -134,12 +175,14 @@ export class WurstServer {
 				this._state = ServerState.Started
 
 				// send working directory
-				this.sendRequest('init', solutionPath);
+				let initPromise = this.sendRequest('init', solutionPath);
+				this.showProgress("Initializing workspace", initPromise);
 
 				// fulfil promise
 				resolve(undefined);
 			});
 		});
+		return this.showProgress("Starting Wurst", resultPromise);
 	}
 
     public stop(): Promise<void> {
@@ -252,7 +295,7 @@ export class WurstServer {
 
 	public clean(): Promise<any> {
 		this._diagnosticsProvider.clean();
-		return this.sendRequest('clean', {});
+		return this.showProgress("Cleaning workspace", this.sendRequest('clean', {}));
 	}
 
 	public startlast(): PromiseLike<any> {
@@ -295,7 +338,7 @@ export class WurstServer {
 	}
 
 	private startMapIntern(mappath: string, wc3path: string) {
-		return this.sendRequest('runmap', {
+		return this.showProgress("Starting map", this.sendRequest('runmap', {
 				'mappath': mappath,
 				"wc3path": wc3path
 			})
@@ -304,7 +347,7 @@ export class WurstServer {
 					return Promise.reject(res);
 				}
 				return Promise.resolve(res);
-			});
+			}));
 	}
 
 
@@ -321,7 +364,7 @@ export class WurstServer {
 			}
 		}
 
-		return this.sendRequest('runtests', data)	
+		return this.showProgress("Running tests", this.sendRequest('runtests', data))	
 	}
 
 	public setDiagnosticsProvider(dp: DiagnosticsProvider) {

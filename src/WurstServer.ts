@@ -54,7 +54,6 @@ export class WurstServer {
 
 	private static _lastMapConfig: string;
 
-	// private _statusBarItems: StatusBarItem[] = [];
 	private _statusBarItems: Set<StatusBarItem> = new Set();
 
     constructor() {

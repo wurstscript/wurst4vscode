@@ -54,7 +54,8 @@ export class WurstServer {
 
 	private static _lastMapConfig: string;
 
-	private _statusBarItem: StatusBarItem;
+	// private _statusBarItems: StatusBarItem[] = [];
+	private _statusBarItems: Set<StatusBarItem> = new Set();
 
     constructor() {
         this._channel = window.createOutputChannel("Wurst Log")
@@ -71,15 +72,11 @@ export class WurstServer {
 		return this._start;
 	}
 
-	private getStatusBarItem(): StatusBarItem {
-		if (!this._statusBarItem) {
-			this._statusBarItem = window.createStatusBarItem(StatusBarAlignment.Left);
-		}
-		return this._statusBarItem;
-	}
 
 	private showProgress<T>(task: string, promise: Promise<T>): Promise<T> {
 		let sbi = window.createStatusBarItem(StatusBarAlignment.Left);
+		let server = this
+		this._statusBarItems.add(sbi)
 		sbi.text = task;
 		sbi.show();
 
@@ -94,19 +91,17 @@ export class WurstServer {
 
 		var intervalID = setInterval(updateText, 50);
 
-		promise.then((val) => { 
+		function end() {
+			clearInterval(intervalID);
+			sbi.text = "$(check) " + task;
+			server._statusBarItems.delete(sbi)
+			setTimeout(() => {
 				sbi.hide();
 				sbi.dispose();
-				clearInterval(intervalID);
-			},
-			(reason) => {
-				sbi.hide();
-				sbi.dispose();
-				clearInterval(intervalID);
-			}
-		);		
+			}, 5000);
+		}
 
-
+		promise.then(end,end);
 		return promise;
 	}
 
@@ -229,6 +224,13 @@ export class WurstServer {
 
 	public restart(solutionPath: string = this._solutionPath): Promise<void> {
 		if (solutionPath) {
+			this._statusBarItems.forEach((sbi) => {
+				sbi.hide();
+				sbi.dispose();
+			})
+			this._statusBarItems.clear();
+
+
 			return new Promise<void>((suc, rej) => {
 				this.stop().then(() => {
 					setTimeout(() => this.start(solutionPath).then(() => suc()), 1000)

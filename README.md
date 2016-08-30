@@ -21,7 +21,7 @@ When navigating via links, remember that vscode provides shortcuts to get to you
 
 ![Find references](http://i.imgur.com/xas74JI.gif)
 
-When you are looking for references insidde a file you don't even need to use the features above.
+When you are looking for references inside a file you don't even need to use the features above.
 Vscode will automatically highlight all other references and definitions related to the element currently under the cursor:
 
 ![Highlight references](http://i.imgur.com/Pzh1Zpq.gif)

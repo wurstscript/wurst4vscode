@@ -105,7 +105,11 @@ export class WurstServer {
 	}
 
 	private _doStart(solutionPath: string): Promise<void> {
+		return this.showProgress("Starting Wurst", this._doStartAsync(solutionPath));
+	}
 
+
+	private async _doStartAsync(solutionPath: string): Promise<void> {
 		this._state = ServerState.Starting;
 		this._solutionPath = solutionPath;
 
@@ -116,67 +120,60 @@ export class WurstServer {
         let wurstJar = config.get<string>("wurstJar")
 		let debugMode = config.get<boolean>("debugMode")
 		let hideExceptions = config.get<boolean>("hideExceptions")
-		let resultPromise = new Promise<void>((resolve, reject) => {
-			fs.stat(wurstJar, (err, stats) => {
-				console.log(`stats: ${err}, ${stats}`);
-				if (err) {
-					let msg = `Could not find ${wurstJar}. Please configure 'wurst.wurstJar' in your settings.json`
 
-					vscode.window.showErrorMessage(msg);
+		if (!(await this.doesFileExist(wurstJar))) {
+			let msg = `Could not find ${wurstJar}. Please configure 'wurst.wurstJar' in your settings.json`
+			vscode.window.showErrorMessage(msg);
+			return Promise.reject(msg);
+		}
 
-					reject(msg);
-					return;
-				}
-				let spawnOptions: SpawnOptions = {
-					detached: false
-				};
-				let args = ["-jar", wurstJar, "-languageServer"]
-				if (debugMode == true) {
-					args = ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005"].concat(args);
-				}
-				let process = spawn(java, args, spawnOptions)
-				this._serverProcess = process;
+		let spawnOptions: SpawnOptions = {
+			detached: false
+		};
+		let args = ["-jar", wurstJar, "-languageServer"]
+		if (debugMode == true) {
+			if (await this.isPortOpen(5005)) {
+				args = ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005"].concat(args);
+			}
+		}
+		let process = spawn(java, args, spawnOptions)
+		this._serverProcess = process;
 
-				process.on('error', (err) => {
-					let msg = `could not start server with command ${java} -jar ${wurstJar}. Try changing your settings for 'wurst.javaExecutable' or 'wurst.wurstJar'.`;
-					console.log(msg)
-					vscode.window.showErrorMessage(msg)
-					reject(msg);
-				})
+		process.on('error', (err) => {
+			let msg = `could not start server with command ${java} -jar ${wurstJar}. Try changing your settings for 'wurst.javaExecutable' or 'wurst.wurstJar'.`;
+			console.log(msg)
+			vscode.window.showErrorMessage(msg)
+			//reject(msg);
+		})
 
-				process.stdout.on('data', (data: string) => {
-					this.handleStdout(data.toString());
-				});
-
-				process.stderr.on('data', (data) => {
-					let msg = `There was a problem with running Wurst: ${data}`
-					console.log(`stderr: ${data}`);
-					if (!hideExceptions) {
-						vscode.window.showErrorMessage(msg);
-					}
-					reject(msg);
-				});
-
-				process.on('close', (code) => {
-					console.log(`child process exited with code ${code}`);
-				});
-
-
-
-
-				// TODO actually it is not yet started, should wait for some message?
-				console.log(`Server started ${this._serverProcess.pid}!`)
-				this._state = ServerState.Started
-
-				// send working directory
-				let initPromise = this.sendRequest('init', solutionPath);
-				this.showProgress("Initializing workspace", initPromise);
-
-				// fulfil promise
-				resolve(undefined);
-			});
+		process.stdout.on('data', (data: string) => {
+			this.handleStdout(data.toString());
 		});
-		return this.showProgress("Starting Wurst", resultPromise);
+
+		process.stderr.on('data', (data) => {
+			let msg = `There was a problem with running Wurst: ${data}`
+			console.log(`stderr: ${data}`);
+			if (!hideExceptions) {
+				vscode.window.showErrorMessage(msg);
+			}
+			// reject(msg);
+		});
+
+		process.on('close', (code) => {
+			console.log(`child process exited with code ${code}`);
+		});
+
+
+		// TODO actually it is not yet started, should wait for some message?
+		console.log(`Server started ${this._serverProcess.pid}!`)
+		this._state = ServerState.Started
+
+		// send working directory
+		let initPromise = this.sendRequest('init', solutionPath);
+		this.showProgress("Initializing workspace", initPromise);
+
+		// fulfil promise
+		return undefined;
 	}
 
     public stop(): Promise<void> {
@@ -410,8 +407,6 @@ export class WurstServer {
 	}
 
 
-	var 
-
 	private consolePrint(msg) {
 		this._channel.append(msg)
 		this._channel.show(true)
@@ -431,6 +426,33 @@ export class WurstServer {
 
 	public getPosition(line: number, column: number): vscode.Position {
 		return new vscode.Position(Math.max(0, line - 1), Math.max(0, column - 1));
+	}
+
+	private isPortOpen(port): Promise<boolean> {
+		return new Promise((resolve, reject) => {
+			let net = require('net');
+			let tester = net.createServer();
+			tester.once('error', function (err) {
+				if (err.code == 'EADDRINUSE') {
+					resolve(false);
+				}
+			});
+			tester.once('listening', function() {
+				tester.close()
+				resolve(true);
+
+			});
+			tester.listen(port);
+		});
+
+	}
+
+	private doesFileExist(filename): Promise<boolean> {
+		return new Promise((resolve, reject) => {
+			fs.stat(filename, (err, stats) => {
+				resolve(!err);
+			});
+		});
 	}
 
 }

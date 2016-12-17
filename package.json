@@ -119,7 +119,7 @@
 
 	},
 	"devDependencies": {
-		"typescript": "^1.8.9",
+		"typescript": "^2.1.4",
 		"vscode": "^0.11.0"
 	},
 	"dependencies": {

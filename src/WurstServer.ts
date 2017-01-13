@@ -413,7 +413,7 @@ export class WurstServer {
 	}
 
 	handleCompilationResult(data) {
-		let path = this._solutionPath + "/" + data.filename
+		let path = this.uriForFilename(data.filename);
 		this._diagnosticsProvider.setError(path, data.errors);
 	}
 

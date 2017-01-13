@@ -22,8 +22,8 @@ export class DiagnosticsProvider {
     public dispose() {
         this._diagnostics.dispose();
     }
-    
-    public setError(document: string, errors: any[]) {
+
+    public setError(document: Uri, errors: any[]) {
         let diagnostics: Diagnostic[] = errors.map((err) => {
             let startLine = Math.max(0, err.startLine-1);
             let startColumn = Math.max(0, err.startColumn-1);
@@ -38,9 +38,8 @@ export class DiagnosticsProvider {
             )
         });
         
-        let uri = Uri.file(document);
-        console.log(`setError on uri ${uri} ....`);
-        this._diagnostics.set(uri, diagnostics);
+        console.log(`setError on uri ${document} ....`);
+        this._diagnostics.set(document, diagnostics);
     }
     
     private convertErrorType(errType: string): DiagnosticSeverity {

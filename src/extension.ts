@@ -16,6 +16,7 @@ import WurstSignatureHelpProvider from './features/signatureHelpProvider'
 import WurstDocumentHighlightProvider from './features/documentHighlightProvider'
 import WurstReferenceProvider from './features/referenceProvider'
 import {registerCommands} from './features/commands'
+import {onDocumentOpen} from './features/fileCreation'
 
 export function activate(context: ExtensionContext) {
     console.log("Wurst extension activated!!")
@@ -70,6 +71,10 @@ export function activate(context: ExtensionContext) {
 
         context.subscriptions.push(
             vscode.languages.registerReferenceProvider('wurst', new WurstReferenceProvider(server))
+        );
+
+        context.subscriptions.push(
+            workspace.onDidOpenTextDocument(onDocumentOpen)
         );
 
     });

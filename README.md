@@ -156,7 +156,8 @@ If you want to build the extension yourself:
 5. Open the project in Visual Studio Code (`code .`)
 6. Press `F5` to debug (it should start a new vscode window with Wurst enabled)
 
-To publish the extension to the Extension Marketplace use `vsce publish` as described in the [vsce - Publishing Tool Reference](https://code.visualstudio.com/docs/tools/vscecli). 
+To publish the extension to the Extension Marketplace use `vsce publish` as described in the [vsce - Publishing Tool Reference](https://code.visualstudio.com/docs/tools/vscecli).
+To update the version use `npm version path`.
 
 
 

@@ -1,138 +1,138 @@
 {
-  "name": "wurst",
-  "displayName": "Wurst language support",
-  "description": "Language support for Wurst.",
-  "icon": "images/wursti_icon.png",
-  "license": "SEE LICENSE IN LICENSE.txt",
-  "bugs": {
-    "url": "https://github.com/peq/wurst4vscode/issues",
-    "email": "peter.peq@gmail.com"
-  },
-  "homepage": "https://github.com/peq/wurst4vscode",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/peq/wurst4vscode.git"
-  },
-  "version": "0.0.8",
-  "publisher": "peterzeller",
-  "engines": {
-    "vscode": "^1.0.0"
-  },
-  "categories": [
-    "Languages"
-  ],
-  "activationEvents": [
-    "onLanguage:wurst"
-  ],
-  "main": "./out/extension",
-  "contributes": {
-    "languages": [
-      {
-        "id": "wurst",
-        "aliases": [
-          "Wurst",
-          "wurst"
-        ],
-        "extensions": [
-          ".wurst",
-          ".jurst",
-          ".j"
-        ],
-        "configuration": "./wurst.configuration.json"
-      }
-    ],
-    "grammars": [
-      {
-        "language": "wurst",
-        "scopeName": "source.wurst",
-        "path": "./syntaxes/wurst.json"
-      }
-    ],
-    "commands": [
-      {
-        "command": "wurst.restart",
-        "title": "Restart wurst language service",
-        "category": "wurst"
-      },
-      {
-        "command": "wurst.clean",
-        "title": "Clean the Wurst workspace",
-        "category": "wurst"
-      },
-      {
-        "command": "wurst.startmap",
-        "title": "Run a Wurst map",
-        "category": "wurst"
-      },
-      {
-        "command": "wurst.startlast",
-        "title": "Run the last map again",
-        "category": "wurst"
-      },
-      {
-        "command": "wurst.tests",
-        "title": "Run all unit tests",
-        "category": "wurst"
-      },
-      {
-        "command": "wurst.tests_file",
-        "title": "Run unit tests in current file",
-        "category": "wurst"
-      },
-      {
-        "command": "wurst.tests_func",
-        "title": "Run unit test under cursor",
-        "category": "wurst"
-      }
-    ],
-    "keybindings": {
-      "command": "wurst.tests_file",
-      "key": "ctrl+f1",
-      "mac": "cmd+f1",
-      "when": "editorTextFocus"
+    "name": "wurst",
+    "displayName": "Wurst language support",
+    "description": "Language support for Wurst.",
+    "icon": "images/wursti_icon.png",
+    "license": "SEE LICENSE IN LICENSE.txt",
+    "bugs": {
+        "url": "https://github.com/peq/wurst4vscode/issues",
+        "email": "peter.peq@gmail.com"
     },
-    "configuration": {
-      "type": "object",
-      "title": "Wurst configuration",
-      "properties": {
-        "wurst.javaExecutable": {
-          "type": "string",
-          "default": "java",
-          "description": "The command to use for starting Java. You can change this if Java is not in your PATH"
+    "homepage": "https://github.com/peq/wurst4vscode",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/peq/wurst4vscode.git"
+    },
+    "version": "0.0.9",
+    "publisher": "peterzeller",
+    "engines": {
+        "vscode": "^1.0.0"
+    },
+    "categories": [
+        "Languages"
+    ],
+    "activationEvents": [
+        "onLanguage:wurst"
+    ],
+    "main": "./out/extension",
+    "contributes": {
+        "languages": [
+            {
+                "id": "wurst",
+                "aliases": [
+                    "Wurst",
+                    "wurst"
+                ],
+                "extensions": [
+                    ".wurst",
+                    ".jurst",
+                    ".j"
+                ],
+                "configuration": "./wurst.configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "wurst",
+                "scopeName": "source.wurst",
+                "path": "./syntaxes/wurst.json"
+            }
+        ],
+        "commands": [
+            {
+                "command": "wurst.restart",
+                "title": "Restart wurst language service",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.clean",
+                "title": "Clean the Wurst workspace",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.startmap",
+                "title": "Run a Wurst map",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.startlast",
+                "title": "Run the last map again",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.tests",
+                "title": "Run all unit tests",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.tests_file",
+                "title": "Run unit tests in current file",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.tests_func",
+                "title": "Run unit test under cursor",
+                "category": "wurst"
+            }
+        ],
+        "keybindings": {
+            "command": "wurst.tests_file",
+            "key": "ctrl+f1",
+            "mac": "cmd+f1",
+            "when": "editorTextFocus"
         },
-        "wurst.debugMode": {
-          "type": "boolean",
-          "default": "false",
-          "description": "Enabling the debugmode will make the VM available for debugging on port 5005"
-        },
-        "wurst.hideExceptions": {
-          "type": "boolean",
-          "default": "true",
-          "description": "Turn this off to see Wurst Exceptions as vscode notifications"
-        },
-        "wurst.wurstJar": {
-          "type": "string",
-          "default": "/home/peter/work/WurstScript/Wurstpack/wurstscript/wurstscript.jar",
-          "description": "The path to wurstscript.jar (in your WurstPack folder)"
-        },
-        "wurst.wc3path": {
-          "type": "string",
-          "default": null,
-          "description": "The path to your Frozen Throne installation directory."
+        "configuration": {
+            "type": "object",
+            "title": "Wurst configuration",
+            "properties": {
+                "wurst.javaExecutable": {
+                    "type": "string",
+                    "default": "java",
+                    "description": "The command to use for starting Java. You can change this if Java is not in your PATH"
+                },
+                "wurst.debugMode": {
+                    "type": "boolean",
+                    "default": "false",
+                    "description": "Enabling the debugmode will make the VM available for debugging on port 5005"
+                },
+                "wurst.hideExceptions": {
+                    "type": "boolean",
+                    "default": "true",
+                    "description": "Turn this off to see Wurst Exceptions as vscode notifications"
+                },
+                "wurst.wurstJar": {
+                    "type": "string",
+                    "default": "/home/peter/work/WurstScript/Wurstpack/wurstscript/wurstscript.jar",
+                    "description": "The path to wurstscript.jar (in your WurstPack folder)"
+                },
+                "wurst.wc3path": {
+                    "type": "string",
+                    "default": null,
+                    "description": "The path to your Frozen Throne installation directory."
+                }
+            }
         }
-      }
+    },
+    "scripts": {
+        "vscode:prepublish": "node ./node_modules/vscode/bin/compile",
+        "compile": "node ./node_modules/vscode/bin/compile -watch -p ./",
+        "postinstall": "node ./node_modules/vscode/bin/install"
+    },
+    "devDependencies": {
+        "typescript": "^2.1.4",
+        "vscode": "^0.11.0"
+    },
+    "dependencies": {
+        "vscode-languageclient": "^1.4.2"
     }
-  },
-  "scripts": {
-    "vscode:prepublish": "node ./node_modules/vscode/bin/compile",
-    "compile": "node ./node_modules/vscode/bin/compile -watch -p ./",
-    "postinstall": "node ./node_modules/vscode/bin/install"
-  },
-  "devDependencies": {
-    "typescript": "^2.1.4",
-    "vscode": "^0.11.0"
-  },
-  "dependencies": {
-    "vscode-languageclient": "^1.4.2"
-  }
 }

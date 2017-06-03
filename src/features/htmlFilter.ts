@@ -16,6 +16,9 @@ export function fromHtml(html: string): MarkedString[] {
 }
 
 export function htmlToString(html: string): string {
+    if (!html) {
+        return "";
+    }
     html = html.replace(/<pre>/g, "\n");
     html = html.replace(/<\/pre>/g, "\n");
     html = html.replace(/<br \/>/g, "\n");

@@ -26,7 +26,7 @@ export default class WurstCompletionItemProvider extends AbstractProvider implem
                
                item.detail = htmlToString(completion.detail);
                item.documentation = htmlToString(completion.documentation);
-               item.sortText = (10.-completion.rating).toFixed(5) + completion.label               
+               item.sortText = (10.-completion.rating).toFixed(5) + completion.label
                //item.textEdit = this.convertTextEdit(completion.textEdit)
                item.insertText = completion.textEdit.newText;
                console.log(`completion ${item.label}!`);

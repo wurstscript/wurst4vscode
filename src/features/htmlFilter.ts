@@ -7,12 +7,37 @@ export function fromHtml(html: string): MarkedString[] {
     html = html.replace(/<\/pre>/g, "\n");
     html = html.replace(/<br \/>/g, "\n");
     let txt = plain(html)
-    return txt.split(/\n/).map(line => {
+    let lines: MarkedString[] = [""];
+    let code: string = null;
+    txt.split(/\n/).forEach(line => {
         if (line.startsWith("[code]")) {
-            return { language: 'wurst', value: line.replace("[code]", "") };
+            if (code !== null) {
+                lines.push({ language: 'wurst', value: code });
+                code = null;
+            }
+            lines.push({ language: 'wurst', value: line.replace("[code]", "") });
+            lines.push("");
+        } else {
+            let lineTrimmed = line.trim();
+            if (lineTrimmed.startsWith("|")) {
+                if (!code) {
+                    code = "";
+                }
+                code = code + "\n" + line.substr(1);
+            } else {
+                if (code !== null) {
+                    lines.push({ language: 'wurst', value: code });
+                    lines.push("");
+                    code = null;
+                }
+                lines[lines.length-1] += "\n" + line;
+            }
         }
-        return line;
     });
+    if (code !== null) {
+        lines.push({ language: 'wurst', value: code });
+    }
+    return lines.filter(s => s !== "");
 }
 
 export function htmlToString(html: string): string {

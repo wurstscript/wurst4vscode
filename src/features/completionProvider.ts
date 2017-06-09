@@ -1,6 +1,6 @@
 'use strict';
 
-import {CompletionItemProvider, TextEdit, CompletionItem, CompletionItemKind, CancellationToken, TextDocument, Range, Position} from 'vscode';
+import {CompletionItemProvider, TextEdit, CompletionItem, CompletionItemKind, CancellationToken, TextDocument, Range, Position, SnippetString} from 'vscode';
 import AbstractProvider from './abstractProvider';
 import {WurstServer} from '../WurstServer';
 import * as vscode from 'vscode';
@@ -38,9 +38,9 @@ export default class WurstCompletionItemProvider extends AbstractProvider implem
                    let paramSnippets = [];
                    for (let i in params) {
                        let param = params[i];
-                       paramSnippets.push('{{' + param.name + '}}')
+                       paramSnippets.push('${' + (i+1) + ":" + param.name + '}')
                    }
-                   item.insertText = item.insertText + '(' + paramSnippets.join(', ') + '){{}}';
+                   item.insertText = new SnippetString(item.insertText + '(' + paramSnippets.join(', ') + ')');
                }
                /*
                let range = item.textEdit.range; 

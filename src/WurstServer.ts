@@ -110,6 +110,17 @@ export class WurstServer {
 
 
 	private async _doStartAsync(solutionPath: string): Promise<void> {
+		if (!solutionPath) {
+			console.log("No folder opened.");
+
+			function delay(t) {
+				return new Promise(function(resolve) {
+					setTimeout(resolve, t)
+				});
+			}
+			this.showProgress("Please open a folder to use the Wurst plugin!", delay(10000));
+			return undefined;
+		}
 		this._state = ServerState.Starting;
 		this._solutionPath = solutionPath;
 

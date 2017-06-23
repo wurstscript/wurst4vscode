@@ -4,7 +4,8 @@ import * as path from 'path';
 
 import * as vscode from 'vscode';
 import { workspace, Disposable, ExtensionContext, LanguageConfiguration } from 'vscode';
-import { LanguageClient, LanguageClientOptions, SettingMonitor, ServerOptions, TransportKind } from 'vscode-languageclient';
+import { LanguageClient, LanguageClientOptions, SettingMonitor, ServerOptions, TransportKind, Executable } from 'vscode-languageclient';
+import * as fs from 'fs';
 
 import {WurstServer} from './WurstServer';
 import forwardChanges from './features/changeForwarding'
@@ -17,6 +18,7 @@ import WurstDocumentHighlightProvider from './features/documentHighlightProvider
 import WurstReferenceProvider from './features/referenceProvider'
 import {registerCommands} from './features/commands'
 import {onDocumentOpen} from './features/fileCreation'
+
 
 export function activate(context: ExtensionContext) {
     console.log("Wurst extension activated!!")
@@ -34,15 +36,15 @@ export function activate(context: ExtensionContext) {
     
     context.subscriptions.push(disposable);    
     
-    
-    const server = new WurstServer();
-    let started = server.start(workspace.rootPath);
-    
+
+    // const server = new WurstServer();
+    // let started = server.start(workspace.rootPath);
+
     // stop server on deactivate
-	context.subscriptions.push(new vscode.Disposable(() => {
-       server.stop(); 
-    }));
-    
+	// context.subscriptions.push(new vscode.Disposable(() => {
+    //    server.stop();
+    // }));
+    /*
     context.subscriptions.push(registerCommands(server))
     
     started.then(value => {
@@ -78,6 +80,7 @@ export function activate(context: ExtensionContext) {
         );
 
     });
+    */
     
     let config: LanguageConfiguration = {
         comments: {
@@ -94,7 +97,103 @@ export function activate(context: ExtensionContext) {
             decreaseIndentPattern: /^\s*(else|end)\s.*$/,
         } 
     };
-    
+
     vscode.languages.setLanguageConfiguration('wurst', config);
-    
+
+    startLanguageClient(context).then(
+        (value) => console.log(`init done : ${value}`),
+        (err) => console.log(`init error: ${err}`)
+    );
+
+}
+
+async function startLanguageClient(context: ExtensionContext) {
+    let cfg = vscode.workspace.getConfiguration("wurst")
+
+    // TODO make configurable
+    let java = cfg.get<string>("javaExecutable")
+    let wurstJar = cfg.get<string>("wurstJar")
+    let debugMode = cfg.get<boolean>("debugMode")
+    let hideExceptions = cfg.get<boolean>("hideExceptions")
+
+
+
+
+
+    let clientOptions: LanguageClientOptions = {
+		// Register the server for Wurst-documents
+		documentSelector: ['wurst'],
+		synchronize: {
+			// Synchronize the setting section 'wurst' to the server
+			configurationSection: 'wurst',
+			// Notify the server about file changes to '.wurst files contain in the workspace
+			fileEvents: workspace.createFileSystemWatcher('**/*.wurst')
+		}
+	}
+
+    let serverOptions = await getServerOptions();
+
+    let client = new LanguageClient("wurstLanguageServer", serverOptions, clientOptions);
+
+    context.subscriptions.push(client.start());
+}
+
+async function getServerOptions(): Promise<ServerOptions> {
+    let config = vscode.workspace.getConfiguration("wurst")
+
+    // TODO make configurable
+    let java = config.get<string>("javaExecutable")
+    let wurstJar = config.get<string>("wurstJar")
+    let debugMode = config.get<boolean>("debugMode")
+    let hideExceptions = config.get<boolean>("hideExceptions")
+
+    if (!(await doesFileExist(wurstJar))) {
+        let msg = `Could not find ${wurstJar}. Please configure 'wurst.wurstJar' in your settings.json`
+        vscode.window.showErrorMessage(msg);
+        return Promise.reject(msg);
+    }
+
+    let args = ["-jar", wurstJar, "-languageServer"]
+    if (debugMode == true) {
+        if (await isPortOpen(5005)) {
+            args = ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005,quiet=y"].concat(args);
+        }
+    }
+
+    let exec: Executable = {
+        command: java,
+        args: args
+    };
+
+    let serverOptions: ServerOptions = {
+		run : exec,
+		debug: exec
+	}
+    return serverOptions;
+}
+
+function doesFileExist(filename): Promise<boolean> {
+    return new Promise((resolve, reject) => {
+        fs.stat(filename, (err, stats) => {
+            resolve(!err);
+        });
+    });
+}
+
+function isPortOpen(port): Promise<boolean> {
+    return new Promise((resolve, reject) => {
+        let net = require('net');
+        let tester = net.createServer();
+        tester.once('error', function (err) {
+            if (err.code == 'EADDRINUSE') {
+                resolve(false);
+            }
+        });
+        tester.once('listening', function() {
+            tester.close()
+            resolve(true);
+
+        });
+        tester.listen(port);
+    });
 }

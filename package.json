@@ -100,6 +100,11 @@
           "default": "java",
           "description": "The command to use for starting Java. You can change this if Java is not in your PATH"
         },
+        "wurst.javaOpts": {
+          "type": "array",
+          "default": [],
+          "description": "Additional options to pass to java when starting Wurst."
+        },
         "wurst.debugMode": {
           "type": "boolean",
           "default": "false",

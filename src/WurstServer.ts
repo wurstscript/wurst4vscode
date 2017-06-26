@@ -128,6 +128,7 @@ export class WurstServer {
 
         // TODO make configurable
         let java = config.get<string>("javaExecutable")
+		let additionalOpts = config.get<string[]>("javaOpts")
         let wurstJar = config.get<string>("wurstJar")
 		let debugMode = config.get<boolean>("debugMode")
 		let hideExceptions = config.get<boolean>("hideExceptions")
@@ -142,6 +143,10 @@ export class WurstServer {
 			detached: false
 		};
 		let args = ["-jar", wurstJar, "-languageServer"]
+
+		// add additional args
+		args = additionalOpts.concat(args);
+
 		if (debugMode == true) {
 			if (await this.isPortOpen(5005)) {
 				args = ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005"].concat(args);
@@ -332,7 +337,7 @@ export class WurstServer {
 		} else {
 			let items = workspace.findFiles('*.w3x', null, 10)
 				.then(uris => uris.sort(function(a, b) {
-					return fs.statSync(b.fsPath).mtime.getTime() - 
+					return fs.statSync(b.fsPath).mtime.getTime() -
 							fs.statSync(a.fsPath).mtime.getTime();
 				}))
 				.then(uris => uris.map(uri => uri.path))

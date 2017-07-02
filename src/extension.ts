@@ -7,15 +7,6 @@ import { workspace, Disposable, ExtensionContext, LanguageConfiguration } from '
 import { LanguageClient, LanguageClientOptions, SettingMonitor, ServerOptions, TransportKind, Executable } from 'vscode-languageclient';
 import * as fs from 'fs';
 
-import {WurstServer} from './WurstServer';
-import forwardChanges from './features/changeForwarding'
-import WurstDefinitionProvider from './features/definitionProvider'
-import WurstHoverProvider from './features/hoverProvider'
-import WurstCompletionItemProvider from './features/completionProvider'
-import {DiagnosticsProvider} from './features/diagnosticsProvider'
-import WurstSignatureHelpProvider from './features/signatureHelpProvider'
-import WurstDocumentHighlightProvider from './features/documentHighlightProvider'
-import WurstReferenceProvider from './features/referenceProvider'
 import {registerCommands} from './features/commands'
 import {onDocumentOpen} from './features/fileCreation'
 
@@ -37,51 +28,6 @@ export function activate(context: ExtensionContext) {
     context.subscriptions.push(disposable);    
     
 
-    // const server = new WurstServer();
-    // let started = server.start(workspace.rootPath);
-
-    // stop server on deactivate
-	// context.subscriptions.push(new vscode.Disposable(() => {
-    //    server.stop();
-    // }));
-    /*
-    context.subscriptions.push(registerCommands(server))
-    
-    started.then(value => {
-        
-        context.subscriptions.push(forwardChanges(server))
-        
-        context.subscriptions.push(new DiagnosticsProvider(server))
-        
-        context.subscriptions.push(
-            vscode.languages.registerDefinitionProvider('wurst', new WurstDefinitionProvider(server)));
-            
-        context.subscriptions.push(
-            vscode.languages.registerHoverProvider('wurst', new WurstHoverProvider(server)));
-        
-        context.subscriptions.push(
-            vscode.languages.registerCompletionItemProvider('wurst', new WurstCompletionItemProvider(server), '.')
-        );
-        
-        context.subscriptions.push(
-            vscode.languages.registerSignatureHelpProvider('wurst', new WurstSignatureHelpProvider(server), '(', ',')
-        );
-
-        context.subscriptions.push(
-            vscode.languages.registerDocumentHighlightProvider('wurst', new WurstDocumentHighlightProvider(server))
-        );
-
-        context.subscriptions.push(
-            vscode.languages.registerReferenceProvider('wurst', new WurstReferenceProvider(server))
-        );
-
-        context.subscriptions.push(
-            workspace.onDidOpenTextDocument(onDocumentOpen)
-        );
-
-    });
-    */
-    
     let config: LanguageConfiguration = {
         comments: {
             lineComment: "//",
@@ -115,9 +61,6 @@ async function startLanguageClient(context: ExtensionContext) {
     let wurstJar = cfg.get<string>("wurstJar")
     let debugMode = cfg.get<boolean>("debugMode")
     let hideExceptions = cfg.get<boolean>("hideExceptions")
-
-
-
 
 
     let clientOptions: LanguageClientOptions = {

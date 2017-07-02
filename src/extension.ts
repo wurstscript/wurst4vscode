@@ -95,7 +95,7 @@ export function activate(context: ExtensionContext) {
         indentationRules: {
             increaseIndentPattern: /^\s*(if|while|for|function|class|module|interface)\s.*$/,
             decreaseIndentPattern: /^\s*(else|end)\s.*$/,
-        } 
+        }
     };
 
     vscode.languages.setLanguageConfiguration('wurst', config);
@@ -134,8 +134,9 @@ async function startLanguageClient(context: ExtensionContext) {
     let serverOptions = await getServerOptions();
 
     let client = new LanguageClient("wurstLanguageServer", serverOptions, clientOptions);
-
     context.subscriptions.push(client.start());
+
+    context.subscriptions.push(registerCommands(client));
 }
 
 async function getServerOptions(): Promise<ServerOptions> {

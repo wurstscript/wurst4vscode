@@ -50,11 +50,6 @@
     ],
     "commands": [
       {
-        "command": "wurst.restart",
-        "title": "Restart wurst language service",
-        "category": "wurst"
-      },
-      {
         "command": "wurst.clean",
         "title": "Clean the Wurst workspace",
         "category": "wurst"

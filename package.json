@@ -78,6 +78,11 @@
         "command": "wurst.tests_func",
         "title": "Run unit test under cursor",
         "category": "wurst"
+      },
+      {
+        "command": "wurst.perform_code_action",
+        "title": "Perform a code action (This command is usually triggered by quick fixes in the editor).",
+        "category": "wurst"
       }
     ],
     "keybindings": {

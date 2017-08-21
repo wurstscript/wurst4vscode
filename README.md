@@ -10,21 +10,21 @@ If you run into any problems while using the plugin, please create a ticket on [
 Context-aware auto completions (default shortcut: `Ctrl+space`) help you to find relevant functions quickly.
 You can also see the documentation of the function and the required arguments.
 
-![Autocomplete](http://i.imgur.com/QPwREHO.gif)
+![Autocomplete](https://i.imgur.com/QPwREHO.gif)
 
 You can always find the definition of a function (`F12` or `Ctrl+leftclick`, or just peek at the definition with `Ctrl+Shift+F10`). 
 
-![Goto declaration](http://i.imgur.com/imIINfH.gif)
+![Goto declaration](https://i.imgur.com/imIINfH.gif)
 
 It is even possible to navigate into the other direction and find all the references of a given definition (`Shift+F12`).
 When navigating via links, remember that vscode provides shortcuts to get to your old position (`ctrl+alt+-` and `ctrl+shift+-`).
 
-![Find references](http://i.imgur.com/xas74JI.gif)
+![Find references](https://i.imgur.com/xas74JI.gif)
 
 When you are looking for references inside a file you don't even need to use the features above.
 Vscode will automatically highlight all other references and definitions related to the element currently under the cursor:
 
-![Highlight references](http://i.imgur.com/Pzh1Zpq.gif)
+![Highlight references](https://i.imgur.com/Pzh1Zpq.gif)
 
 
 
@@ -58,7 +58,7 @@ You should also be aware of the following vscode features, which are independent
 ### Requirements
 
   * [Java 8](http://www.oracle.com/technetwork/java/javase/downloads/index.html)
-  * [Wurst compiler](http://peeeq.de/hudson/job/Wurst/lastSuccessfulBuild/artifact/downloads/wurstpack_compiler.zip) 
+  * [Wurst compiler](http://peeeq.de/hudson/job/Wurst/lastSuccessfulBuild/artifact/downloads/wurstpack_compiler.zip)
      * If you are using WurstPack, you should use the compiler included in the pack under `Wurstpack/wurstscript/wurstscript.jar`.
 
 
@@ -133,7 +133,7 @@ In addition there are some vscode settings relevant to Wurst:
     
     Your project should now have the following structure:
 
-    ![Hello Wurst project layout](http://i.imgur.com/KAB1Se2.png)
+    ![Hello Wurst project layout](https://i.imgur.com/KAB1Se2.png)
 
 7. Launch the command prompt by pressing `F1` and launch the command `wurst: Run a Wurst map`.
     Wurst will search for maps in your project folder (not in subdirectories) and will show you a list of maps to pick from.

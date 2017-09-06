@@ -55,10 +55,15 @@ You should also be aware of the following vscode features, which are independent
 
 ## Setup and Configuration
 
-### Requirements
+Follow the [Wurst Setup Guide](https://wurstscript.github.io/start.html) to install Wurst and the plugin.
+
+## Manual Configuration
+
+First install the requirements:
 
   * [Java 8](http://www.oracle.com/technetwork/java/javase/downloads/index.html)
   * [Wurst compiler](http://peeeq.de/hudson/job/Wurst/lastSuccessfulBuild/artifact/downloads/wurstpack_compiler.zip)
+     * If you used the [WurstSetup tool](https://wurstscript.github.io/start.html) the compiler is installed automatically.
      * If you are using WurstPack, you should use the compiler included in the pack under `Wurstpack/wurstscript/wurstscript.jar`.
 
 
@@ -68,12 +73,12 @@ Launch VS Code Quick Open (Ctrl+P), write `ext install wurst`, and press enter.
 After installation you have to adjust a few settings in your _settings.json_ (open it via `File` -> `Preferences` -> `User settings`):
 
 
-The only mandatory configuration is to set the path to the compiler.
+If you did not install Wurst with the Setup tool, you have to configure the the path to the compiler.
 To do this, set the property `wurst.wurstJar` to the path where you installed the Wurst compiler (`wurstscript.jar`).
 You can run `java -jar your/path/to/wurstscript.jar --about` from a terminal to test whether Java and Wurst have been installed correctly.
 
 
-Minimal configuration:
+Example configuration:
 
     {
         "wurst.wurstJar": "/home/peter/work/WurstScript/Wurstpack/wurstscript/wurstscript.jar",
@@ -92,7 +97,7 @@ All configuration options are shown below with their default values.
         "wurst.hideExceptions": "true",
 
         // The path to wurstscript.jar (in your WurstPack folder)
-        "wurst.wurstJar": "/home/peter/work/WurstScript/Wurstpack/wurstscript/wurstscript.jar",
+        "wurst.wurstJar": "$HOME/.wurst/wurstscript.jar",
 
         // The path to your Frozen Throne installation directory.
         "wurst.wc3path": null,
@@ -113,34 +118,7 @@ In addition there are some vscode settings relevant to Wurst:
 
 ## Getting Started: Your first Wurst project
 
-1. Create a new folder for your project. This will be your project folder.
-2. Use `File`->`Open Folder...` to open your project folder. The plugin only works when opening the project folder.
-3. Create a file named `wurst.dependencies`. 
-    This file contains paths where Wurst searches for libraries (one path per line).
-    Usually, you should at least add the standard library here.
-    To do this, clone or download the [Wurst standard library](https://github.com/peq/wurstStdlib) to your machine and add the path to it to your `wurst.dependencies` file.
-4. Create a folder named `wurst`. This is where all your Wurst sources will go.
-5. Create a new file named `Hello.wurst` in the newly created `wurst` folder.
-    Add the following contents:
-
-        package Hello
-
-        init
-            print("Hello Wurst")
-6. Use the World-Editor to create a new map and save it into your project folder.
-    Make sure, that the map is a Frozen Throne map and has a `*.w3x` ending.
-    Moreover, the map should have at least one unit edited in the object editor, so that Wurst can modify the object file. 
-    
-    Your project should now have the following structure:
-
-    ![Hello Wurst project layout](https://i.imgur.com/KAB1Se2.png)
-
-7. Launch the command prompt by pressing `F1` and launch the command `wurst: Run a Wurst map`.
-    Wurst will search for maps in your project folder (not in subdirectories) and will show you a list of maps to pick from.
-    Pick your map with the arrow keys and press `Enter`.
-
-    Now Warcraft should launch with your map and display "Hello Wurst" on the screen.
-
+Follow the [Wurst Beginner Guide](https://wurstscript.github.io/tutorials/wurstbeginner.html).
 
 
 ## Developer information

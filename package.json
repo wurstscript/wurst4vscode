@@ -117,8 +117,8 @@
         },
         "wurst.wurstJar": {
           "type": "string",
-          "default": "/home/peter/work/WurstScript/Wurstpack/wurstscript/wurstscript.jar",
-          "description": "The path to wurstscript.jar (in your WurstPack folder)"
+          "default": "$HOME/.wurst/wurstscript.jar",
+          "description": "The path to wurstscript.jar (in your WurstPack folder or installed via WurstSetup). The variable $HOME is replaced with the home directory of the current user."
         },
         "wurst.wc3path": {
           "type": "string",
@@ -135,10 +135,12 @@
   },
   "devDependencies": {
     "@types/node": "^7.0.29",
+    "@types/os-homedir": "^1.0.0",
     "typescript": "^2.0.3",
     "vscode": "^1.1.0"
   },
   "dependencies": {
+    "os-homedir": "^1.0.2",
     "vscode-languageclient": "^3.2.2"
   }
 }

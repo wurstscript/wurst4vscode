@@ -8,26 +8,12 @@ import { LanguageClient, LanguageClientOptions, SettingMonitor, ServerOptions, T
 import * as fs from 'fs';
 
 import {registerCommands} from './features/commands'
-import {onDocumentOpen} from './features/fileCreation'
+import {registerFileCreation} from './features/fileCreation'
 import os_homedir = require('os-homedir');
 
 
 export function activate(context: ExtensionContext) {
     console.log("Wurst extension activated!!")
-    context.extensionPath
-
-    // The command has been defined in the package.json file
-    // Now provide the implementation of the command with  registerCommand
-    // The commandId parameter must match the command field in package.json
-    var disposable = vscode.commands.registerCommand('extension.sayHello', () => {
-        // The code you place here will be executed every time your command is executed
-
-        // Display a message box to the user
-        vscode.window.showInformationMessage('Hello World!');
-    });
-
-    context.subscriptions.push(disposable);    
-    
 
     let config: LanguageConfiguration = {
         comments: {
@@ -74,6 +60,7 @@ async function startLanguageClient(context: ExtensionContext) {
     context.subscriptions.push(client.start());
 
     context.subscriptions.push(registerCommands(client));
+    context.subscriptions.push(registerFileCreation());
 }
 
 async function getServerOptions(): Promise<ServerOptions> {

@@ -4,7 +4,7 @@ import {TextDocument} from 'vscode';
 import { workspace, Disposable, ExtensionContext, LanguageConfiguration, WorkspaceEdit, Position } from 'vscode';
 import {basename, extname} from 'path';
 
-export function onDocumentOpen(td: TextDocument) {
+function onDocumentOpen(td: TextDocument) {
 	let extension = extname(td.fileName);
 	if (extension != ".wurst" && extension != ".jurst") {
 		return;
@@ -21,4 +21,8 @@ export function onDocumentOpen(td: TextDocument) {
 	workspace.applyEdit(edit);
 
 
+}
+
+export function registerFileCreation(): Disposable {
+	return workspace.onDidOpenTextDocument(onDocumentOpen);
 }

@@ -9,6 +9,7 @@ import * as fs from 'fs';
 
 import {registerCommands} from './features/commands'
 import {onDocumentOpen} from './features/fileCreation'
+import os_homedir = require('os-homedir');
 
 
 export function activate(context: ExtensionContext) {
@@ -24,7 +25,7 @@ export function activate(context: ExtensionContext) {
         // Display a message box to the user
         vscode.window.showInformationMessage('Hello World!');
     });
-    
+
     context.subscriptions.push(disposable);    
     
 
@@ -56,13 +57,6 @@ export function activate(context: ExtensionContext) {
 async function startLanguageClient(context: ExtensionContext) {
     let cfg = vscode.workspace.getConfiguration("wurst")
 
-    // TODO make configurable
-    let java = cfg.get<string>("javaExecutable")
-    let wurstJar = cfg.get<string>("wurstJar")
-    let debugMode = cfg.get<boolean>("debugMode")
-    let hideExceptions = cfg.get<boolean>("hideExceptions")
-
-
     let clientOptions: LanguageClientOptions = {
 		// Register the server for Wurst-documents
 		documentSelector: ['wurst'],
@@ -87,7 +81,7 @@ async function getServerOptions(): Promise<ServerOptions> {
 
     // TODO make configurable
     let java = config.get<string>("javaExecutable")
-    let wurstJar = config.get<string>("wurstJar")
+    let wurstJar = config.get<string>("wurstJar").replace("$HOME", os_homedir());
     let debugMode = config.get<boolean>("debugMode")
     let hideExceptions = config.get<boolean>("hideExceptions")
 

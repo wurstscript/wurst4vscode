@@ -13,7 +13,7 @@
     "type": "git",
     "url": "https://github.com/peq/wurst4vscode.git"
   },
-  "version": "0.1.0",
+  "version": "0.1.2",
   "publisher": "peterzeller",
   "engines": {
     "vscode": "^1.13.0"
@@ -78,6 +78,11 @@
         "command": "wurst.tests_func",
         "title": "Run unit test under cursor",
         "category": "wurst"
+      },
+      {
+        "command": "wurst.perform_code_action",
+        "title": "Perform a code action (This command is usually triggered by quick fixes in the editor).",
+        "category": "wurst"
       }
     ],
     "keybindings": {
@@ -112,8 +117,8 @@
         },
         "wurst.wurstJar": {
           "type": "string",
-          "default": "/home/peter/work/WurstScript/Wurstpack/wurstscript/wurstscript.jar",
-          "description": "The path to wurstscript.jar (in your WurstPack folder)"
+          "default": "$HOME/.wurst/wurstscript.jar",
+          "description": "The path to wurstscript.jar (in your WurstPack folder or installed via WurstSetup). The variable $HOME is replaced with the home directory of the current user."
         },
         "wurst.wc3path": {
           "type": "string",
@@ -130,10 +135,12 @@
   },
   "devDependencies": {
     "@types/node": "^7.0.29",
+    "@types/os-homedir": "^1.0.0",
     "typescript": "^2.0.3",
     "vscode": "^1.1.0"
   },
   "dependencies": {
+    "os-homedir": "^1.0.2",
     "vscode-languageclient": "^3.2.2"
   }
 }

@@ -71,6 +71,14 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		return client.sendRequest(ExecuteCommandRequest.type, request)
 	}
 
+	let performCodeAction = (args: any[]) => {
+		let request: ExecuteCommandParams = {
+			command: "wurst.perform_code_action",
+			arguments: args
+		};
+		return client.sendRequest(ExecuteCommandRequest.type, request)
+	}
+
 
 	return vscode.Disposable.from(
 		//vscode.commands.registerCommand('wurst.restart', () => client.restart()),
@@ -79,6 +87,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		vscode.commands.registerCommand('wurst.startlast', () => startLast()),
 		vscode.commands.registerCommand('wurst.tests', () => tests('all')),
 		vscode.commands.registerCommand('wurst.tests_file', () => tests('file')),
-		vscode.commands.registerCommand('wurst.tests_func', () => tests('func'))
+		vscode.commands.registerCommand('wurst.tests_func', () => tests('func')),
+		vscode.commands.registerCommand('wurst.perform_code_action', (args: any[]) => performCodeAction(args)),
 	);
 }

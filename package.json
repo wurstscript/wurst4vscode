@@ -83,7 +83,7 @@
         "command": "wurst.perform_code_action",
         "title": "Perform a code action (This command is usually triggered by quick fixes in the editor).",
         "category": "wurst"
-      }
+      },
 	  {
         "command": "wurst.buildmap",
         "title": "Builds your map with the configuration from wurst.build into the \"_build/\" folder.",

@@ -10,6 +10,35 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 
 	let _lastMapConfig: string = undefined;
 
+	let buildMap = async (args: any[]) => {
+		let config = vscode.workspace.getConfiguration("wurst");
+
+		let mapPromise: Thenable<string>;
+		if (args && args.length > 0) {
+			mapPromise = Promise.resolve(args[0]);
+		} else {
+			let items = workspace.findFiles('*.w3x', null, 10)
+				.then(uris => uris.sort(function(a, b) {
+					return fs.statSync(b.fsPath).mtime.getTime() -
+							fs.statSync(a.fsPath).mtime.getTime();
+				}))
+				.then(uris => uris.map(uri => uri.path))
+			mapPromise = window.showQuickPick(items)
+		}
+		let mappath = await mapPromise;
+		if (!mappath) {
+			return Promise.reject("No map selected.");
+		}
+
+		let request: ExecuteCommandParams = {
+			command: "wurst.buildmap",
+			arguments: [{
+				'mappath': mappath,
+			}]
+		};
+		return client.sendRequest(ExecuteCommandRequest.type, request)
+	};
+
 	let startMap = async (args: any[]) => {
 		let config = vscode.workspace.getConfiguration("wurst");
 		let wc3path = config.get<string>("wc3path");
@@ -85,6 +114,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		// vscode.commands.registerCommand('wurst.clean', () => client.clean()),
 		vscode.commands.registerCommand('wurst.startmap', (args: any[]) => startMap(args)),
 		vscode.commands.registerCommand('wurst.startlast', () => startLast()),
+		vscode.commands.registerCommand('wurst.buildmap', () => (args: any[]) => buildMap(args)),
 		vscode.commands.registerCommand('wurst.tests', () => tests('all')),
 		vscode.commands.registerCommand('wurst.tests_file', () => tests('file')),
 		vscode.commands.registerCommand('wurst.tests_func', () => tests('func')),

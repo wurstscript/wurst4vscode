@@ -2,8 +2,7 @@
 
 This is a plugin for the [Wurst programming language](https://peq.github.io/WurstScript/), a language for maps and mods for the game Warcraft III.
 
-If you run into any problems while using the plugin, please create a ticket on [GitHub](https://github.com/peq/wurst4vscode).
-
+If you run into problems related directly to the plugin, please create a ticket on [GitHub](https://github.com/wurstscript/wurst4vscode).
 
 ## Features
 
@@ -27,7 +26,6 @@ Vscode will automatically highlight all other references and definitions related
 ![Highlight references](https://i.imgur.com/Pzh1Zpq.gif)
 
 
-
 ### Feature list:
 
 * Syntax highlighting
@@ -39,7 +37,8 @@ Vscode will automatically highlight all other references and definitions related
 * Mouse hover info (hover the mouse over a function or variable to see types and documentation)
 * Some commands are available via the command palette (press `F1` and type "Wurst")
     * Running units tests
-    * Comiling and running a map 
+	* Building maps independently from warcraft3
+    * Running a map 
 
 You should also be aware of the following vscode features, which are independent from this Wurst plugin:
 
@@ -49,77 +48,13 @@ You should also be aware of the following vscode features, which are independent
 * [Multiple selections](https://code.visualstudio.com/docs/editor/editingevolved#_multiple-selections)
 * Integrated Git support
 
-
-
-
-
 ## Setup and Configuration
 
-Follow the [Wurst Setup Guide](https://wurstscript.github.io/start.html) to install Wurst and the plugin.
-
-## Manual Configuration
-
-First install the requirements:
-
-  * [Java 8](http://www.oracle.com/technetwork/java/javase/downloads/index.html)
-  * [Wurst compiler](http://peeeq.de/hudson/job/Wurst/lastSuccessfulBuild/artifact/downloads/wurstpack_compiler.zip)
-     * If you used the [WurstSetup tool](https://wurstscript.github.io/start.html) the compiler is installed automatically.
-     * If you are using WurstPack, you should use the compiler included in the pack under `Wurstpack/wurstscript/wurstscript.jar`.
-
-
-After installing [vsCode](https://code.visualstudio.com), you can install the [Wurst language support from the vsCode marketplace](https://marketplace.visualstudio.com/items?itemName=peterzeller.wurst).
-Launch VS Code Quick Open (Ctrl+P), write `ext install wurst`, and press enter.
-
-After installation you have to adjust a few settings in your _settings.json_ (open it via `File` -> `Preferences` -> `User settings`):
-
-
-If you did not install Wurst with the Setup tool, you have to configure the the path to the compiler.
-To do this, set the property `wurst.wurstJar` to the path where you installed the Wurst compiler (`wurstscript.jar`).
-You can run `java -jar your/path/to/wurstscript.jar --about` from a terminal to test whether Java and Wurst have been installed correctly.
-
-
-Example configuration:
-
-    {
-        "wurst.wurstJar": "/home/peter/work/WurstScript/Wurstpack/wurstscript/wurstscript.jar",
-    }
-
-All configuration options are shown below with their default values.
-
-    {
-        // The command to use for starting Java. You can change this if Java is not in your PATH
-        "wurst.javaExecutable": "java",
-
-        // Enabling the debugmode will make the VM available for debugging on port 5005
-        "wurst.debugMode": "false",
-
-        // Turn this off to see Wurst Exceptions as vscode notifications
-        "wurst.hideExceptions": "true",
-
-        // The path to wurstscript.jar (in your WurstPack folder)
-        "wurst.wurstJar": "$HOME/.wurst/wurstscript.jar",
-
-        // The path to your Frozen Throne installation directory.
-        "wurst.wc3path": null,
-    }
-
-If you want to run maps from vscode, you have to set the `wurst.wc3path` option.
-
-In addition there are some vscode settings relevant to Wurst:
-
-    // Controls if quick suggestions should show up or not while typing
-	"editor.quickSuggestions": true,
-	
-    // Controls the delay in ms after which quick suggestions will show up
-	"editor.quickSuggestionsDelay": 10,
-    
-    // Insert spaces when pressing Tab.
-    "editor.insertSpaces": true,
+Follow the [Wurst Setup Guide](https://wurstscript.github.io/start.html) to install Wurst, the plugin and create your wurst project.
 
 ## Getting Started: Your first Wurst project
 
 Follow the [Wurst Beginner Guide](https://wurstscript.github.io/tutorials/wurstbeginner.html).
-
 
 ## Developer information
 
@@ -133,9 +68,13 @@ If you want to build the extension yourself:
 4. Run `npm i`
 5. Open the project in Visual Studio Code (`code .`)
 6. Press `F5` to debug (it should start a new vscode window with Wurst enabled)
+7. Make a pull request with your changes
 
-To publish the extension to the Extension Marketplace use `vsce publish` as described in the [vsce - Publishing Tool Reference](https://code.visualstudio.com/docs/tools/vscecli).
+Contributors can publish the extension to the Extension Marketplace using `vsce publish` as described in the [vsce - Publishing Tool Reference](https://code.visualstudio.com/docs/tools/vscecli).
 To update the version use `npm version path`.
+
+
+
 
 
 

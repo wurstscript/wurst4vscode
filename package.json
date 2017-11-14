@@ -2,7 +2,7 @@
   "name": "wurst",
   "displayName": "Wurst language support",
   "description": "Language support for Wurst.",
-  "icon": "images/wursti_icon.png",
+  "icon": "images/wurst_icon.png",
   "license": "SEE LICENSE IN LICENSE.txt",
   "bugs": {
     "url": "https://github.com/peq/wurst4vscode/issues",

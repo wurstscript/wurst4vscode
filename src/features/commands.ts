@@ -33,7 +33,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		let request: ExecuteCommandParams = {
 			command: "wurst.buildmap",
 			arguments: [{
-				'mappath': mappath,
+				'mappath': mappath
 			}]
 		};
 		return client.sendRequest(ExecuteCommandRequest.type, request)
@@ -114,7 +114,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		// vscode.commands.registerCommand('wurst.clean', () => client.clean()),
 		vscode.commands.registerCommand('wurst.startmap', (args: any[]) => startMap(args)),
 		vscode.commands.registerCommand('wurst.startlast', () => startLast()),
-		vscode.commands.registerCommand('wurst.buildmap', () => (args: any[]) => buildMap(args)),
+		vscode.commands.registerCommand('wurst.buildmap', (args: any[]) => buildMap(args)),
 		vscode.commands.registerCommand('wurst.tests', () => tests('all')),
 		vscode.commands.registerCommand('wurst.tests_file', () => tests('file')),
 		vscode.commands.registerCommand('wurst.tests_func', () => tests('func')),

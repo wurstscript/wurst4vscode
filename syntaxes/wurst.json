@@ -88,6 +88,16 @@
           ]
         },
         {
+          "begin": "/\\*\\*",
+          "captures": {
+            "0": {
+              "name": "constant.regexp.actuallyitshotdoccommment.wurst"
+            }
+          },
+          "end": "\\*/\\n?",
+          "name": "constant.regexp.actuallyitshotdoccommment.wurst"
+        },
+        {
           "begin": "/\\*",
           "captures": {
             "0": {

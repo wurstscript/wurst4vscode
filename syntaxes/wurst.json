@@ -139,7 +139,7 @@
               "name": "punctuation.definition.string.begin.wurst"
             }
           },
-          "match": "@\"([^\"]|\"\")*\"",
+          "match": "@([^\"]|\"\")+",
           "name": "string.quoted.double.literal.wurst"
         },
         {

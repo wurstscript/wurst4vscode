@@ -1,3 +1,7 @@
+## 0.1.10
+
+* Fixed annotations highlighting the entire line
+
 ## 0.1.9
 
 * Fixed annotation highlight

@@ -91,11 +91,11 @@
           "begin": "/\\*\\*",
           "captures": {
             "0": {
-              "name": "constant.regexp.actuallyitshotdoccommment.wurst"
+              "name": "constant.regexp.hotdoc.wurst"
             }
           },
           "end": "\\*/\\n?",
-          "name": "constant.regexp.actuallyitshotdoccommment.wurst"
+          "name": "constant.regexp.hotdoc.wurst"
         },
         {
           "begin": "/\\*",
@@ -139,8 +139,8 @@
               "name": "punctuation.definition.string.begin.wurst"
             }
           },
-          "match": "@([^\"]|\"\")+",
-          "name": "string.quoted.double.literal.wurst"
+          "match": "@(\\w)+",
+          "name": "entity.name.tag.wurst"
         },
         {
           "begin": "\"",

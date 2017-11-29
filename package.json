@@ -86,7 +86,7 @@
       },
       {
         "command": "wurst.buildmap",
-        "title": "Builds your map with the configuration from wurst.build into the \"_build/\" folder.",
+        "title": "Build your map via wurst.build (into /_build)",
         "category": "wurst"
       }
     ],

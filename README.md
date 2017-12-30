@@ -71,7 +71,7 @@ If you want to build the extension yourself:
 7. Make a pull request with your changes
 
 Contributors can publish the extension to the Extension Marketplace using `vsce publish` as described in the [vsce - Publishing Tool Reference](https://code.visualstudio.com/docs/tools/vscecli).
-To update the version use `npm version path`.
+To update the version use `npm version patch`.
 
 
 

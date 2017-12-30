@@ -49,10 +49,12 @@ async function startLanguageClient(context: ExtensionContext) {
 		synchronize: {
 			// Synchronize the setting section 'wurst' to the server
 			configurationSection: 'wurst',
-			// Notify the server about file changes to '.wurst files contain in the workspace
-			fileEvents: workspace.createFileSystemWatcher('**/*.wurst')
+            // Notify the server about file changes to '.wurst files contain in the workspace
+            // currently disabled, because not working
+            // using manual workaround in registerFileChanges instead
+			// fileEvents: workspace.createFileSystemWatcher('**/*.wurst')
 		}
-	}
+    }
 
     let serverOptions = await getServerOptions();
 
@@ -61,6 +63,28 @@ async function startLanguageClient(context: ExtensionContext) {
 
     context.subscriptions.push(registerCommands(client));
     context.subscriptions.push(registerFileCreation());
+    context.subscriptions.push(registerFileChanges(client));
+}
+
+/** register file events and manually send them to language client */
+function registerFileChanges(client: LanguageClient): vscode.FileSystemWatcher {
+    let watcher = workspace.createFileSystemWatcher('**/*.wurst');
+    function notifyFileChange(type: number, uri: vscode.Uri) {
+        let args /*: DidChangeWatchedFilesParams */ = {
+            changes: [
+                {
+                    uri: uri.toString(),
+                    type: type
+                }
+            ]
+        };
+        client.sendNotification("workspace/didChangeWatchedFiles", args);
+    }
+
+    watcher.onDidCreate(uri => notifyFileChange(1, uri));
+    watcher.onDidChange(uri => notifyFileChange(2, uri));
+    watcher.onDidDelete(uri => notifyFileChange(3, uri));
+    return watcher;
 }
 
 async function getServerOptions(): Promise<ServerOptions> {

@@ -70,6 +70,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 				'wc3path': wc3path
 			}]
 		};
+		_lastMapConfig = mappath
 		return client.sendRequest(ExecuteCommandRequest.type, request)
 	};
 

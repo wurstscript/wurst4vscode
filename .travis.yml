@@ -9,7 +9,8 @@ sudo: false
 language: node_js
 # Specify the node versions to run on
 node_js:
-  - "0.12"
+  - "4.1"
+  - "4.0"
 # Make sure to have typings before the test
 before_script:
   - npm run typings

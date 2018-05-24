@@ -11,9 +11,3 @@ language: node_js
 node_js:
   - "4.1"
   - "4.0"
-# Make sure to have typings before the test
-before_script:
-  - npm run typings
-# Make sure to bundle the application before any deploys
-before_deploy:
-  - npm run bundle

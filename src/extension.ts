@@ -12,7 +12,7 @@ import {registerFileCreation} from './features/fileCreation'
 import os_homedir = require('os-homedir');
 
 
-export function activate(context: ExtensionContext) {
+export async function activate(context: ExtensionContext) {
     console.log("Wurst extension activated!!")
 
     let config: LanguageConfiguration = {
@@ -33,7 +33,7 @@ export function activate(context: ExtensionContext) {
 
     vscode.languages.setLanguageConfiguration('wurst', config);
 
-    startLanguageClient(context).then(
+    await startLanguageClient(context).then(
         (value) => console.log(`init done : ${value}`),
         (err) => console.log(`init error: ${err}`)
     );

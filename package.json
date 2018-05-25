@@ -22,7 +22,16 @@
     "Languages"
   ],
   "activationEvents": [
-    "onLanguage:wurst"
+    "onLanguage:wurst",
+    "onCommand:wurst.clean",
+    "onCommand:wurst.startmap",
+    "onCommand:wurst.startlast",
+    "onCommand:wurst.tests",
+    "onCommand:wurst.tests_file",
+    "onCommand:wurst.tests_func",
+    "onCommand:wurst.perform_code_action",
+    "onCommand:wurst.buildmap",
+    "onCommand:wurst.tests_file"
   ],
   "main": "./out/extension",
   "contributes": {

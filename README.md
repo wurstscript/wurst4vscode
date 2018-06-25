@@ -1,3 +1,4 @@
+[![Build Status](https://travis-ci.org/wurstscript/wurst4vscode.svg?branch=master)](https://travis-ci.org/wurstscript/wurst4vscode)
 # Wurst extension for Visual Studio Code
 
 This is a plugin for the [Wurst programming language](https://peq.github.io/WurstScript/), a language for maps and mods for the game Warcraft III.

@@ -16,7 +16,7 @@
   "version": "0.1.19",
   "publisher": "peterzeller",
   "engines": {
-    "vscode": "^1.15.0"
+    "vscode": "^1.26.0"
   },
   "categories": [
     "Languages"
@@ -138,6 +138,17 @@
           "type": "string",
           "default": null,
           "description": "The path to your Frozen Throne installation directory."
+        },
+        "wurst.trace.server": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the language server."
         }
       }
     }
@@ -150,11 +161,11 @@
   "devDependencies": {
     "@types/node": "^7.0.29",
     "@types/os-homedir": "^1.0.0",
-    "typescript": "^2.0.3",
-    "vscode": "^1.1.10"
+    "typescript": "^2.3.4"
   },
   "dependencies": {
     "os-homedir": "^1.0.2",
-    "vscode-languageclient": "^3.5.0"
+    "vscode": "^1.1.21",
+    "vscode-languageclient": "~5.0.1"
   }
 }

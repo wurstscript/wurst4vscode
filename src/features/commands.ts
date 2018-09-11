@@ -135,7 +135,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		vscode.commands.registerCommand('wurst.startmap', (args: any[]) => startMap(args)),
 		vscode.commands.registerCommand('wurst.startlast', () => startLast()),
 		vscode.commands.registerCommand('wurst.buildmap', (args: any[]) => buildMap(args)),
-		vscode.commands.registerCommand('wurst.browseTexture', (args: any[]) => browseTexture(arg)),
+		vscode.commands.registerCommand('wurst.browseTexture', (args: any[]) => browseTexture(args)),
 		// vscode.commands.registerCommand('wurst.browseIcon', (args: any[]) => browseIcon(args)),
 		vscode.commands.registerCommand('wurst.tests', () => tests('all')),
 		vscode.commands.registerCommand('wurst.tests_file', () => tests('file')),

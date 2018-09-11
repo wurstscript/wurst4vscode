@@ -97,6 +97,16 @@
         "command": "wurst.buildmap",
         "title": "Build your map via wurst.build (into /_build)",
         "category": "wurst"
+      },
+      {
+        "command": "wurst.browseTexture",
+        "title": "Displays the .blp texture and a opens a game texture browser",
+        "category": "wurst"
+      },
+      {
+        "command": "wurst.browseIcon",
+        "title": "Displays the icon a opens an icon browser",
+        "category": "wurst"
       }
     ],
     "keybindings": {

@@ -39,6 +39,25 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		return client.sendRequest(ExecuteCommandRequest.type, request)
 	};
 
+	let browseTexture = async (arg: any[]) => {
+		let texPromise: Thenable<String>;
+		if (arg && arg.length > 0) {
+			texPromise = Promise.resolve(arg[0]);
+		} 
+		let texpath = await texPromise;
+		if (!texpath) {
+			return Promise.reject("No texture selected.");
+		}
+
+		let request: ExecuteCommandParams = {
+			command: "wurst.browseTexture",
+			arguments: [{
+				'texpath': texpath
+			}]
+		};
+		return client.sendRequest(ExecuteCommandRequest.type, request)
+	};
+
 	let startMap = async (args: any[]) => {
 		let config = vscode.workspace.getConfiguration("wurst");
 		let wc3path = config.get<string>("wc3path");
@@ -116,6 +135,8 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		vscode.commands.registerCommand('wurst.startmap', (args: any[]) => startMap(args)),
 		vscode.commands.registerCommand('wurst.startlast', () => startLast()),
 		vscode.commands.registerCommand('wurst.buildmap', (args: any[]) => buildMap(args)),
+		vscode.commands.registerCommand('wurst.browseTexture', (args: any[]) => browseTexture(arg)),
+		// vscode.commands.registerCommand('wurst.browseIcon', (args: any[]) => browseIcon(args)),
 		vscode.commands.registerCommand('wurst.tests', () => tests('all')),
 		vscode.commands.registerCommand('wurst.tests_file', () => tests('file')),
 		vscode.commands.registerCommand('wurst.tests_func', () => tests('func')),

@@ -39,7 +39,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		return client.sendRequest(ExecuteCommandRequest.type, request)
 	};
 
-	let startMap = async (args: any[]) => {
+	let startMap = async (cmd: "wurst.startmap" | "wurst.hotstartmap" | "wurst.hotreload" , args: any[]) => {
 		let config = vscode.workspace.getConfiguration("wurst");
 		let wc3path = config.get<string>("wc3path");
 		if (!wc3path) {
@@ -64,7 +64,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		}
 
 		let request: ExecuteCommandParams = {
-			command: "wurst.startmap",
+			command: cmd,
 			arguments: [{
 				'mappath': mappath,
 				'wc3path': wc3path
@@ -76,9 +76,9 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 
 	let startLast = () => {
 		if (_lastMapConfig) {
-			return startMap([_lastMapConfig]);
+			return startMap("wurst.startmap", [_lastMapConfig]);
 		} else {
-			return startMap([]);
+			return startMap("wurst.startmap", []);
 		}
 	};
 
@@ -113,7 +113,9 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 	return vscode.Disposable.from(
 		//vscode.commands.registerCommand('wurst.restart', () => client.restart()),
 		// vscode.commands.registerCommand('wurst.clean', () => client.clean()),
-		vscode.commands.registerCommand('wurst.startmap', (args: any[]) => startMap(args)),
+		vscode.commands.registerCommand('wurst.startmap', (args: any[]) => startMap("wurst.startmap", args)),
+        vscode.commands.registerCommand('wurst.hotstartmap', (args: any[]) => startMap("wurst.hotstartmap", args)),
+        vscode.commands.registerCommand('wurst.hotreload', (args: any[]) => startMap("wurst.hotreload", args)),
 		vscode.commands.registerCommand('wurst.startlast', () => startLast()),
 		vscode.commands.registerCommand('wurst.buildmap', (args: any[]) => buildMap(args)),
 		vscode.commands.registerCommand('wurst.tests', () => tests('all')),

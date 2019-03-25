@@ -69,6 +69,16 @@
         "category": "wurst"
       },
       {
+        "command": "wurst.hotstartmap",
+        "title": "Run a Wurst map with Jass Hot Code Reload (JHCR)",
+        "category": "wurst"
+      },
+      {
+        "command": "wurst.hotreload",
+        "title": "Reload code for a Wurst map started with Jass Hot Code Reload (JHCR)",
+        "category": "wurst"
+      },
+      {
         "command": "wurst.startlast",
         "title": "Run the last map again",
         "category": "wurst"

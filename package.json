@@ -13,7 +13,7 @@
     "type": "git",
     "url": "https://github.com/peq/wurst4vscode.git"
   },
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "peterzeller",
   "engines": {
     "vscode": "^1.26.0"
@@ -150,9 +150,9 @@
           "description": "The path to your Frozen Throne installation directory."
         },
         "wurst.jhcrExe": {
-            "type": "string",
-            "default": "jhcr.exe",
-            "description": "The path to the Jass Hot Code Reload (JHCR) executable. The default assumes that the executable is on the Path"
+          "type": "string",
+          "default": "jhcr.exe",
+          "description": "The path to the Jass Hot Code Reload (JHCR) executable. The default assumes that the executable is on the Path"
         },
         "wurst.customMapDataPath": {
           "type": "string",

@@ -149,6 +149,11 @@
           "default": null,
           "description": "The path to your Frozen Throne installation directory."
         },
+        "wurst.jhcrExe": {
+            "type": "string",
+            "default": "jhcr.exe",
+            "description": "The path to the Jass Hot Code Reload (JHCR) executable. The default assumes that the executable is on the Path"
+        },
         "wurst.trace.server": {
           "scope": "window",
           "type": "string",

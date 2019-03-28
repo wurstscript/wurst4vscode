@@ -154,6 +154,11 @@
             "default": "jhcr.exe",
             "description": "The path to the Jass Hot Code Reload (JHCR) executable. The default assumes that the executable is on the Path"
         },
+        "wurst.customMapDataPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The path where Warcraft stores custom map data. This is usually something like `C:\\Users\\lep\\Documents\\Warcraft III\\CustomMapData` or `C:\\Users\\Peter\\OneDrive\\Dokumente\\Warcraft III\\CustomMapData`. This path will be passed to the `--preload-path` option of Jass Hot Code Reload (JHCR)."
+        },
         "wurst.trace.server": {
           "scope": "window",
           "type": "string",

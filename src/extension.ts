@@ -65,7 +65,7 @@ function setupDecorators(context: ExtensionContext) {
 		if (!activeEditor) {
 			return;
 		}
-		const regEx = /@compiletime function.+/g;
+		const regEx = /@compiletime (\s*(static|public|private)\s)*function.+/g;
 		const text = activeEditor.document.getText();
 		const compiletime: vscode.DecorationOptions[] = [];
 		let match;

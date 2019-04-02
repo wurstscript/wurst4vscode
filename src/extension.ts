@@ -31,6 +31,8 @@ export async function activate(context: ExtensionContext) {
         }
     };
 
+	setupDecorators(context);
+
     vscode.languages.setLanguageConfiguration('wurst', config);
 
     await startLanguageClient(context).then(
@@ -38,6 +40,68 @@ export async function activate(context: ExtensionContext) {
         (err) => console.log(`init error: ${err}`)
     );
 
+}
+
+function setupDecorators(context: ExtensionContext) {
+	let timeout: NodeJS.Timer | undefined = undefined;
+	const compiletimeDecorator = vscode.window.createTextEditorDecorationType({
+		borderWidth: '1px',
+		borderStyle: 'solid',
+		overviewRulerColor: 'blue',
+		overviewRulerLane: vscode.OverviewRulerLane.Right,
+		light: {
+			// this color will be used in light color themes
+			borderColor: 'darkblue'
+		},
+		dark: {
+			// this color will be used in dark color themes
+			borderColor: 'lightblue'
+		}
+	});
+
+	let activeEditor = vscode.window.activeTextEditor;
+
+	function updateDecorations() {
+		if (!activeEditor) {
+			return;
+		}
+		const regEx = /@compiletime function.+/g;
+		const text = activeEditor.document.getText();
+		const compiletime: vscode.DecorationOptions[] = [];
+		let match;
+		while (match = regEx.exec(text)) {
+			const startPos = activeEditor.document.positionAt(match.index);
+			const endPos = activeEditor.document.positionAt(match.index + match[0].length);
+			const decoration = { range: new vscode.Range(startPos, endPos), hoverMessage: 'This function will be executed at compiletime.' };
+			compiletime.push(decoration);
+		}
+		activeEditor.setDecorations(compiletimeDecorator, compiletime);
+	}
+
+	function triggerUpdateDecorations() {
+		if (timeout) {
+			clearTimeout(timeout);
+			timeout = undefined;
+		}
+		timeout = setTimeout(updateDecorations, 500);
+	}
+
+	if (activeEditor) {
+		triggerUpdateDecorations();
+	}
+
+	vscode.window.onDidChangeActiveTextEditor(editor => {
+		activeEditor = editor;
+		if (editor) {
+			triggerUpdateDecorations();
+		}
+	}, null, context.subscriptions);
+
+	vscode.workspace.onDidChangeTextDocument(event => {
+		if (activeEditor && event.document === activeEditor.document) {
+			triggerUpdateDecorations();
+		}
+	}, null, context.subscriptions);
 }
 
 async function startLanguageClient(context: ExtensionContext) {

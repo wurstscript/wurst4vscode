@@ -44,19 +44,10 @@ export async function activate(context: ExtensionContext) {
 
 function setupDecorators(context: ExtensionContext) {
 	let timeout: NodeJS.Timer | undefined = undefined;
+  const path = vscode.extensions.getExtension('peterzeller.wurst').extensionPath;
 	const compiletimeDecorator = vscode.window.createTextEditorDecorationType({
-		borderWidth: '1px',
-		borderStyle: 'solid',
-		overviewRulerColor: 'blue',
-		overviewRulerLane: vscode.OverviewRulerLane.Right,
-		light: {
-			// this color will be used in light color themes
-			borderColor: 'darkblue'
-		},
-		dark: {
-			// this color will be used in dark color themes
-			borderColor: 'lightblue'
-		}
+		gutterIconPath: `${path}/images/gears.svg`,
+    	gutterIconSize: 'contain',
 	});
 
 	let activeEditor = vscode.window.activeTextEditor;
@@ -65,7 +56,8 @@ function setupDecorators(context: ExtensionContext) {
 		if (!activeEditor) {
 			return;
 		}
-		const regEx = /@compiletime (\s*(static|public|private)\s)*function.+/g;
+    	timeout = undefined;
+		const regEx = /@compiletime\s+(\s*(static|public|private)\s)*function.+/g;
 		const text = activeEditor.document.getText();
 		const compiletime: vscode.DecorationOptions[] = [];
 		let match;
@@ -81,7 +73,6 @@ function setupDecorators(context: ExtensionContext) {
 	function triggerUpdateDecorations() {
 		if (timeout) {
 			clearTimeout(timeout);
-			timeout = undefined;
 		}
 		timeout = setTimeout(updateDecorations, 500);
 	}

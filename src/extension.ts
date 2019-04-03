@@ -31,6 +31,8 @@ export async function activate(context: ExtensionContext) {
         }
     };
 
+	setupDecorators(context);
+
     vscode.languages.setLanguageConfiguration('wurst', config);
 
     await startLanguageClient(context).then(
@@ -38,6 +40,59 @@ export async function activate(context: ExtensionContext) {
         (err) => console.log(`init error: ${err}`)
     );
 
+}
+
+function setupDecorators(context: ExtensionContext) {
+	let timeout: NodeJS.Timer | undefined = undefined;
+	const path = vscode.extensions.getExtension('peterzeller.wurst').extensionPath;
+	const compiletimeDecorator = vscode.window.createTextEditorDecorationType({
+		gutterIconPath: `${path}/images/gears.svg`,
+    	gutterIconSize: 'contain',
+	});
+
+	let activeEditor = vscode.window.activeTextEditor;
+
+	function updateDecorations() {
+		if (!activeEditor) {
+			return;
+		}
+    	timeout = undefined;
+		const regEx = /@compiletime\s+(\s*(static|public|private)\s)*function.+/g;
+		const text = activeEditor.document.getText();
+		const compiletime: vscode.DecorationOptions[] = [];
+		let match;
+		while (match = regEx.exec(text)) {
+			const startPos = activeEditor.document.positionAt(match.index);
+			const endPos = activeEditor.document.positionAt(match.index + match[0].length);
+			const decoration = { range: new vscode.Range(startPos, endPos), hoverMessage: 'This function will be executed at compiletime.' };
+			compiletime.push(decoration);
+		}
+		activeEditor.setDecorations(compiletimeDecorator, compiletime);
+	}
+
+	function triggerUpdateDecorations() {
+		if (timeout) {
+			clearTimeout(timeout);
+		}
+		timeout = setTimeout(updateDecorations, 500);
+	}
+
+	if (activeEditor) {
+		triggerUpdateDecorations();
+	}
+
+	vscode.window.onDidChangeActiveTextEditor(editor => {
+		activeEditor = editor;
+		if (editor) {
+			triggerUpdateDecorations();
+		}
+	}, null, context.subscriptions);
+
+	vscode.workspace.onDidChangeTextDocument(event => {
+		if (activeEditor && event.document === activeEditor.document) {
+			triggerUpdateDecorations();
+		}
+	}, null, context.subscriptions);
 }
 
 async function startLanguageClient(context: ExtensionContext) {

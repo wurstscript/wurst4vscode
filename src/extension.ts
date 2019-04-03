@@ -44,7 +44,7 @@ export async function activate(context: ExtensionContext) {
 
 function setupDecorators(context: ExtensionContext) {
 	let timeout: NodeJS.Timer | undefined = undefined;
-  const path = vscode.extensions.getExtension('peterzeller.wurst').extensionPath;
+	const path = vscode.extensions.getExtension('peterzeller.wurst').extensionPath;
 	const compiletimeDecorator = vscode.window.createTextEditorDecorationType({
 		gutterIconPath: `${path}/images/gears.svg`,
     	gutterIconSize: 'contain',

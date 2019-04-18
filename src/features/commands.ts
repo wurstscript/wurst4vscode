@@ -93,21 +93,25 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		}
 	};
 
-	let tests = (mode: 'all'|'file'|'func') => {
-		let data: any = {}
-		if (mode != 'all') {
-			data.filename = window.activeTextEditor.document.fileName
-		}
-		if (mode == 'func') {
-			let sel = window.activeTextEditor.selection
-			if (sel) {
-				data.line = sel.start.line
-				data.column = sel.start.character
+	let tests = (mode: 'all'|'file'|'func', args: any) => {
+		if (!args) {
+			let data: any = {}
+			if (mode != 'all') {
+				data.filename = window.activeTextEditor.document.fileName
 			}
+
+			if (mode == 'func') {
+				let sel = window.activeTextEditor.selection
+				if (sel) {
+					data.line = sel.start.line
+					data.column = sel.start.character
+				}
+			}
+			args = [data]
 		}
 		let request: ExecuteCommandParams = {
 			command: "wurst.tests",
-			arguments: [data]
+			arguments: args
 		};
 		return client.sendRequest(ExecuteCommandRequest.type, request)
 	}
@@ -125,13 +129,13 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		//vscode.commands.registerCommand('wurst.restart', () => client.restart()),
 		// vscode.commands.registerCommand('wurst.clean', () => client.clean()),
 		vscode.commands.registerCommand('wurst.startmap', (args: any[]) => startMap("wurst.startmap", args)),
-        vscode.commands.registerCommand('wurst.hotstartmap', (args: any[]) => startMap("wurst.hotstartmap", args)),
-        vscode.commands.registerCommand('wurst.hotreload', (args: any[]) => reloadMap(args)),
+		vscode.commands.registerCommand('wurst.hotstartmap', (args: any[]) => startMap("wurst.hotstartmap", args)),
+		vscode.commands.registerCommand('wurst.hotreload', (args: any[]) => reloadMap(args)),
 		vscode.commands.registerCommand('wurst.startlast', () => startLast()),
 		vscode.commands.registerCommand('wurst.buildmap', (args: any[]) => buildMap(args)),
-		vscode.commands.registerCommand('wurst.tests', () => tests('all')),
-		vscode.commands.registerCommand('wurst.tests_file', () => tests('file')),
-		vscode.commands.registerCommand('wurst.tests_func', () => tests('func')),
+		vscode.commands.registerCommand('wurst.tests', (args: any[]) => tests('all', args)),
+		vscode.commands.registerCommand('wurst.tests_file', (args: any[]) => tests('file', args)),
+		vscode.commands.registerCommand('wurst.tests_func', (args: any[]) => tests('func', args)),
 		vscode.commands.registerCommand('wurst.perform_code_action', (args: any[]) => performCodeAction(args)),
 	);
 }

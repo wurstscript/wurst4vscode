@@ -147,6 +147,7 @@ async function getServerOptions(): Promise<ServerOptions> {
 
     // TODO make configurable
     let java = config.get<string>("javaExecutable")
+    let javaOpts = config.get<string[]>("javaOpts")
     let wurstJar = config.get<string>("wurstJar").replace("$HOME", os_homedir());
     let debugMode = config.get<boolean>("debugMode")
     let hideExceptions = config.get<boolean>("hideExceptions")
@@ -157,7 +158,7 @@ async function getServerOptions(): Promise<ServerOptions> {
         return Promise.reject(msg);
     }
 
-    let args = ["-jar", wurstJar, "-languageServer"]
+    let args = javaOpts.concat(["-jar", wurstJar, "-languageServer"])
     if (debugMode == true) {
         if (await isPortOpen(5005)) {
             args = ["-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005,quiet=y"].concat(args);

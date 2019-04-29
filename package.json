@@ -190,7 +190,6 @@
   },
   "dependencies": {
     "os-homedir": "^1.0.2",
-    "vscode": "^1.1.21",
     "vscode-languageclient": "~5.0.1"
   }
 }

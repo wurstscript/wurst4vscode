@@ -19,7 +19,7 @@
     "vscode": "^1.26.0"
   },
   "categories": [
-    "Languages"
+    "Programming Languages"
   ],
   "activationEvents": [
     "onLanguage:wurst",

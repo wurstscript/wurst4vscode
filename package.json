@@ -146,12 +146,17 @@
         },
         "wurst.wc3path": {
           "type": "string",
-          "default": null,
+          "default": "",
           "description": "The path to your Frozen Throne installation directory."
+        },
+        "wurst.wc3RunArgs": {
+          "type": "string",
+          "default": "",
+          "description": "Optional arguments passed to the warcraft executable, such as -windowmode and -graphicsapi"
         },
         "wurst.mapDocumentPath": {
           "type": "string",
-          "default": null,
+          "default": "",
           "description": "The path where to put maps before running them. Usually something like `C:\\Users\\YourName\\Documents\\Warcraft III`."
         },
         "wurst.jhcrExe": {

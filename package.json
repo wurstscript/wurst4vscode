@@ -194,7 +194,7 @@
     "typescript": "^2.3.4"
   },
   "dependencies": {
-    "os-homedir": "^1.0.2",
-    "vscode-languageclient": "~5.0.1"
+    "vscode": "^1.1.35",
+    "vscode-languageclient": "^5.2.1"
   }
 }

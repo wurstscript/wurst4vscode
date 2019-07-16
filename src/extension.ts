@@ -1,16 +1,12 @@
 'use strict';
 
-import * as path from 'path';
-
 import * as vscode from 'vscode';
-import { workspace, Disposable, ExtensionContext, LanguageConfiguration } from 'vscode';
-import { LanguageClient, LanguageClientOptions, SettingMonitor, ServerOptions, TransportKind, Executable } from 'vscode-languageclient';
+import { workspace, ExtensionContext, LanguageConfiguration } from 'vscode';
+import { LanguageClient, LanguageClientOptions, ServerOptions, Executable } from 'vscode-languageclient';
 import * as fs from 'fs';
 
 import {registerCommands} from './features/commands'
 import {registerFileCreation} from './features/fileCreation'
-import os_homedir = require('os-homedir');
-
 
 export async function activate(context: ExtensionContext) {
     console.log("Wurst extension activated!!")
@@ -148,9 +144,8 @@ async function getServerOptions(): Promise<ServerOptions> {
     // TODO make configurable
     let java = config.get<string>("javaExecutable")
     let javaOpts = config.get<string[]>("javaOpts")
-    let wurstJar = config.get<string>("wurstJar").replace("$HOME", os_homedir());
+    let wurstJar = config.get<string>("wurstJar").replace("$HOME", require('os').homedir());
     let debugMode = config.get<boolean>("debugMode")
-    let hideExceptions = config.get<boolean>("hideExceptions")
 
     if (!(await doesFileExist(wurstJar))) {
         let msg = `Could not find ${wurstJar}. Please configure 'wurst.wurstJar' in your settings.json`

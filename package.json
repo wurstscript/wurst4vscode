@@ -16,7 +16,7 @@
   "version": "0.5.4",
   "publisher": "peterzeller",
   "engines": {
-    "vscode": "^1.26.0"
+    "vscode": "^1.30.0"
   },
   "categories": [
     "Programming Languages"

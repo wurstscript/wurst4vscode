@@ -191,10 +191,10 @@
   "devDependencies": {
     "@types/node": "^7.0.29",
     "@types/os-homedir": "^1.0.0",
-    "typescript": "^2.3.4"
+    "typescript": "^2.3.4",
+    "vscode": "^1.1.35"
   },
   "dependencies": {
-    "vscode": "^1.1.35",
     "vscode-languageclient": "^5.2.1"
   }
 }

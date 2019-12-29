@@ -42,9 +42,6 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 	let startMap = async (cmd: "wurst.startmap" | "wurst.hotstartmap" , args: any[]) => {
 		let config = vscode.workspace.getConfiguration("wurst");
 		let wc3path = config.get<string>("wc3path");
-		if (!wc3path) {
-			return Promise.reject("Warcraft path not set (change 'wurst.wc3path' in your settings).");
-		}
 
 		let mapPromise: Thenable<string>;
 		if (args && args.length > 0) {

@@ -1,17 +1,17 @@
 {
   "name": "wurst",
   "displayName": "Wurst language support",
-  "description": "Language support for Wurst.",
+  "description": "Language support for Wurstscript.",
   "icon": "images/wurst_icon.png",
   "license": "SEE LICENSE IN LICENSE.txt",
   "bugs": {
-    "url": "https://github.com/peq/wurst4vscode/issues",
+    "url": "https://github.com/wurstscript/wurst4vscode/issues",
     "email": "peter.peq@gmail.com"
   },
-  "homepage": "https://github.com/peq/wurst4vscode",
+  "homepage": "https://github.com/wurstscript/wurst4vscode",
   "repository": {
     "type": "git",
-    "url": "https://github.com/peq/wurst4vscode.git"
+    "url": "https://github.com/wurstscript/wurst4vscode.git"
   },
   "version": "0.5.5",
   "publisher": "peterzeller",
@@ -132,7 +132,7 @@
         "wurst.debugMode": {
           "type": "boolean",
           "default": "false",
-          "description": "Enabling the debugmode will make the VM available for debugging on port 5005"
+          "description": "Enabling the debugmode will make the VM available for attaching on port 5005"
         },
         "wurst.hideExceptions": {
           "type": "boolean",
@@ -142,17 +142,17 @@
         "wurst.wurstJar": {
           "type": "string",
           "default": "$HOME/.wurst/wurstscript.jar",
-          "description": "The path to wurstscript.jar (in your WurstPack folder or installed via WurstSetup). The variable $HOME is replaced with the home directory of the current user."
+          "description": "The path to the wurstscript.jar of your wurstscript installation. Under normal circumstances you should not touch this! It should be set by the setup tool or grill."
         },
         "wurst.wc3path": {
           "type": "string",
           "default": "",
-          "description": "The path to your Frozen Throne installation directory."
+          "description": "Optional path to a Warcraft installation directory (e.g. C:\\Games\\Warcraft III\\). If no executable can be found, it will be followed by an auto detection attempt."
         },
         "wurst.wc3RunArgs": {
           "type": "string",
           "default": "",
-          "description": "Optional arguments passed to the warcraft executable, such as -windowmode and -graphicsapi"
+          "description": "Custom run arguments passed to the warcraft executable (such as -windowmode and -graphicsapi) which will replace the default wurst arguments."
         },
         "wurst.mapDocumentPath": {
           "type": "string",
@@ -162,7 +162,7 @@
         "wurst.jhcrExe": {
           "type": "string",
           "default": "jhcr.exe",
-          "description": "The path to the Jass Hot Code Reload (JHCR) executable. The default assumes that the executable is on the Path"
+          "description": "The path to the Jass Hot Code Reload (JHCR) executable. The default assumes that the executable is on the Path."
         },
         "wurst.customMapDataPath": {
           "type": "string",

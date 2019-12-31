@@ -92,8 +92,6 @@ function setupDecorators(context: ExtensionContext) {
 }
 
 async function startLanguageClient(context: ExtensionContext) {
-    let cfg = vscode.workspace.getConfiguration("wurst")
-
     let clientOptions: LanguageClientOptions = {
 		// Register the server for Wurst-documents
 		documentSelector: ['wurst'],
@@ -172,19 +170,19 @@ async function getServerOptions(): Promise<ServerOptions> {
     return serverOptions;
 }
 
-function doesFileExist(filename): Promise<boolean> {
-    return new Promise((resolve, reject) => {
-        fs.stat(filename, (err, stats) => {
+function doesFileExist(filename: string): Promise<boolean> {
+    return new Promise((resolve, _reject) => {
+        fs.stat(filename, (err, _stats) => {
             resolve(!err);
         });
     });
 }
 
-function isPortOpen(port): Promise<boolean> {
-    return new Promise((resolve, reject) => {
+function isPortOpen(port: number): Promise<boolean> {
+    return new Promise((resolve, _reject) => {
         let net = require('net');
         let tester = net.createServer();
-        tester.once('error', function (err) {
+        tester.once('error', function (err: { code: string; }) {
             if (err.code == 'EADDRINUSE') {
                 resolve(false);
             }

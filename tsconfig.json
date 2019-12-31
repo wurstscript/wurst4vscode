@@ -5,7 +5,10 @@
 		"moduleResolution": "node",
 		"outDir": "out",
 		"lib": [ "es6" ],
-		"sourceMap": true
+		"sourceMap": true,
+		"noImplicitAny": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
 	},
 	"exclude": [
 		"node_modules",

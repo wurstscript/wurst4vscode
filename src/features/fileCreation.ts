@@ -1,7 +1,7 @@
 'use strict';
 
 import {TextDocument} from 'vscode';
-import { workspace, Disposable, ExtensionContext, LanguageConfiguration, WorkspaceEdit, Position } from 'vscode';
+import { workspace, Disposable, WorkspaceEdit, Position } from 'vscode';
 import {basename, extname} from 'path';
 
 function onDocumentOpen(td: TextDocument) {

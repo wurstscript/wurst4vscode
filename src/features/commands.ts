@@ -1,9 +1,8 @@
 'use strict';
 
-import * as path from 'path';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import { LanguageClient, LanguageClientOptions, SettingMonitor, ServerOptions, TransportKind, Executable, ExecuteCommandParams, ExecuteCommandRequest } from 'vscode-languageclient';
+import { LanguageClient, ExecuteCommandParams, ExecuteCommandRequest } from 'vscode-languageclient';
 import { workspace, window } from "vscode";
 
 export function registerCommands(client: LanguageClient): vscode.Disposable {
@@ -11,8 +10,6 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 	let _lastMapConfig: string = undefined;
 
 	let buildMap = async (args: any[]) => {
-		let config = vscode.workspace.getConfiguration("wurst");
-
 		let mapPromise: Thenable<string>;
 		if (args && args.length > 0) {
 			mapPromise = Promise.resolve(args[0]);
@@ -71,9 +68,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		return client.sendRequest(ExecuteCommandRequest.type, request)
 	};
 
-	let reloadMap = async (args: any[]) => {
-		let config = vscode.workspace.getConfiguration("wurst");
-
+	let reloadMap = async () => {
 		let request: ExecuteCommandParams = {
 			command: "wurst.hotreload",
 			arguments: [{
@@ -127,7 +122,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		// vscode.commands.registerCommand('wurst.clean', () => client.clean()),
 		vscode.commands.registerCommand('wurst.startmap', (args: any[]) => startMap("wurst.startmap", args)),
 		vscode.commands.registerCommand('wurst.hotstartmap', (args: any[]) => startMap("wurst.hotstartmap", args)),
-		vscode.commands.registerCommand('wurst.hotreload', (args: any[]) => reloadMap(args)),
+		vscode.commands.registerCommand('wurst.hotreload', () => reloadMap()),
 		vscode.commands.registerCommand('wurst.startlast', () => startLast()),
 		vscode.commands.registerCommand('wurst.buildmap', (args: any[]) => buildMap(args)),
 		vscode.commands.registerCommand('wurst.tests', (args: any[]) => tests('all', args)),

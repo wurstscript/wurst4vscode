@@ -10,6 +10,9 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 	let _lastMapConfig: string = undefined;
 
 	let buildMap = async (args: any[]) => {
+		let config = vscode.workspace.getConfiguration("wurst");
+		let wc3path = config.get<string>("wc3path");
+
 		let mapPromise: Thenable<string>;
 		if (args && args.length > 0) {
 			mapPromise = Promise.resolve(args[0]);
@@ -30,7 +33,8 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		let request: ExecuteCommandParams = {
 			command: "wurst.buildmap",
 			arguments: [{
-				'mappath': mappath
+				'mappath': mappath,
+				'wc3path': wc3path
 			}]
 		};
 		return client.sendRequest(ExecuteCommandRequest.type, request)

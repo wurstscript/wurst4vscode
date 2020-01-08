@@ -196,5 +196,6 @@
   },
   "dependencies": {
     "vscode-languageclient": "^5.2.1"
-  }
+  },
+  "extensionPack": ["redhat.vscode-yaml"]
 }

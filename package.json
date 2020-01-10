@@ -197,5 +197,5 @@
   "dependencies": {
     "vscode-languageclient": "^5.2.1"
   },
-  "extensionPack": ["redhat.vscode-yaml"]
+  "extensionPack": ["redhat.vscode-yaml", "vscode-icons-team.vscode-icons"]
 }

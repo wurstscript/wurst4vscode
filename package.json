@@ -13,7 +13,7 @@
     "type": "git",
     "url": "https://github.com/wurstscript/wurst4vscode.git"
   },
-  "version": "0.5.7",
+  "version": "0.5.8",
   "publisher": "peterzeller",
   "engines": {
     "vscode": "^1.30.0"
@@ -197,5 +197,8 @@
   "dependencies": {
     "vscode-languageclient": "^5.2.1"
   },
-  "extensionPack": ["redhat.vscode-yaml", "vscode-icons-team.vscode-icons"]
+  "extensionPack": [
+    "redhat.vscode-yaml",
+    "vscode-icons-team.vscode-icons"
+  ]
 }

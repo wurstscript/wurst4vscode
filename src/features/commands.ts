@@ -17,7 +17,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		if (args && args.length > 0) {
 			mapPromise = Promise.resolve(args[0]);
 		} else {
-			let items = workspace.findFiles('*.w3x', null, 10)
+			let items = workspace.findFiles('{*.w3x,*.w3m}', null, 10)
 				.then(uris => uris.sort(function(a, b) {
 					return fs.statSync(b.fsPath).mtime.getTime() -
 							fs.statSync(a.fsPath).mtime.getTime();
@@ -48,7 +48,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		if (args && args.length > 0) {
 			mapPromise = Promise.resolve(args[0]);
 		} else {
-			let items = workspace.findFiles('*.w3x', null, 10)
+			let items = workspace.findFiles('{*.w3x,*.w3m}', null, 10)
 				.then(uris => uris.sort(function(a, b) {
 					return fs.statSync(b.fsPath).mtime.getTime() -
 							fs.statSync(a.fsPath).mtime.getTime();

@@ -9,8 +9,7 @@ sudo: false
 language: node_js
 # Specify the node versions to run on
 node_js:
-  - "4.1"
-  - "4.0"
+  - 14
 install:
   - npm install
   - npm run vscode:prepublish

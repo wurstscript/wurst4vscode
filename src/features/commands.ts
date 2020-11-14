@@ -7,13 +7,13 @@ import { workspace, window } from "vscode";
 
 export function registerCommands(client: LanguageClient): vscode.Disposable {
 
-	let _lastMapConfig: string = undefined;
+	let _lastMapConfig: string | undefined = undefined;
 
 	let buildMap = async (args: any[]) => {
 		let config = vscode.workspace.getConfiguration("wurst");
 		let wc3path = config.get<string>("wc3path");
 
-		let mapPromise: Thenable<string>;
+		let mapPromise: Thenable<string | undefined>;
 		if (args && args.length > 0) {
 			mapPromise = Promise.resolve(args[0]);
 		} else {
@@ -44,7 +44,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		let config = vscode.workspace.getConfiguration("wurst");
 		let wc3path = config.get<string>("wc3path");
 
-		let mapPromise: Thenable<string>;
+		let mapPromise: Thenable<string | undefined>;
 		if (args && args.length > 0) {
 			mapPromise = Promise.resolve(args[0]);
 		} else {
@@ -93,11 +93,11 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
 		if (!args) {
 			let data: any = {}
 			if (mode != 'all') {
-				data.filename = window.activeTextEditor.document.fileName
+				data.filename = window.activeTextEditor?.document.fileName
 			}
 
 			if (mode == 'func') {
-				let sel = window.activeTextEditor.selection
+				let sel = window.activeTextEditor?.selection
 				if (sel) {
 					data.line = sel.start.line
 					data.column = sel.start.character

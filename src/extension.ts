@@ -40,7 +40,8 @@ export async function activate(context: ExtensionContext) {
 
 function setupDecorators(context: ExtensionContext) {
 	let timeout: NodeJS.Timer | undefined = undefined;
-	const path = vscode.extensions.getExtension('peterzeller.wurst').extensionPath;
+    const extension = vscode.extensions.getExtension('peterzeller.wurst');
+	const path = extension!.extensionPath;
 	const compiletimeDecorator = vscode.window.createTextEditorDecorationType({
 		gutterIconPath: `${path}/images/gears.svg`,
     	gutterIconSize: 'contain',
@@ -140,9 +141,9 @@ async function getServerOptions(): Promise<ServerOptions> {
     let config = vscode.workspace.getConfiguration("wurst")
 
     // TODO make configurable
-    let java = config.get<string>("javaExecutable")
-    let javaOpts = config.get<string[]>("javaOpts")
-    let wurstJar = config.get<string>("wurstJar").replace("$HOME", require('os').homedir());
+    let java = config.get<string>("javaExecutable") ?? 'java';
+    let javaOpts = config.get<string[]>("javaOpts") ?? [];
+    let wurstJar = (config.get<string>("wurstJar")?? '$HOME/.wurst/wurstscript.jar').replace("$HOME", require('os').homedir());
     let debugMode = config.get<boolean>("debugMode")
 
     if (!(await doesFileExist(wurstJar))) {

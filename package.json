@@ -16,7 +16,7 @@
   "version": "0.5.11",
   "publisher": "peterzeller",
   "engines": {
-    "vscode": "^1.30.0"
+    "vscode": "^1.51.0"
   },
   "categories": [
     "Programming Languages"
@@ -199,6 +199,7 @@
     "@types/vscode": "^1.51.0"
   },
   "dependencies": {
+    "semver": "^5.7.1",
     "vscode-languageclient": "^5.2.1"
   },
   "extensionPack": [

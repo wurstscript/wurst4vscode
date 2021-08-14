@@ -22,7 +22,9 @@ export async function activate(context: ExtensionContext) {
             ['(', ')'],
         ],
         indentationRules: {
-            increaseIndentPattern: /^\s*(if|while|for|function|class|module|interface)\s.*$/,
+            increaseIndentPattern:
+                //            < keywords behind which a space must follow >          <keywords without space>  <construct may have no spaces>
+                /^\s*(((if|while|for|function|class|module|interface|case|switch)\s.*)|(begin|ondestroy|init)|(construct).*)$/,
             decreaseIndentPattern: /^\s*(else|end)\s.*$/,
         },
     };

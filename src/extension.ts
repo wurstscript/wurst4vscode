@@ -12,20 +12,22 @@ export async function activate(context: ExtensionContext) {
     console.log("Wurst extension activated!!")
 
     let config: LanguageConfiguration = {
-        comments: {
-            lineComment: "//",
-            blockComment: ["/*","*/"]
-        },
-        brackets: [
-            ["{", "}"],
-            ["[", "]"],
-            ["(", ")"]
-        ],
-        indentationRules: {
-            increaseIndentPattern: /^\s*(if|while|for|function|class|module|interface)\s.*$/,
-            decreaseIndentPattern: /^\s*(else|end)\s.*$/,
-        }
-    };
+		comments: {
+			lineComment: "//",
+			blockComment: ["/*", "*/"],
+		},
+		brackets: [
+			["{", "}"],
+			["[", "]"],
+			["(", ")"],
+		],
+		indentationRules: {
+			increaseIndentPattern:
+				//            < keywords behind which a space must follow >          <keywords without space>  <construct may have no spaces>
+				/^\s*(((if|while|for|function|class|module|interface|case|switch)\s.*)|(begin|ondestroy|init)|(construct).*)$/,
+			decreaseIndentPattern: /^\s*(else|end)\s.*$/,
+		},
+	};
 
 	setupDecorators(context);
 

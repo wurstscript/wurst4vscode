@@ -1,206 +1,204 @@
 {
-  "scopeName": "source.wurst",
-  "name": "wurst",
-  "fileTypes": [
-    "wurst"
-  ],
-  "foldingStartMarker": "^\\s*#\\s*region|^\\s*/\\*|^(?![^{]*?//|[^{]*?/\\*(?!.*?\\*/.*?\\{)).*?\\{\\s*($|//|/\\*(?!.*?\\*/.*\\S))",
-  "foldingStopMarker": "^\\s*#\\s*endregion|^\\s*\\*/|^\\s*\\}",
-  "patterns": [
-    {
-      "include": "#code"
+    "scopeName": "source.wurst",
+    "name": "wurst",
+    "fileTypes": ["wurst"],
+    "foldingStartMarker": "^\\s*#\\s*region|^\\s*/\\*|^(?![^{]*?//|[^{]*?/\\*(?!.*?\\*/.*?\\{)).*?\\{\\s*($|//|/\\*(?!.*?\\*/.*\\S))",
+    "foldingStopMarker": "^\\s*#\\s*endregion|^\\s*\\*/|^\\s*\\}",
+    "patterns": [
+        {
+            "include": "#code"
+        }
+    ],
+    "repository": {
+        "functions": {
+            "patterns": [
+                {
+                    "match": "\\b(int|integer|real|code|boolean|string|bool|agent|event|player|widget|unit|destructable|item|ability|buff|force|group|trigger|triggercondition|triggeraction|timer|location|region|rect|boolexpr|sound|conditionfunc|filterfunc|unitpool|itempool|race|alliancetype|racepreference|gamestate|igamestate|fgamestate|playerstate|playerscore|playergameresult|unitstate|aidifficulty|eventid|gameevent|playerevent|playerunitevent|unitevent|limitop|widgetevent|dialogevent|unittype|gamespeed|gamedifficulty|gametype|mapflag|mapvisibility|mapsetting|mapdensity|mapcontrol|playerslotstate|volumegroup|camerafield|camerasetup|playercolor|placement|startlocprio|raritycontrol|blendmode|texmapflags|effect|effecttype|weathereffect|terraindeformation|fogstate|fogmodifier|dialog|button|quest|questitem|defeatcondition|timerdialog|leaderboard|multiboard|multiboarditem|trackable|gamecache|version|itemtype|texttag|attacktype|damagetype|weapontype|soundtype|lightning|pathingtype|image|ubersplat|hashtable|mousebuttontype|handle|framehandle|originframetype|framepointtype|textaligntype|frameeventtype|oskeytype|abilityintegerfield|abilityrealfield|abilitybooleanfield|abilitystringfield|abilityintegerlevelfield|abilityreallevelfield|abilitybooleanlevelfield|abilitystringlevelfield|abilityintegerlevelarrayfield|abilityreallevelarrayfield|abilitybooleanlevelarrayfield|abilitystringlevelarrayfield|unitintegerfield|unitrealfield|unitbooleanfield|unitstringfield|unitweaponintegerfield|unitweaponrealfield|unitweaponbooleanfield|unitweaponstringfield|itemintegerfield|itemrealfield|itembooleanfield|itemstringfield|movetype|targetflag|armortype|heroattribute|defensetype|regentype|unitcategory|pathingflag)\\b",
+                    "name": "storage.type.wurst"
+                }
+            ]
+        },
+        "builtinTypes": {
+            "patterns": [
+                {
+                    "match": "\\b(int|integer|real|code|boolean|string|bool|agent|event|player|widget|unit|destructable|item|ability|buff|force|group|trigger|triggercondition|triggeraction|timer|location|region|rect|boolexpr|sound|conditionfunc|filterfunc|unitpool|itempool|race|alliancetype|racepreference|gamestate|igamestate|fgamestate|playerstate|playerscore|playergameresult|unitstate|aidifficulty|eventid|gameevent|playerevent|playerunitevent|unitevent|limitop|widgetevent|dialogevent|unittype|gamespeed|gamedifficulty|gametype|mapflag|mapvisibility|mapsetting|mapdensity|mapcontrol|playerslotstate|volumegroup|camerafield|camerasetup|playercolor|placement|startlocprio|raritycontrol|blendmode|texmapflags|effect|effecttype|weathereffect|terraindeformation|fogstate|fogmodifier|dialog|button|quest|questitem|defeatcondition|timerdialog|leaderboard|multiboard|multiboarditem|trackable|gamecache|version|itemtype|texttag|attacktype|damagetype|weapontype|soundtype|lightning|pathingtype|image|ubersplat|hashtable|mousebuttontype|handle|framehandle|originframetype|framepointtype|textaligntype|frameeventtype|oskeytype|abilityintegerfield|abilityrealfield|abilitybooleanfield|abilitystringfield|abilityintegerlevelfield|abilityreallevelfield|abilitybooleanlevelfield|abilitystringlevelfield|abilityintegerlevelarrayfield|abilityreallevelarrayfield|abilitybooleanlevelarrayfield|abilitystringlevelarrayfield|unitintegerfield|unitrealfield|unitbooleanfield|unitstringfield|unitweaponintegerfield|unitweaponrealfield|unitweaponbooleanfield|unitweaponstringfield|itemintegerfield|itemrealfield|itembooleanfield|itemstringfield|movetype|targetflag|armortype|heroattribute|defensetype|regentype|unitcategory|pathingflag)\\b",
+                    "name": "storage.type.wurst"
+                },
+                {
+                    "match": "\\.|[..]",
+                    "name": "storage.type.punctuation"
+                }
+            ]
+        },
+        "code": {
+            "patterns": [
+                {
+                    "include": "#block"
+                },
+                {
+                    "include": "#comments"
+                },
+                {
+                    "include": "#class"
+                },
+                {
+                    "include": "#constants"
+                },
+                {
+                    "include": "#storage-modifiers"
+                },
+                {
+                    "include": "#keywords"
+                },
+                {
+                    "include": "#preprocessor"
+                },
+                {
+                    "include": "#method-call"
+                },
+                {
+                    "include": "#builtinTypes"
+                },
+                {
+                    "include": "#documentation"
+                }
+            ]
+        },
+        "preprocessor": {
+            "patterns": [
+                {
+                    "match": "[a-zA-Z0-9_]+\\s{0,}(?=\\()",
+                    "name": "entity.name.function.wurst"
+                }
+            ]
+        },
+        "comments": {
+            "patterns": [
+                {
+                    "begin": "///",
+                    "captures": {
+                        "0": {
+                            "name": "punctuation.definition.comment.wurst"
+                        }
+                    },
+                    "end": "$\\n?",
+                    "name": "comment.block.documentation.wurst",
+                    "patterns": [
+                        {
+                            "include": "text.xml"
+                        }
+                    ]
+                },
+                {
+                    "begin": "/\\*\\*",
+                    "captures": {
+                        "0": {
+                            "name": "constant.regexp.hotdoc.wurst"
+                        }
+                    },
+                    "end": "\\*/\\n?",
+                    "name": "constant.regexp.hotdoc.wurst"
+                },
+                {
+                    "begin": "/\\*",
+                    "captures": {
+                        "0": {
+                            "name": "punctuation.definition.comment.wurst"
+                        }
+                    },
+                    "end": "\\*/\\n?",
+                    "name": "comment.block.wurst"
+                },
+                {
+                    "begin": "//",
+                    "captures": {
+                        "1": {
+                            "name": "punctuation.definition.comment.wurst"
+                        }
+                    },
+                    "end": "$\\n?",
+                    "name": "comment.line.double-slash.wurst"
+                }
+            ]
+        },
+        "constants": {
+            "patterns": [
+                {
+                    "match": "\\b(true|false|null|this|base)\\b",
+                    "name": "constant.language.wurst"
+                },
+                {
+                    "match": "\\'(.|....)\\'",
+                    "name": "string.quoted.single.wurst"
+                },
+                {
+                    "match": "\\b((0(x|X)[0-9a-fA-F]*)|(([0-9]+\\.?[0-9]*)|(\\.[0-9]+))((e|E)(\\+|-)?[0-9]+)?)(L|l|UL|ul|u|U|F|f|ll|LL|ull|ULL)?\\b",
+                    "name": "constant.numeric.wurst"
+                },
+                {
+                    "captures": {
+                        "0": {
+                            "name": "punctuation.definition.string.begin.wurst"
+                        }
+                    },
+                    "match": "@(\\w)+",
+                    "name": "entity.name.tag.wurst"
+                },
+                {
+                    "begin": "\"",
+                    "beginCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.string.begin.wurst"
+                        }
+                    },
+                    "end": "\"",
+                    "endCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.string.end.wurst"
+                        }
+                    },
+                    "name": "string.quoted.double.wurst",
+                    "patterns": [
+                        {
+                            "match": "\\\\.",
+                            "name": "constant.character.escape.wurst"
+                        }
+                    ]
+                },
+                {
+                    "begin": "'",
+                    "beginCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.string.begin.wurst"
+                        }
+                    },
+                    "end": "'",
+                    "endCaptures": {
+                        "0": {
+                            "name": "punctuation.definition.string.end.wurst"
+                        }
+                    },
+                    "name": "string.quoted.single.wurst",
+                    "patterns": [
+                        {
+                            "match": "\\\\.",
+                            "name": "constant.character.escape.wurst"
+                        }
+                    ]
+                }
+            ]
+        },
+        "keywords": {
+            "patterns": [
+                {
+                    "match": "\\b(class|return|if|else|while|for|in|break|new|null|package|endpackage|function|returns|public|private|protected|import|initlater|native|nativetype|extends|interface|implements|module|use|abstract|static|thistype|override|immutable|it|array|and|or|not|this|construct|ondestroy|destroy|type|constant|endfunction|nothing|init|castTo|tuple|div|mod|let|from|to|downto|step|endpackage|skip|true|false|var|instanceof|super|enum|switch|case|default|typeId|begin|end|compiletime|library|endlibrary|scope|endscope|requires|uses|needs|struct|endstruct|then|endif|loop|exitwhen|endloop|method|takes|endmethod|set|call|globals|endglobals|initializer|elseif|vararg|local)\\b",
+                    "name": "keyword.control.wurst"
+                },
+                {
+                    "match": "[-+%=]=?|!=|\\*\\*?=?|//?=?|<[<=>]?|>[=>]?|[&|^~]",
+                    "name": "entity.name.tag.css"
+                }
+            ]
+        }
     }
-  ],
-  "repository": {
-    "functions": {
-      "patterns": [
-        {
-          "match": "\\b(int|integer|real|code|boolean|string|bool|agent|event|player|widget|unit|destructable|item|ability|buff|force|group|trigger|triggercondition|triggeraction|timer|location|region|rect|boolexpr|sound|conditionfunc|filterfunc|unitpool|itempool|race|alliancetype|racepreference|gamestate|igamestate|fgamestate|playerstate|playerscore|playergameresult|unitstate|aidifficulty|eventid|gameevent|playerevent|playerunitevent|unitevent|limitop|widgetevent|dialogevent|unittype|gamespeed|gamedifficulty|gametype|mapflag|mapvisibility|mapsetting|mapdensity|mapcontrol|playerslotstate|volumegroup|camerafield|camerasetup|playercolor|placement|startlocprio|raritycontrol|blendmode|texmapflags|effect|effecttype|weathereffect|terraindeformation|fogstate|fogmodifier|dialog|button|quest|questitem|defeatcondition|timerdialog|leaderboard|multiboard|multiboarditem|trackable|gamecache|version|itemtype|texttag|attacktype|damagetype|weapontype|soundtype|lightning|pathingtype|image|ubersplat|hashtable|mousebuttontype|handle|framehandle|originframetype|framepointtype|textaligntype|frameeventtype|oskeytype|abilityintegerfield|abilityrealfield|abilitybooleanfield|abilitystringfield|abilityintegerlevelfield|abilityreallevelfield|abilitybooleanlevelfield|abilitystringlevelfield|abilityintegerlevelarrayfield|abilityreallevelarrayfield|abilitybooleanlevelarrayfield|abilitystringlevelarrayfield|unitintegerfield|unitrealfield|unitbooleanfield|unitstringfield|unitweaponintegerfield|unitweaponrealfield|unitweaponbooleanfield|unitweaponstringfield|itemintegerfield|itemrealfield|itembooleanfield|itemstringfield|movetype|targetflag|armortype|heroattribute|defensetype|regentype|unitcategory|pathingflag)\\b",
-          "name": "storage.type.wurst"
-        }
-      ]
-    },
-    "builtinTypes": {
-      "patterns": [
-        {
-          "match": "\\b(int|integer|real|code|boolean|string|bool|agent|event|player|widget|unit|destructable|item|ability|buff|force|group|trigger|triggercondition|triggeraction|timer|location|region|rect|boolexpr|sound|conditionfunc|filterfunc|unitpool|itempool|race|alliancetype|racepreference|gamestate|igamestate|fgamestate|playerstate|playerscore|playergameresult|unitstate|aidifficulty|eventid|gameevent|playerevent|playerunitevent|unitevent|limitop|widgetevent|dialogevent|unittype|gamespeed|gamedifficulty|gametype|mapflag|mapvisibility|mapsetting|mapdensity|mapcontrol|playerslotstate|volumegroup|camerafield|camerasetup|playercolor|placement|startlocprio|raritycontrol|blendmode|texmapflags|effect|effecttype|weathereffect|terraindeformation|fogstate|fogmodifier|dialog|button|quest|questitem|defeatcondition|timerdialog|leaderboard|multiboard|multiboarditem|trackable|gamecache|version|itemtype|texttag|attacktype|damagetype|weapontype|soundtype|lightning|pathingtype|image|ubersplat|hashtable|mousebuttontype|handle|framehandle|originframetype|framepointtype|textaligntype|frameeventtype|oskeytype|abilityintegerfield|abilityrealfield|abilitybooleanfield|abilitystringfield|abilityintegerlevelfield|abilityreallevelfield|abilitybooleanlevelfield|abilitystringlevelfield|abilityintegerlevelarrayfield|abilityreallevelarrayfield|abilitybooleanlevelarrayfield|abilitystringlevelarrayfield|unitintegerfield|unitrealfield|unitbooleanfield|unitstringfield|unitweaponintegerfield|unitweaponrealfield|unitweaponbooleanfield|unitweaponstringfield|itemintegerfield|itemrealfield|itembooleanfield|itemstringfield|movetype|targetflag|armortype|heroattribute|defensetype|regentype|unitcategory|pathingflag)\\b",
-          "name": "storage.type.wurst"
-        },
-        {
-          "match": "\\.|[..]",
-          "name": "storage.type.punctuation"
-        }
-      ]
-    },
-    "code": {
-      "patterns": [
-        {
-          "include": "#block"
-        },
-        {
-          "include": "#comments"
-        },
-        {
-          "include": "#class"
-        },
-        {
-          "include": "#constants"
-        },
-        {
-          "include": "#storage-modifiers"
-        },
-        {
-          "include": "#keywords"
-        },
-        {
-          "include": "#preprocessor"
-        },
-        {
-          "include": "#method-call"
-        },
-        {
-          "include": "#builtinTypes"
-        },
-        {
-          "include": "#documentation"
-        }
-      ]
-    },
-    "preprocessor": {
-      "patterns": [
-        {
-          "match": "[a-zA-Z0-9_]+\\s{0,}(?=\\()",
-          "name": "entity.name.function.wurst"
-        }
-      ]
-    },
-    "comments": {
-      "patterns": [
-        {
-          "begin": "///",
-          "captures": {
-            "0": {
-              "name": "punctuation.definition.comment.wurst"
-            }
-          },
-          "end": "$\\n?",
-          "name": "comment.block.documentation.wurst",
-          "patterns": [
-            {
-              "include": "text.xml"
-            }
-          ]
-        },
-        {
-          "begin": "/\\*\\*",
-          "captures": {
-            "0": {
-              "name": "constant.regexp.hotdoc.wurst"
-            }
-          },
-          "end": "\\*/\\n?",
-          "name": "constant.regexp.hotdoc.wurst"
-        },
-        {
-          "begin": "/\\*",
-          "captures": {
-            "0": {
-              "name": "punctuation.definition.comment.wurst"
-            }
-          },
-          "end": "\\*/\\n?",
-          "name": "comment.block.wurst"
-        },
-        {
-          "begin": "//",
-          "captures": {
-            "1": {
-              "name": "punctuation.definition.comment.wurst"
-            }
-          },
-          "end": "$\\n?",
-          "name": "comment.line.double-slash.wurst"
-        }
-      ]
-    },
-    "constants": {
-      "patterns": [
-        {
-          "match": "\\b(true|false|null|this|base)\\b",
-          "name": "constant.language.wurst"
-        },
-        {
-          "match": "\\'(.|....)\\'",
-          "name": "string.quoted.single.wurst"
-        },
-        {
-          "match": "\\b((0(x|X)[0-9a-fA-F]*)|(([0-9]+\\.?[0-9]*)|(\\.[0-9]+))((e|E)(\\+|-)?[0-9]+)?)(L|l|UL|ul|u|U|F|f|ll|LL|ull|ULL)?\\b",
-          "name": "constant.numeric.wurst"
-        },
-        {
-          "captures": {
-            "0": {
-              "name": "punctuation.definition.string.begin.wurst"
-            }
-          },
-          "match": "@(\\w)+",
-          "name": "entity.name.tag.wurst"
-        },
-        {
-          "begin": "\"",
-          "beginCaptures": {
-            "0": {
-              "name": "punctuation.definition.string.begin.wurst"
-            }
-          },
-          "end": "\"",
-          "endCaptures": {
-            "0": {
-              "name": "punctuation.definition.string.end.wurst"
-            }
-          },
-          "name": "string.quoted.double.wurst",
-          "patterns": [
-            {
-              "match": "\\\\.",
-              "name": "constant.character.escape.wurst"
-            }
-          ]
-        },
-        {
-          "begin": "'",
-          "beginCaptures": {
-            "0": {
-              "name": "punctuation.definition.string.begin.wurst"
-            }
-          },
-          "end": "'",
-          "endCaptures": {
-            "0": {
-              "name": "punctuation.definition.string.end.wurst"
-            }
-          },
-          "name": "string.quoted.single.wurst",
-          "patterns": [
-            {
-              "match": "\\\\.",
-              "name": "constant.character.escape.wurst"
-            }
-          ]
-        }
-      ]
-    },
-    "keywords": {
-      "patterns": [
-        {
-          "match": "\\b(class|return|if|else|while|for|in|break|new|null|package|endpackage|function|returns|public|private|protected|import|initlater|native|nativetype|extends|interface|implements|module|use|abstract|static|thistype|override|immutable|it|array|and|or|not|this|construct|ondestroy|destroy|type|constant|endfunction|nothing|init|castTo|tuple|div|mod|let|from|to|downto|step|endpackage|skip|true|false|var|instanceof|super|enum|switch|case|default|typeId|begin|end|compiletime|library|endlibrary|scope|endscope|requires|uses|needs|struct|endstruct|then|endif|loop|exitwhen|endloop|method|takes|endmethod|set|call|globals|endglobals|initializer|elseif|vararg|local)\\b",
-          "name": "keyword.control.wurst"
-        },
-        {
-          "match": "[-+%=]=?|!=|\\*\\*?=?|\/\/?=?|<[<=>]?|>[=>]?|[&|^~]",
-          "name": "entity.name.tag.css"
-        }
-      ]
-    }
-  }
 }

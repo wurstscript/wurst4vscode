@@ -1,37 +1,21 @@
 'use strict';
 
 import * as vscode from 'vscode';
-import { workspace, ExtensionContext, LanguageConfiguration } from 'vscode';
+import { workspace, ExtensionContext } from 'vscode';
 import { LanguageClient, LanguageClientOptions, ServerOptions, Executable } from 'vscode-languageclient';
 import * as fs from 'fs';
 
 import { registerCommands } from './features/commands';
 import { registerFileCreation } from './features/fileCreation';
+import { languageConfig } from './languageConfig';
 
 export async function activate(context: ExtensionContext) {
     console.log('Wurst extension activated!!');
 
-    let config: LanguageConfiguration = {
-        comments: {
-            lineComment: '//',
-            blockComment: ['/*', '*/'],
-        },
-        brackets: [
-            ['{', '}'],
-            ['[', ']'],
-            ['(', ')'],
-        ],
-        indentationRules: {
-            increaseIndentPattern:
-                //            < keywords behind which a space must follow >          <keywords without space>  <construct may have no spaces>
-                /^\s*(((if|while|for|function|class|module|interface|case|switch)\s.*)|(begin|ondestroy|init)|(construct|else).*)|.*(->)$/,
-            decreaseIndentPattern: /^\s*(else|end)\s.*$/,
-        },
-    };
 
     setupDecorators(context);
 
-    vscode.languages.setLanguageConfiguration('wurst', config);
+    vscode.languages.setLanguageConfiguration('wurst', languageConfig);
 
     await startLanguageClient(context).then(
         (value) => console.log(`init done : ${value}`),

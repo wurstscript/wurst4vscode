@@ -14,6 +14,17 @@
 			"preLaunchTask": "npm"
 		},
 		{
+			"name": "Launch Extension For Web",
+			"type": "extensionHost",
+			"request": "launch",
+			"runtimeExecutable": "${execPath}",
+			"args": ["--extensionDevelopmentPath=${workspaceRoot}", "--extensionDevelopmentKind=web" ],
+			"stopOnEntry": false,
+			"sourceMaps": true,
+			"outFiles": ["${workspaceRoot}/out"],
+			"preLaunchTask": "npm: watch-web"
+		},
+		{
 			"name": "Launch Tests",
 			"type": "extensionHost",
 			"request": "launch",

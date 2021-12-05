@@ -34,6 +34,7 @@
     "onCommand:wurst.tests_file"
   ],
   "main": "./out/extension",
+  "browser": "./dist/web/extension.js",
   "contributes": {
     "languages": [
       {
@@ -189,14 +190,21 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "tsc -p ./",
-    "compile": "tsc -watch -p ./"
+    "vscode:prepublish": "tsc -p ./ && npm run package-web",
+    "compile": "tsc -watch -p ./",
+    "compile-web": "webpack",
+		"watch-web": "webpack --watch",
+		"package-web": "webpack --mode production --devtool hidden-source-map"
   },
   "devDependencies": {
     "@types/node": "^14.14.7",
     "@types/os-homedir": "^1.0.0",
     "typescript": "^4.0.5",
-    "@types/vscode": "^1.51.0"
+    "@types/vscode": "^1.51.0",
+    "webpack": "^5.52.1",
+		"webpack-cli": "^4.8.0",
+		"@types/webpack-env": "^1.16.2",
+    "ts-loader": "^9.2.5"
   },
   "dependencies": {
     "semver": "^5.7.1",

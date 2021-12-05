@@ -10,10 +10,19 @@ export let languageConfig: LanguageConfiguration = {
         ['[', ']'],
         ['(', ')'],
     ],
-    indentationRules: {
-        increaseIndentPattern:
-            //            < keywords behind which a space must follow >          <keywords without space>  <construct may have no spaces>
-            /^\s*(((if|while|for|function|class|module|interface|case|switch)\s.*)|(begin|ondestroy|init)|(construct|else).*)|.*(->)$/,
-        decreaseIndentPattern: /^\s*(else|end)\s.*$/,
-    },
+    onEnterRules: [
+        {
+            //                       < keywords behind which a space must follow >          <keywords without space>  <construct may have no spaces>
+            beforeText: /^\s*(((if|while|for|function|class|module|enum|interface|case|switch)\s.*)|(begin|ondestroy|init)|(construct|else).*)|.*(->)$/,
+            action: {
+                indentAction: IndentAction.Indent,
+            },
+        },
+        {
+            beforeText: /^\s*(else|end|exitwhen|break|skip|return)(\s.*)?$/,
+            action: {
+                indentAction: IndentAction.Outdent,
+            },
+        }
+    ]
 };

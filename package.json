@@ -51,6 +51,16 @@
         "configuration": "./wurst.configuration.json"
       }
     ],
+    "documentFormattingEditProvider": {
+        "documentSelector": [
+            "wurst"
+        ],
+        "enableForFileTypes": [
+            ".wurst",
+            ".jurst",
+            ".j"
+        ]
+    },
     "grammars": [
       {
         "language": "wurst",

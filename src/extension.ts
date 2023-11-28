@@ -105,6 +105,12 @@ async function startLanguageClient(context: ExtensionContext) {
     let serverOptions = await getServerOptions();
 
     let client = new LanguageClient('wurstLanguageServer', serverOptions, clientOptions);
+
+    client.onReady().then(() => {
+        client.onNotification('wurst/updateGamePath', (params) => {
+           vscode.workspace.getConfiguration().update("wurst.wc3path", params)
+        });
+    })
     context.subscriptions.push(client.start());
 
     context.subscriptions.push(registerCommands(client));

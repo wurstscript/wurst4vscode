@@ -10,8 +10,7 @@ import { registerFileCreation } from './features/fileCreation';
 import { languageConfig } from './languageConfig';
 
 export async function activate(context: ExtensionContext) {
-    console.log('Wurst extension activated!!');
-
+    console.log('Wurst extension activated!');
 
     setupDecorators(context);
 
@@ -104,7 +103,7 @@ async function startLanguageClient(context: ExtensionContext) {
 
     let serverOptions = await getServerOptions();
 
-    let client = new LanguageClient('wurstLanguageServer', serverOptions, clientOptions);
+    let client = new LanguageClient('Wurstscript Language Server', serverOptions, clientOptions);
 
     client.onReady().then(() => {
         client.onNotification('wurst/updateGamePath', (params) => {

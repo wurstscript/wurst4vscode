@@ -230,7 +230,7 @@ async function getServerOptions(): Promise<ServerOptions> {
                 title: 'Installing WurstScript…',
                 cancellable: false,
             },
-            async (progress) => {
+            async (_progress) => {
                 const interval = 2000;
                 const timeout = 5 * 60 * 1000;
                 const start = Date.now();

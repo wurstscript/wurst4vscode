@@ -21,6 +21,17 @@
   "categories": [
     "Programming Languages"
   ],
+  "activationEvents": [
+    "onLanguage:wurst",
+    "onCommand:wurst.startmap",
+    "onCommand:wurst.startlast",
+    "onCommand:wurst.tests",
+    "onCommand:wurst.tests_file",
+    "onCommand:wurst.tests_func",
+    "onCommand:wurst.perform_code_action",
+    "onCommand:wurst.buildmap",
+    "onCommand:wurst.tests_file"
+  ],
   "main": "./out/extension",
   "browser": "./dist/web/extension.js",
   "contributes": {

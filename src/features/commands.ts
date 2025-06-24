@@ -46,6 +46,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
     let startMap = async (cmd: 'wurst.startmap' | 'wurst.hotstartmap', args: any[]) => {
         let config = vscode.workspace.getConfiguration('wurst');
         let wc3path = config.get<string>('wc3path');
+        let gameExePath = config.get<string>('gameExePath');
 
         let mapPromise: Thenable<string | undefined>;
         if (args && args.length > 0) {
@@ -72,6 +73,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
                 {
                     mappath: mappath,
                     wc3path: wc3path,
+                    gameExePath: gameExePath,
                 },
             ],
         };

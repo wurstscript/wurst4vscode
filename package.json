@@ -21,18 +21,6 @@
   "categories": [
     "Programming Languages"
   ],
-  "activationEvents": [
-    "onLanguage:wurst",
-    "onCommand:wurst.clean",
-    "onCommand:wurst.startmap",
-    "onCommand:wurst.startlast",
-    "onCommand:wurst.tests",
-    "onCommand:wurst.tests_file",
-    "onCommand:wurst.tests_func",
-    "onCommand:wurst.perform_code_action",
-    "onCommand:wurst.buildmap",
-    "onCommand:wurst.tests_file"
-  ],
   "main": "./out/extension",
   "browser": "./dist/web/extension.js",
   "contributes": {
@@ -69,11 +57,6 @@
       }
     ],
     "commands": [
-      {
-        "command": "wurst.clean",
-        "title": "Clean the Wurst workspace",
-        "category": "wurst"
-      },
       {
         "command": "wurst.startmap",
         "title": "Run a Wurst map",
@@ -118,6 +101,11 @@
         "command": "wurst.buildmap",
         "title": "Build your map via wurst.build (into /_build)",
         "category": "wurst"
+      },
+      {
+        "command": "wurst.chooseGameExecutable",
+        "title": "Choose Warcraft III executable",
+        "category": "wurst"
       }
     ],
     "keybindings": {
@@ -159,6 +147,11 @@
           "type": "string",
           "default": "",
           "description": "Optional path to a Warcraft installation directory (e.g. C:\\Games\\Warcraft III\\). If no executable can be found, it will be followed by an auto detection attempt."
+        },
+        "wurst.gameExePath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional path to a Warcraft executable to override wc3path detection."
         },
         "wurst.wc3RunArgs": {
           "type": "string",

@@ -117,6 +117,11 @@
         "command": "wurst.chooseGameExecutable",
         "title": "Choose Warcraft III executable",
         "category": "wurst"
+      },
+      {
+        "command": "wurst.installJava",
+        "title": "Install Java 17",
+        "category": "wurst"
       }
     ],
     "keybindings": {

@@ -13,6 +13,13 @@ import { registerCommands } from './features/commands';
 import { registerFileCreation } from './features/fileCreation';
 import { languageConfig } from './languageConfig';
 
+// Static Java download URLs
+const JAVA_DOWNLOAD_URLS: { [key: string]: string } = {
+    win32: 'https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.15%2B6/OpenJDK17U-jdk_x64_windows_hotspot_17.0.15_6.msi',
+    darwin: 'https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.15%2B6/OpenJDK17U-jdk_aarch64_mac_hotspot_17.0.15_6.pkg',
+    linux: 'https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.15%2B6/OpenJDK17U-jdk_aarch64_linux_hotspot_17.0.15_6.tar.gz',
+};
+
 export async function activate(context: ExtensionContext) {
     console.log('Wurst extension activated!');
 
@@ -24,11 +31,13 @@ export async function activate(context: ExtensionContext) {
     try {
         await startLanguageClient(context);
     } catch (err) {
+        console.error('Failed to start language client:', err);
         vscode.window.showWarningMessage(`Wurst language features disabled: ${err}`);
     }
 }
 
 function registerBasicCommands(context: ExtensionContext) {
+    // Choose game executable
     context.subscriptions.push(
         vscode.commands.registerCommand('wurst.chooseGameExecutable', async () => {
             const uris = await vscode.window.showOpenDialog({
@@ -45,7 +54,15 @@ function registerBasicCommands(context: ExtensionContext) {
                     .update('wurst.gameExePath', exePath, vscode.ConfigurationTarget.Workspace);
                 vscode.window.showInformationMessage(`Wurst game executable path set: ${exePath}`);
             }
-        }),
+        })
+    );
+
+    // Install Java command
+    context.subscriptions.push(
+        vscode.commands.registerCommand('wurst.installJava', async () => {
+            console.log('Command wurst.installJava invoked');
+            await installJavaAutomatically(context);
+        })
     );
 }
 
@@ -110,13 +127,12 @@ async function startLanguageClient(context: ExtensionContext) {
         synchronize: { configurationSection: 'wurst' },
     };
 
-    const serverOptions = await getServerOptions();
+    const serverOptions = await getServerOptions(context);
     const client = new LanguageClient('Wurstscript Language Server', serverOptions, clientOptions);
 
     context.subscriptions.push(client.start());
 
     client.onReady().then(() => {
-        // 1) Create a status‐bar item
         const sb = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
         sb.text = '$(check) WurstScript';
         sb.tooltip = 'WurstScript language server is running.';
@@ -125,7 +141,6 @@ async function startLanguageClient(context: ExtensionContext) {
     });
 
     await client.onReady();
-
     client.onNotification('wurst/updateGamePath', (params) => {
         workspace.getConfiguration().update('wurst.wc3path', params);
     });
@@ -137,52 +152,144 @@ async function startLanguageClient(context: ExtensionContext) {
 
 function registerFileChanges(client: LanguageClient): vscode.FileSystemWatcher {
     const watcher = workspace.createFileSystemWatcher('**/*.wurst');
-
     function notify(type: number, uri: vscode.Uri) {
         client.sendNotification('workspace/didChangeWatchedFiles', {
             changes: [{ uri: uri.toString(), type }],
         });
     }
-
     watcher.onDidCreate((uri) => notify(1, uri));
     watcher.onDidChange((uri) => notify(2, uri));
     watcher.onDidDelete((uri) => notify(3, uri));
-
     return watcher;
 }
 
-async function getServerOptions(): Promise<ServerOptions> {
+async function downloadWithProgress(
+    url: string,
+    destination: string,
+    progressTitle: string,
+    progress?: vscode.Progress<{ message?: string; increment?: number }>,
+    cancellationToken?: vscode.CancellationToken
+): Promise<void> {
+    const maxRedirects = 5;
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+
+    await vscode.window.withProgress(
+        {
+            location: vscode.ProgressLocation.Notification,
+            title: progressTitle,
+            cancellable: !!cancellationToken,
+        },
+        (_progress, token) => {
+            let received = 0;
+            let total = 0;
+            let lastPct = 0;
+            let cancelled = false;
+
+            if (cancellationToken) {
+                cancellationToken.onCancellationRequested(() => (cancelled = true));
+            } else {
+                token.onCancellationRequested(() => (cancelled = true));
+            }
+
+            return new Promise<void>((resolve, reject) => {
+                function requestUrl(url: string, redirectCount: number) {
+                    if (cancelled) return reject(new Error('Download cancelled by user'));
+                    if (redirectCount > maxRedirects) return reject(new Error('Too many redirects'));
+
+                    const req = https.get(url, (res) => {
+                        if ([301, 302, 303, 307, 308].includes(res.statusCode!)) {
+                            const loc = res.headers.location;
+                            if (!loc) return reject(new Error('Redirect without Location header'));
+                            res.destroy();
+                            return requestUrl(loc, redirectCount + 1);
+                        }
+
+                        if (res.statusCode !== 200) return reject(new Error(`Download failed: HTTP ${res.statusCode}`));
+
+                        total = parseInt(res.headers['content-length'] || '0', 10);
+                        const fileStream = fs.createWriteStream(destination);
+
+                        res.on('data', (chunk) => {
+                            if (cancelled) {
+                                req.destroy();
+                                return;
+                            }
+                            received += chunk.length;
+                            if (total > 0 && progress) {
+                                const pct = (received / total) * 100;
+                                const inc = pct - lastPct;
+                                if (inc > 0) {
+                                    progress.report({ increment: inc, message: `${Math.floor(pct)}%` });
+                                    lastPct = pct;
+                                }
+                            }
+                        });
+
+                        res.pipe(fileStream);
+
+                        fileStream.on('finish', () => {
+                            fileStream.close();
+                            if (cancelled) return reject(new Error('Download cancelled by user'));
+                            resolve();
+                        });
+
+                        res.on('error', (err) => {
+                            fs.unlink(destination, () => {});
+                            reject(err);
+                        });
+                    });
+
+                    req.on('error', (err) => {
+                        fs.unlink(destination, () => {});
+                        reject(err);
+                    });
+                }
+
+                requestUrl(url, 0);
+            });
+        }
+    );
+}
+
+export async function downloadFile(
+    url: string,
+    destination: string,
+    progress?: vscode.Progress<{ message?: string; increment?: number }>
+): Promise<number> {
+    await downloadWithProgress(url, destination, 'Downloading…', progress);
+    return fs.statSync(destination).size;
+}
+
+async function downloadWurstSetup(destination: string): Promise<void> {
+    const url = 'https://github.com/wurstscript/WurstSetup/releases/download/nightly-master/WurstSetup.jar';
+    await downloadWithProgress(url, destination, 'Downloading WurstSetup…');
+}
+
+
+async function getServerOptions(context: ExtensionContext): Promise<ServerOptions> {
     const config = workspace.getConfiguration('wurst');
     const java = config.get<string>('javaExecutable') ?? 'java';
     const javaOpts = config.get<string[]>('javaOpts') ?? [];
     const wurstJar = (config.get<string>('wurstJar') ?? '$HOME/.wurst/wurstscript.jar').replace('$HOME', os.homedir());
     const debugMode = config.get<boolean>('debugMode');
 
-    // 1) Check for Java
+    console.log('Checking Java availability at', java);
     if (!isJavaAvailable(java)) {
-        await vscode.window
-            .showErrorMessage(
-                'Java 17+ is required but not found. Please install Java or configure "wurst.javaExecutable".',
-                'Download Temurin JDK'
-            )
-            .then((selection) => {
-                if (selection === 'Download Temurin JDK') {
-                    vscode.env.openExternal(
-                        vscode.Uri.parse('https://adoptium.net/en-GB/temurin/releases/?version=17')
-                    );
-                }
-            });
-        throw new Error('Java not found.');
+        console.log('Java not available, invoking installer');
+        await installJavaAutomatically(context);
+        if (!isJavaAvailable(java)) {
+            console.error('Java still not found after installation');
+            throw new Error('Java not found after installation.');
+        }
     }
 
-    // 2) Download WurstSetup if needed
     if (!(await doesFileExist(wurstJar))) {
         const choice = await vscode.window.showWarningMessage(
             `WurstScript not found at ${wurstJar}. Download now?`,
             'Yes',
-            'No'
-        );
-        if (choice !== 'Yes') {
+            'No');
+
+            if (choice !== 'Yes') {
             throw new Error('WurstScript not installed.');
         }
         const setupJar = path.join(os.homedir(), '.wurst', 'WurstSetup.jar');
@@ -248,13 +355,8 @@ async function getServerOptions(): Promise<ServerOptions> {
                 });
             }
         );
-
-        // 3) when we get here, lsJar exists
-        vscode.window.showInformationMessage('WurstScript installed successfully! Launching language server…');
-
     }
 
-    // 4) Build and return the Language Server command
     let args = [...javaOpts, '-jar', wurstJar, '-languageServer'];
     if (debugMode && (await isPortOpen(5005))) {
         args.unshift('-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005,quiet=y');
@@ -264,122 +366,120 @@ async function getServerOptions(): Promise<ServerOptions> {
     return { run: exec, debug: exec };
 }
 
+async function installJavaAutomatically(context: ExtensionContext): Promise<void> {
+    const choice = await vscode.window.showInformationMessage(
+        'Java 17+ is required but not found. Automatically download and install OpenJDK 17?',
+        'Yes',
+        'No'
+    );
+    console.log('User chose to install Java:', choice);
+    if (choice !== 'Yes') {
+        console.log('Opening manual download page');
+        vscode.env.openExternal(vscode.Uri.parse(JAVA_DOWNLOAD_URLS[os.platform()] || 'https://adoptium.net'));
+        return;
+    }
+
+    const plat = os.platform();
+    const url = JAVA_DOWNLOAD_URLS[plat];
+    if (!url) {
+        console.error('No download URL for platform', plat);
+        vscode.window.showErrorMessage(`Unsupported platform for auto-install: ${plat}`);
+        return;
+    }
+
+    const installerName = path.basename(url);
+    const dest = path.join(os.tmpdir(), installerName);
+
+    try {
+        console.log('Downloading Java from', url, 'to', dest);
+        let expectedSize = 0;
+        await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: 'Downloading OpenJDK…', cancellable: false },
+            (progress) =>
+                downloadFile(url, dest, progress).then((size) => {
+                    expectedSize = size;
+                })
+        );
+        console.log(`Download completed, size=${expectedSize} bytes`);
+
+        const stats = fs.statSync(dest);
+        if (stats.size < expectedSize) {
+            throw new Error(`Downloaded file incomplete: ${stats.size}/${expectedSize}`);
+        }
+
+        console.log('Running installer at', dest);
+
+        const copyPath = path.join(os.tmpdir(), 'jdk-installer-copy.msi');
+        fs.copyFileSync(dest, copyPath);
+        console.log('Copied installer to', copyPath);
+
+        await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: 'Installing Java…', cancellable: false },
+            async () => await runInstaller(copyPath)
+        );
+        console.log('Installation completed');
+
+        const proceed = await vscode.window.showInformationMessage(
+            'The java installer has been launched. Click "Done" after installation is complete.',
+            'Done'
+        );
+
+        if (proceed === 'Done') {
+            await vscode.commands.executeCommand('workbench.action.reloadWindow');
+        }
+
+        vscode.window.showInformationMessage('Java installed. Restarting extension...');
+        await vscode.commands.executeCommand('workbench.action.reloadWindow');
+    } catch (error) {
+        console.error('Java installation failed:', error);
+        fs.existsSync(dest) && fs.unlinkSync(dest);
+        vscode.window.showErrorMessage(`Java installation failed: ${error}`);
+    }
+}
+
+
+export async function runInstaller(installerPath: string): Promise<void> {
+    const plat = os.platform();
+    console.log('Launching installer for platform', plat, 'at path', installerPath);
+
+    if (!fs.existsSync(installerPath)) {
+        throw new Error(`Installer file not found at ${installerPath}`);
+    }
+
+    try {
+        // Open with default system installer (works for .msi, .pkg, etc.)
+        await vscode.env.openExternal(vscode.Uri.file(installerPath));
+    } catch (err) {
+        console.error('Failed to open installer:', err);
+        throw new Error(`Failed to open installer: ${err}`);
+    }
+}
+
 function isJavaAvailable(java: string): boolean {
-    const result = spawnSync(java, ['-version'], { encoding: 'utf8' });
-    return result.status === 0 && result.stderr.includes('version');
+    const result = spawnSync('cmd', ['/c', java, '-version'], {
+        encoding: 'utf8',
+        shell: false,
+    });
+
+    if (result.status === 0) {
+        console.log('Java output:', result.stdout || result.stderr);
+        return true;
+    } else {
+        console.error('Java not found:', result.stderr || result.stdout);
+        return false;
+    }
 }
 
 function doesFileExist(filePath: string): Promise<boolean> {
-    return new Promise((resolve) => {
-        fs.stat(filePath, (err) => resolve(!err));
-    });
-}
-
-async function downloadWurstSetup(destination: string): Promise<void> {
-    const initialUrl = 'https://github.com/wurstscript/WurstSetup/releases/download/nightly-master/WurstSetup.jar';
-    const maxRedirects = 5;
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
-
-    await vscode.window.withProgress(
-        {
-            location: vscode.ProgressLocation.Notification,
-            title: 'Downloading WurstSetup…',
-            cancellable: true,
-        },
-        (progress, token) => {
-            return new Promise<void>((resolve, reject) => {
-                let received = 0;
-                let total = 0;
-                let lastPct = 0;
-                let cancelled = false;
-
-                token.onCancellationRequested(() => {
-                    cancelled = true;
-                });
-
-                function requestUrl(url: string, redirectCount: number) {
-                    if (cancelled) {
-                        return reject(new Error('Download cancelled by user'));
-                    }
-                    if (redirectCount > maxRedirects) {
-                        return reject(new Error('Too many redirects'));
-                    }
-
-                    const req = https.get(url, (res) => {
-                        // follow redirects
-                        if ([301, 302, 303, 307, 308].includes(res.statusCode!)) {
-                            const loc = res.headers.location;
-                            if (!loc) {
-                                return reject(new Error(`Redirect response without Location header`));
-                            }
-                            // abandon this response and follow the new URL
-                            res.destroy();
-                            return requestUrl(loc, redirectCount + 1);
-                        }
-
-                        if (res.statusCode !== 200) {
-                            return reject(new Error(`Download failed: HTTP ${res.statusCode}`));
-                        }
-
-                        total = parseInt(res.headers['content-length'] || '0', 10);
-                        const fileStream = fs.createWriteStream(destination);
-
-                        res.on('data', (chunk) => {
-                            if (cancelled) {
-                                req.abort();
-                                return;
-                            }
-                            received += chunk.length;
-                            if (total > 0) {
-                                const pct = (received / total) * 100;
-                                const inc = pct - lastPct;
-                                if (inc > 0) {
-                                    progress.report({ increment: inc, message: `${Math.floor(pct)}%` });
-                                    lastPct = pct;
-                                }
-                            }
-                        });
-
-                        res.pipe(fileStream);
-                        fileStream.on('finish', () => {
-                            fileStream.close();
-                            if (cancelled) {
-                                return reject(new Error('Download cancelled by user'));
-                            }
-                            vscode.window.showInformationMessage('WurstSetup downloaded.');
-                            resolve();
-                        });
-
-                        res.on('error', (err) => {
-                            fs.unlink(destination, () => {});
-                            reject(err);
-                        });
-                    });
-
-                    req.on('error', (err) => {
-                        fs.unlink(destination, () => {});
-                        reject(err);
-                    });
-                }
-
-                // kick off the first request
-                requestUrl(initialUrl, 0);
-            });
-        }
-    );
+    return new Promise((resolve) => fs.stat(filePath, (err) => resolve(!err)));
 }
 
 function isPortOpen(port: number): Promise<boolean> {
     return new Promise((resolve) => {
         const net = require('net');
         const srv = net.createServer();
-        srv.once('error', (err: { code: string }) => {
-            resolve(err.code !== 'EADDRINUSE');
-        });
-        srv.once('listening', () => {
-            srv.close();
-            resolve(true);
-        });
+        srv.once('error', (err: { code: string }) => resolve(err.code !== 'EADDRINUSE'));
+        srv.once('listening', () => srv.close(() => resolve(true)));
         srv.listen(port);
     });
 }

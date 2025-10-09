@@ -4,11 +4,7 @@
     "fileTypes": ["wurst"],
     "foldingStartMarker": "^\\s*#\\s*region|^\\s*/\\*|^(?![^{]*?//|[^{]*?/\\*(?!.*?\\*/.*?\\{)).*?\\{\\s*($|//|/\\*(?!.*?\\*/.*\\S))",
     "foldingStopMarker": "^\\s*#\\s*endregion|^\\s*\\*/|^\\s*\\}",
-    "patterns": [
-        {
-            "include": "#code"
-        }
-    ],
+    "patterns": [{ "include": "#code" }],
     "repository": {
         "functions": {
             "patterns": [
@@ -18,6 +14,7 @@
                 }
             ]
         },
+
         "builtinTypes": {
             "patterns": [
                 {
@@ -25,169 +22,103 @@
                     "name": "storage.type.wurst"
                 },
                 {
-                    "match": "\\.|[..]",
-                    "name": "storage.type.punctuation"
+                    "match": "\\.\\.",
+                    "name": "keyword.operator"
+                },
+                {
+                    "match": "\\.",
+                    "name": "punctuation.accessor"
                 }
             ]
         },
+
         "code": {
             "patterns": [
-                {
-                    "include": "#block"
-                },
-                {
-                    "include": "#comments"
-                },
-                {
-                    "include": "#class"
-                },
-                {
-                    "include": "#constants"
-                },
-                {
-                    "include": "#storage-modifiers"
-                },
-                {
-                    "include": "#keywords"
-                },
-                {
-                    "include": "#preprocessor"
-                },
-                {
-                    "include": "#method-call"
-                },
-                {
-                    "include": "#builtinTypes"
-                },
-                {
-                    "include": "#documentation"
-                }
+                { "include": "#block" },
+                { "include": "#comments" },
+                { "include": "#class" },
+                { "include": "#constants" },
+                { "include": "#storage-modifiers" },
+                { "include": "#keywords" },
+                { "include": "#preprocessor" },
+                { "include": "#method-call" },
+                { "include": "#builtinTypes" },
+                { "include": "#documentation" }
             ]
         },
+
         "preprocessor": {
             "patterns": [
                 {
-                    "match": "[a-zA-Z0-9_]+\\s{0,}(?=\\()",
-                    "name": "entity.name.function.wurst"
+                    "comment": "function call-ish: word followed by '(' but not language keywords",
+                    "match": "\\b(?!(?:if|for|while|return|switch|case|new)\\b)[A-Za-z_]\\w*(?=\\()",
+                    "name": "entity.name.function.wurst support.function"
                 }
             ]
         },
+
         "comments": {
             "patterns": [
                 {
                     "begin": "///",
-                    "captures": {
-                        "0": {
-                            "name": "punctuation.definition.comment.wurst"
-                        }
-                    },
+                    "captures": { "0": { "name": "punctuation.definition.comment.wurst" } },
                     "end": "$\\n?",
                     "name": "comment.block.documentation.wurst",
-                    "patterns": [
-                        {
-                            "include": "text.xml"
-                        }
-                    ]
+                    "patterns": [{ "include": "text.xml" }]
                 },
                 {
                     "begin": "/\\*\\*",
-                    "captures": {
-                        "0": {
-                            "name": "constant.regexp.hotdoc.wurst"
-                        }
-                    },
+                    "captures": { "0": { "name": "constant.regexp.hotdoc.wurst" } },
                     "end": "\\*/\\n?",
                     "name": "constant.regexp.hotdoc.wurst"
                 },
                 {
                     "begin": "/\\*",
-                    "captures": {
-                        "0": {
-                            "name": "punctuation.definition.comment.wurst"
-                        }
-                    },
+                    "captures": { "0": { "name": "punctuation.definition.comment.wurst" } },
                     "end": "\\*/\\n?",
                     "name": "comment.block.wurst"
                 },
                 {
                     "begin": "//",
-                    "captures": {
-                        "1": {
-                            "name": "punctuation.definition.comment.wurst"
-                        }
-                    },
+                    "captures": { "1": { "name": "punctuation.definition.comment.wurst" } },
                     "end": "$\\n?",
                     "name": "comment.line.double-slash.wurst"
                 }
             ]
         },
+
         "constants": {
             "patterns": [
-                {
-                    "match": "\\b(true|false|null|this|base)\\b",
-                    "name": "constant.language.wurst"
-                },
-                {
-                    "match": "\\'(.|....)\\'",
-                    "name": "string.quoted.single.wurst"
-                },
+                { "match": "\\b(true|false|null|this|base)\\b", "name": "constant.language.wurst" },
+                { "match": "\\'(.|....)\\'", "name": "string.quoted.single.wurst" },
                 {
                     "match": "\\b((0(x|X)[0-9a-fA-F]*)|(([0-9]+\\.?[0-9]*)|(\\.[0-9]+))((e|E)(\\+|-)?[0-9]+)?)(L|l|UL|ul|u|U|F|f|ll|LL|ull|ULL)?\\b",
                     "name": "constant.numeric.wurst"
                 },
                 {
-                    "captures": {
-                        "0": {
-                            "name": "punctuation.definition.string.begin.wurst"
-                        }
-                    },
+                    "captures": { "0": { "name": "punctuation.definition.string.begin.wurst" } },
                     "match": "@(\\w)+",
                     "name": "entity.name.tag.wurst"
                 },
                 {
                     "begin": "\"",
-                    "beginCaptures": {
-                        "0": {
-                            "name": "punctuation.definition.string.begin.wurst"
-                        }
-                    },
+                    "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.wurst" } },
                     "end": "\"",
-                    "endCaptures": {
-                        "0": {
-                            "name": "punctuation.definition.string.end.wurst"
-                        }
-                    },
+                    "endCaptures": { "0": { "name": "punctuation.definition.string.end.wurst" } },
                     "name": "string.quoted.double.wurst",
-                    "patterns": [
-                        {
-                            "match": "\\\\.",
-                            "name": "constant.character.escape.wurst"
-                        }
-                    ]
+                    "patterns": [{ "match": "\\\\.", "name": "constant.character.escape.wurst" }]
                 },
                 {
                     "begin": "'",
-                    "beginCaptures": {
-                        "0": {
-                            "name": "punctuation.definition.string.begin.wurst"
-                        }
-                    },
+                    "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.wurst" } },
                     "end": "'",
-                    "endCaptures": {
-                        "0": {
-                            "name": "punctuation.definition.string.end.wurst"
-                        }
-                    },
+                    "endCaptures": { "0": { "name": "punctuation.definition.string.end.wurst" } },
                     "name": "string.quoted.single.wurst",
-                    "patterns": [
-                        {
-                            "match": "\\\\.",
-                            "name": "constant.character.escape.wurst"
-                        }
-                    ]
+                    "patterns": [{ "match": "\\\\.", "name": "constant.character.escape.wurst" }]
                 }
             ]
         },
+
         "keywords": {
             "patterns": [
                 {
@@ -196,7 +127,7 @@
                 },
                 {
                     "match": "[-+%=]=?|!=|\\*\\*?=?|//?=?|<[<=>]?|>[=>]?|[&|^~]",
-                    "name": "entity.name.tag.css"
+                    "name": "keyword.operator.wurst keyword.operator"
                 }
             ]
         }

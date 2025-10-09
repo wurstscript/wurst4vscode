@@ -6,7 +6,7 @@ export let languageConfig: LanguageConfiguration = {
         blockComment: ['/*', '*/'],
     },
     brackets: [
-        ['{', '}'],
+        ['<', '>'],
         ['[', ']'],
         ['(', ')'],
     ],

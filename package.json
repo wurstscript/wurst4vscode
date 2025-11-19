@@ -1,238 +1,234 @@
 {
-  "name": "wurst",
-  "displayName": "Wurst language support",
-  "description": "Language support for Wurstscript.",
-  "icon": "images/wurst_icon.png",
-  "license": "SEE LICENSE IN LICENSE.txt",
-  "bugs": {
-    "url": "https://github.com/wurstscript/wurst4vscode/issues",
-    "email": "peter.peq@gmail.com"
-  },
-  "homepage": "https://github.com/wurstscript/wurst4vscode",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/wurstscript/wurst4vscode.git"
-  },
-  "version": "0.7.1",
-  "publisher": "peterzeller",
-  "engines": {
-    "vscode": "^1.51.0"
-  },
-  "categories": [
-    "Programming Languages"
-  ],
-  "activationEvents": [
-    "onLanguage:wurst",
-    "onCommand:wurst.startmap",
-    "onCommand:wurst.startlast",
-    "onCommand:wurst.tests",
-    "onCommand:wurst.tests_file",
-    "onCommand:wurst.tests_func",
-    "onCommand:wurst.perform_code_action",
-    "onCommand:wurst.buildmap",
-    "onCommand:wurst.tests_file"
-  ],
-  "main": "./out/extension",
-  "browser": "./dist/web/extension.js",
-  "contributes": {
-    "languages": [
-      {
-        "id": "wurst",
-        "aliases": [
-          "Wurst",
-          "wurst"
-        ],
-        "extensions": [
-          ".wurst",
-          ".jurst",
-          ".j"
-        ],
-        "configuration": "./wurst.configuration.json"
-      }
-    ],
-    "documentFormattingEditProvider": {
-      "documentSelector": [
-        "wurst"
-      ],
-      "enableForFileTypes": [
-        ".wurst",
-        ".jurst",
-        ".j"
-      ]
+    "name": "wurst",
+    "displayName": "Wurst language support",
+    "description": "Language support for Wurstscript.",
+    "icon": "images/wurst_icon.png",
+    "license": "SEE LICENSE IN LICENSE.txt",
+    "bugs": {
+        "url": "https://github.com/wurstscript/wurst4vscode/issues",
+        "email": "peter.peq@gmail.com"
     },
-    "grammars": [
-      {
-        "language": "wurst",
-        "scopeName": "source.wurst",
-        "path": "./syntaxes/wurst.json"
-      }
-    ],
-    "commands": [
-      {
-        "command": "wurst.startmap",
-        "title": "Run a Wurst map",
-        "category": "wurst"
-      },
-      {
-        "command": "wurst.hotstartmap",
-        "title": "Hot run a Wurst map with Jass Hot Code Reload (JHCR)",
-        "category": "wurst"
-      },
-      {
-        "command": "wurst.hotreload",
-        "title": "Hot reload code for a Wurst map started with Jass Hot Code Reload (JHCR)",
-        "category": "wurst"
-      },
-      {
-        "command": "wurst.startlast",
-        "title": "Run the last map again",
-        "category": "wurst"
-      },
-      {
-        "command": "wurst.tests",
-        "title": "Run all unit tests",
-        "category": "wurst"
-      },
-      {
-        "command": "wurst.tests_file",
-        "title": "Run unit tests in current file",
-        "category": "wurst"
-      },
-      {
-        "command": "wurst.tests_func",
-        "title": "Run unit test under cursor",
-        "category": "wurst"
-      },
-      {
-        "command": "wurst.perform_code_action",
-        "title": "Perform a code action (This command is usually triggered by quick fixes in the editor).",
-        "category": "wurst"
-      },
-      {
-        "command": "wurst.buildmap",
-        "title": "Build your map via wurst.build (into /_build)",
-        "category": "wurst"
-      },
-      {
-        "command": "wurst.chooseGameExecutable",
-        "title": "Choose Warcraft III executable",
-        "category": "wurst"
-      },
-      {
-        "command": "wurst.installJava",
-        "title": "Install Java 17",
-        "category": "wurst"
-      }
-    ],
-    "keybindings": {
-      "command": "wurst.tests_file",
-      "key": "ctrl+f1",
-      "mac": "cmd+f1",
-      "when": "editorTextFocus"
+    "homepage": "https://github.com/wurstscript/wurst4vscode",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/wurstscript/wurst4vscode.git"
     },
-    "configuration": {
-      "type": "object",
-      "title": "Wurst configuration",
-      "properties": {
-        "wurst.javaExecutable": {
-          "type": "string",
-          "default": "java",
-          "description": "The command to use for starting Java. You can change this if Java is not in your PATH"
+    "version": "0.7.1",
+    "publisher": "peterzeller",
+    "engines": {
+        "vscode": "^1.51.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "activationEvents": [
+        "onLanguage:wurst",
+        "onCommand:wurst.startmap",
+        "onCommand:wurst.startlast",
+        "onCommand:wurst.tests",
+        "onCommand:wurst.tests_file",
+        "onCommand:wurst.tests_func",
+        "onCommand:wurst.perform_code_action",
+        "onCommand:wurst.buildmap",
+        "onCommand:wurst.tests_file"
+    ],
+    "main": "./out/extension",
+    "browser": "./dist/web/extension.js",
+    "contributes": {
+        "languages": [
+            {
+                "id": "wurst",
+                "aliases": [
+                    "Wurst",
+                    "wurst"
+                ],
+                "extensions": [
+                    ".wurst",
+                    ".jurst",
+                    ".j"
+                ],
+                "configuration": "./wurst.configuration.json"
+            }
+        ],
+        "documentFormattingEditProvider": {
+            "documentSelector": [
+                "wurst"
+            ],
+            "enableForFileTypes": [
+                ".wurst",
+                ".jurst",
+                ".j"
+            ]
         },
-        "wurst.javaOpts": {
-          "type": "array",
-          "default": [],
-          "description": "Additional options to pass to java when starting Wurst."
+        "grammars": [
+            {
+                "language": "wurst",
+                "scopeName": "source.wurst",
+                "path": "./syntaxes/wurst.json"
+            }
+        ],
+        "commands": [
+            {
+                "command": "wurst.startmap",
+                "title": "Run a Wurst map",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.hotstartmap",
+                "title": "Hot run a Wurst map with Jass Hot Code Reload (JHCR)",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.hotreload",
+                "title": "Hot reload code for a Wurst map started with Jass Hot Code Reload (JHCR)",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.startlast",
+                "title": "Run the last map again",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.tests",
+                "title": "Run all unit tests",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.tests_file",
+                "title": "Run unit tests in current file",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.tests_func",
+                "title": "Run unit test under cursor",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.perform_code_action",
+                "title": "Perform a code action (This command is usually triggered by quick fixes in the editor).",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.buildmap",
+                "title": "Build your map via wurst.build (into /_build)",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.chooseGameExecutable",
+                "title": "Choose Warcraft III executable",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.installOrUpdate",
+                "title": "Install or update your Wurstscript installation",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.showLogs",
+                "title": "Open VSCode output panel for Wurst logs",
+                "category": "wurst"
+            }
+        ],
+        "keybindings": {
+            "command": "wurst.tests_file",
+            "key": "ctrl+f1",
+            "mac": "cmd+f1",
+            "when": "editorTextFocus"
         },
-        "wurst.debugMode": {
-          "type": "boolean",
-          "default": "false",
-          "description": "Enabling the debugmode will make the VM available for attaching on port 5005"
-        },
-        "wurst.hideExceptions": {
-          "type": "boolean",
-          "default": "true",
-          "description": "Turn this off to see Wurst Exceptions as vscode notifications"
-        },
-        "wurst.wurstJar": {
-          "type": "string",
-          "default": "$HOME/.wurst/wurstscript.jar",
-          "description": "The path to the wurstscript.jar of your wurstscript installation. Under normal circumstances you should not touch this! It should be set by the setup tool or grill."
-        },
-        "wurst.wc3path": {
-          "type": "string",
-          "default": "",
-          "description": "Optional path to a Warcraft installation directory (e.g. C:\\Games\\Warcraft III\\). If no executable can be found, it will be followed by an auto detection attempt."
-        },
-        "wurst.gameExePath": {
-          "type": "string",
-          "default": "",
-          "description": "Optional path to a Warcraft executable to override wc3path detection."
-        },
-        "wurst.wc3RunArgs": {
-          "type": "string",
-          "default": "",
-          "description": "Custom run arguments passed to the warcraft executable (such as -windowmode and -graphicsapi) which will replace the default wurst arguments."
-        },
-        "wurst.mapDocumentPath": {
-          "type": "string",
-          "default": "",
-          "description": "The path where to put maps before running them. Usually something like `C:\\Users\\YourName\\Documents\\Warcraft III`."
-        },
-        "wurst.jhcrExe": {
-          "type": "string",
-          "default": "jhcr.exe",
-          "description": "The path to the Jass Hot Code Reload (JHCR) executable. The default assumes that the executable is on the Path."
-        },
-        "wurst.customMapDataPath": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "The path where Warcraft stores custom map data. This is usually something like `C:\\Users\\lep\\Documents\\Warcraft III\\CustomMapData` or `C:\\Users\\Peter\\OneDrive\\Dokumente\\Warcraft III\\CustomMapData`. This path will be passed to the `--preload-path` option of Jass Hot Code Reload (JHCR)."
-        },
-        "wurst.testTimeout": {
-          "type": "number",
-          "default": "20",
-          "description": "Timeout in seconds after which tests will be cancelled and considered failed, if they did not yet succeed."
-        },
-        "wurst.trace.server": {
-          "scope": "window",
-          "type": "string",
-          "enum": [
-            "off",
-            "messages",
-            "verbose"
-          ],
-          "default": "off",
-          "description": "Traces the communication between VS Code and the language server."
+        "configuration": {
+            "type": "object",
+            "title": "Wurst configuration",
+            "properties": {
+                "wurst.javaOpts": {
+                    "type": "array",
+                    "default": [],
+                    "description": "Additional options to pass to java when starting Wurst."
+                },
+                "wurst.debugMode": {
+                    "type": "boolean",
+                    "default": "false",
+                    "description": "Enabling the debugmode will make the VM available for attaching on port 5005"
+                },
+                "wurst.hideExceptions": {
+                    "type": "boolean",
+                    "default": "true",
+                    "description": "Turn this off to see Wurst Exceptions as vscode notifications"
+                },
+                "wurst.wc3path": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Optional path to a Warcraft installation directory (e.g. C:\\Games\\Warcraft III\\). If no executable can be found, it will be followed by an auto detection attempt."
+                },
+                "wurst.gameExePath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Optional path to a Warcraft executable to override wc3path detection."
+                },
+                "wurst.wc3RunArgs": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Custom run arguments passed to the warcraft executable (such as -windowmode and -graphicsapi) which will replace the default wurst arguments."
+                },
+                "wurst.mapDocumentPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "The path where to put maps before running them. Usually something like `C:\\Users\\YourName\\Documents\\Warcraft III`."
+                },
+                "wurst.jhcrExe": {
+                    "type": "string",
+                    "default": "jhcr.exe",
+                    "description": "The path to the Jass Hot Code Reload (JHCR) executable. The default assumes that the executable is on the Path."
+                },
+                "wurst.customMapDataPath": {
+                    "type": "string",
+                    "default": "",
+                    "markdownDescription": "The path where Warcraft stores custom map data. This is usually something like `C:\\Users\\lep\\Documents\\Warcraft III\\CustomMapData` or `C:\\Users\\Peter\\OneDrive\\Dokumente\\Warcraft III\\CustomMapData`. This path will be passed to the `--preload-path` option of Jass Hot Code Reload (JHCR)."
+                },
+                "wurst.testTimeout": {
+                    "type": "number",
+                    "default": "20",
+                    "description": "Timeout in seconds after which tests will be cancelled and considered failed, if they did not yet succeed."
+                },
+                "wurst.trace.server": {
+                    "scope": "window",
+                    "type": "string",
+                    "enum": [
+                        "off",
+                        "messages",
+                        "verbose"
+                    ],
+                    "default": "off",
+                    "description": "Traces the communication between VS Code and the language server."
+                }
+            }
         }
-      }
-    }
-  },
-  "scripts": {
-    "vscode:prepublish": "tsc -p ./ && npm run package-web",
-    "compile": "tsc -watch -p ./",
-    "compile-web": "webpack",
-    "watch-web": "webpack --watch",
-    "package-web": "webpack --mode production --devtool hidden-source-map",
-    "publish": "vsce publish"
-  },
-  "devDependencies": {
-    "@types/node": "^14.14.7",
-    "@types/os-homedir": "^1.0.0",
-    "@types/vscode": "^1.51.0",
-    "@types/webpack-env": "^1.16.2",
-    "@vscode/vsce": "^2.21.1",
-    "ts-loader": "^9.2.5",
-    "typescript": "^4.0.5",
-    "webpack": "^5.52.1",
-    "webpack-cli": "^4.8.0"
-  },
-  "dependencies": {
-    "semver": "^5.7.1",
-    "vscode-languageclient": "^5.2.1"
-  },
-  "extensionPack": [
-    "redhat.vscode-yaml",
-    "vscode-icons-team.vscode-icons"
-  ]
+    },
+    "scripts": {
+        "vscode:prepublish": "tsc -p ./ && npm run package-web",
+        "compile": "tsc -watch -p ./",
+        "compile-web": "webpack",
+        "watch-web": "webpack --watch",
+        "package-web": "webpack --mode production --devtool hidden-source-map",
+        "publish": "vsce publish"
+    },
+    "devDependencies": {
+        "@types/node": "^14.14.7",
+        "@types/os-homedir": "^1.0.0",
+        "@types/vscode": "^1.51.0",
+        "@types/webpack-env": "^1.16.2",
+        "@vscode/vsce": "^2.21.1",
+        "ts-loader": "^9.2.5",
+        "typescript": "^4.0.5",
+        "webpack": "^5.52.1",
+        "webpack-cli": "^4.8.0"
+    },
+    "dependencies": {
+        "node-stream-zip": "^1.15.0",
+        "semver": "^5.7.1",
+        "vscode-languageclient": "^5.2.1"
+    },
+    "extensionPack": [
+        "redhat.vscode-yaml",
+        "vscode-icons-team.vscode-icons"
+    ]
 }

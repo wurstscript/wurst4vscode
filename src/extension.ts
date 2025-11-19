@@ -12,13 +12,79 @@ import { spawnSync } from 'child_process';
 import { registerCommands } from './features/commands';
 import { registerFileCreation } from './features/fileCreation';
 import { languageConfig } from './languageConfig';
+import StreamZip = require('node-stream-zip');
 
-// Static Java download URLs
-const JAVA_DOWNLOAD_URLS: { [key: string]: string } = {
-    win32: 'https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.15%2B6/OpenJDK17U-jdk_x64_windows_hotspot_17.0.15_6.msi',
-    darwin: 'https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.15%2B6/OpenJDK17U-jdk_aarch64_mac_hotspot_17.0.15_6.pkg',
-    linux: 'https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.15%2B6/OpenJDK17U-jdk_aarch64_linux_hotspot_17.0.15_6.tar.gz',
-};
+const WURST_HOME = path.join(os.homedir(), '.wurst');
+const RUNTIME_DIR = path.join(WURST_HOME, 'wurst-runtime');
+const COMPILER_DIR = path.join(WURST_HOME, 'wurst-compiler');
+const COMPILER_JAR = path.join(COMPILER_DIR, 'wurstscript.jar'); // new structure ships this jar
+const NIGHTLY_RELEASE_BY_TAG_API = 'https://api.github.com/repos/wurstscript/WurstScript/releases/tags/nightly';
+const NIGHTLY_COMMIT_API = 'https://api.github.com/repos/wurstscript/WurstScript/commits/nightly';
+
+let clientRef: LanguageClient | null = null;
+
+async function stopLanguageServerIfRunning(): Promise<void> {
+    if (!clientRef) return;
+    try {
+        await clientRef.stop();
+    } catch {
+        // ignore
+    }
+    clientRef = null;
+}
+
+function sleep(ms: number) {
+    return new Promise((res) => setTimeout(res, ms));
+}
+
+async function withRetry<T>(fn: () => T | Promise<T>, attempts = 8, delayMs = 200): Promise<T> {
+    let lastErr: any;
+    for (let i = 0; i < attempts; i++) {
+        try {
+            return await fn();
+        } catch (e: any) {
+            lastErr = e;
+            if (e?.code !== 'EBUSY' && e?.code !== 'EPERM' && e?.code !== 'EACCES') throw e;
+            await sleep(delayMs * Math.pow(1.4, i));
+        }
+    }
+    throw lastErr;
+}
+
+function copyDirContents(srcDir: string, destDir: string) {
+    fs.mkdirSync(destDir, { recursive: true });
+    for (const entry of fs.readdirSync(srcDir)) {
+        const s = path.join(srcDir, entry);
+        const d = path.join(destDir, entry);
+        const st = fs.statSync(s);
+        if (st.isDirectory()) {
+            copyDirContents(s, d);
+        } else if (st.isFile()) {
+            fs.copyFileSync(s, d);
+        }
+    }
+}
+
+async function upgradeFolder(src: string, dest: string) {
+    // Try clean replace
+    try {
+        if (fs.existsSync(dest)) await removeDirSafe(dest);
+        await withRetry(() => fs.renameSync(src, dest));
+        return;
+    } catch {
+        // Fallback: merge/copy over existing destination
+        copyDirContents(src, dest);
+        try {
+            await removeDirSafe(src);
+        } catch {}
+    }
+}
+
+async function removeDirSafe(dir: string) {
+    if (!fs.existsSync(dir)) return;
+    await withRetry(() => fs.rmSync(dir, { recursive: true, force: true }));
+}
+
 
 export async function activate(context: ExtensionContext) {
     console.log('Wurst extension activated!');
@@ -37,7 +103,7 @@ export async function activate(context: ExtensionContext) {
 }
 
 function registerBasicCommands(context: ExtensionContext) {
-    // Choose game executable
+    // Choose game executable (unchanged)
     context.subscriptions.push(
         vscode.commands.registerCommand('wurst.chooseGameExecutable', async () => {
             const uris = await vscode.window.showOpenDialog({
@@ -57,11 +123,16 @@ function registerBasicCommands(context: ExtensionContext) {
         })
     );
 
-    // Install Java command
+    // New: manual install/update command (replaces old Java install)
     context.subscriptions.push(
-        vscode.commands.registerCommand('wurst.installJava', async () => {
-            console.log('Command wurst.installJava invoked');
-            await installJavaAutomatically(context);
+        vscode.commands.registerCommand('wurst.installOrUpdate', async () => {
+            try {
+                await ensureInstalledOrOfferMigration(/*forcePrompt=*/ true);
+                await maybeOfferUpdate();
+                vscode.window.showInformationMessage('WurstScript is installed and up to date.');
+            } catch (e: any) {
+                vscode.window.showErrorMessage(`Install/Update failed: ${e?.message || e}`);
+            }
         })
     );
 }
@@ -122,22 +193,48 @@ function setupDecorators(context: ExtensionContext) {
 }
 
 async function startLanguageClient(context: ExtensionContext) {
+    // Ensure installation/migration & optional update prompt
+    await ensureInstalledOrOfferMigration(/*forcePrompt=*/ false);
+    await maybeOfferUpdate();
+
     const clientOptions: LanguageClientOptions = {
         documentSelector: ['wurst'],
         synchronize: { configurationSection: 'wurst' },
     };
 
-    const serverOptions = await getServerOptions(context);
+    const serverOptions = await getServerOptions();
     const client = new LanguageClient('Wurstscript Language Server', serverOptions, clientOptions);
+    clientRef = client;
 
     context.subscriptions.push(client.start());
 
     client.onReady().then(() => {
+        const version = getInstalledVersionString() ?? 'unknown';
         const sb = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
         sb.text = '$(check) WurstScript';
-        sb.tooltip = 'WurstScript language server is running.';
+        sb.tooltip = [
+            'WurstScript language server is running.',
+            `Version: ${version}`,
+            'Click to open logs.',
+        ]
+            .filter(Boolean)
+            .join('\n');
+        sb.command = 'wurst.showLogs';
         sb.show();
         context.subscriptions.push(sb);
+
+        // Command to focus Output with the Wurst channel selected (like Prettier)
+        context.subscriptions.push(
+            vscode.commands.registerCommand('wurst.showLogs', () => {
+                try {
+                    // languageclient exposes the output channel
+                    client.outputChannel.show(); // focus + selects the channel
+                } catch {
+                    // fallback: just open Output panel
+                    vscode.commands.executeCommand('workbench.action.output.toggleOutput');
+                }
+            })
+        );
     });
 
     await client.onReady();
@@ -163,201 +260,434 @@ function registerFileChanges(client: LanguageClient): vscode.FileSystemWatcher {
     return watcher;
 }
 
-async function downloadWithProgress(
-    url: string,
-    destination: string,
-    progressTitle: string,
-    progress?: vscode.Progress<{ message?: string; increment?: number }>,
-    cancellationToken?: vscode.CancellationToken
-): Promise<void> {
-    const maxRedirects = 5;
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
+/** =========================
+ *  GitHub + Download helpers
+ *  ========================= */
 
-    await vscode.window.withProgress(
-        {
-            location: vscode.ProgressLocation.Notification,
-            title: progressTitle,
-            cancellable: !!cancellationToken,
-        },
-        (_progress, token) => {
-            let received = 0;
-            let total = 0;
-            let lastPct = 0;
-            let cancelled = false;
-
-            if (cancellationToken) {
-                cancellationToken.onCancellationRequested(() => (cancelled = true));
-            } else {
-                token.onCancellationRequested(() => (cancelled = true));
-            }
-
-            return new Promise<void>((resolve, reject) => {
-                function requestUrl(url: string, redirectCount: number) {
-                    if (cancelled) return reject(new Error('Download cancelled by user'));
-                    if (redirectCount > maxRedirects) return reject(new Error('Too many redirects'));
-
-                    const req = https.get(url, (res) => {
-                        if ([301, 302, 303, 307, 308].includes(res.statusCode!)) {
-                            const loc = res.headers.location;
-                            if (!loc) return reject(new Error('Redirect without Location header'));
-                            res.destroy();
-                            return requestUrl(loc, redirectCount + 1);
-                        }
-
-                        if (res.statusCode !== 200) return reject(new Error(`Download failed: HTTP ${res.statusCode}`));
-
-                        total = parseInt(res.headers['content-length'] || '0', 10);
-                        const fileStream = fs.createWriteStream(destination);
-
-                        res.on('data', (chunk) => {
-                            if (cancelled) {
-                                req.destroy();
-                                return;
-                            }
-                            received += chunk.length;
-                            if (total > 0 && progress) {
-                                const pct = (received / total) * 100;
-                                const inc = pct - lastPct;
-                                if (inc > 0) {
-                                    progress.report({ increment: inc, message: `${Math.floor(pct)}%` });
-                                    lastPct = pct;
-                                }
-                            }
-                        });
-
-                        res.pipe(fileStream);
-
-                        fileStream.on('finish', () => {
-                            fileStream.close();
-                            if (cancelled) return reject(new Error('Download cancelled by user'));
-                            resolve();
-                        });
-
-                        res.on('error', (err) => {
-                            fs.unlink(destination, () => {});
-                            reject(err);
-                        });
-                    });
-
-                    req.on('error', (err) => {
-                        fs.unlink(destination, () => {});
-                        reject(err);
-                    });
-                }
-
-                requestUrl(url, 0);
-            });
-        }
-    );
-}
-
-export async function downloadFile(
-    url: string,
-    destination: string,
-    progress?: vscode.Progress<{ message?: string; increment?: number }>
-): Promise<number> {
-    await downloadWithProgress(url, destination, 'Downloading…', progress);
-    return fs.statSync(destination).size;
-}
-
-async function downloadWurstSetup(destination: string): Promise<void> {
-    const url = 'https://github.com/wurstscript/WurstSetup/releases/download/nightly-master/WurstSetup.jar';
-    await downloadWithProgress(url, destination, 'Downloading WurstSetup…');
-}
-
-
-async function getServerOptions(context: ExtensionContext): Promise<ServerOptions> {
-    const config = workspace.getConfiguration('wurst');
-    const java = config.get<string>('javaExecutable') ?? 'java';
-    const javaOpts = config.get<string[]>('javaOpts') ?? [];
-    const wurstJar = (config.get<string>('wurstJar') ?? '$HOME/.wurst/wurstscript.jar').replace('$HOME', os.homedir());
-    const debugMode = config.get<boolean>('debugMode');
-
-    console.log('Checking Java availability at', java);
-    if (!isJavaAvailable(java)) {
-        console.log('Java not available, invoking installer');
-        await installJavaAutomatically(context);
-        if (!isJavaAvailable(java)) {
-            console.error('Java still not found after installation');
-            throw new Error('Java not found after installation.');
-        }
-    }
-
-    if (!(await doesFileExist(wurstJar))) {
-        const choice = await vscode.window.showWarningMessage(
-            `WurstScript not found at ${wurstJar}. Download now?`,
-            'Yes',
-            'No');
-
-            if (choice !== 'Yes') {
-            throw new Error('WurstScript not installed.');
-        }
-        const setupJar = path.join(os.homedir(), '.wurst', 'WurstSetup.jar');
-        await downloadWurstSetup(setupJar);
-
-        // 3) Run the installer in a Terminal
-        const term = vscode.window.createTerminal({
-            name: 'WurstScript Installer',
-            shellPath:
-                process.platform === 'win32'
-                    ? 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
-                    : undefined,
-            shellArgs:
-                process.platform === 'win32'
-                    ? [
-                          '-NoExit',
-                          '-Command',
-                          // 1) switch code page, 2) set PS’s OutputEncoding, all in one line
-                          'chcp 65001; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()',
-                      ]
-                    : undefined,
-            env: {
-                LANG: 'en_US.UTF-8',
-            },
-        });
-        term.show(true);
-
-        // make sure your PowerShell terminal is in UTF-8 mode…
-        if (process.platform === 'win32') {
-            term.sendText('chcp 65001; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()');
-        }
-
-        // now send the properly quoted install command:
-        const installerCmd = [
-            `& "${java}"`,
-            `"-Dfile.encoding=UTF-8"`,
-            `-jar "${setupJar}"`,
-            `install wurstscript`,
-        ].join(' ');
-        term.sendText(installerCmd);
-
-        await vscode.window.withProgress(
+function githubJson<T = any>(url: string): Promise<T> {
+    return new Promise((resolve, reject) => {
+        const req = https.request(
+            url,
             {
-                location: vscode.ProgressLocation.Notification,
-                title: 'Installing WurstScript…',
-                cancellable: false,
+                method: 'GET',
+                headers: {
+                    'User-Agent': 'wurst4vscode',
+                    Accept: 'application/vnd.github+json',
+                    'X-GitHub-Api-Version': '2022-11-28',
+                },
             },
-            async (_progress) => {
-                const interval = 2000;
-                const timeout = 5 * 60 * 1000;
-                const start = Date.now();
-
-                return new Promise<void>((resolve, reject) => {
-                    const handle = setInterval(async () => {
-                        if (await doesFileExist(wurstJar)) {
-                            clearInterval(handle);
-                            resolve();
-                        } else if (Date.now() - start > timeout) {
-                            clearInterval(handle);
-                            reject(new Error('Timed out waiting for WurstScript installation.'));
-                        }
-                    }, interval);
+            (res) => {
+                if (!res.statusCode || res.statusCode >= 400) {
+                    reject(new Error(`GitHub API error: HTTP ${res.statusCode}`));
+                    return;
+                }
+                const chunks: Buffer[] = [];
+                res.on('data', (d) => chunks.push(Buffer.from(d)));
+                res.on('end', () => {
+                    try {
+                        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+                    } catch (e) {
+                        reject(e);
+                    }
                 });
             }
         );
+        req.on('error', reject);
+        req.end();
+    });
+}
+
+async function fetchNightlyZipAsset(): Promise<{ name: string; url: string }> {
+    // Map Node’s platform/arch to your release suffixes
+    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+    let plat: string;
+    if (process.platform === 'win32') plat = `win-${arch}`;
+    else if (process.platform === 'linux') plat = `linux-${arch}`;
+    else if (process.platform === 'darwin') plat = `macos-${arch}`; // plan ahead
+    else throw new Error(`Unsupported platform: ${process.platform} ${process.arch}`);
+
+    const rel = await githubJson(NIGHTLY_RELEASE_BY_TAG_API);
+    const assets = Array.isArray(rel?.assets) ? rel.assets : [];
+
+    // Expected naming: wurst-compiler-nightly-<plat>.zip
+    const wanted = assets.find((a: any) => {
+        const n = String(a?.name ?? '').toLowerCase();
+        return n.endsWith(`${plat}.zip`) && n.startsWith('wurst-compiler-nightly-');
+    });
+
+    if (!wanted?.browser_download_url) {
+        // Helpful macOS message if you haven’t uploaded a mac build yet
+        if (process.platform === 'darwin') {
+            throw new Error('No macOS build found on the nightly release. Please add macOS zips (macos-x64/arm64).');
+        }
+        throw new Error(`No matching asset found for ${plat}.`);
+    }
+    return { name: wanted.name, url: wanted.browser_download_url };
+}
+
+
+async function fetchNightlyCommitSha(): Promise<string> {
+    const obj = await githubJson(NIGHTLY_COMMIT_API);
+    const sha: string | undefined = obj?.sha;
+    if (!sha || !/^[0-9a-f]{40}$/i.test(sha)) {
+        throw new Error('Could not resolve nightly commit SHA.');
+    }
+    return sha.toLowerCase();
+}
+
+/** =========================
+ *  Download / Extract
+ *  ========================= */
+async function downloadFileWithProgress(
+    url: string,
+    destination: string,
+    onPct?: (pct: number) => void,
+    cancellationToken?: vscode.CancellationToken
+): Promise<number> {
+    const maxRedirects = 5;
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+
+    return await new Promise<number>((resolve, reject) => {
+        let received = 0;
+        let total = 0;
+        let cancelled = false;
+
+        if (cancellationToken) {
+            cancellationToken.onCancellationRequested(() => (cancelled = true));
+        }
+
+        function requestUrl(currentUrl: string, redirects: number) {
+            if (cancelled) return reject(new Error('Download cancelled by user'));
+            if (redirects > maxRedirects) return reject(new Error('Too many redirects'));
+
+            const req = https.get(currentUrl, (res) => {
+                if ([301, 302, 303, 307, 308].includes(res.statusCode!)) {
+                    const loc = res.headers.location;
+                    if (!loc) return reject(new Error('Redirect without Location header'));
+                    res.destroy();
+                    return requestUrl(loc, redirects + 1);
+                }
+                if (res.statusCode !== 200) return reject(new Error(`Download failed: HTTP ${res.statusCode}`));
+
+                total = parseInt(res.headers['content-length'] || '0', 10);
+                const fileStream = fs.createWriteStream(destination);
+
+                res.on('data', (chunk) => {
+                    if (cancelled) {
+                        req.destroy();
+                        return;
+                    }
+                    received += chunk.length;
+                    if (total > 0 && onPct) onPct((received / total) * 100);
+                });
+
+                res.pipe(fileStream);
+                fileStream.on('finish', () => {
+                    fileStream.close();
+                    if (cancelled) return reject(new Error('Download cancelled by user'));
+                    resolve(fs.statSync(destination).size);
+                });
+                res.on('error', (err) => {
+                    fs.unlink(destination, () => {});
+                    reject(err);
+                });
+            });
+
+            req.on('error', (err) => {
+                fs.unlink(destination, () => {});
+                reject(err);
+            });
+        }
+
+        requestUrl(url, 0);
+    });
+}
+
+
+function within(destDir: string, p: string) {
+    const abs = path.resolve(p);
+    return abs.startsWith(path.resolve(destDir) + path.sep);
+}
+
+async function extractZipWithByteProgress(
+    zipPath: string,
+    destDir: string,
+    onPct?: (pct: number) => void
+): Promise<void> {
+    fs.mkdirSync(destDir, { recursive: true });
+
+    await new Promise<void>((resolve, reject) => {
+        const zip = new StreamZip({ file: zipPath, storeEntries: true });
+
+        zip.on('error', (e: any) => reject(e));
+
+        zip.on('ready', async () => {
+            try {
+                const entries = zip.entries() as { [name: string]: any };
+                const names = Object.keys(entries);
+
+                // Create dirs first
+                for (const name of names) {
+                    const e = entries[name];
+                    if (e.isDirectory) {
+                        const d = path.join(destDir, name);
+                        if (!within(destDir, d)) throw new Error('Illegal path in zip');
+                        fs.mkdirSync(d, { recursive: true });
+                    }
+                }
+
+                // Total uncompressed bytes
+                const files = names.filter((n) => !entries[n].isDirectory);
+                const total = files.reduce((s, n) => s + (entries[n].size || 0), 0) || 1;
+                let processed = 0;
+
+                // Extract files, streaming bytes to report progress
+                for (const name of files) {
+                    const outPath = path.join(destDir, name);
+                    if (!within(destDir, outPath)) throw new Error('Illegal path in zip');
+                    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+
+                    await new Promise<void>((res, rej) => {
+                        zip.stream(name, (err: any, stream: any) => {
+                            if (err || !stream) return rej(err || new Error('stream error'));
+                            const out = fs.createWriteStream(outPath);
+                            stream.on('data', (chunk: Buffer) => {
+                                processed += chunk.length;
+                                onPct?.((processed / total) * 100);
+                            });
+                            stream.on('end', () => res());
+                            stream.on('error', rej);
+                            out.on('error', rej);
+                            stream.pipe(out);
+                        });
+                    });
+                }
+
+                zip.close();
+                resolve();
+            } catch (e) {
+                try {
+                    zip.close();
+                } catch {}
+                reject(e);
+            }
+        });
+    });
+}
+
+/** =========================
+ *  Install / Update logic
+ *  ========================= */
+
+function hasNewLayout(): boolean {
+    return fs.existsSync(RUNTIME_DIR) && fs.existsSync(COMPILER_DIR);
+}
+
+async function ensureInstalledOrOfferMigration(_forcePrompt: boolean): Promise<void> {
+    const newLayout = hasNewLayout();
+
+    if (!newLayout) {
+        const msg = [
+            'Old WurstScript installation detected.',
+            '',
+            'Wurst just got a major update! We now ship a bundled runtime and deliver updates directly via GitHub Releases through this extension.',
+            '',
+            'Highlights:',
+            '• Much faster warm “runmap” (up to ~80%)',
+            '• Many bug fixes and improvements',
+            '• New language features',
+            '',
+            'Note:',
+            'This release introduces - and future updates may continue to introduce - breaking changes to improve reliability and maintainability.',
+            'If you encounter any issues, please let us know on GitHub or Discord.',
+        ].join('\n');
+
+        await vscode.window.showInformationMessage(msg, { modal: true }, 'Continue');
+        // Proceed automatically: download zip and lay down new folders
+        await installFreshFromNightly();
+        return;
     }
 
-    let args = [...javaOpts, '-jar', wurstJar, '-languageServer'];
+    // New layout present but first run could still miss the jar
+    if (!fs.existsSync(COMPILER_JAR)) {
+        await installFreshFromNightly();
+    }
+}
+
+
+
+async function installFreshFromNightly(): Promise<void> {
+    await stopLanguageServerIfRunning(); // release locks if LS was running
+
+    await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Installing WurstScript', cancellable: false },
+        async (progress) => {
+            progress.report({ message: 'Preparing…', increment: 2 });
+
+            progress.report({ message: 'Fetching release info…', increment: 3 });
+            const asset = await fetchNightlyZipAsset();
+
+            const tmpWork = path.join(os.tmpdir(), `wurst-install-${Date.now()}`);
+            const tmpZip = path.join(tmpWork, 'payload.zip');
+            const unpack = path.join(tmpWork, 'unpacked');
+            fs.mkdirSync(unpack, { recursive: true });
+
+            let last = 0;
+            // 80% of bar for download, 18% for extraction, 2% finishing
+            const DL_WEIGHT = 80;
+            const EX_WEIGHT = 18;
+
+            await downloadFileWithProgress(asset.url, tmpZip, (pct) => {
+                const scaled = (pct / 100) * DL_WEIGHT;
+                const inc = Math.max(0, scaled - last);
+                last += inc;
+                progress.report({ message: `Downloading ${Math.floor(pct)}%`, increment: inc });
+            });
+
+            await extractZipWithByteProgress(tmpZip, unpack, (pct) => {
+                const scaled = DL_WEIGHT + (pct / 100) * EX_WEIGHT;
+                const inc = Math.max(0, scaled - last);
+                last += inc;
+                progress.report({ message: `Extracting ${Math.floor(pct)}%`, increment: inc });
+            });
+
+            progress.report({ message: 'Finishing up…', increment: Math.max(0, 100 - last) });
+
+            const srcRuntime = path.join(unpack, 'wurst-runtime');
+            const srcCompiler = path.join(unpack, 'wurst-compiler');
+            const srcLauncher = path.join(unpack, process.platform === 'win32' ? 'wurstscript.cmd' : 'wurstscript');
+
+            if (!fs.existsSync(srcRuntime) || !fs.existsSync(path.join(srcCompiler, 'wurstscript.jar'))) {
+                throw new Error('Installation incomplete: runtime or compiler not found after extraction.');
+            }
+
+            // Ensure ~/.wurst exists
+            fs.mkdirSync(WURST_HOME, { recursive: true });
+
+            // Upgrade subfolders in place (no touching ~/.wurst itself)
+            await upgradeFolder(srcRuntime, RUNTIME_DIR);
+            await upgradeFolder(srcCompiler, COMPILER_DIR);
+
+            // Place/refresh launcher (best effort)
+            try {
+                const targetLauncher = path.join(WURST_HOME, path.basename(srcLauncher));
+                try {
+                    fs.unlinkSync(targetLauncher);
+                } catch {}
+                fs.renameSync(srcLauncher, targetLauncher);
+                if (process.platform !== 'win32') {
+                    try {
+                        fs.chmodSync(targetLauncher, 0o755);
+                    } catch {}
+                }
+            } catch {
+                /* ignore */
+            }
+
+            // Ensure java is executable on unix
+            if (process.platform !== 'win32') {
+                try {
+                    fs.chmodSync(getBundledJava(), 0o755);
+                } catch {}
+            }
+
+            // Cleanup tmp
+            try {
+                await removeDirSafe(tmpWork);
+            } catch {}
+
+            progress.report({ message: 'Ready', increment: 10 });
+        }
+    );
+
+    // Ask for reload so the LS restarts against the new layout
+    const reload = await vscode.window.showInformationMessage(
+        'WurstScript was updated. Reload VS Code now to use the new runtime?',
+        { modal: true },
+        'Reload',
+        'Later'
+    );
+    if (reload === 'Reload') {
+        await vscode.commands.executeCommand('workbench.action.reloadWindow');
+    }
+}
+
+
+
+
+async function maybeOfferUpdate(): Promise<void> {
+    try {
+        if (!hasNewLayout() || !fs.existsSync(COMPILER_JAR)) return;
+
+        const installed = getInstalledVersionString(); // e.g. 1.8.1.0-nightly-master-3-ge4a2bd1
+        const installedShort = installed ? extractShortSha(installed) : null;
+
+        const latestSha = await fetchNightlyCommitSha(); // 40-hex
+        if (installedShort && latestSha.startsWith(installedShort)) return;
+
+        const detail = [
+            installed ? `Installed: ${installedShort}` : 'Installed: unknown',
+            `Latest: ${latestSha.slice(0, 7)}`,
+        ].join('\n');
+
+        const choice = await vscode.window.showInformationMessage(
+            'A newer WurstScript version is available.',
+            { modal: true, detail },
+            'Update', 'Later'
+        );
+        if (choice === 'Update') {
+            await installFreshFromNightly();
+        }
+    } catch (e) {
+        console.warn('Update check failed:', e);
+    }
+}
+
+function getBundledJava(): string {
+    const exe = process.platform === 'win32' ? 'java.exe' : 'java';
+    return path.join(RUNTIME_DIR, 'bin', exe);
+}
+
+function getInstalledVersionString(): string | null {
+    try {
+        const java = getBundledJava();
+        if (!fs.existsSync(java) || !fs.existsSync(COMPILER_JAR)) return null;
+
+        const res = spawnSync(java, ['-jar', COMPILER_JAR, '--version'], {
+            encoding: 'utf8',
+            windowsHide: true,
+        });
+        const out = `${res.stdout || ''}\n${res.stderr || ''}`.trim();
+        if (!out) return null;
+        // Example line contains: 1.8.1.0-nightly-master-3-ge4a2bd1
+        return out.split(/\r?\n/).pop() || out;
+    } catch {
+        return null;
+    }
+}
+
+function extractShortSha(versionString: string): string | null {
+    return versionString.substring(versionString.lastIndexOf('-') + 1);
+}
+
+/** =========================
+ *  Language Server launch
+ *  ========================= */
+
+async function getServerOptions(): Promise<ServerOptions> {
+    // Only keep minimal config knobs; old ones removed
+    const config = workspace.getConfiguration('wurst');
+    const javaOpts = config.get<string[]>('javaOpts') ?? []; // still useful for power users
+    const debugMode = config.get<boolean>('debugMode');
+
+    // Validate installation
+    if (!fs.existsSync(RUNTIME_DIR) || !fs.existsSync(COMPILER_JAR)) {
+        throw new Error('WurstScript is not installed. Use the "Wurst: Install/Update" command.');
+    }
+
+    const java = getBundledJava();
+    const args = [...javaOpts, '-jar', COMPILER_JAR, '-languageServer'];
+
     if (debugMode && (await isPortOpen(5005))) {
         args.unshift('-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005,quiet=y');
     }
@@ -366,113 +696,9 @@ async function getServerOptions(context: ExtensionContext): Promise<ServerOption
     return { run: exec, debug: exec };
 }
 
-async function installJavaAutomatically(context: ExtensionContext): Promise<void> {
-    const choice = await vscode.window.showInformationMessage(
-        'Java 17+ is required but not found. Automatically download and install OpenJDK 17?',
-        'Yes',
-        'No'
-    );
-    console.log('User chose to install Java:', choice);
-    if (choice !== 'Yes') {
-        console.log('Opening manual download page');
-        vscode.env.openExternal(vscode.Uri.parse(JAVA_DOWNLOAD_URLS[os.platform()] || 'https://adoptium.net'));
-        return;
-    }
-
-    const plat = os.platform();
-    const url = JAVA_DOWNLOAD_URLS[plat];
-    if (!url) {
-        console.error('No download URL for platform', plat);
-        vscode.window.showErrorMessage(`Unsupported platform for auto-install: ${plat}`);
-        return;
-    }
-
-    const installerName = path.basename(url);
-    const dest = path.join(os.tmpdir(), installerName);
-
-    try {
-        console.log('Downloading Java from', url, 'to', dest);
-        let expectedSize = 0;
-        await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: 'Downloading OpenJDK…', cancellable: false },
-            (progress) =>
-                downloadFile(url, dest, progress).then((size) => {
-                    expectedSize = size;
-                })
-        );
-        console.log(`Download completed, size=${expectedSize} bytes`);
-
-        const stats = fs.statSync(dest);
-        if (stats.size < expectedSize) {
-            throw new Error(`Downloaded file incomplete: ${stats.size}/${expectedSize}`);
-        }
-
-        console.log('Running installer at', dest);
-
-        const copyPath = path.join(os.tmpdir(), 'jdk-installer-copy.msi');
-        fs.copyFileSync(dest, copyPath);
-        console.log('Copied installer to', copyPath);
-
-        await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: 'Installing Java…', cancellable: false },
-            async () => await runInstaller(copyPath)
-        );
-        console.log('Installation completed');
-
-        const proceed = await vscode.window.showInformationMessage(
-            'The java installer has been launched. Click "Done" after installation is complete.',
-            'Done'
-        );
-
-        if (proceed === 'Done') {
-            await vscode.commands.executeCommand('workbench.action.reloadWindow');
-        }
-
-        vscode.window.showInformationMessage('Java installed. Restarting extension...');
-        await vscode.commands.executeCommand('workbench.action.reloadWindow');
-    } catch (error) {
-        console.error('Java installation failed:', error);
-        fs.existsSync(dest) && fs.unlinkSync(dest);
-        vscode.window.showErrorMessage(`Java installation failed: ${error}`);
-    }
-}
-
-
-export async function runInstaller(installerPath: string): Promise<void> {
-    const plat = os.platform();
-    console.log('Launching installer for platform', plat, 'at path', installerPath);
-
-    if (!fs.existsSync(installerPath)) {
-        throw new Error(`Installer file not found at ${installerPath}`);
-    }
-
-    try {
-        // Open with default system installer (works for .msi, .pkg, etc.)
-        await vscode.env.openExternal(vscode.Uri.file(installerPath));
-    } catch (err) {
-        console.error('Failed to open installer:', err);
-        throw new Error(`Failed to open installer: ${err}`);
-    }
-}
-
-function isJavaAvailable(java: string): boolean {
-    const result = spawnSync('cmd', ['/c', java, '-version'], {
-        encoding: 'utf8',
-        shell: false,
-    });
-
-    if (result.status === 0) {
-        console.log('Java output:', result.stdout || result.stderr);
-        return true;
-    } else {
-        console.error('Java not found:', result.stderr || result.stdout);
-        return false;
-    }
-}
-
-function doesFileExist(filePath: string): Promise<boolean> {
-    return new Promise((resolve) => fs.stat(filePath, (err) => resolve(!err)));
-}
+/** =========================
+ *  Utilities
+ *  ========================= */
 
 function isPortOpen(port: number): Promise<boolean> {
     return new Promise((resolve) => {

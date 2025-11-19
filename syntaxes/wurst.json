@@ -2,8 +2,8 @@
     "scopeName": "source.wurst",
     "name": "wurst",
     "fileTypes": ["wurst"],
-    "foldingStartMarker": "^\\s*#\\s*region|^\\s*/\\*|^(?![^{]*?//|[^{]*?/\\*(?!.*?\\*/.*?\\{)).*?\\{\\s*($|//|/\\*(?!.*?\\*/.*\\S))",
-    "foldingStopMarker": "^\\s*#\\s*endregion|^\\s*\\*/|^\\s*\\}",
+    "foldingStartMarker": "^\\s*(#\\s*region|/\\*|.*\\b(?:class|module|interface|enum|function|if|else|elseif|while|for|switch|begin|ondestroy|init|construct)\\b.*|.*\\{\\s*(?://.*)?$)",
+    "foldingStopMarker": "^\\s*(#\\s*endregion|\\*/|\\bend\\b|\\})\\s*$",
     "patterns": [{ "include": "#code" }],
     "repository": {
         "functions": {

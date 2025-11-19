@@ -103,7 +103,6 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
             if (mode != 'all') {
                 data.filename = window.activeTextEditor?.document.fileName;
             }
-
             if (mode == 'func') {
                 let sel = window.activeTextEditor?.selection;
                 if (sel) {
@@ -113,11 +112,28 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
             }
             args = [data];
         }
-        let request: ExecuteCommandParams = {
-            command: 'wurst.tests',
-            arguments: args,
-        };
-        return client.sendRequest(ExecuteCommandRequest.type, request);
+
+        // Show the Wurst output so users see progress immediately
+        try {
+            (client as any).outputChannel?.show();
+        } catch {}
+
+        const request: ExecuteCommandParams = { command: 'wurst.tests', arguments: args };
+
+        return client.sendRequest(ExecuteCommandRequest.type, request).then(
+            (result: any) => {
+                // Non-modal heads-up; users can jump to Output again if they closed it
+                vscode.window.showInformationMessage('Wurst tests finished.', 'Open Output').then((btn) => {
+                    if (btn === 'Open Output') (client as any).outputChannel?.show();
+                });
+                return result;
+            },
+            (err) => {
+                (client as any).outputChannel?.show();
+                vscode.window.showErrorMessage('Wurst tests failed. See "WurstScript" output for details.');
+                throw err;
+            }
+        );
     };
 
     let performCodeAction = (args: any[]) => {
@@ -129,8 +145,6 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
     };
 
     return vscode.Disposable.from(
-        //vscode.commands.registerCommand('wurst.restart', () => client.restart()),
-        // vscode.commands.registerCommand('wurst.clean', () => client.clean()),
         vscode.commands.registerCommand('wurst.startmap', (args: any[]) => startMap('wurst.startmap', args)),
         vscode.commands.registerCommand('wurst.hotstartmap', (args: any[]) => startMap('wurst.hotstartmap', args)),
         vscode.commands.registerCommand('wurst.hotreload', () => reloadMap()),

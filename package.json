@@ -127,6 +127,11 @@
                 "command": "wurst.showLogs",
                 "title": "Open VSCode output panel for Wurst logs",
                 "category": "wurst"
+            },
+            {
+                "command": "wurst.newProject",
+                "title": "New Wurst Project",
+                "category": "wurst"
             }
         ],
         "keybindings": {

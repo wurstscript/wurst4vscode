@@ -20,6 +20,7 @@ const COMPILER_DIR = path.join(WURST_HOME, 'wurst-compiler');
 const COMPILER_JAR = path.join(COMPILER_DIR, 'wurstscript.jar'); // new structure ships this jar
 const NIGHTLY_RELEASE_BY_TAG_API = 'https://api.github.com/repos/wurstscript/WurstScript/releases/tags/nightly';
 const NIGHTLY_COMMIT_API = 'https://api.github.com/repos/wurstscript/WurstScript/commits/nightly';
+const TEMPLATE_ZIP_URL = 'https://github.com/wurstscript/wurst-project-template/archive/refs/heads/master.zip';
 
 let clientRef: LanguageClient | null = null;
 
@@ -123,7 +124,6 @@ function registerBasicCommands(context: ExtensionContext) {
         })
     );
 
-    // New: manual install/update command (replaces old Java install)
     context.subscriptions.push(
         vscode.commands.registerCommand('wurst.installOrUpdate', async () => {
             try {
@@ -132,6 +132,16 @@ function registerBasicCommands(context: ExtensionContext) {
                 vscode.window.showInformationMessage('WurstScript is installed and up to date.');
             } catch (e: any) {
                 vscode.window.showErrorMessage(`Install/Update failed: ${e?.message || e}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('wurst.newProject', async () => {
+            try {
+                await createNewWurstProject();
+            } catch (e: any) {
+                vscode.window.showErrorMessage(`Failed to create Wurst project: ${e?.message ?? String(e)}`);
             }
         })
     );
@@ -258,6 +268,129 @@ function registerFileChanges(client: LanguageClient): vscode.FileSystemWatcher {
     watcher.onDidChange((uri) => notify(2, uri));
     watcher.onDidDelete((uri) => notify(3, uri));
     return watcher;
+}
+
+async function createNewWurstProject(): Promise<void> {
+    // 1) Ask for project name
+    const name = await vscode.window.showInputBox({
+        prompt: 'Enter a name for the new Wurst project (folder name)',
+        value: 'MyWurstProject',
+        validateInput: (value) => {
+            if (!value.trim()) return 'Project name must not be empty';
+            if (value.indexOf('/') >= 0 || value.indexOf('\\') >= 0) {
+                return 'Project name must not contain path separators';
+            }
+            return undefined;
+        },
+    });
+    if (!name) {
+        return; // user cancelled
+    }
+
+    // 2) Ask for parent folder
+    const parentPick = await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        openLabel: 'Select parent folder for the new Wurst project',
+    });
+    if (!parentPick || parentPick.length === 0) {
+        return; // user cancelled
+    }
+
+    const parentDir = parentPick[0].fsPath;
+    const destDir = path.join(parentDir, name);
+
+    // 3) Check destination
+    if (fs.existsSync(destDir)) {
+        const existingEntries = fs.readdirSync(destDir);
+        if (existingEntries.length > 0) {
+            const choice = await vscode.window.showWarningMessage(
+                `The folder "${name}" already exists and is not empty. Create project there anyway?`,
+                { modal: true },
+                'Use existing folder',
+                'Cancel'
+            );
+            if (choice !== 'Use existing folder') {
+                return;
+            }
+        }
+    } else {
+        fs.mkdirSync(destDir, { recursive: true });
+    }
+
+    // 4) Download + extract template
+    await vscode.window.withProgress(
+        {
+            location: vscode.ProgressLocation.Notification,
+            title: 'Creating Wurst project',
+            cancellable: false,
+        },
+        async (progress) => {
+            const tmpRoot = path.join(os.tmpdir(), `wurst-template-${Date.now()}`);
+            const tmpZip = path.join(tmpRoot, 'template.zip');
+            const unpackDir = path.join(tmpRoot, 'unpacked');
+
+            fs.mkdirSync(unpackDir, { recursive: true });
+
+            try {
+                let last = 0;
+                progress.report({ message: 'Downloading project template…', increment: 5 });
+
+                await downloadFileWithProgress(TEMPLATE_ZIP_URL, tmpZip, (pct) => {
+                    const scaled = (pct / 100) * 60; // use first 60% for download
+                    const inc = Math.max(0, scaled - last);
+                    last += inc;
+                    progress.report({
+                        message: `Downloading project template… ${Math.floor(pct)}%`,
+                        increment: inc,
+                    });
+                });
+
+                await extractZipWithByteProgress(tmpZip, unpackDir, (pct) => {
+                    const scaled = 60 + (pct / 100) * 35; // next 35% for extraction
+                    const inc = Math.max(0, scaled - last);
+                    last += inc;
+                    progress.report({
+                        message: `Extracting… ${Math.floor(pct)}%`,
+                        increment: inc,
+                    });
+                });
+
+                // GitHub archive layout: unpackDir/<single-root>/...
+                const roots = fs
+                    .readdirSync(unpackDir)
+                    .map((n) => path.join(unpackDir, n))
+                    .filter((p) => fs.statSync(p).isDirectory());
+
+                if (roots.length === 0) {
+                    throw new Error('Template archive did not contain a project folder.');
+                }
+
+                const srcRoot = roots[0];
+                progress.report({ message: 'Copying project files…', increment: Math.max(0, 95 - last) });
+
+                copyDirContents(srcRoot, destDir);
+                progress.report({ message: 'Project created.', increment: Math.max(0, 100 - last) });
+            } finally {
+                try {
+                    await removeDirSafe(tmpRoot);
+                } catch {
+                    // ignore cleanup failure
+                }
+            }
+        }
+    );
+
+    // 5) Offer to open the created folder
+    const choice = await vscode.window.showInformationMessage(
+        `Wurst project created at:\n${destDir}`,
+        'Open Folder',
+        'Close'
+    );
+    if (choice === 'Open Folder') {
+        await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(destDir), true);
+    }
 }
 
 /** =========================

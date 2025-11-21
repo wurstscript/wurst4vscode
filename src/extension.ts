@@ -21,6 +21,8 @@ const COMPILER_JAR = path.join(COMPILER_DIR, 'wurstscript.jar'); // new structur
 const NIGHTLY_RELEASE_BY_TAG_API = 'https://api.github.com/repos/wurstscript/WurstScript/releases/tags/nightly';
 const NIGHTLY_COMMIT_API = 'https://api.github.com/repos/wurstscript/WurstScript/commits/nightly';
 const TEMPLATE_ZIP_URL = 'https://github.com/wurstscript/wurst-project-template/archive/refs/heads/master.zip';
+const WURSTSETUP_RELEASE = 'https://api.github.com/repos/wurstscript/WurstSetup/releases/tags/nightly-master';
+
 
 let clientRef: LanguageClient | null = null;
 
@@ -430,6 +432,25 @@ function githubJson<T = any>(url: string): Promise<T> {
     });
 }
 
+async function fetchLatestGrillAsset(): Promise<{ name: string; url: string }> {
+    const rel = await githubJson(WURSTSETUP_RELEASE);
+    const assets = Array.isArray(rel?.assets) ? rel.assets : [];
+
+    const wanted = assets.find((a: any) => {
+        const n = String(a?.name ?? '').toLowerCase();
+        return n.startsWith('wurstsetup') && n.endsWith('.jar');
+    });
+
+    if (!wanted?.browser_download_url) {
+        throw new Error('No WurstSetup JAR found in the latest WurstSetup release.');
+    }
+
+    return {
+        name: wanted.name,
+        url: wanted.browser_download_url,
+    };
+}
+
 async function fetchNightlyZipAsset(): Promise<{ name: string; url: string }> {
     // Map Node’s platform/arch to your release suffixes
     const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
@@ -666,29 +687,32 @@ async function installFreshFromNightly(): Promise<void> {
             fs.mkdirSync(unpack, { recursive: true });
 
             let last = 0;
-            // 80% of bar for download, 18% for extraction, 2% finishing
-            const DL_WEIGHT = 80;
+            // Weights within the main 0–100 range for the heavy work:
+            // 70% compiler ZIP download, 18% extract, 10% Grill download, rest finishing.
+            const DL_WEIGHT = 70;
             const EX_WEIGHT = 18;
+            const GRILL_WEIGHT = 10;
 
             await downloadFileWithProgress(asset.url, tmpZip, (pct) => {
                 const scaled = (pct / 100) * DL_WEIGHT;
                 const inc = Math.max(0, scaled - last);
                 last += inc;
-                progress.report({ message: `Downloading ${Math.floor(pct)}%`, increment: inc });
+                progress.report({ message: `Downloading compiler… ${Math.floor(pct)}%`, increment: inc });
             });
 
             await extractZipWithByteProgress(tmpZip, unpack, (pct) => {
                 const scaled = DL_WEIGHT + (pct / 100) * EX_WEIGHT;
                 const inc = Math.max(0, scaled - last);
                 last += inc;
-                progress.report({ message: `Extracting ${Math.floor(pct)}%`, increment: inc });
+                progress.report({ message: `Extracting compiler… ${Math.floor(pct)}%`, increment: inc });
             });
 
-            progress.report({ message: 'Finishing up…', increment: Math.max(0, 100 - last) });
+            progress.report({ message: 'Finishing up compiler install…', increment: 0 });
 
             const srcRuntime = path.join(unpack, 'wurst-runtime');
             const srcCompiler = path.join(unpack, 'wurst-compiler');
             const srcLauncher = path.join(unpack, process.platform === 'win32' ? 'wurstscript.cmd' : 'wurstscript');
+            const srcGrill = path.join(unpack, process.platform === 'win32' ? 'grill.cmd' : 'grill');
 
             if (!fs.existsSync(srcRuntime) || !fs.existsSync(path.join(srcCompiler, 'wurstscript.jar'))) {
                 throw new Error('Installation incomplete: runtime or compiler not found after extraction.');
@@ -700,8 +724,6 @@ async function installFreshFromNightly(): Promise<void> {
             // Upgrade subfolders in place (no touching ~/.wurst itself)
             await upgradeFolder(srcRuntime, RUNTIME_DIR);
             await upgradeFolder(srcCompiler, COMPILER_DIR);
-
-            cleanupOldWurstHome();
 
             // Place/refresh launcher (best effort)
             try {
@@ -719,6 +741,21 @@ async function installFreshFromNightly(): Promise<void> {
                 /* ignore */
             }
 
+            try {
+                const targetLauncher = path.join(WURST_HOME, path.basename(srcGrill));
+                try {
+                    fs.unlinkSync(targetLauncher);
+                } catch {}
+                fs.renameSync(srcGrill, targetLauncher);
+                if (process.platform !== 'win32') {
+                    try {
+                        fs.chmodSync(targetLauncher, 0o755);
+                    } catch {}
+                }
+            } catch {
+                /* ignore */
+            }
+
             // Ensure java is executable on unix
             if (process.platform !== 'win32') {
                 try {
@@ -726,16 +763,47 @@ async function installFreshFromNightly(): Promise<void> {
                 } catch {}
             }
 
+            // ------------------ Install Grill CLI with progress ------------------
+            try {
+                const grillAsset = await fetchLatestGrillAsset();
+                const grillDir = path.join(WURST_HOME, 'grill');
+                fs.mkdirSync(grillDir, { recursive: true });
+
+                const tmpGrillJar = path.join(tmpWork, 'grill.jar');
+
+                await downloadFileWithProgress(grillAsset.url, tmpGrillJar, (pct) => {
+                    const scaled = DL_WEIGHT + EX_WEIGHT + (pct / 100) * GRILL_WEIGHT;
+                    const inc = Math.max(0, scaled - last);
+                    last += inc;
+                    progress.report({
+                        message: `Downloading Grill CLI… ${Math.floor(pct)}%`,
+                        increment: inc,
+                    });
+                });
+
+                const grillDest = path.join(grillDir, 'grill.jar');
+                fs.copyFileSync(tmpGrillJar, grillDest);
+                try {
+                    fs.unlinkSync(tmpGrillJar);
+                } catch {}
+
+                console.log('[wurst] Installed Grill CLI at', grillDest);
+            } catch (e) {
+                console.warn('Failed to install Grill CLI:', e);
+            }
+
+            cleanupOldWurstHome();
+
             // Cleanup tmp
             try {
                 await removeDirSafe(tmpWork);
             } catch {}
 
-            progress.report({ message: 'Ready', increment: 10 });
+            // Final bump to 100
+            progress.report({ message: 'Ready', increment: Math.max(0, 100 - last) });
         }
     );
 
-    // Ask for reload so the LS restarts against the new layout
     const reload = await vscode.window.showInformationMessage(
         'WurstScript was updated. Reload VS Code now to use the new runtime?',
         { modal: true },
@@ -746,9 +814,16 @@ async function installFreshFromNightly(): Promise<void> {
         await vscode.commands.executeCommand('workbench.action.reloadWindow');
     }
 }
-
 function cleanupOldWurstHome() {
-    const allowed = new Set(['logs', 'wurst-runtime', 'wurst-compiler', 'grill.cmd', 'wurstscript.cmd']);
+    const allowed = new Set([
+        'logs',
+        'grill',
+        'grill.cmd',
+        'wurstscript',
+        'wurstscript.cmd',
+        'wurst-runtime',
+        'wurst-compiler',
+    ]);
 
     if (!fs.existsSync(WURST_HOME)) return;
 

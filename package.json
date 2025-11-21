@@ -229,7 +229,7 @@
     },
     "dependencies": {
         "node-stream-zip": "^1.15.0",
-        "semver": "^5.7.1",
+        "semver": "^5.7.2",
         "vscode-languageclient": "^5.2.1"
     },
     "extensionPack": [

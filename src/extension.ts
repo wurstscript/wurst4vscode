@@ -685,7 +685,7 @@ function getInstalledVersionString(): string | null {
 }
 
 function extractShortSha(versionString: string): string | null {
-    return versionString.substring(versionString.lastIndexOf('-') + 1);
+    return versionString.substring(versionString.lastIndexOf('-') + 2);
 }
 
 /** =========================

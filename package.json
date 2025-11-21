@@ -13,7 +13,7 @@
         "type": "git",
         "url": "https://github.com/wurstscript/wurst4vscode.git"
     },
-    "version": "0.7.4",
+    "version": "0.7.5",
     "publisher": "peterzeller",
     "engines": {
         "vscode": "^1.51.0"

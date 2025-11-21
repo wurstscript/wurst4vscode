@@ -568,6 +568,8 @@ async function installFreshFromNightly(): Promise<void> {
             await upgradeFolder(srcRuntime, RUNTIME_DIR);
             await upgradeFolder(srcCompiler, COMPILER_DIR);
 
+            cleanupOldWurstHome();
+
             // Place/refresh launcher (best effort)
             try {
                 const targetLauncher = path.join(WURST_HOME, path.basename(srcLauncher));
@@ -612,7 +614,23 @@ async function installFreshFromNightly(): Promise<void> {
     }
 }
 
+function cleanupOldWurstHome() {
+    const allowed = new Set(['logs', 'wurst-runtime', 'wurst-compiler', 'grill.cmd', 'wurstscript.cmd']);
 
+    if (!fs.existsSync(WURST_HOME)) return;
+
+    for (const entry of fs.readdirSync(WURST_HOME)) {
+        if (!allowed.has(entry)) {
+            const p = path.join(WURST_HOME, entry);
+            try {
+                // remove old jars, exes, folders, etc.
+                fs.rmSync(p, { recursive: true, force: true });
+            } catch (e) {
+                console.warn('Failed to delete old file:', p, e);
+            }
+        }
+    }
+}
 
 
 async function maybeOfferUpdate(): Promise<void> {

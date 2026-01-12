@@ -25,6 +25,7 @@ const WURSTSETUP_RELEASE = 'https://api.github.com/repos/wurstscript/WurstSetup/
 
 
 let clientRef: LanguageClient | null = null;
+let envCollection: vscode.EnvironmentVariableCollection | null = null;
 
 async function stopLanguageServerIfRunning(): Promise<void> {
     if (!clientRef) return;
@@ -91,6 +92,7 @@ async function removeDirSafe(dir: string) {
 
 export async function activate(context: ExtensionContext) {
     console.log('Wurst extension activated!');
+    envCollection = context.environmentVariableCollection;
 
     setupDecorators(context);
     vscode.languages.setLanguageConfiguration('wurst', languageConfig);
@@ -804,15 +806,8 @@ async function installFreshFromNightly(): Promise<void> {
         }
     );
 
-    const reload = await vscode.window.showInformationMessage(
-        'WurstScript was updated. Reload VS Code now to use the new runtime?',
-        { modal: true },
-        'Reload',
-        'Later'
-    );
-    if (reload === 'Reload') {
-        await vscode.commands.executeCommand('workbench.action.reloadWindow');
-    }
+    const pathUpdate = await ensureCliOnPath();
+    await offerPostInstallActions(pathUpdate);
 }
 function cleanupOldWurstHome() {
     const allowed = new Set([
@@ -894,6 +889,150 @@ function getInstalledVersionString(): string | null {
 
 function extractShortSha(versionString: string): string | null {
     return versionString.substring(versionString.lastIndexOf('-') + 2);
+}
+
+type CliPathUpdate = {
+    updated: boolean;
+    targetDir: string | null;
+    needsTerminalRestart: boolean;
+    notes: string[];
+};
+
+async function ensureCliOnPath(): Promise<CliPathUpdate> {
+    const notes: string[] = [];
+    if (!fs.existsSync(WURST_HOME)) {
+        return { updated: false, targetDir: null, needsTerminalRestart: false, notes };
+    }
+    const targetDir = WURST_HOME;
+
+    const envPath = process.env.PATH ?? '';
+    const entries = envPath.split(path.delimiter).filter(Boolean);
+    const normalized = entries.map((entry) => normalizePath(entry));
+    const normalizedTarget = normalizePath(targetDir);
+
+    const isOnPath = normalized.includes(normalizedTarget);
+    if (isOnPath) {
+        return { updated: false, targetDir, needsTerminalRestart: false, notes };
+    }
+
+    prependPathForVsCodeTerminals(targetDir);
+    const updated = await updateUserPath(targetDir, notes);
+    if (updated) {
+        return { updated: true, targetDir, needsTerminalRestart: true, notes };
+    }
+
+    return { updated: false, targetDir, needsTerminalRestart: true, notes };
+}
+
+function normalizePath(value: string): string {
+    const resolved = path.resolve(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function prependPathForVsCodeTerminals(pathEntry: string) {
+    if (!envCollection) return;
+    envCollection.prepend('PATH', `${pathEntry}${path.delimiter}`);
+    process.env.PATH = `${pathEntry}${path.delimiter}${process.env.PATH ?? ''}`;
+}
+
+async function updateUserPath(pathEntry: string, notes: string[]): Promise<boolean> {
+    if (process.platform === 'win32') {
+        const updated = setWindowsUserPath(pathEntry);
+        if (updated) notes.push('Updated Windows user PATH.');
+        return updated;
+    }
+
+    const updated = updateShellProfiles(pathEntry, notes);
+    if (updated) return true;
+    return false;
+}
+
+function updateShellProfiles(pathEntry: string, notes: string[]): boolean {
+    const home = os.homedir();
+    const profile = path.join(home, '.profile');
+    const zprofile = path.join(home, '.zprofile');
+    let changed = false;
+
+    changed = ensurePathExport(profile, pathEntry, notes) || changed;
+    changed = ensurePathExport(zprofile, pathEntry, notes) || changed;
+
+    return changed;
+}
+
+function ensurePathExport(profilePath: string, pathEntry: string, notes: string[]): boolean {
+    const markerStart = '# >>> WurstScript CLI >>>';
+    const markerEnd = '# <<< WurstScript CLI <<<';
+    const line = `export PATH="${pathEntry}:$PATH"`;
+
+    let content = '';
+    if (fs.existsSync(profilePath)) {
+        content = fs.readFileSync(profilePath, 'utf8');
+        if (content.includes(markerStart) && content.includes(markerEnd)) {
+            return false;
+        }
+    }
+
+    const block = `\n${markerStart}\n${line}\n${markerEnd}\n`;
+    fs.appendFileSync(profilePath, block, 'utf8');
+    notes.push(`Added PATH export to ${profilePath}.`);
+    return true;
+}
+
+function setWindowsUserPath(pathEntry: string): boolean {
+    const existing = getWindowsUserPath();
+    const entries = existing
+        ? existing
+              .split(';')
+              .map((entry) => entry.trim())
+              .filter(Boolean)
+        : [];
+    const normalized = entries.map((entry) => normalizePath(entry));
+    const normalizedEntry = normalizePath(pathEntry);
+    if (normalized.includes(normalizedEntry)) return false;
+
+    const updated = [...entries, pathEntry].join(';');
+    const escaped = escapePowerShellString(updated);
+    const res = spawnSync(
+        'powershell.exe',
+        ['-NoProfile', '-Command', `[Environment]::SetEnvironmentVariable('Path', '${escaped}', 'User')`],
+        { encoding: 'utf8', windowsHide: true }
+    );
+    return res.status === 0;
+}
+
+function getWindowsUserPath(): string {
+    const res = spawnSync(
+        'powershell.exe',
+        ['-NoProfile', '-Command', "[Environment]::GetEnvironmentVariable('Path', 'User')"],
+        { encoding: 'utf8', windowsHide: true }
+    );
+    return (res.stdout || '').trim();
+}
+
+function escapePowerShellString(value: string): string {
+    return value.replace(/'/g, "''");
+}
+
+async function offerPostInstallActions(update: CliPathUpdate): Promise<void> {
+    const baseMessage = 'WurstScript was updated. Reload VS Code now to use the new runtime?';
+    const extraMessage = update.updated ? '\n\nRestart terminals or open a new shell to pick up PATH changes.' : '';
+
+    const message = `${baseMessage}${extraMessage}`;
+    const actions = ['Reload'];
+    if (update.needsTerminalRestart) {
+        actions.unshift('Restart Terminals');
+    }
+    actions.push('Later');
+
+    const choice = await vscode.window.showInformationMessage(message, { modal: true }, ...actions);
+    if (choice === 'Reload') {
+        await vscode.commands.executeCommand('workbench.action.reloadWindow');
+        return;
+    }
+    if (choice === 'Restart Terminals') {
+        await vscode.commands.executeCommand('workbench.action.terminal.killAll');
+        await vscode.commands.executeCommand('workbench.action.terminal.new');
+    }
 }
 
 /** =========================

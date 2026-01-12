@@ -915,13 +915,13 @@ async function ensureCliOnPath(): Promise<CliPathUpdate> {
         return { updated: false, targetDir, needsTerminalRestart: false, notes };
     }
 
+    prependPathForVsCodeTerminals(targetDir);
     const updated = await updateUserPath(targetDir, notes);
     if (updated) {
-        prependPathForVsCodeTerminals(targetDir);
         return { updated: true, targetDir, needsTerminalRestart: true, notes };
     }
 
-    return { updated: false, targetDir, needsTerminalRestart: false, notes };
+    return { updated: false, targetDir, needsTerminalRestart: true, notes };
 }
 
 function normalizePath(value: string): string {

@@ -954,9 +954,7 @@ function updateShellProfiles(pathEntry: string, notes: string[]): boolean {
     let changed = false;
 
     changed = ensurePathExport(profile, pathEntry, notes) || changed;
-    if (fs.existsSync(zprofile)) {
-        changed = ensurePathExport(zprofile, pathEntry, notes) || changed;
-    }
+    changed = ensurePathExport(zprofile, pathEntry, notes) || changed;
 
     return changed;
 }
@@ -983,7 +981,10 @@ function ensurePathExport(profilePath: string, pathEntry: string, notes: string[
 function setWindowsUserPath(pathEntry: string): boolean {
     const existing = getWindowsUserPath();
     const entries = existing
-        ? existing.split(';').map((entry) => entry.trim()).filter(Boolean)
+        ? existing
+              .split(';')
+              .map((entry) => entry.trim())
+              .filter(Boolean)
         : [];
     const normalized = entries.map((entry) => normalizePath(entry));
     const normalizedEntry = normalizePath(pathEntry);
@@ -991,20 +992,20 @@ function setWindowsUserPath(pathEntry: string): boolean {
 
     const updated = [...entries, pathEntry].join(';');
     const escaped = escapePowerShellString(updated);
-    const res = spawnSync('powershell.exe', [
-        '-NoProfile',
-        '-Command',
-        `[Environment]::SetEnvironmentVariable('Path', '${escaped}', 'User')`,
-    ], { encoding: 'utf8', windowsHide: true });
+    const res = spawnSync(
+        'powershell.exe',
+        ['-NoProfile', '-Command', `[Environment]::SetEnvironmentVariable('Path', '${escaped}', 'User')`],
+        { encoding: 'utf8', windowsHide: true }
+    );
     return res.status === 0;
 }
 
 function getWindowsUserPath(): string {
-    const res = spawnSync('powershell.exe', [
-        '-NoProfile',
-        '-Command',
-        "[Environment]::GetEnvironmentVariable('Path', 'User')",
-    ], { encoding: 'utf8', windowsHide: true });
+    const res = spawnSync(
+        'powershell.exe',
+        ['-NoProfile', '-Command', "[Environment]::GetEnvironmentVariable('Path', 'User')"],
+        { encoding: 'utf8', windowsHide: true }
+    );
     return (res.stdout || '').trim();
 }
 
@@ -1014,9 +1015,7 @@ function escapePowerShellString(value: string): string {
 
 async function offerPostInstallActions(update: CliPathUpdate): Promise<void> {
     const baseMessage = 'WurstScript was updated. Reload VS Code now to use the new runtime?';
-    const extraMessage = update.updated
-        ? '\n\nRestart terminals or open a new shell to pick up PATH changes.'
-        : '';
+    const extraMessage = update.updated ? '\n\nRestart terminals or open a new shell to pick up PATH changes.' : '';
 
     const message = `${baseMessage}${extraMessage}`;
     const actions = ['Reload'];

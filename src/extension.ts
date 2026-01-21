@@ -2,7 +2,7 @@
 
 import * as vscode from 'vscode';
 import { workspace, ExtensionContext } from 'vscode';
-import { LanguageClient, LanguageClientOptions, ServerOptions, Executable } from 'vscode-languageclient';
+import { LanguageClient, LanguageClientOptions, ServerOptions, Executable } from 'vscode-languageclient/node';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -152,7 +152,7 @@ function registerBasicCommands(context: ExtensionContext) {
 }
 
 function setupDecorators(context: ExtensionContext) {
-    let timeout: NodeJS.Timer | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     const extension = vscode.extensions.getExtension('peterzeller.wurst')!;
     const extPath = extension.extensionPath;
     const decorator = vscode.window.createTextEditorDecorationType({
@@ -220,38 +220,37 @@ async function startLanguageClient(context: ExtensionContext) {
     const client = new LanguageClient('Wurstscript Language Server', serverOptions, clientOptions);
     clientRef = client;
 
-    context.subscriptions.push(client.start());
+    const startPromise = client.start();
+    context.subscriptions.push({ dispose: () => client.stop() });
 
-    client.onReady().then(() => {
-        const version = getInstalledVersionString() ?? 'unknown';
-        const sb = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-        sb.text = '$(check) WurstScript';
-        sb.tooltip = [
-            'WurstScript language server is running.',
-            `Version: ${version}`,
-            'Click to open logs.',
-        ]
-            .filter(Boolean)
-            .join('\n');
-        sb.command = 'wurst.showLogs';
-        sb.show();
-        context.subscriptions.push(sb);
+    await startPromise;
 
-        // Command to focus Output with the Wurst channel selected (like Prettier)
-        context.subscriptions.push(
-            vscode.commands.registerCommand('wurst.showLogs', () => {
-                try {
-                    // languageclient exposes the output channel
-                    client.outputChannel.show(); // focus + selects the channel
-                } catch {
-                    // fallback: just open Output panel
-                    vscode.commands.executeCommand('workbench.action.output.toggleOutput');
-                }
-            })
-        );
-    });
+    const version = getInstalledVersionString() ?? 'unknown';
+    const sb = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    sb.text = '$(check) WurstScript';
+    sb.tooltip = [
+        'WurstScript language server is running.',
+        `Version: ${version}`,
+        'Click to open logs.',
+    ]
+        .filter(Boolean)
+        .join('\n');
+    sb.command = 'wurst.showLogs';
+    sb.show();
+    context.subscriptions.push(sb);
 
-    await client.onReady();
+    // Command to focus Output with the Wurst channel selected (like Prettier)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('wurst.showLogs', () => {
+            try {
+                // languageclient exposes the output channel
+                client.outputChannel.show(); // focus + selects the channel
+            } catch {
+                // fallback: just open Output panel
+                vscode.commands.executeCommand('workbench.action.output.toggleOutput');
+            }
+        })
+    );
     client.onNotification('wurst/updateGamePath', (params) => {
         workspace.getConfiguration().update('wurst.wc3path', params);
     });

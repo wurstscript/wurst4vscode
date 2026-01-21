@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as https from 'https';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 
 import { registerCommands } from './features/commands';
 import { registerFileCreation } from './features/fileCreation';
@@ -309,21 +309,17 @@ async function createNewWurstProject(): Promise<void> {
     if (fs.existsSync(destDir)) {
         const existingEntries = fs.readdirSync(destDir);
         if (existingEntries.length > 0) {
-            const choice = await vscode.window.showWarningMessage(
-                `The folder "${name}" already exists and is not empty. Create project there anyway?`,
-                { modal: true },
-                'Use existing folder',
-                'Cancel'
+            await vscode.window.showWarningMessage(
+                `The folder "${name}" already exists and is not empty.\n\nPlease choose an empty folder for Grill project generation.`,
+                { modal: true }
             );
-            if (choice !== 'Use existing folder') {
-                return;
-            }
+            return;
         }
     } else {
         fs.mkdirSync(destDir, { recursive: true });
     }
 
-    // 4) Download + extract template
+    // 4) Generate project via Grill
     await vscode.window.withProgress(
         {
             location: vscode.ProgressLocation.Notification,
@@ -331,58 +327,25 @@ async function createNewWurstProject(): Promise<void> {
             cancellable: false,
         },
         async (progress) => {
-            const tmpRoot = path.join(os.tmpdir(), `wurst-template-${Date.now()}`);
-            const tmpZip = path.join(tmpRoot, 'template.zip');
-            const unpackDir = path.join(tmpRoot, 'unpacked');
+            progress.report({ message: 'Ensuring WurstScript/Grill installation…', increment: 10 });
 
-            fs.mkdirSync(unpackDir, { recursive: true });
+            // Make sure install has run at least once (so bundled grill exists),
+            // and PATH in this extension host is updated if needed.
+            await ensureInstalledOrOfferMigration(/*forcePrompt=*/ false);
 
-            try {
-                let last = 0;
-                progress.report({ message: 'Downloading project template…', increment: 5 });
+            progress.report({ message: 'Generating project with Grill…', increment: 30 });
 
-                await downloadFileWithProgress(TEMPLATE_ZIP_URL, tmpZip, (pct) => {
-                    const scaled = (pct / 100) * 60; // use first 60% for download
-                    const inc = Math.max(0, scaled - last);
-                    last += inc;
-                    progress.report({
-                        message: `Downloading project template… ${Math.floor(pct)}%`,
-                        increment: inc,
-                    });
-                });
-
-                await extractZipWithByteProgress(tmpZip, unpackDir, (pct) => {
-                    const scaled = 60 + (pct / 100) * 35; // next 35% for extraction
-                    const inc = Math.max(0, scaled - last);
-                    last += inc;
-                    progress.report({
-                        message: `Extracting… ${Math.floor(pct)}%`,
-                        increment: inc,
-                    });
-                });
-
-                // GitHub archive layout: unpackDir/<single-root>/...
-                const roots = fs
-                    .readdirSync(unpackDir)
-                    .map((n) => path.join(unpackDir, n))
-                    .filter((p) => fs.statSync(p).isDirectory());
-
-                if (roots.length === 0) {
-                    throw new Error('Template archive did not contain a project folder.');
-                }
-
-                const srcRoot = roots[0];
-                progress.report({ message: 'Copying project files…', increment: Math.max(0, 95 - last) });
-
-                copyDirContents(srcRoot, destDir);
-                progress.report({ message: 'Project created.', increment: Math.max(0, 100 - last) });
-            } finally {
-                try {
-                    await removeDirSafe(tmpRoot);
-                } catch {
-                    // ignore cleanup failure
-                }
+            // Grill often expects an empty/non-existing directory. Your earlier logic allows “use existing folder”.
+            // If the folder exists and is not empty, Grill may refuse or create a partial project.
+            if (fs.existsSync(destDir) && fs.readdirSync(destDir).length > 0) {
+                throw new Error(
+                    `Destination folder is not empty:\n${destDir}\n\nPlease choose an empty folder (Grill project generation may refuse non-empty directories).`
+                );
             }
+
+            await runGrillGenerate(destDir);
+
+            progress.report({ message: 'Project created.', increment: 60 });
         }
     );
 
@@ -862,6 +825,73 @@ async function maybeOfferUpdate(): Promise<void> {
     } catch (e) {
         console.warn('Update check failed:', e);
     }
+}
+
+function getBundledGrillExecutable(): string | null {
+    // The installer drops these directly into ~/.wurst
+    const p = path.join(WURST_HOME, process.platform === 'win32' ? 'grill.cmd' : 'grill');
+    return fs.existsSync(p) ? p : null;
+}
+
+async function runGrillGenerate(destDir: string): Promise<void> {
+    // Prefer an on-disk bundled grill (works immediately after installFreshFromNightly, even before a reload),
+    // otherwise fall back to PATH ("grill").
+    const bundled = getBundledGrillExecutable();
+    const grillCmd = bundled ?? 'grill';
+
+    // Make sure the current extension host can resolve the bundled one right away
+    // (ensureCliOnPath updates process.env.PATH too, but this makes it deterministic).
+    if (bundled) {
+        prependPathForVsCodeTerminals(WURST_HOME);
+    }
+
+    await new Promise<void>((resolve, reject) => {
+        const out: string[] = [];
+        const push = (s: any) => {
+            const str = String(s ?? '');
+            if (!str) return;
+            out.push(str);
+            if (out.length > 2000) out.shift(); // cap memory
+        };
+
+        let child;
+        if (process.platform === 'win32') {
+            // Use cmd.exe so .cmd + PATH resolution works reliably
+            child = spawn('cmd.exe', ['/c', grillCmd, 'generate', destDir], { windowsHide: true });
+        } else {
+            child = spawn(grillCmd, ['generate', destDir], { stdio: ['ignore', 'pipe', 'pipe'] });
+        }
+
+        child.on('error', (err: any) => {
+            const details = out.join('').trim();
+            if (err?.code === 'ENOENT') {
+                reject(
+                    new Error(
+                        [
+                            `Could not execute "grill".`,
+                            `Make sure Grill is installed and on PATH, or run "Wurst: Install/Update" once.`,
+                            details ? `\nLast output:\n${details}` : '',
+                        ].join('\n')
+                    )
+                );
+            } else {
+                reject(new Error(`${err?.message ?? String(err)}${details ? `\n\n${details}` : ''}`));
+            }
+        });
+
+        child.stdout?.on('data', push);
+        child.stderr?.on('data', push);
+
+        child.on('close', (code) => {
+            const details = out.join('').trim();
+            if (code === 0) return resolve();
+            reject(
+                new Error(
+                    [`"grill generate" failed (exit code ${code}).`, details ? `\nOutput:\n${details}` : ''].join('\n')
+                )
+            );
+        });
+    });
 }
 
 function getBundledJava(): string {

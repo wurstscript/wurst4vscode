@@ -340,6 +340,7 @@ async function createNewWurstProject(): Promise<void> {
             // Make sure install has run at least once (so bundled grill exists),
             // and PATH in this extension host is updated if needed.
             await ensureInstalledOrOfferMigration(/*forcePrompt=*/ false);
+            await ensureGrillAvailable();
 
             progress.report({ message: 'Generating project with Grill…', increment: 30 });
 
@@ -610,6 +611,13 @@ function hasNewLayout(): boolean {
     return fs.existsSync(RUNTIME_DIR) && fs.existsSync(COMPILER_DIR);
 }
 
+function isGrillOnPath(): boolean {
+    const result = process.platform === 'win32'
+        ? spawnSync('where', ['grill'], { stdio: 'ignore' })
+        : spawnSync('which', ['grill'], { stdio: 'ignore' });
+    return result.status === 0;
+}
+
 async function ensureInstalledOrOfferMigration(_forcePrompt: boolean): Promise<void> {
     const newLayout = hasNewLayout();
 
@@ -641,6 +649,17 @@ async function ensureInstalledOrOfferMigration(_forcePrompt: boolean): Promise<v
     }
 }
 
+async function ensureGrillAvailable(): Promise<void> {
+    if (getBundledGrillExecutable() || isGrillOnPath()) {
+        return;
+    }
+
+    await installFreshFromNightly();
+
+    if (!getBundledGrillExecutable() && !isGrillOnPath()) {
+        throw new Error('Grill CLI is not available. Please run "Wurst: Install/Update" and try again.');
+    }
+}
 
 
 async function installFreshFromNightly(): Promise<void> {

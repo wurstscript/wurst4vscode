@@ -221,8 +221,13 @@ async function startLanguageClient(context: ExtensionContext) {
     const client = new LanguageClient('Wurstscript Language Server', serverOptions, clientOptions);
     clientRef = client;
 
-    const startDisposable = client.start();
-    context.subscriptions.push(startDisposable);
+    const startResult = client.start();
+    if (isDisposable(startResult)) {
+        context.subscriptions.push(startResult);
+    } else {
+        context.subscriptions.push({ dispose: () => client.stop() });
+        await startResult;
+    }
 
     const anyClient = client as LanguageClient & { onReady?: () => Promise<void> };
     try {
@@ -987,6 +992,10 @@ function normalizePath(value: string): string {
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
+function isDisposable(value: unknown): value is vscode.Disposable {
+    return !!value && typeof (value as vscode.Disposable).dispose === 'function';
+}
+
 function prependPathForVsCodeTerminals(pathEntry: string) {
     if (!envCollection) return;
     const normalizedEntry = normalizePath(pathEntry);
@@ -1109,6 +1118,7 @@ async function offerPostInstallActions(update: CliPathUpdate): Promise<void> {
     if (choice === 'Restart Terminals') {
         await vscode.commands.executeCommand('workbench.action.terminal.killAll');
         await vscode.commands.executeCommand('workbench.action.terminal.new');
+        await vscode.commands.executeCommand('workbench.action.reloadWindow');
     }
 }
 

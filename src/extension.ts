@@ -26,6 +26,7 @@ const WURSTSETUP_RELEASE = 'https://api.github.com/repos/wurstscript/WurstSetup/
 
 let clientRef: LanguageClient | null = null;
 let envCollection: vscode.EnvironmentVariableCollection | null = null;
+const prependedPathEntries = new Set<string>();
 
 async function stopLanguageServerIfRunning(): Promise<void> {
     if (!clientRef) return;
@@ -988,8 +989,21 @@ function normalizePath(value: string): string {
 
 function prependPathForVsCodeTerminals(pathEntry: string) {
     if (!envCollection) return;
+    const normalizedEntry = normalizePath(pathEntry);
+    if (prependedPathEntries.has(normalizedEntry)) {
+        return;
+    }
+
+    const envPath = process.env.PATH ?? '';
+    const existingEntries = envPath.split(path.delimiter).filter(Boolean).map((entry) => normalizePath(entry));
+    if (existingEntries.includes(normalizedEntry)) {
+        prependedPathEntries.add(normalizedEntry);
+        return;
+    }
+
     envCollection.prepend('PATH', `${pathEntry}${path.delimiter}`);
-    process.env.PATH = `${pathEntry}${path.delimiter}${process.env.PATH ?? ''}`;
+    process.env.PATH = `${pathEntry}${path.delimiter}${envPath}`;
+    prependedPathEntries.add(normalizedEntry);
 }
 
 async function updateUserPath(pathEntry: string, notes: string[]): Promise<boolean> {
@@ -1030,9 +1044,15 @@ function ensurePathExport(profilePath: string, pathEntry: string, notes: string[
     }
 
     const block = `\n${markerStart}\n${line}\n${markerEnd}\n`;
-    fs.appendFileSync(profilePath, block, 'utf8');
-    notes.push(`Added PATH export to ${profilePath}.`);
-    return true;
+    try {
+        fs.appendFileSync(profilePath, block, 'utf8');
+        notes.push(`Added PATH export to ${profilePath}.`);
+        return true;
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        notes.push(`Could not update ${profilePath}: ${message}`);
+        return false;
+    }
 }
 
 function setWindowsUserPath(pathEntry: string): boolean {

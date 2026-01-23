@@ -2,12 +2,12 @@
 
 import * as vscode from 'vscode';
 import { workspace, ExtensionContext } from 'vscode';
-import { LanguageClient, LanguageClientOptions, ServerOptions, Executable } from 'vscode-languageclient';
+import { LanguageClient, LanguageClientOptions, ServerOptions, Executable } from 'vscode-languageclient/node';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as https from 'https';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 
 import { registerCommands } from './features/commands';
 import { registerFileCreation } from './features/fileCreation';
@@ -26,6 +26,7 @@ const WURSTSETUP_RELEASE = 'https://api.github.com/repos/wurstscript/WurstSetup/
 
 let clientRef: LanguageClient | null = null;
 let envCollection: vscode.EnvironmentVariableCollection | null = null;
+const prependedPathEntries = new Set<string>();
 
 async function stopLanguageServerIfRunning(): Promise<void> {
     if (!clientRef) return;
@@ -152,7 +153,7 @@ function registerBasicCommands(context: ExtensionContext) {
 }
 
 function setupDecorators(context: ExtensionContext) {
-    let timeout: NodeJS.Timer | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     const extension = vscode.extensions.getExtension('peterzeller.wurst')!;
     const extPath = extension.extensionPath;
     const decorator = vscode.window.createTextEditorDecorationType({
@@ -220,38 +221,51 @@ async function startLanguageClient(context: ExtensionContext) {
     const client = new LanguageClient('Wurstscript Language Server', serverOptions, clientOptions);
     clientRef = client;
 
-    context.subscriptions.push(client.start());
+    const startResult = client.start();
+    if (isDisposable(startResult)) {
+        context.subscriptions.push(startResult);
+    } else {
+        context.subscriptions.push({ dispose: () => client.stop() });
+        await startResult;
+    }
 
-    client.onReady().then(() => {
-        const version = getInstalledVersionString() ?? 'unknown';
-        const sb = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-        sb.text = '$(check) WurstScript';
-        sb.tooltip = [
-            'WurstScript language server is running.',
-            `Version: ${version}`,
-            'Click to open logs.',
-        ]
-            .filter(Boolean)
-            .join('\n');
-        sb.command = 'wurst.showLogs';
-        sb.show();
-        context.subscriptions.push(sb);
+    const anyClient = client as LanguageClient & { onReady?: () => Promise<void> };
+    try {
+        if (typeof anyClient.onReady === 'function') {
+            await anyClient.onReady();
+        }
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        vscode.window.showErrorMessage(`Wurst language server failed to start: ${message}`);
+        throw error;
+    }
 
-        // Command to focus Output with the Wurst channel selected (like Prettier)
-        context.subscriptions.push(
-            vscode.commands.registerCommand('wurst.showLogs', () => {
-                try {
-                    // languageclient exposes the output channel
-                    client.outputChannel.show(); // focus + selects the channel
-                } catch {
-                    // fallback: just open Output panel
-                    vscode.commands.executeCommand('workbench.action.output.toggleOutput');
-                }
-            })
-        );
-    });
+    const version = getInstalledVersionString() ?? 'unknown';
+    const sb = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    sb.text = '$(check) WurstScript';
+    sb.tooltip = [
+        'WurstScript language server is running.',
+        `Version: ${version}`,
+        'Click to open logs.',
+    ]
+        .filter(Boolean)
+        .join('\n');
+    sb.command = 'wurst.showLogs';
+    sb.show();
+    context.subscriptions.push(sb);
 
-    await client.onReady();
+    // Command to focus Output with the Wurst channel selected (like Prettier)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('wurst.showLogs', () => {
+            try {
+                // languageclient exposes the output channel
+                client.outputChannel.show(); // focus + selects the channel
+            } catch {
+                // fallback: just open Output panel
+                vscode.commands.executeCommand('workbench.action.output.toggleOutput');
+            }
+        })
+    );
     client.onNotification('wurst/updateGamePath', (params) => {
         workspace.getConfiguration().update('wurst.wc3path', params);
     });
@@ -309,21 +323,17 @@ async function createNewWurstProject(): Promise<void> {
     if (fs.existsSync(destDir)) {
         const existingEntries = fs.readdirSync(destDir);
         if (existingEntries.length > 0) {
-            const choice = await vscode.window.showWarningMessage(
-                `The folder "${name}" already exists and is not empty. Create project there anyway?`,
-                { modal: true },
-                'Use existing folder',
-                'Cancel'
+            await vscode.window.showWarningMessage(
+                `The folder "${name}" already exists and is not empty.\n\nPlease choose an empty folder for Grill project generation.`,
+                { modal: true }
             );
-            if (choice !== 'Use existing folder') {
-                return;
-            }
+            return;
         }
     } else {
         fs.mkdirSync(destDir, { recursive: true });
     }
 
-    // 4) Download + extract template
+    // 4) Generate project via Grill
     await vscode.window.withProgress(
         {
             location: vscode.ProgressLocation.Notification,
@@ -331,58 +341,26 @@ async function createNewWurstProject(): Promise<void> {
             cancellable: false,
         },
         async (progress) => {
-            const tmpRoot = path.join(os.tmpdir(), `wurst-template-${Date.now()}`);
-            const tmpZip = path.join(tmpRoot, 'template.zip');
-            const unpackDir = path.join(tmpRoot, 'unpacked');
+            progress.report({ message: 'Ensuring WurstScript/Grill installation…', increment: 10 });
 
-            fs.mkdirSync(unpackDir, { recursive: true });
+            // Make sure install has run at least once (so bundled grill exists),
+            // and PATH in this extension host is updated if needed.
+            await ensureInstalledOrOfferMigration(/*forcePrompt=*/ false);
+            await ensureGrillAvailable();
 
-            try {
-                let last = 0;
-                progress.report({ message: 'Downloading project template…', increment: 5 });
+            progress.report({ message: 'Generating project with Grill…', increment: 30 });
 
-                await downloadFileWithProgress(TEMPLATE_ZIP_URL, tmpZip, (pct) => {
-                    const scaled = (pct / 100) * 60; // use first 60% for download
-                    const inc = Math.max(0, scaled - last);
-                    last += inc;
-                    progress.report({
-                        message: `Downloading project template… ${Math.floor(pct)}%`,
-                        increment: inc,
-                    });
-                });
-
-                await extractZipWithByteProgress(tmpZip, unpackDir, (pct) => {
-                    const scaled = 60 + (pct / 100) * 35; // next 35% for extraction
-                    const inc = Math.max(0, scaled - last);
-                    last += inc;
-                    progress.report({
-                        message: `Extracting… ${Math.floor(pct)}%`,
-                        increment: inc,
-                    });
-                });
-
-                // GitHub archive layout: unpackDir/<single-root>/...
-                const roots = fs
-                    .readdirSync(unpackDir)
-                    .map((n) => path.join(unpackDir, n))
-                    .filter((p) => fs.statSync(p).isDirectory());
-
-                if (roots.length === 0) {
-                    throw new Error('Template archive did not contain a project folder.');
-                }
-
-                const srcRoot = roots[0];
-                progress.report({ message: 'Copying project files…', increment: Math.max(0, 95 - last) });
-
-                copyDirContents(srcRoot, destDir);
-                progress.report({ message: 'Project created.', increment: Math.max(0, 100 - last) });
-            } finally {
-                try {
-                    await removeDirSafe(tmpRoot);
-                } catch {
-                    // ignore cleanup failure
-                }
+            // Grill often expects an empty/non-existing directory. Your earlier logic allows “use existing folder”.
+            // If the folder exists and is not empty, Grill may refuse or create a partial project.
+            if (fs.existsSync(destDir) && fs.readdirSync(destDir).length > 0) {
+                throw new Error(
+                    `Destination folder is not empty:\n${destDir}\n\nPlease choose an empty folder (Grill project generation may refuse non-empty directories).`
+                );
             }
+
+            await runGrillGenerate(destDir);
+
+            progress.report({ message: 'Project created.', increment: 60 });
         }
     );
 
@@ -639,6 +617,13 @@ function hasNewLayout(): boolean {
     return fs.existsSync(RUNTIME_DIR) && fs.existsSync(COMPILER_DIR);
 }
 
+function isGrillOnPath(): boolean {
+    const result = process.platform === 'win32'
+        ? spawnSync('where', ['grill'], { stdio: 'ignore' })
+        : spawnSync('which', ['grill'], { stdio: 'ignore' });
+    return result.status === 0;
+}
+
 async function ensureInstalledOrOfferMigration(_forcePrompt: boolean): Promise<void> {
     const newLayout = hasNewLayout();
 
@@ -670,6 +655,17 @@ async function ensureInstalledOrOfferMigration(_forcePrompt: boolean): Promise<v
     }
 }
 
+async function ensureGrillAvailable(): Promise<void> {
+    if (getBundledGrillExecutable() || isGrillOnPath()) {
+        return;
+    }
+
+    await installFreshFromNightly();
+
+    if (!getBundledGrillExecutable() && !isGrillOnPath()) {
+        throw new Error('Grill CLI is not available. Please run "Wurst: Install/Update" and try again.');
+    }
+}
 
 
 async function installFreshFromNightly(): Promise<void> {
@@ -864,6 +860,73 @@ async function maybeOfferUpdate(): Promise<void> {
     }
 }
 
+function getBundledGrillExecutable(): string | null {
+    // The installer drops these directly into ~/.wurst
+    const p = path.join(WURST_HOME, process.platform === 'win32' ? 'grill.cmd' : 'grill');
+    return fs.existsSync(p) ? p : null;
+}
+
+async function runGrillGenerate(destDir: string): Promise<void> {
+    // Prefer an on-disk bundled grill (works immediately after installFreshFromNightly, even before a reload),
+    // otherwise fall back to PATH ("grill").
+    const bundled = getBundledGrillExecutable();
+    const grillCmd = bundled ?? 'grill';
+
+    // Make sure the current extension host can resolve the bundled one right away
+    // (ensureCliOnPath updates process.env.PATH too, but this makes it deterministic).
+    if (bundled) {
+        prependPathForVsCodeTerminals(WURST_HOME);
+    }
+
+    await new Promise<void>((resolve, reject) => {
+        const out: string[] = [];
+        const push = (s: any) => {
+            const str = String(s ?? '');
+            if (!str) return;
+            out.push(str);
+            if (out.length > 2000) out.shift(); // cap memory
+        };
+
+        let child;
+        if (process.platform === 'win32') {
+            // Use cmd.exe so .cmd + PATH resolution works reliably
+            child = spawn('cmd.exe', ['/c', grillCmd, 'generate', destDir], { windowsHide: true });
+        } else {
+            child = spawn(grillCmd, ['generate', destDir], { stdio: ['ignore', 'pipe', 'pipe'] });
+        }
+
+        child.on('error', (err: any) => {
+            const details = out.join('').trim();
+            if (err?.code === 'ENOENT') {
+                reject(
+                    new Error(
+                        [
+                            `Could not execute "grill".`,
+                            `Make sure Grill is installed and on PATH, or run "Wurst: Install/Update" once.`,
+                            details ? `\nLast output:\n${details}` : '',
+                        ].join('\n')
+                    )
+                );
+            } else {
+                reject(new Error(`${err?.message ?? String(err)}${details ? `\n\n${details}` : ''}`));
+            }
+        });
+
+        child.stdout?.on('data', push);
+        child.stderr?.on('data', push);
+
+        child.on('close', (code) => {
+            const details = out.join('').trim();
+            if (code === 0) return resolve();
+            reject(
+                new Error(
+                    [`"grill generate" failed (exit code ${code}).`, details ? `\nOutput:\n${details}` : ''].join('\n')
+                )
+            );
+        });
+    });
+}
+
 function getBundledJava(): string {
     const exe = process.platform === 'win32' ? 'java.exe' : 'java';
     return path.join(RUNTIME_DIR, 'bin', exe);
@@ -929,10 +992,27 @@ function normalizePath(value: string): string {
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
+function isDisposable(value: unknown): value is vscode.Disposable {
+    return !!value && typeof (value as vscode.Disposable).dispose === 'function';
+}
+
 function prependPathForVsCodeTerminals(pathEntry: string) {
     if (!envCollection) return;
+    const normalizedEntry = normalizePath(pathEntry);
+    if (prependedPathEntries.has(normalizedEntry)) {
+        return;
+    }
+
+    const envPath = process.env.PATH ?? '';
+    const existingEntries = envPath.split(path.delimiter).filter(Boolean).map((entry) => normalizePath(entry));
+    if (existingEntries.includes(normalizedEntry)) {
+        prependedPathEntries.add(normalizedEntry);
+        return;
+    }
+
     envCollection.prepend('PATH', `${pathEntry}${path.delimiter}`);
-    process.env.PATH = `${pathEntry}${path.delimiter}${process.env.PATH ?? ''}`;
+    process.env.PATH = `${pathEntry}${path.delimiter}${envPath}`;
+    prependedPathEntries.add(normalizedEntry);
 }
 
 async function updateUserPath(pathEntry: string, notes: string[]): Promise<boolean> {
@@ -973,9 +1053,15 @@ function ensurePathExport(profilePath: string, pathEntry: string, notes: string[
     }
 
     const block = `\n${markerStart}\n${line}\n${markerEnd}\n`;
-    fs.appendFileSync(profilePath, block, 'utf8');
-    notes.push(`Added PATH export to ${profilePath}.`);
-    return true;
+    try {
+        fs.appendFileSync(profilePath, block, 'utf8');
+        notes.push(`Added PATH export to ${profilePath}.`);
+        return true;
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        notes.push(`Could not update ${profilePath}: ${message}`);
+        return false;
+    }
 }
 
 function setWindowsUserPath(pathEntry: string): boolean {
@@ -1032,6 +1118,7 @@ async function offerPostInstallActions(update: CliPathUpdate): Promise<void> {
     if (choice === 'Restart Terminals') {
         await vscode.commands.executeCommand('workbench.action.terminal.killAll');
         await vscode.commands.executeCommand('workbench.action.terminal.new');
+        await vscode.commands.executeCommand('workbench.action.reloadWindow');
     }
 }
 

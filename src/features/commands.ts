@@ -2,7 +2,7 @@
 
 import * as vscode from 'vscode';
 import * as fs from 'fs';
-import { LanguageClient, ExecuteCommandParams, ExecuteCommandRequest } from 'vscode-languageclient';
+import { LanguageClient, ExecuteCommandParams, ExecuteCommandRequest } from 'vscode-languageclient/node';
 import { workspace, window } from 'vscode';
 
 export function registerCommands(client: LanguageClient): vscode.Disposable {

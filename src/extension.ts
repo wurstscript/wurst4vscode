@@ -20,7 +20,6 @@ const COMPILER_DIR = path.join(WURST_HOME, 'wurst-compiler');
 const COMPILER_JAR = path.join(COMPILER_DIR, 'wurstscript.jar'); // new structure ships this jar
 const NIGHTLY_RELEASE_BY_TAG_API = 'https://api.github.com/repos/wurstscript/WurstScript/releases/tags/nightly';
 const NIGHTLY_COMMIT_API = 'https://api.github.com/repos/wurstscript/WurstScript/commits/nightly';
-const TEMPLATE_ZIP_URL = 'https://github.com/wurstscript/wurst-project-template/archive/refs/heads/master.zip';
 const WURSTSETUP_RELEASE = 'https://api.github.com/repos/wurstscript/WurstSetup/releases/tags/nightly-master';
 
 
@@ -624,10 +623,28 @@ function isGrillOnPath(): boolean {
     return result.status === 0;
 }
 
-async function ensureInstalledOrOfferMigration(_forcePrompt: boolean): Promise<void> {
+async function ensureInstalledOrOfferMigration(forcePrompt: boolean): Promise<void> {
     const newLayout = hasNewLayout();
+    const hasHomeDir = fs.existsSync(WURST_HOME);
 
     if (!newLayout) {
+        if (!hasHomeDir) {
+            if (!forcePrompt) {
+                const choice = await vscode.window.showInformationMessage(
+                    'Welcome to WurstScript! Would you like to install it now?',
+                    { modal: true },
+                    'Install',
+                    'Not now'
+                );
+                if (choice !== 'Install') {
+                    throw new Error('WurstScript is not installed.');
+                }
+            }
+
+            await installWithRetry();
+            return;
+        }
+
         const msg = [
             'Old WurstScript installation detected.',
             '',
@@ -645,13 +662,13 @@ async function ensureInstalledOrOfferMigration(_forcePrompt: boolean): Promise<v
 
         await vscode.window.showInformationMessage(msg, { modal: true }, 'Continue');
         // Proceed automatically: download zip and lay down new folders
-        await installFreshFromNightly();
+        await installWithRetry();
         return;
     }
 
     // New layout present but first run could still miss the jar
     if (!fs.existsSync(COMPILER_JAR)) {
-        await installFreshFromNightly();
+        await installWithRetry();
     }
 }
 
@@ -660,13 +677,32 @@ async function ensureGrillAvailable(): Promise<void> {
         return;
     }
 
-    await installFreshFromNightly();
+    await installWithRetry();
 
     if (!getBundledGrillExecutable() && !isGrillOnPath()) {
         throw new Error('Grill CLI is not available. Please run "Wurst: Install/Update" and try again.');
     }
 }
 
+async function installWithRetry(): Promise<void> {
+    while (true) {
+        try {
+            await installFreshFromNightly();
+            return;
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const choice = await vscode.window.showErrorMessage(
+                `Installation failed: ${message}`,
+                { modal: true },
+                'Retry',
+                'Cancel'
+            );
+            if (choice !== 'Retry') {
+                throw error;
+            }
+        }
+    }
+}
 
 async function installFreshFromNightly(): Promise<void> {
     await stopLanguageServerIfRunning(); // release locks if LS was running
@@ -762,48 +798,44 @@ async function installFreshFromNightly(): Promise<void> {
             }
 
             // ------------------ Install Grill CLI with progress ------------------
-            try {
-                const grillAsset = await fetchLatestGrillAsset();
-                const grillDir = path.join(WURST_HOME, 'grill');
-                fs.mkdirSync(grillDir, { recursive: true });
+            const grillAsset = await fetchLatestGrillAsset();
+            const grillDir = path.join(WURST_HOME, 'grill');
+            fs.mkdirSync(grillDir, { recursive: true });
 
-                const tmpGrillJar = path.join(tmpWork, 'grill.jar');
+            const tmpGrillJar = path.join(tmpWork, 'grill.jar');
 
-                await downloadFileWithProgress(grillAsset.url, tmpGrillJar, (pct) => {
-                    const scaled = DL_WEIGHT + EX_WEIGHT + (pct / 100) * GRILL_WEIGHT;
-                    const inc = Math.max(0, scaled - last);
-                    last += inc;
-                    progress.report({
-                        message: `Downloading Grill CLI… ${Math.floor(pct)}%`,
-                        increment: inc,
-                    });
+            await downloadFileWithProgress(grillAsset.url, tmpGrillJar, (pct) => {
+                const scaled = DL_WEIGHT + EX_WEIGHT + (pct / 100) * GRILL_WEIGHT;
+                const inc = Math.max(0, scaled - last);
+                last += inc;
+                progress.report({
+                    message: `Downloading Grill CLI… ${Math.floor(pct)}%`,
+                    increment: inc,
                 });
+            });
 
-                const grillDest = path.join(grillDir, 'grill.jar');
-                fs.copyFileSync(tmpGrillJar, grillDest);
-                try {
-                    fs.unlinkSync(tmpGrillJar);
-                } catch {}
+            const grillDest = path.join(grillDir, 'grill.jar');
+            fs.copyFileSync(tmpGrillJar, grillDest);
+            try {
+                fs.unlinkSync(tmpGrillJar);
+            } catch {}
 
-                console.log('[wurst] Installed Grill CLI at', grillDest);
-            } catch (e) {
-                console.warn('Failed to install Grill CLI:', e);
-            }
+            console.log('[wurst] Installed Grill CLI at', grillDest);
 
             cleanupOldWurstHome();
+            cleanupWurstSetupJar();
 
             // Cleanup tmp
             try {
                 await removeDirSafe(tmpWork);
             } catch {}
 
-            // Final bump to 100
-            progress.report({ message: 'Ready', increment: Math.max(0, 100 - last) });
+            progress.report({ message: 'Finishing up installation…', increment: Math.max(0, 100 - last) });
+
+            const pathUpdate = await ensureCliOnPath();
+            await offerPostInstallActions(pathUpdate);
         }
     );
-
-    const pathUpdate = await ensureCliOnPath();
-    await offerPostInstallActions(pathUpdate);
 }
 function cleanupOldWurstHome() {
     const allowed = new Set([
@@ -831,6 +863,26 @@ function cleanupOldWurstHome() {
     }
 }
 
+function cleanupWurstSetupJar() {
+    if (!fs.existsSync(WURST_HOME)) return;
+
+    const jarPattern = /^wurstsetup.*\.jar$/i;
+    const dirs = [WURST_HOME, path.join(WURST_HOME, 'grill')];
+
+    for (const dir of dirs) {
+        if (!fs.existsSync(dir)) continue;
+        for (const entry of fs.readdirSync(dir)) {
+            if (!jarPattern.test(entry)) continue;
+            const p = path.join(dir, entry);
+            try {
+                fs.rmSync(p, { force: true });
+            } catch (e) {
+                console.warn('Failed to delete WurstSetup jar:', p, e);
+            }
+        }
+    }
+}
+
 
 async function maybeOfferUpdate(): Promise<void> {
     try {
@@ -853,7 +905,7 @@ async function maybeOfferUpdate(): Promise<void> {
             'Update', 'Later'
         );
         if (choice === 'Update') {
-            await installFreshFromNightly();
+            await installWithRetry();
         }
     } catch (e) {
         console.warn('Update check failed:', e);
@@ -1100,24 +1152,16 @@ function escapePowerShellString(value: string): string {
 }
 
 async function offerPostInstallActions(update: CliPathUpdate): Promise<void> {
-    const baseMessage = 'WurstScript was updated. Reload VS Code now to use the new runtime?';
+    const baseMessage = 'WurstScript was updated. Restart VS Code now to use the new runtime?';
     const extraMessage = update.updated ? '\n\nRestart terminals or open a new shell to pick up PATH changes.' : '';
 
     const message = `${baseMessage}${extraMessage}`;
-    const actions = ['Reload'];
-    if (update.needsTerminalRestart) {
-        actions.unshift('Restart Terminals');
-    }
-    actions.push('Later');
-
-    const choice = await vscode.window.showInformationMessage(message, { modal: true }, ...actions);
-    if (choice === 'Reload') {
-        await vscode.commands.executeCommand('workbench.action.reloadWindow');
-        return;
-    }
-    if (choice === 'Restart Terminals') {
-        await vscode.commands.executeCommand('workbench.action.terminal.killAll');
-        await vscode.commands.executeCommand('workbench.action.terminal.new');
+    const choice = await vscode.window.showInformationMessage(message, { modal: true }, 'Restart', 'Cancel');
+    if (choice === 'Restart') {
+        if (update.needsTerminalRestart) {
+            await vscode.commands.executeCommand('workbench.action.terminal.killAll');
+            await vscode.commands.executeCommand('workbench.action.terminal.new');
+        }
         await vscode.commands.executeCommand('workbench.action.reloadWindow');
     }
 }

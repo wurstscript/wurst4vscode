@@ -148,6 +148,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
         vscode.commands.registerCommand('wurst.startmap', (args: any[]) => startMap('wurst.startmap', args)),
         vscode.commands.registerCommand('wurst.hotstartmap', (args: any[]) => startMap('wurst.hotstartmap', args)),
         vscode.commands.registerCommand('wurst.hotreload', () => reloadMap()),
+        vscode.commands.registerCommand('wurst.runmap', () => startLast()),
         vscode.commands.registerCommand('wurst.startlast', () => startLast()),
         vscode.commands.registerCommand('wurst.buildmap', (args: any[]) => buildMap(args)),
         vscode.commands.registerCommand('wurst.tests', (args: any[]) => tests('all', args)),

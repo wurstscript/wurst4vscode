@@ -13,7 +13,7 @@
         "type": "git",
         "url": "https://github.com/wurstscript/wurst4vscode.git"
     },
-    "version": "0.8.1",
+    "version": "0.8.2",
     "publisher": "peterzeller",
     "engines": {
         "vscode": "^1.96.0"
@@ -24,6 +24,7 @@
     "activationEvents": [
         "onLanguage:wurst",
         "onCommand:wurst.startmap",
+        "onCommand:wurst.runmap",
         "onCommand:wurst.startlast",
         "onCommand:wurst.tests",
         "onCommand:wurst.tests_file",
@@ -70,23 +71,32 @@
         "commands": [
             {
                 "command": "wurst.startmap",
-                "title": "Run a Wurst map",
+                "title": "Run wurstscript map",
                 "category": "wurst"
             },
             {
                 "command": "wurst.hotstartmap",
-                "title": "Hot run a Wurst map with Jass Hot Code Reload (JHCR)",
+                "title": "Hot run wurstscript map with Jass Hot Code Reload (JHCR)",
                 "category": "wurst"
             },
             {
                 "command": "wurst.hotreload",
-                "title": "Hot reload code for a Wurst map started with Jass Hot Code Reload (JHCR)",
+                "title": "Hot reload code for wurstscript map started with Jass Hot Code Reload (JHCR)",
                 "category": "wurst"
             },
             {
                 "command": "wurst.startlast",
-                "title": "Run the last map again",
+                "title": "Run the last wurstscript map again",
                 "category": "wurst"
+            },
+            {
+                "command": "wurst.runmap",
+                "title": "Run wurstscript Map",
+                "category": "wurst",
+                "icon": {
+                    "light": "images/wurst_icon_play.svg",
+                    "dark": "images/wurst_icon_play.svg"
+                }
             },
             {
                 "command": "wurst.tests",
@@ -134,6 +144,15 @@
                 "category": "wurst"
             }
         ],
+        "menus": {
+            "editor/title": [
+                {
+                    "command": "wurst.runmap",
+                    "when": "resourceLangId == wurst",
+                    "group": "navigation@1"
+                }
+            ]
+        },
         "keybindings": {
             "command": "wurst.tests_file",
             "key": "ctrl+f1",

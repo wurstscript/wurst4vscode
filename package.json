@@ -150,6 +150,18 @@
                     "command": "wurst.runmap",
                     "when": "resourceLangId == wurst",
                     "group": "navigation@1"
+                },
+                {
+                    "command": "wurst.runmap",
+                    "when": "resourceExtname == .w3x || resourceExtname == .w3m",
+                    "group": "navigation@1"
+                }
+            ],
+            "explorer/context": [
+                {
+                    "command": "wurst.runmap",
+                    "when": "resourceExtname == .w3x || resourceExtname == .w3m",
+                    "group": "navigation@1"
                 }
             ]
         },

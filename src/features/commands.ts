@@ -7,14 +7,34 @@ import { workspace, window } from 'vscode';
 
 export function registerCommands(client: LanguageClient): vscode.Disposable {
     let _lastMapConfig: string | undefined = undefined;
+    const isMapFilePath = (value: string | undefined): value is string =>
+        !!value && (value.toLowerCase().endsWith('.w3x') || value.toLowerCase().endsWith('.w3m'));
 
-    let buildMap = async (args: any[]) => {
+    const getMapPathFromArg = (arg: any): string | undefined => {
+        if (!arg) return undefined;
+        if (typeof arg === 'string') return arg;
+        if (arg instanceof vscode.Uri) return arg.fsPath || arg.path;
+        if (typeof arg?.fsPath === 'string') return arg.fsPath;
+        if (typeof arg?.path === 'string') return arg.path;
+        if (arg?.resourceUri instanceof vscode.Uri) return arg.resourceUri.fsPath || arg.resourceUri.path;
+        return undefined;
+    };
+
+    const getMapPathFromInvocation = (args: any): string | undefined => {
+        if (Array.isArray(args) && args.length > 0) {
+            return getMapPathFromArg(args[0]);
+        }
+        return getMapPathFromArg(args);
+    };
+
+    let buildMap = async (args: any) => {
         let config = vscode.workspace.getConfiguration('wurst');
         let wc3path = config.get<string>('wc3path');
 
         let mapPromise: Thenable<string | undefined>;
-        if (args && args.length > 0) {
-            mapPromise = Promise.resolve(args[0]);
+        const mapPathFromArgs = getMapPathFromInvocation(args);
+        if (isMapFilePath(mapPathFromArgs)) {
+            mapPromise = Promise.resolve(mapPathFromArgs);
         } else {
             let items = workspace
                 .findFiles('{*.w3x,*.w3m}', null, 10)
@@ -24,11 +44,15 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
                     })
                 )
                 .then((uris) => uris.map((uri) => uri.path));
-            mapPromise = window.showQuickPick(items);
+            mapPromise = window.showQuickPick(items, {
+                title: 'Wurst: Select map to build',
+                placeHolder: 'Choose a .w3x/.w3m map file',
+            });
         }
         let mappath = await mapPromise;
         if (!mappath) {
-            return Promise.reject('No map selected.');
+            window.showWarningMessage('No map selected for build. Choose a .w3x or .w3m map file and try again.');
+            return;
         }
 
         let request: ExecuteCommandParams = {
@@ -43,14 +67,15 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
         return client.sendRequest(ExecuteCommandRequest.type, request);
     };
 
-    let startMap = async (cmd: 'wurst.startmap' | 'wurst.hotstartmap', args: any[]) => {
+    let startMap = async (cmd: 'wurst.startmap' | 'wurst.hotstartmap', args: any) => {
         let config = vscode.workspace.getConfiguration('wurst');
         let wc3path = config.get<string>('wc3path');
         let gameExePath = config.get<string>('gameExePath');
 
         let mapPromise: Thenable<string | undefined>;
-        if (args && args.length > 0) {
-            mapPromise = Promise.resolve(args[0]);
+        const mapPathFromArgs = getMapPathFromInvocation(args);
+        if (isMapFilePath(mapPathFromArgs)) {
+            mapPromise = Promise.resolve(mapPathFromArgs);
         } else {
             let items = workspace
                 .findFiles('{*.w3x,*.w3m}', null, 10)
@@ -60,11 +85,15 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
                     })
                 )
                 .then((uris) => uris.map((uri) => uri.path));
-            mapPromise = window.showQuickPick(items);
+            mapPromise = window.showQuickPick(items, {
+                title: cmd === 'wurst.hotstartmap' ? 'Wurst: Select map to hot run' : 'Wurst: Select map to run',
+                placeHolder: 'Choose a .w3x/.w3m map file',
+            });
         }
         let mappath = await mapPromise;
         if (!mappath) {
-            return Promise.reject('No map selected.');
+            window.showWarningMessage('No map selected to run. Choose a .w3x or .w3m map file and try again.');
+            return;
         }
 
         let request: ExecuteCommandParams = {
@@ -95,6 +124,20 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
         } else {
             return startMap('wurst.startmap', []);
         }
+    };
+
+    let runMapSmart = (args: any) => {
+        const fromInvocation = getMapPathFromInvocation(args);
+        if (isMapFilePath(fromInvocation)) {
+            return startMap('wurst.startmap', [fromInvocation]);
+        }
+
+        const activePath = window.activeTextEditor?.document?.uri?.fsPath;
+        if (isMapFilePath(activePath)) {
+            return startMap('wurst.startmap', [activePath]);
+        }
+
+        return startLast();
     };
 
     let tests = (mode: 'all' | 'file' | 'func', args: any) => {
@@ -148,7 +191,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
         vscode.commands.registerCommand('wurst.startmap', (args: any[]) => startMap('wurst.startmap', args)),
         vscode.commands.registerCommand('wurst.hotstartmap', (args: any[]) => startMap('wurst.hotstartmap', args)),
         vscode.commands.registerCommand('wurst.hotreload', () => reloadMap()),
-        vscode.commands.registerCommand('wurst.runmap', () => startLast()),
+        vscode.commands.registerCommand('wurst.runmap', (args: any) => runMapSmart(args)),
         vscode.commands.registerCommand('wurst.startlast', () => startLast()),
         vscode.commands.registerCommand('wurst.buildmap', (args: any[]) => buildMap(args)),
         vscode.commands.registerCommand('wurst.tests', (args: any[]) => tests('all', args)),

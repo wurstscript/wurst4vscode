@@ -16,7 +16,7 @@
     "version": "0.8.4",
     "publisher": "peterzeller",
     "engines": {
-        "vscode": "^1.96.0"
+        "vscode": "^1.109.0"
     },
     "categories": [
         "Programming Languages"
@@ -248,13 +248,13 @@
         "publish": "vsce publish"
     },
     "devDependencies": {
-        "@types/node": "^22.10.2",
+        "@types/node": "^25.3.3",
         "@types/os-homedir": "^1.0.2",
-        "@types/vscode": "^1.96.0",
-        "@types/webpack-env": "^1.18.6",
-        "@vscode/vsce": "^3.1.0",
+        "@types/vscode": "^1.109.0",
+        "@types/webpack-env": "^1.18.8",
+        "@vscode/vsce": "^3.7.1",
         "ts-loader": "^9.5.1",
-        "typescript": "^5.7.2",
+        "typescript": "^5.9.3",
         "webpack": "^5.105.0",
         "webpack-cli": "^5.1.4"
     },

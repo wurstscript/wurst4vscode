@@ -11,7 +11,6 @@ import { spawn, spawnSync } from 'child_process';
 
 import { registerCommands } from './features/commands';
 import { registerFileCreation } from './features/fileCreation';
-import { languageConfig } from './languageConfig';
 import StreamZip = require('node-stream-zip');
 
 const WURST_HOME = path.join(os.homedir(), '.wurst');
@@ -213,7 +212,6 @@ export async function activate(context: ExtensionContext) {
     envCollection = context.environmentVariableCollection;
 
     setupDecorators(context);
-    vscode.languages.setLanguageConfiguration('wurst', languageConfig);
 
     registerBasicCommands(context);
 

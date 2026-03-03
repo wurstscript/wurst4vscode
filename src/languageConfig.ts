@@ -1,12 +1,25 @@
 import { IndentAction, LanguageConfiguration } from "vscode";
 
-export let languageConfig: LanguageConfiguration = {
+export let languageConfig = {
     comments: {
         lineComment: '//',
         blockComment: ['/*', '*/'],
     },
     brackets: [
+        ['{', '}'],
+        ['[', ']'],
+        ['(', ')'],
+    ],
+    surroundingPairs: [
+        ['{', '}'],
+        ['[', ']'],
+        ['(', ')'],
+        ['"', '"'],
+        ["'", "'"],
         ['<', '>'],
+    ],
+    colorizedBracketPairs: [
+        ['{', '}'],
         ['[', ']'],
         ['(', ')'],
     ],
@@ -22,4 +35,4 @@ export let languageConfig: LanguageConfiguration = {
             action: { indentAction: IndentAction.Outdent },
         },
     ],
-};
+} as LanguageConfiguration & { colorizedBracketPairs: [string, string][] };

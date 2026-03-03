@@ -18,6 +18,8 @@ const WURST_HOME = path.join(os.homedir(), '.wurst');
 const RUNTIME_DIR = path.join(WURST_HOME, 'wurst-runtime');
 const COMPILER_DIR = path.join(WURST_HOME, 'wurst-compiler');
 const COMPILER_JAR = path.join(COMPILER_DIR, 'wurstscript.jar'); // new structure ships this jar
+const LEGACY_GRILL_DIR = path.join(WURST_HOME, 'grill');
+const GRILL_HOME_DIR = path.join(WURST_HOME, 'grill-cli');
 const NIGHTLY_RELEASE_BY_TAG_API = 'https://api.github.com/repos/wurstscript/WurstScript/releases/tags/nightly';
 const NIGHTLY_COMMIT_API = 'https://api.github.com/repos/wurstscript/WurstScript/commits/nightly';
 const WURSTSETUP_RELEASE = 'https://api.github.com/repos/wurstscript/WurstSetup/releases/tags/nightly-master';
@@ -87,6 +89,122 @@ async function upgradeFolder(src: string, dest: string) {
 async function removeDirSafe(dir: string) {
     if (!fs.existsSync(dir)) return;
     await withRetry(() => fs.rmSync(dir, { recursive: true, force: true }));
+}
+
+function ensureDirectoryPath(dir: string) {
+    if (fs.existsSync(dir)) {
+        const st = fs.lstatSync(dir);
+        if (st.isDirectory()) return;
+        if (!forceDeletePath(dir)) {
+            throw new Error(`Path exists but is not a directory: ${dir}`);
+        }
+    }
+    fs.mkdirSync(dir, { recursive: true });
+}
+
+function migrateLegacyGrillLayout() {
+    if (!fs.existsSync(WURST_HOME) || !fs.existsSync(LEGACY_GRILL_DIR)) return;
+
+    let st: fs.Stats;
+    try {
+        st = fs.lstatSync(LEGACY_GRILL_DIR);
+    } catch {
+        return;
+    }
+
+    // Only migrate the old "grill" directory layout.
+    if (!st.isDirectory()) return;
+
+    // Preserve useful legacy jars by moving them into the new dedicated CLI directory.
+    ensureDirectoryPath(GRILL_HOME_DIR);
+    try {
+        for (const entry of fs.readdirSync(LEGACY_GRILL_DIR)) {
+            if (!entry.toLowerCase().endsWith('.jar')) continue;
+            const src = path.join(LEGACY_GRILL_DIR, entry);
+            const dst = path.join(GRILL_HOME_DIR, entry);
+            if (fs.existsSync(dst)) {
+                forceDeletePath(src);
+                continue;
+            }
+            try {
+                fs.renameSync(src, dst);
+            } catch {
+                try {
+                    fs.copyFileSync(src, dst);
+                    forceDeletePath(src);
+                } catch {}
+            }
+        }
+    } catch {}
+
+    // Remove the old directory so ~/.wurst/grill can be used as executable path on unix.
+    forceDeletePath(LEGACY_GRILL_DIR);
+}
+
+function installLauncherExecutable(srcExecutable: string) {
+    if (!fs.existsSync(srcExecutable)) return;
+
+    const target = path.join(WURST_HOME, path.basename(srcExecutable));
+    try {
+        if (fs.existsSync(target) && !forceDeletePath(target)) {
+            throw new Error(`Failed to replace existing path: ${target}`);
+        }
+        fs.renameSync(srcExecutable, target);
+        if (process.platform !== 'win32') {
+            try {
+                fs.chmodSync(target, 0o755);
+            } catch {}
+        }
+    } catch {
+        /* ignore */
+    }
+}
+
+function isDirectoryPath(p: string): boolean {
+    try {
+        return fs.lstatSync(p).isDirectory();
+    } catch {
+        return false;
+    }
+}
+
+function ensureDirOrDeleteConflictingPath(p: string) {
+    if (!fs.existsSync(p)) {
+        fs.mkdirSync(p, { recursive: true });
+        return;
+    }
+    if (isDirectoryPath(p)) return;
+    if (!forceDeletePath(p)) {
+        throw new Error(`Conflicting non-directory path cannot be removed: ${p}`);
+    }
+    fs.mkdirSync(p, { recursive: true });
+}
+
+function normalizeInstallerPaths() {
+    ensureDirOrDeleteConflictingPath(WURST_HOME);
+    ensureDirOrDeleteConflictingPath(RUNTIME_DIR);
+    ensureDirOrDeleteConflictingPath(COMPILER_DIR);
+    ensureDirOrDeleteConflictingPath(GRILL_HOME_DIR);
+    migrateLegacyGrillLayout();
+}
+
+function isRecoverableInstallError(error: unknown): boolean {
+    const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+    const recoverableMarkers = [
+        'eexist',
+        'enotdir',
+        'enotempty',
+        'eperm',
+        'ebusy',
+        'path exists but is not a directory',
+    ];
+    return recoverableMarkers.some((m) => msg.includes(m));
+}
+
+async function repairInstallationLayout() {
+    await stopLanguageServerIfRunning();
+    normalizeInstallerPaths();
+    cleanupWurstSetupJar();
 }
 
 
@@ -624,6 +742,8 @@ function isGrillOnPath(): boolean {
 }
 
 async function ensureInstalledOrOfferMigration(forcePrompt: boolean): Promise<void> {
+    migrateLegacyGrillLayout();
+
     const newLayout = hasNewLayout();
     const hasHomeDir = fs.existsSync(WURST_HOME);
 
@@ -685,18 +805,34 @@ async function ensureGrillAvailable(): Promise<void> {
 }
 
 async function installWithRetry(): Promise<void> {
+    let autoRepairAttempted = false;
     while (true) {
         try {
             await installFreshFromNightly();
             return;
         } catch (error) {
+            if (!autoRepairAttempted && isRecoverableInstallError(error)) {
+                autoRepairAttempted = true;
+                try {
+                    await repairInstallationLayout();
+                    continue;
+                } catch {
+                    // fall through to user-visible choices
+                }
+            }
+
             const message = error instanceof Error ? error.message : String(error);
             const choice = await vscode.window.showErrorMessage(
                 `Installation failed: ${message}`,
                 { modal: true },
                 'Retry',
+                'Repair',
                 'Cancel'
             );
+            if (choice === 'Repair') {
+                await repairInstallationLayout();
+                continue;
+            }
             if (choice !== 'Retry') {
                 throw error;
             }
@@ -759,36 +895,10 @@ async function installFreshFromNightly(): Promise<void> {
             await upgradeFolder(srcRuntime, RUNTIME_DIR);
             await upgradeFolder(srcCompiler, COMPILER_DIR);
 
-            // Place/refresh launcher (best effort)
-            try {
-                const targetLauncher = path.join(WURST_HOME, path.basename(srcLauncher));
-                try {
-                    fs.unlinkSync(targetLauncher);
-                } catch {}
-                fs.renameSync(srcLauncher, targetLauncher);
-                if (process.platform !== 'win32') {
-                    try {
-                        fs.chmodSync(targetLauncher, 0o755);
-                    } catch {}
-                }
-            } catch {
-                /* ignore */
-            }
-
-            try {
-                const targetLauncher = path.join(WURST_HOME, path.basename(srcGrill));
-                try {
-                    fs.unlinkSync(targetLauncher);
-                } catch {}
-                fs.renameSync(srcGrill, targetLauncher);
-                if (process.platform !== 'win32') {
-                    try {
-                        fs.chmodSync(targetLauncher, 0o755);
-                    } catch {}
-                }
-            } catch {
-                /* ignore */
-            }
+            // Place/refresh launchers (best effort).
+            // Handles legacy file/dir collisions (e.g. ~/.wurst/grill directory from old layouts).
+            installLauncherExecutable(srcLauncher);
+            installLauncherExecutable(srcGrill);
 
             // Ensure java is executable on unix
             if (process.platform !== 'win32') {
@@ -799,8 +909,8 @@ async function installFreshFromNightly(): Promise<void> {
 
             // ------------------ Install Grill CLI with progress ------------------
             const grillAsset = await fetchLatestGrillAsset();
-            const grillDir = path.join(WURST_HOME, 'grill');
-            fs.mkdirSync(grillDir, { recursive: true });
+            const grillDir = GRILL_HOME_DIR;
+            ensureDirectoryPath(grillDir);
 
             const tmpGrillJar = path.join(tmpWork, 'grill.jar');
 
@@ -841,6 +951,7 @@ function cleanupOldWurstHome() {
     const allowed = new Set([
         'logs',
         'grill',
+        'grill-cli',
         'grill.cmd',
         'wurstscript',
         'wurstscript.cmd',
@@ -853,11 +964,9 @@ function cleanupOldWurstHome() {
     for (const entry of fs.readdirSync(WURST_HOME)) {
         if (!allowed.has(entry)) {
             const p = path.join(WURST_HOME, entry);
-            try {
-                // remove old jars, exes, folders, etc.
-                fs.rmSync(p, { recursive: true, force: true });
-            } catch (e) {
-                console.warn('Failed to delete old file:', p, e);
+            // remove old jars, exes, folders, etc.
+            if (!forceDeletePath(p)) {
+                console.warn('Failed to delete old file:', p);
             }
         }
     }
@@ -867,20 +976,41 @@ function cleanupWurstSetupJar() {
     if (!fs.existsSync(WURST_HOME)) return;
 
     const jarPattern = /^wurstsetup.*\.jar$/i;
-    const dirs = [WURST_HOME, path.join(WURST_HOME, 'grill')];
+    const dirs = [WURST_HOME, GRILL_HOME_DIR, LEGACY_GRILL_DIR];
 
     for (const dir of dirs) {
         if (!fs.existsSync(dir)) continue;
+        try {
+            if (!fs.lstatSync(dir).isDirectory()) continue;
+        } catch {
+            continue;
+        }
         for (const entry of fs.readdirSync(dir)) {
             if (!jarPattern.test(entry)) continue;
             const p = path.join(dir, entry);
-            try {
-                fs.rmSync(p, { force: true });
-            } catch (e) {
-                console.warn('Failed to delete WurstSetup jar:', p, e);
+            if (!forceDeletePath(p)) {
+                console.warn('Failed to delete WurstSetup jar:', p);
             }
         }
     }
+}
+
+function forceDeletePath(p: string): boolean {
+    try {
+        fs.rmSync(p, { recursive: true, force: true });
+        return !fs.existsSync(p);
+    } catch {}
+
+    // Windows can fail on read-only files; clear mode and retry.
+    try {
+        fs.chmodSync(p, 0o666);
+    } catch {}
+    try {
+        fs.unlinkSync(p);
+        return !fs.existsSync(p);
+    } catch {}
+
+    return false;
 }
 
 

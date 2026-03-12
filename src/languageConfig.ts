@@ -31,7 +31,7 @@ export let languageConfig = {
             action: { indentAction: IndentAction.Indent },
         },
         {
-            beforeText: /^\s*(end|exitwhen|break|skip|return)(\s.*)?$/,
+            beforeText: /^\s*(end|exitwhen|break|continue|skip|return)(\s.*)?$/,
             action: { indentAction: IndentAction.Outdent },
         },
     ],

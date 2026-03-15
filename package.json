@@ -23,6 +23,7 @@
     ],
     "activationEvents": [
         "onLanguage:wurst",
+        "onCustomEditor:wurst.blpPreview",
         "onCommand:wurst.startmap",
         "onCommand:wurst.runmap",
         "onCommand:wurst.startlast",
@@ -66,6 +67,33 @@
                 "language": "wurst",
                 "scopeName": "source.wurst",
                 "path": "./syntaxes/wurst.json"
+            }
+        ],
+        "customEditors": [
+            {
+                "viewType": "wurst.blpPreview",
+                "displayName": "WC3 Image Preview",
+                "selector": [
+                    {
+                        "filenamePattern": "*.blp"
+                    },
+                    {
+                        "filenamePattern": "*.BLP"
+                    },
+                    {
+                        "filenamePattern": "*.dds"
+                    },
+                    {
+                        "filenamePattern": "*.DDS"
+                    },
+                    {
+                        "filenamePattern": "*.mdx"
+                    },
+                    {
+                        "filenamePattern": "*.MDX"
+                    }
+                ],
+                "priority": "default"
             }
         ],
         "commands": [

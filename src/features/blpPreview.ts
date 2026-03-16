@@ -135,18 +135,29 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
         let requestId = 0;
         let webviewReady = false;
         let pendingRender = true;
+        let selectedSequenceIndex = -1;
+        let selectedSequenceFrame: number | undefined;
+        let cachedBytes: Uint8Array | undefined;
         const dbg = (msg: string) => console.log(`[wurst-preview] ${msg}`);
         dbg(`resolve editor for ${document.uri.toString()}`);
 
-        const render = async () => {
+        const render = async (opts?: { showLoading?: boolean; preferCached?: boolean }) => {
+            const showLoading = opts?.showLoading ?? true;
+            const preferCached = opts?.preferCached ?? false;
             const id = ++requestId;
             const fileName = getFileName();
             dbg(`render start #${id} for ${fileName}`);
-            await webviewPanel.webview.postMessage({ type: 'loading', fileName });
+            if (showLoading) {
+                await webviewPanel.webview.postMessage({ type: 'loading', fileName });
+            }
             try {
-                const bytes = await vscode.workspace.fs.readFile(document.uri);
-                dbg(`read ${bytes.byteLength} bytes for ${fileName}`);
-                const decoded = decodePreview(bytes, document.uri);
+                let bytes = cachedBytes;
+                if (!preferCached || !bytes) {
+                    bytes = await vscode.workspace.fs.readFile(document.uri);
+                    cachedBytes = bytes;
+                    dbg(`read ${bytes.byteLength} bytes for ${fileName}`);
+                }
+                const decoded = decodePreview(bytes, document.uri, selectedSequenceIndex, selectedSequenceFrame);
                 if (id !== requestId) return;
                 await webviewPanel.webview.postMessage({ type: 'image', fileName, decoded });
                 dbg(`posted image payload for ${fileName}`);
@@ -158,13 +169,13 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
             }
         };
 
-        const requestRender = () => {
+        const requestRender = (opts?: { showLoading?: boolean; preferCached?: boolean }) => {
             if (!webviewReady) {
                 pendingRender = true;
                 dbg(`render queued until webview ready`);
                 return;
             }
-            void render();
+            void render(opts);
         };
         requestRender();
         setTimeout(() => {
@@ -183,7 +194,10 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
             const watcher = vscode.workspace.createFileSystemWatcher(
                 new vscode.RelativePattern(path.dirname(filePath), path.basename(filePath))
             );
-            const rerender = () => requestRender();
+            const rerender = () => {
+                cachedBytes = undefined;
+                requestRender();
+            };
             watcher.onDidChange(rerender);
             watcher.onDidCreate(rerender);
             webviewPanel.onDidDispose(() => watcher.dispose());
@@ -208,7 +222,27 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
             }
             if (type === 'refresh') {
                 dbg(`refresh requested by webview`);
+                cachedBytes = undefined;
                 requestRender();
+                return;
+            }
+            if (type === 'selectSequence') {
+                const raw = (msg as { index?: unknown }).index;
+                const next = typeof raw === 'number' && Number.isFinite(raw) ? Math.max(-1, Math.floor(raw)) : -1;
+                selectedSequenceIndex = next;
+                 selectedSequenceFrame = undefined;
+                dbg(`sequence selected index=${selectedSequenceIndex}`);
+                requestRender({ showLoading: false, preferCached: true });
+                return;
+            }
+            if (type === 'selectSequenceFrame') {
+                const rawIndex = (msg as { index?: unknown }).index;
+                const rawFrame = (msg as { frame?: unknown }).frame;
+                const nextIndex = typeof rawIndex === 'number' && Number.isFinite(rawIndex) ? Math.max(-1, Math.floor(rawIndex)) : -1;
+                const nextFrame = typeof rawFrame === 'number' && Number.isFinite(rawFrame) ? rawFrame : undefined;
+                selectedSequenceIndex = nextIndex;
+                selectedSequenceFrame = nextFrame;
+                requestRender({ showLoading: false, preferCached: true });
             }
         });
     }
@@ -399,6 +433,40 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
     .model-panel.visible {
       display: grid;
     }
+    .seq-panel {
+      width: min(100%, 1000px);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--panel) 72%, transparent);
+      padding: 10px;
+      display: none;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .seq-panel.visible {
+      display: grid;
+    }
+    .seq-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .seq-frame {
+      min-width: 100px;
+      font-variant-numeric: tabular-nums;
+    }
+    .seq-slider {
+      width: min(420px, 100%);
+      flex: 1;
+    }
+    .seq-stats {
+      white-space: pre-wrap;
+      color: var(--text);
+      line-height: 1.4;
+      font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
+    }
     .model-meta strong {
       color: var(--text);
       font-size: 13px;
@@ -495,7 +563,18 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       <div class="model-anim">
         <label for="animSelect">Animation</label>
         <select id="animSelect"></select>
+        <label><input id="autoplayChk" type="checkbox" checked> Auto play</label>
       </div>
+    </div>
+    <div id="seqPanel" class="seq-panel">
+      <div class="seq-row">
+        <strong>Sequence Timeline</strong>
+        <span id="seqFrameLabel" class="seq-frame">frame: -</span>
+      </div>
+      <div class="seq-row">
+        <input id="seqSlider" class="seq-slider" type="range" min="0" max="1" step="1" value="0" />
+      </div>
+      <div id="seqStats" class="seq-stats"></div>
     </div>
     <div id="warnings" class="warnings"></div>
     <div id="debugLog" class="debuglog"></div>
@@ -504,6 +583,14 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
     const vscode = acquireVsCodeApi();
     let currentData = null;
     let modelState = null;
+    let currentFileName = '';
+    let playbackHandle = 0;
+    let playbackSequenceIndex = -1;
+    let playbackStartMs = 0;
+    let playbackLastSentMs = 0;
+    let playbackNeedsRestart = true;
+    let renderLoopHandle = 0;
+    let renderLoopLastTs = 0;
     const debugLines = [];
     const debugLimit = 120;
 
@@ -536,6 +623,11 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
     function bytesToUint32(base64) {
       const bytes = base64ToBytes(base64);
       return new Uint32Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 4));
+    }
+
+    function bytesToInt32(base64) {
+      const bytes = base64ToBytes(base64);
+      return new Int32Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 4));
     }
 
     function showWarnings(messages) {
@@ -580,6 +672,10 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       const rawPositions = bytesToFloat32(data.positionsBase64);
       const rawNormals = bytesToFloat32(data.normalsBase64);
       const indices = bytesToUint32(data.indicesBase64);
+      const rawNodePositions = data.nodeDebugPositionsBase64 ? bytesToFloat32(data.nodeDebugPositionsBase64) : new Float32Array(0);
+      const rawNodeParents = data.nodeDebugParentIndexBase64 ? bytesToInt32(data.nodeDebugParentIndexBase64) : new Int32Array(0);
+      const rawNodeAnimated = data.nodeDebugAnimatedBase64 ? base64ToBytes(data.nodeDebugAnimatedBase64) : new Uint8Array(0);
+      const rawNodeMoved = data.nodeDebugMovedBase64 ? base64ToBytes(data.nodeDebugMovedBase64) : new Uint8Array(0);
       const bounds = {
         minX: Infinity, minY: Infinity, minZ: Infinity,
         maxX: -Infinity, maxY: -Infinity, maxZ: -Infinity,
@@ -645,10 +741,31 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
         normals[i] = nx / nlen; normals[i + 1] = ny / nlen; normals[i + 2] = nz / nlen;
       }
 
+      const nodePositions = new Float32Array(rawNodePositions.length);
+      for (let i = 0; i + 2 < rawNodePositions.length; i += 3) {
+        const srcX = (rawNodePositions[i] - cx) / radius;
+        const srcY = (rawNodePositions[i + 1] - cy) / radius;
+        const srcZ = (rawNodePositions[i + 2] - cz) / radius;
+        nodePositions[i] = srcX;
+        nodePositions[i + 1] = srcZ;
+        nodePositions[i + 2] = srcY;
+      }
+
+      let movedCount = 0;
+      let animatedCount = 0;
+      for (let i = 0; i < rawNodeMoved.length; i++) if (rawNodeMoved[i]) movedCount++;
+      for (let i = 0; i < rawNodeAnimated.length; i++) if (rawNodeAnimated[i]) animatedCount++;
+
       return {
         positions,
         normals,
         indices,
+        nodePositions,
+        nodeParents: rawNodeParents,
+        nodeAnimated: rawNodeAnimated,
+        nodeMoved: rawNodeMoved,
+        nodeAnimatedCount: animatedCount,
+        nodeMovedCount: movedCount,
         version: Date.now() + Math.random(),
         yaw: Math.PI * 0.5,
         pitch: -0.52,
@@ -665,6 +782,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       modelIdxBuffer: null,
       wireIdxBuffer: null,
       gridBuffer: null,
+      nodeDebugBuffer: null,
       modelIndexCount: 0,
       wireIndexCount: 0,
       gridVertexCount: 0,
@@ -757,6 +875,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
         glState.modelIdxBuffer = gl.createBuffer();
         glState.wireIdxBuffer = gl.createBuffer();
         glState.gridBuffer = gl.createBuffer();
+        glState.nodeDebugBuffer = gl.createBuffer();
 
         const grid = [];
         const half = 1.6;
@@ -853,6 +972,74 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       ]);
     }
 
+    function drawNodeDebug(gl, proj, view, state) {
+      if (!state.nodePositions || state.nodePositions.length < 3) return;
+      const nodePositions = state.nodePositions;
+      const nodeParents = state.nodeParents || new Int32Array(0);
+      const nodeAnimated = state.nodeAnimated || new Uint8Array(0);
+      const nodeMoved = state.nodeMoved || new Uint8Array(0);
+
+      const links = [];
+      for (let i = 0; i < nodeParents.length; i++) {
+        const parent = nodeParents[i];
+        if (parent < 0 || parent >= nodeParents.length) continue;
+        const a = i * 3;
+        const b = parent * 3;
+        if (a + 2 >= nodePositions.length || b + 2 >= nodePositions.length) continue;
+        links.push(
+          nodePositions[a], nodePositions[a + 1], nodePositions[a + 2],
+          nodePositions[b], nodePositions[b + 1], nodePositions[b + 2]
+        );
+      }
+
+      const staticCrosses = [];
+      const animatedCrosses = [];
+      const movedCrosses = [];
+      const s = 0.018;
+      function pushCross(out, x, y, z) {
+        out.push(x - s, y, z, x + s, y, z);
+        out.push(x, y - s, z, x, y + s, z);
+        out.push(x, y, z - s, x, y, z + s);
+      }
+      for (let i = 0; i * 3 + 2 < nodePositions.length; i++) {
+        const x = nodePositions[i * 3];
+        const y = nodePositions[i * 3 + 1];
+        const z = nodePositions[i * 3 + 2];
+        if (i < nodeMoved.length && nodeMoved[i]) pushCross(movedCrosses, x, y, z);
+        else if (i < nodeAnimated.length && nodeAnimated[i]) pushCross(animatedCrosses, x, y, z);
+        else pushCross(staticCrosses, x, y, z);
+      }
+
+      gl.useProgram(glState.gridProgram);
+      const aPos = gl.getAttribLocation(glState.gridProgram, 'aPos');
+      gl.bindBuffer(gl.ARRAY_BUFFER, glState.nodeDebugBuffer);
+      gl.enableVertexAttribArray(aPos);
+      gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+      gl.uniformMatrix4fv(gl.getUniformLocation(glState.gridProgram, 'uProj'), false, proj);
+      gl.uniformMatrix4fv(gl.getUniformLocation(glState.gridProgram, 'uView'), false, view);
+
+      if (links.length) {
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(links), gl.DYNAMIC_DRAW);
+        gl.uniform4f(gl.getUniformLocation(glState.gridProgram, 'uColor'), 0.20, 0.73, 0.84, 0.65);
+        gl.drawArrays(gl.LINES, 0, links.length / 3);
+      }
+      if (staticCrosses.length) {
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(staticCrosses), gl.DYNAMIC_DRAW);
+        gl.uniform4f(gl.getUniformLocation(glState.gridProgram, 'uColor'), 0.40, 0.44, 0.48, 0.80);
+        gl.drawArrays(gl.LINES, 0, staticCrosses.length / 3);
+      }
+      if (animatedCrosses.length) {
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(animatedCrosses), gl.DYNAMIC_DRAW);
+        gl.uniform4f(gl.getUniformLocation(glState.gridProgram, 'uColor'), 0.90, 0.86, 0.30, 0.95);
+        gl.drawArrays(gl.LINES, 0, animatedCrosses.length / 3);
+      }
+      if (movedCrosses.length) {
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(movedCrosses), gl.DYNAMIC_DRAW);
+        gl.uniform4f(gl.getUniformLocation(glState.gridProgram, 'uColor'), 0.96, 0.26, 0.26, 0.98);
+        gl.drawArrays(gl.LINES, 0, movedCrosses.length / 3);
+      }
+    }
+
     function renderModel(canvas, state) {
       const gl = ensureGl(canvas, state);
       if (!gl) throw new Error('WebGL2 is unavailable in this webview environment.');
@@ -883,6 +1070,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       gl.uniformMatrix4fv(gl.getUniformLocation(glState.gridProgram, 'uView'), false, view);
       gl.uniform4f(gl.getUniformLocation(glState.gridProgram, 'uColor'), 0.50, 0.56, 0.64, 0.32);
       gl.drawArrays(gl.LINES, 0, glState.gridVertexCount);
+      drawNodeDebug(gl, proj, view, state);
 
       // Solid model
       if (modelRenderMode === 'fill' || modelRenderMode === 'both') {
@@ -918,8 +1106,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       }
 
       renderGizmo(state);
-      debug('gl viewport=' + width + 'x' + height + ' idx=' + glState.modelIndexCount + ' wire=' + glState.wireIndexCount);
-      debug('model rendered');
+      // Intentionally quiet per-frame to avoid flooding debug log during animation/render loop.
     }
 
     function renderGizmo(state) {
@@ -975,19 +1162,26 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       const canvas2d = document.getElementById('canvas2d');
       const canvas3d = document.getElementById('canvas3d');
       if (data.kind === 'model') {
+        const prevState = modelState;
         modelState = buildModelState(data);
+        if (prevState) {
+          modelState.yaw = prevState.yaw;
+          modelState.pitch = prevState.pitch;
+          modelState.distance = prevState.distance;
+        }
         canvas3d.style.display = '';
         canvas2d.style.display = 'none';
         setModelPanelVisible(true);
         stage.style.transform = 'translate(0px, 0px) scale(1)';
         const meta = document.getElementById('modelMeta');
         meta.innerHTML = '<strong>' + data.modelName + '</strong><br/>' +
-          'Geosets: ' + data.geosetsCount + ' | Nodes: ' + data.nodesCount + ' | Triangles: ' + data.trianglesCount;
-        const animSelect = document.getElementById('animSelect');
+          'Geosets: ' + data.geosetsCount + ' | Nodes: ' + data.nodesCount + ' | Triangles: ' + data.trianglesCount +
+          ' | NodeAnim: ' + modelState.nodeAnimatedCount + ' | NodeMoved: ' + modelState.nodeMovedCount;
         animSelect.innerHTML = '';
         if (data.sequences.length === 0) {
           const opt = document.createElement('option');
-          opt.textContent = 'No animations';
+          opt.textContent = 'Bind pose';
+          opt.selected = true;
           animSelect.appendChild(opt);
         } else {
           for (const seq of data.sequences) {
@@ -995,7 +1189,10 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
             opt.textContent = seq.name + ' [' + seq.intervalStart + '-' + seq.intervalEnd + ']' + (seq.looping ? ' (loop)' : '');
             animSelect.appendChild(opt);
           }
+          const sel = data.activeSequenceIndex >= 0 && data.activeSequenceIndex < data.sequences.length ? data.activeSequenceIndex : 0;
+          animSelect.selectedIndex = sel;
         }
+        updateSequencePanel(data);
         renderModel(canvas3d, modelState);
         showWarnings(data.warnings);
         return;
@@ -1005,6 +1202,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       canvas3d.style.display = 'none';
       canvas2d.style.display = '';
       setModelPanelVisible(false);
+      seqPanel.classList.remove('visible');
       const canvas = canvas2d;
       const ctx = canvas.getContext('2d', { alpha: true });
       if (!ctx) {
@@ -1053,6 +1251,12 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
     const zoomResetBtn = document.getElementById('zoomResetBtn');
     const fitBtn = document.getElementById('fitBtn');
     const renderModeBtn = document.getElementById('renderModeBtn');
+    const animSelect = document.getElementById('animSelect');
+    const autoplayChk = document.getElementById('autoplayChk');
+    const seqPanel = document.getElementById('seqPanel');
+    const seqSlider = document.getElementById('seqSlider');
+    const seqFrameLabel = document.getElementById('seqFrameLabel');
+    const seqStats = document.getElementById('seqStats');
 
     let zoom = 1;
     let tx = 0;
@@ -1072,6 +1276,11 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
 
     function clampZoom(value) {
       return Math.min(64, Math.max(0.05, value));
+    }
+
+    function clampPitch(value) {
+      const limit = (Math.PI * 0.5) - 0.02;
+      return Math.max(-limit, Math.min(limit, value));
     }
 
     function applyTransform() {
@@ -1125,6 +1334,129 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       centerImage();
     }
 
+    function stopPlayback() {
+      if (playbackHandle) {
+        cancelAnimationFrame(playbackHandle);
+        playbackHandle = 0;
+      }
+    }
+
+    function restartPlaybackIfNeeded(forceReset) {
+      if (!autoplayChk.checked || !currentData || currentData.kind !== 'model') {
+        stopPlayback();
+        return;
+      }
+      if (!currentData.sequences || currentData.sequences.length === 0) {
+        stopPlayback();
+        return;
+      }
+      const seqIndex = Math.max(0, Math.min(currentData.sequences.length - 1, animSelect.selectedIndex));
+      const seq = currentData.sequences[seqIndex];
+      if (!seq) {
+        stopPlayback();
+        return;
+      }
+
+      const minIntervalMs = 16;
+      if (forceReset || playbackSequenceIndex !== seqIndex || playbackNeedsRestart) {
+        playbackSequenceIndex = seqIndex;
+        playbackStartMs = performance.now();
+        playbackLastSentMs = 0;
+        playbackNeedsRestart = false;
+      }
+      stopPlayback();
+
+      const tick = (now) => {
+        if (!autoplayChk.checked || !currentData || currentData.kind !== 'model') {
+          stopPlayback();
+          return;
+        }
+        const activeSeq = currentData.sequences[playbackSequenceIndex];
+        if (!activeSeq) {
+          stopPlayback();
+          return;
+        }
+        const start = activeSeq.intervalStart;
+        const end = Math.max(start, activeSeq.intervalEnd);
+        const span = Math.max(1, end - start);
+        let frame = start;
+        if (activeSeq.looping) {
+          const elapsedFrames = Math.floor(now - playbackStartMs);
+          frame = start + (elapsedFrames % span);
+        } else {
+          const elapsedFrames = Math.floor(now - playbackStartMs);
+          frame = Math.min(end, start + elapsedFrames);
+        }
+
+        if ((now - playbackLastSentMs) >= minIntervalMs) {
+          playbackLastSentMs = now;
+          vscode.postMessage({ type: 'selectSequenceFrame', index: playbackSequenceIndex, frame });
+        }
+
+        if (!activeSeq.looping && frame >= end) {
+          stopPlayback();
+          return;
+        }
+        playbackHandle = requestAnimationFrame(tick);
+      };
+
+      playbackHandle = requestAnimationFrame(tick);
+    }
+
+    function updateSequencePanel(data) {
+      if (!data || data.kind !== 'model' || !data.sequences || data.sequences.length === 0) {
+        seqPanel.classList.remove('visible');
+        seqStats.textContent = '';
+        seqFrameLabel.textContent = 'frame: -';
+        return;
+      }
+      const seqIndex = Math.max(0, Math.min(data.sequences.length - 1, animSelect.selectedIndex));
+      const seq = data.sequences[seqIndex];
+      seqPanel.classList.add('visible');
+      const minF = seq.intervalStart;
+      const maxF = Math.max(seq.intervalStart, seq.intervalEnd);
+      const frame = Number.isFinite(data.sampledFrame) ? data.sampledFrame : minF;
+      seqSlider.min = String(minF);
+      seqSlider.max = String(maxF);
+      seqSlider.value = String(Math.max(minF, Math.min(maxF, Math.floor(frame))));
+      const tMs = Math.max(0, frame - minF);
+      seqFrameLabel.textContent = 'frame: ' + Math.floor(frame) + ' | t=' + Math.floor(tMs) + 'ms';
+
+      const summary = data.sequenceTrackSummaries && data.sequenceTrackSummaries.length > seqIndex
+        ? data.sequenceTrackSummaries[seqIndex]
+        : null;
+      const nodeIds = (data.activeNodeTrackObjectIds || []).slice(0, 32).join(', ');
+      const geosetIds = (data.activeGeosetAlphaIds || []).slice(0, 32).join(', ');
+      seqStats.textContent =
+        'Seq: ' + seq.name + ' [' + seq.intervalStart + ' - ' + seq.intervalEnd + ']\\n'
+        + 'Node channels: ' + (summary ? summary.nodeChannels : 0)
+        + ' | Node keys: ' + (summary ? summary.nodeKeys : 0) + '\\n'
+        + 'Geoset alpha channels: ' + (summary ? summary.geosetAlphaChannels : 0)
+        + ' | Alpha keys: ' + (summary ? summary.geosetAlphaKeys : 0) + '\\n'
+        + 'Active node ids: ' + (nodeIds || '(none)') + '\\n'
+        + 'Active geoset alpha ids: ' + (geosetIds || '(none)');
+    }
+
+    function ensureRenderLoop() {
+      if (renderLoopHandle) return;
+      const tick = (ts) => {
+        renderLoopHandle = requestAnimationFrame(tick);
+        if (!modelState) {
+          renderLoopLastTs = ts;
+          return;
+        }
+        if (!renderLoopLastTs) renderLoopLastTs = ts;
+        renderLoopLastTs = ts;
+        try {
+          const canvas = document.getElementById('canvas3d');
+          renderModel(canvas, modelState);
+        } catch (err) {
+          // Keep loop alive even if a frame errors.
+        }
+      };
+      renderLoopHandle = requestAnimationFrame(tick);
+    }
+
     viewport.addEventListener('pointerdown', (ev) => {
       dragActive = true;
       dragStartX = ev.clientX;
@@ -1143,7 +1475,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
         dragStartX = ev.clientX;
         dragStartY = ev.clientY;
         modelState.yaw += dx * 0.008;
-        modelState.pitch += dy * 0.008;
+        modelState.pitch = clampPitch(modelState.pitch + dy * 0.008);
         const canvas = document.getElementById('canvas3d');
         renderModel(canvas, modelState);
         return;
@@ -1198,7 +1530,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
     zoomResetBtn.addEventListener('click', () => {
       if (modelState) {
         modelState.yaw = Math.PI * 0.5;
-        modelState.pitch = -0.52;
+        modelState.pitch = clampPitch(-0.52);
         modelState.distance = 3.2;
         const canvas = document.getElementById('canvas3d');
         renderModel(canvas, modelState);
@@ -1228,6 +1560,36 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       }
     });
 
+    animSelect.addEventListener('change', () => {
+      const idx = animSelect.selectedIndex;
+      vscode.postMessage({ type: 'selectSequence', index: idx });
+      playbackNeedsRestart = true;
+      restartPlaybackIfNeeded(true);
+      if (currentData && currentData.kind === 'model') {
+        updateSequencePanel(currentData);
+      }
+    });
+
+    autoplayChk.addEventListener('change', () => {
+      playbackNeedsRestart = true;
+      if (autoplayChk.checked) {
+        restartPlaybackIfNeeded(true);
+      } else {
+        stopPlayback();
+      }
+    });
+
+    seqSlider.addEventListener('input', () => {
+      if (!currentData || currentData.kind !== 'model') return;
+      const idx = Math.max(0, animSelect.selectedIndex);
+      const frame = Math.floor(Number(seqSlider.value));
+      if (autoplayChk.checked) {
+        autoplayChk.checked = false;
+      }
+      stopPlayback();
+      vscode.postMessage({ type: 'selectSequenceFrame', index: idx, frame });
+    });
+
     document.getElementById('refreshBtn').addEventListener('click', () => {
       vscode.postMessage({ type: 'refresh' });
     });
@@ -1247,6 +1609,11 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
         return;
       }
       if (msg.type === 'image') {
+        const incomingFileName = msg.fileName || '';
+        if (incomingFileName !== currentFileName) {
+          currentFileName = incomingFileName;
+          playbackNeedsRestart = true;
+        }
         currentData = msg.decoded;
         if (currentData.kind === 'model') {
           setMeta(msg.fileName || 'Model', currentData.description + ' | geosets: ' + currentData.geosetsCount + ', tris: ' + currentData.trianglesCount);
@@ -1256,10 +1623,12 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
         try {
           await renderCurrent();
           if (!modelState) {
+            stopPlayback();
             zoom = 1;
             centerImage();
           } else {
             zoomLabel.textContent = '3D';
+            restartPlaybackIfNeeded(false);
           }
           setLoading(false);
         } catch (err) {
@@ -1281,6 +1650,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
 
     debug('script boot');
     updateRenderModeUi();
+    ensureRenderLoop();
     vscode.postMessage({ type: 'ready' });
     debug('ready posted');
   </script>
@@ -1290,13 +1660,13 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
 
 }
 
-function decodePreview(sourceBytes: Uint8Array, uri: vscode.Uri): DecodedBlpImage {
+function decodePreview(sourceBytes: Uint8Array, uri: vscode.Uri, sequenceIndex = -1, sequenceFrame?: number): DecodedBlpImage {
     const ext = path.extname(uri.fsPath || uri.path).toLowerCase();
     if (ext === '.dds') {
         return decodeDds(sourceBytes);
     }
     if (ext === '.mdx') {
-        return decodeMdx(sourceBytes);
+        return decodeMdx(sourceBytes, sequenceIndex, sequenceFrame);
     }
     return decodeBlp(sourceBytes);
 }

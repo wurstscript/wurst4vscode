@@ -13,23 +13,58 @@ export type DecodedMdxModel = {
     nodesCount: number;
     geosetsCount: number;
     trianglesCount: number;
+    activeSequenceIndex: number;
+    sampledFrame: number;
     sequences: MdxSequenceInfo[];
+    sequenceTrackSummaries: SequenceTrackSummary[];
+    activeNodeTrackObjectIds: number[];
+    activeGeosetAlphaIds: number[];
     positionsBase64: string;
     normalsBase64: string;
     indicesBase64: string;
+    nodeDebugPositionsBase64: string;
+    nodeDebugParentIndexBase64: string;
+    nodeDebugAnimatedBase64: string;
+    nodeDebugMovedBase64: string;
     warnings: string[];
     description: string;
+};
+
+export type SequenceTrackSummary = {
+    sequenceIndex: number;
+    nodeChannels: number;
+    nodeKeys: number;
+    geosetAlphaChannels: number;
+    geosetAlphaKeys: number;
 };
 
 type MdxNode = {
     objectId: number;
     parentId: number;
-    translation: [number, number, number];
-    rotation: [number, number, number, number];
-    scaling: [number, number, number];
+    flags: number;
+    translationKeys: Vec3Track;
+    rotationKeys: QuatTrack;
+    scalingKeys: Vec3Track;
     pivot: [number, number, number];
-    worldMatrix?: Float32Array;
 };
+
+type TrackInterpolation = 0 | 1 | 2 | 3;
+type Vec3Key = { frame: number; value: [number, number, number] };
+type QuatKey = { frame: number; value: [number, number, number, number] };
+type FloatKey = { frame: number; value: number };
+type Vec3Track = { interpolation: TrackInterpolation; keys: Vec3Key[] };
+type QuatTrack = { interpolation: TrackInterpolation; keys: QuatKey[] };
+type FloatTrack = { interpolation: TrackInterpolation; keys: FloatKey[] };
+
+type GeosetAnim = {
+    geosetId: number;
+    alpha: number;
+    alphaTrack: FloatTrack;
+};
+
+const NODE_DONT_INHERIT_TRANSLATION = 0x1;
+const NODE_DONT_INHERIT_ROTATION = 0x2;
+const NODE_DONT_INHERIT_SCALING = 0x4;
 
 type ParsedGeoset = {
     vertices: number[];
@@ -40,16 +75,16 @@ type ParsedGeoset = {
     matrixIndices: number[];
 };
 
-export function decodeMdx(sourceBytes: Uint8Array): DecodedMdxModel {
+export function decodeMdx(sourceBytes: Uint8Array, sequenceIndex = -1, sequenceFrame?: number): DecodedMdxModel {
     try {
-        return decodeMdxInternal(sourceBytes);
+        return decodeMdxInternal(sourceBytes, sequenceIndex, sequenceFrame);
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(`failed reading MDX: ${message}`);
     }
 }
 
-function decodeMdxInternal(sourceBytes: Uint8Array): DecodedMdxModel {
+function decodeMdxInternal(sourceBytes: Uint8Array, sequenceIndex: number, sequenceFrame?: number): DecodedMdxModel {
     const warnings: string[] = [];
     const warnOnceSet = new Set<string>();
     const warn = (msg: string) => warnings.push(msg);
@@ -71,6 +106,7 @@ function decodeMdxInternal(sourceBytes: Uint8Array): DecodedMdxModel {
     }
 
     let modelName = 'Unnamed Model';
+    let modelVersion = readModelVersion(sourceBytes);
     const sequences: MdxSequenceInfo[] = [];
     const allPositions: number[] = [];
     const allNormals: number[] = [];
@@ -80,6 +116,7 @@ function decodeMdxInternal(sourceBytes: Uint8Array): DecodedMdxModel {
     const pivots: Array<[number, number, number]> = [];
     const nodeMap = new Map<number, MdxNode>();
     const geosets: ParsedGeoset[] = [];
+    const geosetAnims = new Map<number, GeosetAnim>();
 
     let pos = 4;
     while (pos + 8 <= sourceBytes.length) {
@@ -100,6 +137,15 @@ function decodeMdxInternal(sourceBytes: Uint8Array): DecodedMdxModel {
             continue;
         }
 
+        if (token === 'VERS') {
+            if (chunk.length >= 4) {
+                modelVersion = readU32FromArray(chunk, 0);
+            } else {
+                warn('VERS chunk is truncated.');
+            }
+            continue;
+        }
+
         if (token === 'SEQS') {
             const stride = 132;
             if (chunk.length % stride !== 0) {
@@ -114,7 +160,7 @@ function decodeMdxInternal(sourceBytes: Uint8Array): DecodedMdxModel {
                     name,
                     intervalStart,
                     intervalEnd,
-                    looping: (flags & 0x1) > 0,
+                    looping: (flags & 0x1) === 0,
                 });
             }
             continue;
@@ -135,15 +181,22 @@ function decodeMdxInternal(sourceBytes: Uint8Array): DecodedMdxModel {
         }
 
         if (token === 'BONE') {
-            parseNodeEntries(chunk, 8, warn, (entry) => {
+            parseNodeEntriesForVersion(chunk, modelVersion, 8, warn, (entry) => {
                 nodeMap.set(entry.objectId, entry);
             });
             continue;
         }
 
         if (token === 'HELP') {
-            parseNodeEntries(chunk, 0, warn, (entry) => {
+            parseNodeEntriesForVersion(chunk, modelVersion, 0, warn, (entry) => {
                 nodeMap.set(entry.objectId, entry);
+            });
+            continue;
+        }
+
+        if (token === 'GEOA') {
+            parseGeosetAnims(chunk, modelVersion, warn, (anim) => {
+                geosetAnims.set(anim.geosetId, anim);
             });
             continue;
         }
@@ -154,7 +207,7 @@ function decodeMdxInternal(sourceBytes: Uint8Array): DecodedMdxModel {
         while (gpos + 4 <= chunk.length) {
             const maybeToken = readAscii4(chunk, gpos);
             if (maybeToken === 'VRTX') {
-                const parsed = parseMdxGeoset(chunk.subarray(gpos), warn);
+                const parsed = parseMdxGeoset(chunk.subarray(gpos), warn, modelVersion);
                 geosets.push(parsed);
                 geosetsCount++;
                 gpos += Math.max(1, parsed.consumedBytes);
@@ -162,7 +215,10 @@ function decodeMdxInternal(sourceBytes: Uint8Array): DecodedMdxModel {
             }
 
             const inclusiveSize = readU32FromArray(chunk, gpos);
-            const geosetEnd = gpos + 4 + inclusiveSize;
+            let geosetEnd = gpos + inclusiveSize;
+            if (geosetEnd <= gpos + 4 || geosetEnd > chunk.length) {
+                geosetEnd = gpos + 4 + inclusiveSize;
+            }
             if (inclusiveSize <= 0 || geosetEnd > chunk.length) {
                 warn(`GEOS geoset has invalid inclusiveSize ${inclusiveSize}.`);
                 break;
@@ -170,8 +226,9 @@ function decodeMdxInternal(sourceBytes: Uint8Array): DecodedMdxModel {
 
             geosetsCount++;
             const geoset = chunk.subarray(gpos + 4, geosetEnd);
-            const parsed = parseMdxGeoset(geoset, warn);
-            if (parsed.consumedBytes !== geoset.length) {
+            const parsed = parseMdxGeoset(geoset, warn, modelVersion);
+            const leftover = geoset.length - parsed.consumedBytes;
+            if (leftover > 0 && !(leftover <= 4 && isAllZero(geoset.subarray(parsed.consumedBytes)))) {
                 warn(`GEOS geoset payload parsed ${parsed.consumedBytes} of ${geoset.length} bytes.`);
             }
             geosets.push(parsed);
@@ -184,8 +241,35 @@ function decodeMdxInternal(sourceBytes: Uint8Array): DecodedMdxModel {
         node.pivot = [pivot[0], pivot[1], pivot[2]];
     }
 
-    for (const geoset of geosets) {
-        applyBindPoseSkinning(geoset, nodeMap, warnOnce);
+    // Backfill missing node ids referenced by matrix indices so skinning relations are always resolvable.
+    backfillMissingNodesFromGeosets(geosets, nodeMap, warn);
+
+    const activeSequenceIndex = sequenceIndex >= 0 && sequenceIndex < sequences.length ? sequenceIndex : -1;
+    const sampleFrame = activeSequenceIndex >= 0
+        ? (Number.isFinite(sequenceFrame)
+            ? Math.floor(sequenceFrame as number)
+            : Math.floor((sequences[activeSequenceIndex].intervalStart + sequences[activeSequenceIndex].intervalEnd) * 0.5))
+        : 0;
+    const sequenceTrackSummaries = buildSequenceTrackSummaries(sequences, nodeMap, geosetAnims);
+    const activeNodeTrackObjectIds = activeSequenceIndex >= 0
+        ? collectActiveNodeTrackObjectIds(nodeMap, sequences[activeSequenceIndex].intervalStart, sequences[activeSequenceIndex].intervalEnd)
+        : [];
+    const activeGeosetAlphaIds = activeSequenceIndex >= 0
+        ? collectActiveGeosetAlphaIds(geosetAnims, sequences[activeSequenceIndex].intervalStart, sequences[activeSequenceIndex].intervalEnd)
+        : [];
+    const animatedNodeCount = Array.from(nodeMap.values()).filter(
+        (n) => n.translationKeys.keys.length > 0 || n.rotationKeys.keys.length > 0 || n.scalingKeys.keys.length > 0
+    ).length;
+    if (activeSequenceIndex >= 0) {
+        warn(`Animation debug: frame=${sampleFrame}, nodes=${nodeMap.size}, animatedNodes=${animatedNodeCount}.`);
+    }
+
+    for (let i = 0; i < geosets.length; i++) {
+        const geoset = geosets[i];
+        if (!isGeosetVisible(i, sampleFrame, geosetAnims)) {
+            continue;
+        }
+        applyPoseSkinning(geoset, nodeMap, sampleFrame, warnOnce);
         const baseVertex = allPositions.length / 3;
         for (const v of geoset.vertices) allPositions.push(v);
         for (const n of geoset.normals) allNormals.push(n);
@@ -195,22 +279,183 @@ function decodeMdxInternal(sourceBytes: Uint8Array): DecodedMdxModel {
     const positions = new Float32Array(allPositions);
     const normals = new Float32Array(allNormals);
     const indices = new Uint32Array(allIndices);
+    const nodeDebug = buildNodeDebugPayload(nodeMap, sampleFrame, warnOnce);
     return {
         kind: 'model',
         modelName,
         nodesCount: nodeMap.size,
         geosetsCount,
         trianglesCount: Math.floor(indices.length / 3),
+        activeSequenceIndex,
+        sampledFrame: sampleFrame,
         sequences,
+        sequenceTrackSummaries,
+        activeNodeTrackObjectIds,
+        activeGeosetAlphaIds,
         positionsBase64: Buffer.from(positions.buffer).toString('base64'),
         normalsBase64: Buffer.from(normals.buffer).toString('base64'),
         indicesBase64: Buffer.from(indices.buffer).toString('base64'),
+        nodeDebugPositionsBase64: nodeDebug.positionsBase64,
+        nodeDebugParentIndexBase64: nodeDebug.parentIndexBase64,
+        nodeDebugAnimatedBase64: nodeDebug.animatedBase64,
+        nodeDebugMovedBase64: nodeDebug.movedBase64,
         warnings,
-        description: 'MDX static geosets (bind-pose skinning)',
+        description: activeSequenceIndex >= 0
+            ? `MDX sequence pose: ${sequences[activeSequenceIndex].name}`
+            : 'MDX static geosets (bind-pose skinning)',
     };
 }
 
-function parseNodeEntries(
+function buildNodeDebugPayload(
+    nodeMap: Map<number, MdxNode>,
+    frame: number,
+    warnOnce: (msg: string) => void
+): { positionsBase64: string; parentIndexBase64: string; animatedBase64: string; movedBase64: string } {
+    const nodes = Array.from(nodeMap.values()).sort((a, b) => a.objectId - b.objectId);
+    const indexById = new Map<number, number>();
+    for (let i = 0; i < nodes.length; i++) indexById.set(nodes[i].objectId, i);
+
+    const positions = new Float32Array(nodes.length * 3);
+    const parents = new Int32Array(nodes.length);
+    const animated = new Uint8Array(nodes.length);
+    const moved = new Uint8Array(nodes.length);
+
+    const cacheNow = new Map<number, Float32Array>();
+    const cacheNext = new Map<number, Float32Array>();
+    const nextFrame = frame + 1;
+
+    for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
+        const worldNow = getNodeWorldMatrix(node, nodeMap, frame, warnOnce, new Set<number>(), cacheNow);
+        const worldNext = getNodeWorldMatrix(node, nodeMap, nextFrame, warnOnce, new Set<number>(), cacheNext);
+        const pNow = transformPoint(worldNow, 0, 0, 0);
+        const pNext = transformPoint(worldNext, 0, 0, 0);
+        positions[i * 3] = pNow[0];
+        positions[i * 3 + 1] = pNow[1];
+        positions[i * 3 + 2] = pNow[2];
+
+        parents[i] = node.parentId >= 0 && indexById.has(node.parentId) ? (indexById.get(node.parentId) as number) : -1;
+        animated[i] = (node.translationKeys.keys.length > 0 || node.rotationKeys.keys.length > 0 || node.scalingKeys.keys.length > 0) ? 1 : 0;
+        const dx = pNext[0] - pNow[0];
+        const dy = pNext[1] - pNow[1];
+        const dz = pNext[2] - pNow[2];
+        moved[i] = (dx * dx + dy * dy + dz * dz) > 1e-10 ? 1 : 0;
+    }
+
+    return {
+        positionsBase64: Buffer.from(positions.buffer).toString('base64'),
+        parentIndexBase64: Buffer.from(parents.buffer).toString('base64'),
+        animatedBase64: Buffer.from(animated.buffer).toString('base64'),
+        movedBase64: Buffer.from(moved.buffer).toString('base64'),
+    };
+}
+
+function buildSequenceTrackSummaries(
+    sequences: MdxSequenceInfo[],
+    nodeMap: Map<number, MdxNode>,
+    geosetAnims: Map<number, GeosetAnim>
+): SequenceTrackSummary[] {
+    const out: SequenceTrackSummary[] = [];
+    for (let i = 0; i < sequences.length; i++) {
+        const seq = sequences[i];
+        let nodeChannels = 0;
+        let nodeKeys = 0;
+        for (const node of nodeMap.values()) {
+            const t = countKeysInIntervalVec3(node.translationKeys, seq.intervalStart, seq.intervalEnd);
+            const r = countKeysInIntervalQuat(node.rotationKeys, seq.intervalStart, seq.intervalEnd);
+            const s = countKeysInIntervalVec3(node.scalingKeys, seq.intervalStart, seq.intervalEnd);
+            if (t > 0) nodeChannels++;
+            if (r > 0) nodeChannels++;
+            if (s > 0) nodeChannels++;
+            nodeKeys += t + r + s;
+        }
+        let geosetAlphaChannels = 0;
+        let geosetAlphaKeys = 0;
+        for (const anim of geosetAnims.values()) {
+            const c = countKeysInIntervalFloat(anim.alphaTrack, seq.intervalStart, seq.intervalEnd);
+            if (c > 0) geosetAlphaChannels++;
+            geosetAlphaKeys += c;
+        }
+        out.push({ sequenceIndex: i, nodeChannels, nodeKeys, geosetAlphaChannels, geosetAlphaKeys });
+    }
+    return out;
+}
+
+function collectActiveNodeTrackObjectIds(nodeMap: Map<number, MdxNode>, start: number, end: number): number[] {
+    const ids: number[] = [];
+    for (const node of nodeMap.values()) {
+        if (
+            countKeysInIntervalVec3(node.translationKeys, start, end) > 0 ||
+            countKeysInIntervalQuat(node.rotationKeys, start, end) > 0 ||
+            countKeysInIntervalVec3(node.scalingKeys, start, end) > 0
+        ) {
+            ids.push(node.objectId);
+        }
+    }
+    ids.sort((a, b) => a - b);
+    return ids;
+}
+
+function collectActiveGeosetAlphaIds(geosetAnims: Map<number, GeosetAnim>, start: number, end: number): number[] {
+    const ids: number[] = [];
+    for (const [geosetId, anim] of geosetAnims.entries()) {
+        if (countKeysInIntervalFloat(anim.alphaTrack, start, end) > 0) {
+            ids.push(geosetId);
+        }
+    }
+    ids.sort((a, b) => a - b);
+    return ids;
+}
+
+function countKeysInIntervalVec3(track: Vec3Track, start: number, end: number): number {
+    let count = 0;
+    for (const key of track.keys) {
+        if (key.frame >= start && key.frame <= end) count++;
+    }
+    return count;
+}
+
+function countKeysInIntervalQuat(track: QuatTrack, start: number, end: number): number {
+    let count = 0;
+    for (const key of track.keys) {
+        if (key.frame >= start && key.frame <= end) count++;
+    }
+    return count;
+}
+
+function countKeysInIntervalFloat(track: FloatTrack, start: number, end: number): number {
+    let count = 0;
+    for (const key of track.keys) {
+        if (key.frame >= start && key.frame <= end) count++;
+    }
+    return count;
+}
+
+function isAllZero(bytes: Uint8Array): boolean {
+    for (let i = 0; i < bytes.length; i++) {
+        if (bytes[i] !== 0) return false;
+    }
+    return true;
+}
+
+function readModelVersion(sourceBytes: Uint8Array): number {
+    let pos = 4;
+    while (pos + 8 <= sourceBytes.length) {
+        const token = readAscii4(sourceBytes, pos);
+        const size = readU32FromArray(sourceBytes, pos + 4);
+        pos += 8;
+        if (size <= 0 || pos + size > sourceBytes.length) {
+            break;
+        }
+        if (token === 'VERS' && size >= 4) {
+            return readU32FromArray(sourceBytes, pos);
+        }
+        pos += size;
+    }
+    return 800;
+}
+
+function parseNodeEntriesLegacy(
     chunk: Uint8Array,
     trailingBytesAfterNode: number,
     warn: (msg: string) => void,
@@ -222,36 +467,172 @@ function parseNodeEntries(
         if (size === 0 && chunk.subarray(pos).every((b) => b === 0)) {
             break;
         }
-        if (size <= 0 || pos + 4 + size > chunk.length) {
+        if (size <= 0 || pos + size > chunk.length) {
             warn(`Node chunk has invalid entry size ${size}.`);
             break;
         }
 
-        const entryStart = pos + 4;
-        const entryEnd = entryStart + size;
-        if (entryStart + 96 > entryEnd) {
+        const nodeStart = pos + 4;
+        const nodeEnd = pos + size;
+        const entryEnd = nodeEnd + trailingBytesAfterNode;
+        if (nodeStart + 92 > nodeEnd) {
             warn(`Node entry size ${size} is too small.`);
+            pos = Math.min(chunk.length, entryEnd);
+            continue;
+        }
+        if (entryEnd > chunk.length) {
+            warn(`Node entry overruns chunk (size ${size}, trailing ${trailingBytesAfterNode}).`);
+            break;
+        }
+
+        const objectId = readU32FromArray(chunk, nodeStart + 80);
+        const parentId = readI32FromArray(chunk, nodeStart + 84);
+
+        const tracks = parseNodeTracks(chunk, nodeStart + 92, nodeEnd, warn);
+        if (tracks.nextPos > nodeEnd) {
+            warn(`Node ${objectId} entry is truncated (expected ${trailingBytesAfterNode} trailing bytes).`);
+        }
+        onNode({
+            objectId,
+            parentId,
+            flags: readU32FromArray(chunk, nodeStart + 88),
+            translationKeys: tracks.translationKeys,
+            rotationKeys: tracks.rotationKeys,
+            scalingKeys: tracks.scalingKeys,
+            pivot: [0, 0, 0],
+        });
+
+        pos = entryEnd;
+    }
+}
+
+function parseObjectEntriesModern(
+    chunk: Uint8Array,
+    trailingBytesAfterObject: number,
+    warn: (msg: string) => void,
+    onNode: (node: MdxNode) => void
+): void {
+    let pos = 0;
+    while (pos + 4 <= chunk.length) {
+        const entrySize = readU32FromArray(chunk, pos);
+        if (entrySize === 0 && chunk.subarray(pos).every((b) => b === 0)) {
+            break;
+        }
+        if (entrySize <= 0 || pos + 4 + entrySize > chunk.length) {
+            warn(`Object chunk has invalid entry size ${entrySize}.`);
+            break;
+        }
+        const entryStart = pos + 4;
+        const entryEnd = entryStart + entrySize;
+        const objectEnd = entryEnd - trailingBytesAfterObject;
+        if (objectEnd < entryStart + 92) {
+            warn(`Object entry size ${entrySize} is too small.`);
             pos = entryEnd;
             continue;
         }
 
         const objectId = readU32FromArray(chunk, entryStart + 80);
         const parentId = readI32FromArray(chunk, entryStart + 84);
+        const flags = readU32FromArray(chunk, entryStart + 88);
+        const tracks = parseNodeTracks(chunk, entryStart + 92, objectEnd, warn);
 
-        const tracks = parseNodeTracks(chunk, entryStart + 96, entryEnd, warn);
-        if (tracks.nextPos + trailingBytesAfterNode > entryEnd) {
-            warn(`Node ${objectId} entry is truncated (expected ${trailingBytesAfterNode} trailing bytes).`);
-        }
         onNode({
             objectId,
             parentId,
-            translation: tracks.translation,
-            rotation: tracks.rotation,
-            scaling: tracks.scaling,
+            flags,
+            translationKeys: tracks.translationKeys,
+            rotationKeys: tracks.rotationKeys,
+            scalingKeys: tracks.scalingKeys,
             pivot: [0, 0, 0],
         });
 
         pos = entryEnd;
+    }
+}
+
+function parseObjectEntriesBare(
+    chunk: Uint8Array,
+    trailingBytesAfterObject: number,
+    warn: (msg: string) => void,
+    onNode: (node: MdxNode) => void
+): void {
+    let pos = 0;
+    while (pos + 92 + trailingBytesAfterObject <= chunk.length) {
+        const objectStart = pos;
+        const objectId = readU32FromArray(chunk, objectStart + 80);
+        const parentId = readI32FromArray(chunk, objectStart + 84);
+        const flags = readU32FromArray(chunk, objectStart + 88);
+        const tracks = parseNodeTracks(chunk, objectStart + 92, chunk.length, warn);
+        const objectEnd = tracks.nextPos;
+        const entryEnd = objectEnd + trailingBytesAfterObject;
+        if (entryEnd > chunk.length) {
+            warn(`Object entry overruns chunk (trailing ${trailingBytesAfterObject}).`);
+            break;
+        }
+
+        onNode({
+            objectId,
+            parentId,
+            flags,
+            translationKeys: tracks.translationKeys,
+            rotationKeys: tracks.rotationKeys,
+            scalingKeys: tracks.scalingKeys,
+            pivot: [0, 0, 0],
+        });
+
+        if (entryEnd <= pos) {
+            warn('Object parser made no forward progress.');
+            break;
+        }
+        pos = entryEnd;
+    }
+}
+
+function parseNodeEntriesForVersion(
+    chunk: Uint8Array,
+    modelVersion: number,
+    trailingBytesAfterObject: number,
+    warn: (msg: string) => void,
+    onNode: (node: MdxNode) => void
+): void {
+    const first = readU32FromArray(chunk, 0);
+    const hasSizedEntries = first > 0 && first + 4 <= chunk.length;
+    const isLikelyBare = !hasSizedEntries;
+
+    if (isLikelyBare) {
+        parseObjectEntriesBare(chunk, trailingBytesAfterObject, warn, onNode);
+        return;
+    }
+    if (modelVersion >= 1000) {
+        parseObjectEntriesModern(chunk, trailingBytesAfterObject, warn, onNode);
+        return;
+    }
+    parseNodeEntriesLegacy(chunk, trailingBytesAfterObject, warn, onNode);
+}
+
+function backfillMissingNodesFromGeosets(geosets: ParsedGeoset[], nodeMap: Map<number, MdxNode>, warn: (msg: string) => void): void {
+    const needed = new Set<number>();
+    for (const geoset of geosets) {
+        for (const idx of geoset.matrixIndices) {
+            if (idx >= 0) needed.add(idx);
+        }
+    }
+    let added = 0;
+    for (const nodeId of needed) {
+        if (nodeMap.has(nodeId)) continue;
+        nodeMap.set(nodeId, {
+            objectId: nodeId,
+            parentId: -1,
+            flags: 0,
+            translationKeys: { interpolation: 0, keys: [] },
+            rotationKeys: { interpolation: 0, keys: [] },
+            scalingKeys: { interpolation: 0, keys: [] },
+            pivot: [0, 0, 0],
+        });
+        added++;
+    }
+    if (added > 0) {
+        warn(`Backfilled ${added} missing node references as identity nodes.`);
     }
 }
 
@@ -262,85 +643,176 @@ function parseNodeTracks(
     warn: (msg: string) => void
 ): {
     nextPos: number;
-    translation: [number, number, number];
-    rotation: [number, number, number, number];
-    scaling: [number, number, number];
+    translationKeys: Vec3Track;
+    rotationKeys: QuatTrack;
+    scalingKeys: Vec3Track;
 } {
-    const translation: [number, number, number] = [0, 0, 0];
-    const rotation: [number, number, number, number] = [0, 0, 0, 1];
-    const scaling: [number, number, number] = [1, 1, 1];
+    const translationKeys: Vec3Track = { interpolation: 0, keys: [] };
+    const rotationKeys: QuatTrack = { interpolation: 0, keys: [] };
+    const scalingKeys: Vec3Track = { interpolation: 0, keys: [] };
 
     let pos = start;
-    while (pos + 8 <= end) {
+    while (pos + 16 <= end) {
         const token = readAscii4(bytes, pos);
         if (token !== 'KGTR' && token !== 'KGRT' && token !== 'KGSC') {
             break;
         }
-        const size = readU32FromArray(bytes, pos + 4);
-        const blockStart = pos + 8;
-        const blockEnd = blockStart + size;
-        if (size <= 0 || blockEnd > end) {
-            warn(`Node track ${token} has invalid size ${size}.`);
+        const tracksCount = readU32FromArray(bytes, pos + 4);
+        const interpolationType = Math.min(3, readU32FromArray(bytes, pos + 8)) as TrackInterpolation;
+        const blockStart = pos + 16;
+        const entryBytes = token === 'KGRT' ? 20 : 16; // frame + quat / frame + vec3
+        const tanBytes = token === 'KGRT' ? 32 : 24; // in/out tangents for hermite/bezier
+        const totalBytes = tracksCount * (entryBytes + (interpolationType > 1 ? tanBytes : 0));
+        const blockEnd = blockStart + totalBytes;
+        if (blockEnd > end) {
+            warn(`Node track ${token} payload exceeds node bounds.`);
             break;
         }
 
         if (token === 'KGTR') {
-            const v = readTrackVec3(bytes, blockStart, blockEnd);
-            if (v) translation[0] = v[0], translation[1] = v[1], translation[2] = v[2];
+            const track = readTrackVec3(bytes, pos + 4, blockEnd);
+            if (track) {
+                translationKeys.interpolation = track.interpolation;
+                translationKeys.keys = track.keys;
+            }
         } else if (token === 'KGRT') {
-            const q = readTrackQuat(bytes, blockStart, blockEnd);
-            if (q) rotation[0] = q[0], rotation[1] = q[1], rotation[2] = q[2], rotation[3] = q[3];
+            const track = readTrackQuat(bytes, pos + 4, blockEnd);
+            if (track) {
+                rotationKeys.interpolation = track.interpolation;
+                rotationKeys.keys = track.keys;
+            }
         } else if (token === 'KGSC') {
-            const v = readTrackVec3(bytes, blockStart, blockEnd);
-            if (v) scaling[0] = v[0], scaling[1] = v[1], scaling[2] = v[2];
+            const track = readTrackVec3(bytes, pos + 4, blockEnd);
+            if (track) {
+                scalingKeys.interpolation = track.interpolation;
+                scalingKeys.keys = track.keys;
+            }
         }
 
         pos = blockEnd;
     }
 
-    return { nextPos: pos, translation, rotation: normalizeQuat(rotation), scaling };
+    return { nextPos: pos, translationKeys, rotationKeys, scalingKeys };
 }
 
-function readTrackVec3(bytes: Uint8Array, start: number, end: number): [number, number, number] | null {
+function readTrackVec3(bytes: Uint8Array, start: number, end: number): Vec3Track | null {
     if (start + 12 > end) return null;
     const tracksCount = readU32FromArray(bytes, start);
-    const interpolationType = readU32FromArray(bytes, start + 4);
+    const interpolationType = Math.min(3, readU32FromArray(bytes, start + 4)) as TrackInterpolation;
     let pos = start + 12;
-    if (tracksCount <= 0 || pos + 4 + 12 > end) return null;
-
-    pos += 4; // time
-    const v: [number, number, number] = [readF32FromArray(bytes, pos), readF32FromArray(bytes, pos + 4), readF32FromArray(bytes, pos + 8)];
-    pos += 12;
-
-    if (interpolationType > 1) {
-        if (pos + 24 > end) return v;
+    const keys: Vec3Key[] = [];
+    for (let i = 0; i < tracksCount; i++) {
+        if (pos + 16 > end) break;
+        const frame = readI32FromArray(bytes, pos);
+        pos += 4;
+        const value: [number, number, number] = [readF32FromArray(bytes, pos), readF32FromArray(bytes, pos + 4), readF32FromArray(bytes, pos + 8)];
+        pos += 12;
+        keys.push({ frame, value });
+        if (interpolationType > 1) {
+            if (pos + 24 > end) break;
+            pos += 24;
+        }
     }
-    return v;
+    return { interpolation: interpolationType, keys };
 }
 
-function readTrackQuat(bytes: Uint8Array, start: number, end: number): [number, number, number, number] | null {
+function readTrackQuat(bytes: Uint8Array, start: number, end: number): QuatTrack | null {
     if (start + 12 > end) return null;
     const tracksCount = readU32FromArray(bytes, start);
-    const interpolationType = readU32FromArray(bytes, start + 4);
+    const interpolationType = Math.min(3, readU32FromArray(bytes, start + 4)) as TrackInterpolation;
     let pos = start + 12;
-    if (tracksCount <= 0 || pos + 4 + 16 > end) return null;
-
-    pos += 4; // time
-    const q: [number, number, number, number] = [
-        readF32FromArray(bytes, pos),
-        readF32FromArray(bytes, pos + 4),
-        readF32FromArray(bytes, pos + 8),
-        readF32FromArray(bytes, pos + 12),
-    ];
-    pos += 16;
-
-    if (interpolationType > 1) {
-        if (pos + 32 > end) return normalizeQuat(q);
+    const keys: QuatKey[] = [];
+    for (let i = 0; i < tracksCount; i++) {
+        if (pos + 20 > end) break;
+        const frame = readI32FromArray(bytes, pos);
+        pos += 4;
+        const q: [number, number, number, number] = normalizeQuat([
+            readF32FromArray(bytes, pos),
+            readF32FromArray(bytes, pos + 4),
+            readF32FromArray(bytes, pos + 8),
+            readF32FromArray(bytes, pos + 12),
+        ]);
+        pos += 16;
+        keys.push({ frame, value: q });
+        if (interpolationType > 1) {
+            if (pos + 32 > end) break;
+            pos += 32;
+        }
     }
-    return normalizeQuat(q);
+    return { interpolation: interpolationType, keys };
 }
 
-function applyBindPoseSkinning(geoset: ParsedGeoset, nodeMap: Map<number, MdxNode>, warnOnce: (msg: string) => void): void {
+function parseGeosetAnims(
+    chunk: Uint8Array,
+    _modelVersion: number,
+    warn: (msg: string) => void,
+    onAnim: (anim: GeosetAnim) => void
+): void {
+    let pos = 0;
+    while (pos + 4 <= chunk.length) {
+        const inclusiveSize = readU32FromArray(chunk, pos);
+        let entryEnd = pos + inclusiveSize;
+        if (entryEnd <= pos + 4 || entryEnd > chunk.length) {
+            entryEnd = pos + 4 + inclusiveSize;
+        }
+        if (inclusiveSize <= 0 || entryEnd > chunk.length) {
+            warn(`GEOA has invalid entry size ${inclusiveSize}.`);
+            break;
+        }
+        const entryStart = pos + 4;
+        if (entryStart + 24 > entryEnd) {
+            warn(`GEOA entry size ${inclusiveSize} too small.`);
+            pos = entryEnd;
+            continue;
+        }
+
+        const alpha = readF32FromArray(chunk, entryStart);
+        const geosetId = readU32FromArray(chunk, entryStart + 16);
+        let alphaTrack: FloatTrack = { interpolation: 0, keys: [] };
+
+        let tpos = entryStart + 20;
+        while (tpos + 16 <= entryEnd) {
+            const token = readAscii4(chunk, tpos);
+            if (token !== 'KGAO') break;
+            const tracksCount = readU32FromArray(chunk, tpos + 4);
+            const interpolationType = Math.min(3, readU32FromArray(chunk, tpos + 8)) as TrackInterpolation;
+            const blockStart = tpos + 16;
+            const entryBytes = 8; // frame + float
+            const tanBytes = 8; // in/out float
+            const totalBytes = tracksCount * (entryBytes + (interpolationType > 1 ? tanBytes : 0));
+            const blockEnd = blockStart + totalBytes;
+            if (blockEnd > entryEnd) {
+                warn(`GEOA track ${token} payload exceeds entry bounds.`);
+                break;
+            }
+            const track = readTrackFloat(chunk, tpos + 4, blockEnd);
+            if (track) alphaTrack = track;
+            tpos = blockEnd;
+        }
+
+        onAnim({ geosetId, alpha, alphaTrack });
+        pos = entryEnd;
+    }
+}
+
+function isGeosetVisible(geosetId: number, frame: number, geosetAnims: Map<number, GeosetAnim>): boolean {
+    const anim = geosetAnims.get(geosetId);
+    if (!anim) return true;
+    const alpha = evalFloatTrack(anim.alphaTrack, frame, anim.alpha);
+    return alpha > 0.01;
+}
+
+function applyPoseSkinning(geoset: ParsedGeoset, nodeMap: Map<number, MdxNode>, frame: number, warnOnce: (msg: string) => void): void {
+    const worldByNodeId = new Map<number, Float32Array>();
+    const resolveWorld = (nodeId: number): Float32Array | null => {
+        const existing = worldByNodeId.get(nodeId);
+        if (existing) return existing;
+        const node = nodeMap.get(nodeId);
+        if (!node) return null;
+        const world = getNodeWorldMatrix(node, nodeMap, frame, warnOnce, new Set<number>(), worldByNodeId);
+        return world;
+    };
+
     const groupOffsets: number[] = new Array(geoset.matrixGroupCounts.length);
     let cursor = 0;
     for (let i = 0; i < geoset.matrixGroupCounts.length; i++) {
@@ -378,12 +850,11 @@ function applyBindPoseSkinning(geoset: ParsedGeoset, nodeMap: Map<number, MdxNod
             const matrixIndexOffset = start + mi;
             if (matrixIndexOffset >= geoset.matrixIndices.length) break;
             const nodeId = geoset.matrixIndices[matrixIndexOffset];
-            const node = nodeMap.get(nodeId);
-            if (!node) {
+            const world = resolveWorld(nodeId);
+            if (!world) {
                 warnOnce(`Missing node ${nodeId} referenced by geoset matrix group.`);
                 continue;
             }
-            const world = getNodeWorldMatrix(node, nodeMap, warnOnce, new Set<number>());
             const p = transformPoint(world, px, py, pz);
             const n = transformDirection(world, nx, ny, nz);
             sx += p[0];
@@ -415,36 +886,62 @@ function applyBindPoseSkinning(geoset: ParsedGeoset, nodeMap: Map<number, MdxNod
 function getNodeWorldMatrix(
     node: MdxNode,
     nodeMap: Map<number, MdxNode>,
+    frame: number,
     warnOnce: (msg: string) => void,
-    chain: Set<number>
+    chain: Set<number>,
+    cache: Map<number, Float32Array>
 ): Float32Array {
-    if (node.worldMatrix) return node.worldMatrix;
+    const cached = cache.get(node.objectId);
+    if (cached) return cached;
 
     if (chain.has(node.objectId)) {
         warnOnce(`Cycle detected in node hierarchy at objectId ${node.objectId}.`);
-        node.worldMatrix = mat4FromTRSP(node.translation, node.rotation, node.scaling, node.pivot);
-        return node.worldMatrix;
+        const cyc = mat4FromTRSP(
+            evalVec3Track(node.translationKeys, frame, [0, 0, 0]),
+            evalQuatTrack(node.rotationKeys, frame, [0, 0, 0, 1]),
+            evalVec3Track(node.scalingKeys, frame, [1, 1, 1]),
+            node.pivot
+        );
+        cache.set(node.objectId, cyc);
+        return cyc;
     }
 
     chain.add(node.objectId);
-    const local = mat4FromTRSP(node.translation, node.rotation, node.scaling, node.pivot);
+    const local = mat4FromTRSP(
+        evalVec3Track(node.translationKeys, frame, [0, 0, 0]),
+        evalQuatTrack(node.rotationKeys, frame, [0, 0, 0, 1]),
+        evalVec3Track(node.scalingKeys, frame, [1, 1, 1]),
+        node.pivot
+    );
+    let world = local;
     if (node.parentId >= 0) {
         const parent = nodeMap.get(node.parentId);
         if (parent) {
-            const parentWorld = getNodeWorldMatrix(parent, nodeMap, warnOnce, chain);
-            node.worldMatrix = mat4Multiply(parentWorld, local);
+            const parentWorld = getNodeWorldMatrix(parent, nodeMap, frame, warnOnce, chain, cache);
+            world = mat4Multiply(buildParentInheritedMatrix(parentWorld, node.flags), local);
         } else {
             warnOnce(`Node ${node.objectId} references missing parent ${node.parentId}.`);
-            node.worldMatrix = local;
         }
-    } else {
-        node.worldMatrix = local;
     }
     chain.delete(node.objectId);
-    return node.worldMatrix;
+    cache.set(node.objectId, world);
+    return world;
 }
 
-function parseMdxGeoset(geoset: Uint8Array, warn: (msg: string) => void): ParsedGeoset & { consumedBytes: number } {
+function buildParentInheritedMatrix(parentWorld: Float32Array, childFlags: number): Float32Array {
+    const parentT = extractTranslation(parentWorld);
+    const parentS = extractScale(parentWorld);
+    const parentR = extractRotation(parentWorld, parentS);
+    const t: [number, number, number] =
+        (childFlags & NODE_DONT_INHERIT_TRANSLATION) !== 0 ? [0, 0, 0] : parentT;
+    const r: [number, number, number, number] =
+        (childFlags & NODE_DONT_INHERIT_ROTATION) !== 0 ? [0, 0, 0, 1] : parentR;
+    const s: [number, number, number] =
+        (childFlags & NODE_DONT_INHERIT_SCALING) !== 0 ? [1, 1, 1] : parentS;
+    return mat4FromTRSP(t, r, s, [0, 0, 0]);
+}
+
+function parseMdxGeoset(geoset: Uint8Array, warn: (msg: string) => void, modelVersion: number): ParsedGeoset & { consumedBytes: number } {
     let pos = 0;
 
     const expectChunk = (token: string): { count: number; start: number } => {
@@ -535,27 +1032,22 @@ function parseMdxGeoset(geoset: Uint8Array, warn: (msg: string) => void): Parsed
     }
     pos += matsBytes;
 
-    const tailEndSd = parseGeosetTail(geoset, pos, false);
-    const tailEndHd = parseGeosetTail(geoset, pos, true);
-    if (tailEndSd < 0 && tailEndHd < 0) {
+    const tailEnd = parseGeosetTail(geoset, pos, modelVersion);
+    if (tailEnd < 0) {
         throw new Error('geoset fixed fields are truncated or unsupported');
     }
-    if (tailEndHd >= 0 && (tailEndSd < 0 || tailEndHd >= tailEndSd)) {
-        pos = tailEndHd;
-    } else {
-        pos = tailEndSd;
-    }
+    pos = tailEnd;
 
     const triangles = buildTriangles(faceTypes, faceGroups, faceIndices, warn);
     return { vertices, normals, indices: triangles, vertexGroupByVertex, matrixGroupCounts, matrixIndices, consumedBytes: pos };
 }
 
-function parseGeosetTail(geoset: Uint8Array, start: number, includeHdLod: boolean): number {
+function parseGeosetTail(geoset: Uint8Array, start: number, modelVersion: number): number {
     let pos = start;
     if (pos + 12 > geoset.length) return -1;
     pos += 12; // materialId, selectionGroup, selectionFlags
 
-    if (includeHdLod) {
+    if (modelVersion > 800) {
         if (pos + 84 > geoset.length) return -1;
         pos += 84; // lod + lodName[80]
     }
@@ -569,23 +1061,25 @@ function parseGeosetTail(geoset: Uint8Array, start: number, includeHdLod: boolea
     if (pos + extentsBytes > geoset.length) return -1;
     pos += extentsBytes;
 
-    // Optional HD blocks before UVAS.
-    while (pos + 8 <= geoset.length) {
-        const token = readAscii4(geoset, pos);
-        if (token === 'UVAS') break;
-        const count = readU32FromArray(geoset, pos + 4);
-        if (token === 'TANG') {
-            const bytes = count * 16;
-            if (pos + 8 + bytes > geoset.length) return -1;
-            pos += 8 + bytes;
-            continue;
+    if (modelVersion > 800 && modelVersion < 1200) {
+        // Optional HD blocks before UVAS.
+        while (pos + 8 <= geoset.length) {
+            const token = readAscii4(geoset, pos);
+            if (token === 'UVAS') break;
+            const count = readU32FromArray(geoset, pos + 4);
+            if (token === 'TANG') {
+                const bytes = count * 16;
+                if (pos + 8 + bytes > geoset.length) return -1;
+                pos += 8 + bytes;
+                continue;
+            }
+            if (token === 'SKIN') {
+                if (pos + 8 + count > geoset.length) return -1;
+                pos += 8 + count;
+                continue;
+            }
+            return -1;
         }
-        if (token === 'SKIN') {
-            if (pos + 8 + count > geoset.length) return -1;
-            pos += 8 + count;
-            continue;
-        }
-        return -1;
     }
 
     if (pos + 8 > geoset.length || readAscii4(geoset, pos) !== 'UVAS') return -1;
@@ -636,6 +1130,122 @@ function buildTriangles(faceTypes: number[], faceGroups: number[], faceIndices: 
         }
     }
     return out;
+}
+
+function readTrackFloat(bytes: Uint8Array, start: number, end: number): FloatTrack | null {
+    if (start + 12 > end) return null;
+    const tracksCount = readU32FromArray(bytes, start);
+    const interpolationType = Math.min(3, readU32FromArray(bytes, start + 4)) as TrackInterpolation;
+    let pos = start + 12;
+    const keys: FloatKey[] = [];
+    for (let i = 0; i < tracksCount; i++) {
+        if (pos + 8 > end) break;
+        const frame = readI32FromArray(bytes, pos);
+        pos += 4;
+        const value = readF32FromArray(bytes, pos);
+        pos += 4;
+        keys.push({ frame, value });
+        if (interpolationType > 1) {
+            if (pos + 8 > end) break;
+            pos += 8;
+        }
+    }
+    return { interpolation: interpolationType, keys };
+}
+
+function evalFloatTrack(track: FloatTrack, frame: number, fallback: number): number {
+    if (!track.keys.length) return fallback;
+    if (track.keys.length === 1) return track.keys[0].value;
+    if (frame <= track.keys[0].frame) return track.keys[0].value;
+    const last = track.keys[track.keys.length - 1];
+    if (frame >= last.frame) return last.value;
+    for (let i = 0; i + 1 < track.keys.length; i++) {
+        const a = track.keys[i];
+        const b = track.keys[i + 1];
+        if (frame < a.frame || frame > b.frame) continue;
+        if (track.interpolation === 0) return a.value;
+        const t = (frame - a.frame) / Math.max(1e-6, b.frame - a.frame);
+        return a.value + (b.value - a.value) * t;
+    }
+    return last.value;
+}
+
+function evalVec3Track(track: Vec3Track, frame: number, fallback: [number, number, number]): [number, number, number] {
+    if (!track.keys.length) return fallback;
+    if (track.keys.length === 1) return track.keys[0].value;
+    if (frame <= track.keys[0].frame) return track.keys[0].value;
+    const last = track.keys[track.keys.length - 1];
+    if (frame >= last.frame) return last.value;
+    for (let i = 0; i + 1 < track.keys.length; i++) {
+        const a = track.keys[i];
+        const b = track.keys[i + 1];
+        if (frame < a.frame || frame > b.frame) continue;
+        if (track.interpolation === 0) return a.value;
+        const t = (frame - a.frame) / Math.max(1e-6, b.frame - a.frame);
+        return [
+            a.value[0] + (b.value[0] - a.value[0]) * t,
+            a.value[1] + (b.value[1] - a.value[1]) * t,
+            a.value[2] + (b.value[2] - a.value[2]) * t,
+        ];
+    }
+    return last.value;
+}
+
+function evalQuatTrack(track: QuatTrack, frame: number, fallback: [number, number, number, number]): [number, number, number, number] {
+    if (!track.keys.length) return fallback;
+    if (track.keys.length === 1) return track.keys[0].value;
+    if (frame <= track.keys[0].frame) return track.keys[0].value;
+    const last = track.keys[track.keys.length - 1];
+    if (frame >= last.frame) return last.value;
+    for (let i = 0; i + 1 < track.keys.length; i++) {
+        const a = track.keys[i];
+        const b = track.keys[i + 1];
+        if (frame < a.frame || frame > b.frame) continue;
+        if (track.interpolation === 0) return a.value;
+        const t = (frame - a.frame) / Math.max(1e-6, b.frame - a.frame);
+        return slerpQuat(a.value, b.value, t);
+    }
+    return last.value;
+}
+
+function slerpQuat(
+    a: [number, number, number, number],
+    b: [number, number, number, number],
+    t: number
+): [number, number, number, number] {
+    let ax = a[0], ay = a[1], az = a[2], aw = a[3];
+    let bx = b[0], by = b[1], bz = b[2], bw = b[3];
+    let cosHalfTheta = ax * bx + ay * by + az * bz + aw * bw;
+    if (cosHalfTheta < 0) {
+        bx = -bx; by = -by; bz = -bz; bw = -bw;
+        cosHalfTheta = -cosHalfTheta;
+    }
+    if (cosHalfTheta > 0.9995) {
+        return normalizeQuat([
+            ax + (bx - ax) * t,
+            ay + (by - ay) * t,
+            az + (bz - az) * t,
+            aw + (bw - aw) * t,
+        ]);
+    }
+    const halfTheta = Math.acos(Math.max(-1, Math.min(1, cosHalfTheta)));
+    const sinHalfTheta = Math.sqrt(1 - cosHalfTheta * cosHalfTheta);
+    if (Math.abs(sinHalfTheta) < 0.001) {
+        return normalizeQuat([
+            ax * 0.5 + bx * 0.5,
+            ay * 0.5 + by * 0.5,
+            az * 0.5 + bz * 0.5,
+            aw * 0.5 + bw * 0.5,
+        ]);
+    }
+    const ratioA = Math.sin((1 - t) * halfTheta) / sinHalfTheta;
+    const ratioB = Math.sin(t * halfTheta) / sinHalfTheta;
+    return normalizeQuat([
+        ax * ratioA + bx * ratioB,
+        ay * ratioA + by * ratioB,
+        az * ratioA + bz * ratioB,
+        aw * ratioA + bw * ratioB,
+    ]);
 }
 
 function mat4Identity(): Float32Array {
@@ -709,6 +1319,55 @@ function mat4FromTRSP(
     const s = mat4Scale(scaling[0], scaling[1], scaling[2]);
     const tnp = mat4Translate(-pivot[0], -pivot[1], -pivot[2]);
     return mat4Multiply(mat4Multiply(mat4Multiply(mat4Multiply(t, tp), r), s), tnp);
+}
+
+function extractTranslation(m: Float32Array): [number, number, number] {
+    return [m[12], m[13], m[14]];
+}
+
+function extractScale(m: Float32Array): [number, number, number] {
+    const sx = Math.hypot(m[0], m[1], m[2]) || 1;
+    const sy = Math.hypot(m[4], m[5], m[6]) || 1;
+    const sz = Math.hypot(m[8], m[9], m[10]) || 1;
+    return [sx, sy, sz];
+}
+
+function extractRotation(m: Float32Array, scale: [number, number, number]): [number, number, number, number] {
+    const sx = scale[0] || 1;
+    const sy = scale[1] || 1;
+    const sz = scale[2] || 1;
+    const r00 = m[0] / sx, r01 = m[4] / sy, r02 = m[8] / sz;
+    const r10 = m[1] / sx, r11 = m[5] / sy, r12 = m[9] / sz;
+    const r20 = m[2] / sx, r21 = m[6] / sy, r22 = m[10] / sz;
+
+    const trace = r00 + r11 + r22;
+    let x = 0, y = 0, z = 0, w = 1;
+    if (trace > 0) {
+        const s = Math.sqrt(trace + 1) * 2;
+        w = 0.25 * s;
+        x = (r21 - r12) / s;
+        y = (r02 - r20) / s;
+        z = (r10 - r01) / s;
+    } else if (r00 > r11 && r00 > r22) {
+        const s = Math.sqrt(1 + r00 - r11 - r22) * 2;
+        w = (r21 - r12) / s;
+        x = 0.25 * s;
+        y = (r01 + r10) / s;
+        z = (r02 + r20) / s;
+    } else if (r11 > r22) {
+        const s = Math.sqrt(1 + r11 - r00 - r22) * 2;
+        w = (r02 - r20) / s;
+        x = (r01 + r10) / s;
+        y = 0.25 * s;
+        z = (r12 + r21) / s;
+    } else {
+        const s = Math.sqrt(1 + r22 - r00 - r11) * 2;
+        w = (r10 - r01) / s;
+        x = (r02 + r20) / s;
+        y = (r12 + r21) / s;
+        z = 0.25 * s;
+    }
+    return normalizeQuat([x, y, z, w]);
 }
 
 function transformPoint(m: Float32Array, x: number, y: number, z: number): [number, number, number] {

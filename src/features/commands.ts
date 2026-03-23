@@ -187,6 +187,14 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
         return client.sendRequest(ExecuteCommandRequest.type, request);
     };
 
+    let fixAllQuickfixes = () => {
+        let request: ExecuteCommandParams = {
+            command: 'wurst.fix_all_quickfixes',
+            arguments: [],
+        };
+        return client.sendRequest(ExecuteCommandRequest.type, request);
+    };
+
     return vscode.Disposable.from(
         vscode.commands.registerCommand('wurst.startmap', (args: any[]) => startMap('wurst.startmap', args)),
         vscode.commands.registerCommand('wurst.hotstartmap', (args: any[]) => startMap('wurst.hotstartmap', args)),
@@ -197,6 +205,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
         vscode.commands.registerCommand('wurst.tests', (args: any[]) => tests('all', args)),
         vscode.commands.registerCommand('wurst.tests_file', (args: any[]) => tests('file', args)),
         vscode.commands.registerCommand('wurst.tests_func', (args: any[]) => tests('func', args)),
-        vscode.commands.registerCommand('wurst.perform_code_action', (args: any[]) => performCodeAction(args))
+        vscode.commands.registerCommand('wurst.perform_code_action', (args: any[]) => performCodeAction(args)),
+        vscode.commands.registerCommand('wurst.fix_all_quickfixes', () => fixAllQuickfixes())
     );
 }

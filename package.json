@@ -30,6 +30,7 @@
         "onCommand:wurst.tests",
         "onCommand:wurst.tests_file",
         "onCommand:wurst.tests_func",
+        "onCommand:wurst.fix_all_quickfixes",
         "onCommand:wurst.perform_code_action",
         "onCommand:wurst.buildmap",
         "onCommand:wurst.tests_file"
@@ -139,6 +140,11 @@
             {
                 "command": "wurst.tests_func",
                 "title": "Run unit test under cursor",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.fix_all_quickfixes",
+                "title": "Apply all Wurst quickfixes in workspace",
                 "category": "wurst"
             },
             {

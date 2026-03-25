@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:registry.npmjs.org)",
+      "WebFetch(domain:bundlephobia.com)",
+      "Bash(npm install:*)",
+      "Bash(node -e \":*)",
+      "Bash(npx webpack:*)",
+      "Bash(npx tsc:*)",
+      "Bash(node -e \"const c = require\\(''casc-cdn''\\); console.log\\(Object.keys\\(c\\)\\)\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/dschu012/node-casclib/master/README.md\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/dschu012/node-casclib/master/package.json\")",
+      "Bash(npm view:*)",
+      "Bash(npm pack:*)",
+      "Bash(ls c:/Users/Frotty/Documents/GitHub/wurst4vscode/node_modules/@dschu012/casclib/build/Release/*.node)"
+    ]
+  }
+}

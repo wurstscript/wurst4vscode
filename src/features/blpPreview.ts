@@ -1,8 +1,10 @@
 'use strict';
 
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+import { execFile } from 'child_process';
 import * as vscode from 'vscode';
-import { decodeMdx, DecodedMdxModel } from './preview/mdxDecode';
 
 const BLP_VIEW_TYPE = 'wurst.blpPreview';
 const CONTENT_JPEG = 0;
@@ -35,7 +37,13 @@ type DecodedRasterImage =
           description: string;
       };
 
-type DecodedBlpImage = DecodedRasterImage | DecodedMdxModel;
+type DecodedMdxRaw = {
+    kind: 'mdx-raw';
+    mdxBase64: string;
+    fileName: string;
+};
+
+type DecodedBlpImage = DecodedRasterImage | DecodedMdxRaw;
 
 class ByteReader {
     private pos = 0;
@@ -99,26 +107,166 @@ class ByteReader {
     }
 }
 
-export function registerBlpPreview(_context: vscode.ExtensionContext): vscode.Disposable {
-    const provider = new BlpPreviewProvider();
-    return vscode.window.registerCustomEditorProvider(BLP_VIEW_TYPE, provider, {
+export function registerBlpPreview(context: vscode.ExtensionContext): vscode.Disposable {
+    const provider = new BlpPreviewProvider(context.extensionUri);
+    const editorDisposable = vscode.window.registerCustomEditorProvider(BLP_VIEW_TYPE, provider, {
         webviewOptions: {
             retainContextWhenHidden: true,
         },
         supportsMultipleEditorsPerDocument: true,
     });
+
+    const testDisposable = vscode.commands.registerCommand('wurst.testCascExtraction', async () => {
+        const output = vscode.window.createOutputChannel('Wurst CASC Smoketest');
+        output.show(true);
+        const log = (msg: string) => { output.appendLine(msg); };
+
+        log('=== CASC Smoketest ===');
+        const wc3path = vscode.workspace.getConfiguration('wurst').get<string>('wc3path', '');
+        log(`wurst.wc3path setting: "${wc3path || '(not set)'}"`);
+        log(`cache dir: ${getCacheDir()}`);
+
+        const testBlpPath = 'Textures\\Abomination.blp';
+        log(`\nExtracting: ${testBlpPath}`);
+        const result = await findCascTexture(testBlpPath, log);
+        if (result) {
+            log(`\nSUCCESS: ${result.ext} ${result.buf.length} bytes`);
+            vscode.window.showInformationMessage(`CASC smoketest OK: ${result.ext} (${result.buf.length} bytes)`);
+        } else {
+            log(`\nFAILED`);
+            vscode.window.showWarningMessage('CASC smoketest failed — see output');
+        }
+    });
+
+    return vscode.Disposable.from(editorDisposable, testDisposable);
+}
+
+const WC3_DEFAULT_PATHS = [
+    'C:\\Program Files (x86)\\Warcraft III',
+    'C:\\Program Files\\Warcraft III',
+    'D:\\Program Files (x86)\\Warcraft III',
+    'D:\\Program Files\\Warcraft III',
+];
+
+/** Walk up from `startPath` until we find a directory containing a `Data` subdirectory. */
+function findCascDataRoot(startPath: string): string | null {
+    let dir = startPath;
+    for (let i = 0; i < 5; i++) {
+        if (fs.existsSync(path.join(dir, 'Data'))) {
+            return dir;
+        }
+        const parent = path.dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+    }
+    return null;
+}
+
+function getCacheDir(): string {
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    return ws ? path.join(ws, '_build', 'casc_cache') : path.join(os.tmpdir(), 'wurst_casc_cache');
+}
+
+function getCascDataRoot(log: (msg: string) => void): string | null {
+    let wc3path = vscode.workspace.getConfiguration('wurst').get<string>('wc3path', '');
+    if (!wc3path) {
+        const found = WC3_DEFAULT_PATHS.find(p => fs.existsSync(p));
+        if (found) { log(`CASC wc3path not set, using default: ${found}`); wc3path = found; }
+        else { log(`CASC skip: wurst.wc3path not set and no default path found`); return null; }
+    }
+    const dataRoot = findCascDataRoot(wc3path);
+    if (!dataRoot) { log(`CASC skip: no Data/ folder found walking up from: ${wc3path}`); return null; }
+    if (dataRoot !== wc3path) { log(`CASC resolved data root: ${dataRoot} (from ${wc3path})`); }
+    return dataRoot;
+}
+
+/** Spawn casc-extract-worker.js (plain Node) to extract one file from CASC into outputFile. */
+function cascExtractViaWorker(wc3Root: string, cascPath: string, outputFile: string): Promise<number> {
+    const workerScript = path.join(__dirname, '..', '..', 'src', 'casc-extract-worker.js');
+    // Use system node, not process.execPath (which is Electron)
+    const nodeBin = 'node';
+    return new Promise((resolve, reject) => {
+        execFile(nodeBin, [workerScript, wc3Root, cascPath, outputFile], { timeout: 30000 }, (err, stdout, stderr) => {
+            if (err) { reject(new Error(stderr || err.message)); return; }
+            resolve(parseInt(stdout.trim(), 10) || 0);
+        });
+    });
+}
+
+/** Look up a texture. Checks disk cache first; if missing, extracts via child process and caches. */
+async function findCascTexture(texPath: string, log: (msg: string) => void): Promise<{ buf: Buffer; ext: 'dds' | 'blp' } | null> {
+    const cacheDir = getCacheDir();
+    // CASC paths are lowercase with backslash separators
+    const normalized = texPath.replace(/\//g, '\\').toLowerCase();
+    const ddsPath = normalized.replace(/\.blp$/, '.dds');
+
+    // Check disk cache
+    for (const [rel, ext] of [[ddsPath, 'dds'], [normalized, 'blp']] as const) {
+        const cachePath = path.join(cacheDir, rel);
+        if (fs.existsSync(cachePath)) {
+            log(`CASC cache hit: ${rel}`);
+            return { buf: fs.readFileSync(cachePath), ext };
+        }
+    }
+
+    const wc3Root = getCascDataRoot(log);
+    if (!wc3Root) return null;
+
+    const candidates: Array<[string, 'dds' | 'blp']> = [
+        [`war3.w3mod:${ddsPath}`, 'dds'],
+        [`war3.w3mod:_hd.w3mod:${ddsPath}`, 'dds'],
+        [`war3.w3mod:${normalized}`, 'blp'],
+    ];
+
+    for (const [cascPath, ext] of candidates) {
+        const rel = ext === 'dds' ? ddsPath : normalized;
+        const cachePath = path.join(cacheDir, rel);
+        try {
+            const bytes = await cascExtractViaWorker(wc3Root, cascPath, cachePath);
+            log(`CASC extracted: ${cascPath} (${bytes} bytes) → ${cachePath}`);
+            return { buf: fs.readFileSync(cachePath), ext };
+        } catch (e) {
+            log(`CASC miss: ${cascPath} — ${String(e)}`);
+        }
+    }
+    return null;
+}
+
+/** Try to read a texture file from the local filesystem relative to the MDX file.
+ *  Returns the buffer and the actual path found (may differ in extension). */
+function findLocalTexture(texPath: string, mdxFsPath: string): { buf: Buffer; foundPath: string } | null {
+    const normalized = texPath.replace(/\\/g, '/');
+    // When the model references a .blp, also try the Reforged .dds equivalent.
+    const alternates = [normalized];
+    if (normalized.toLowerCase().endsWith('.blp')) {
+        alternates.push(normalized.slice(0, -4) + '.dds');
+    }
+    const mdxDir = path.dirname(mdxFsPath);
+
+    let dir = mdxDir;
+    for (let i = 0; i < 4; i++) {
+        for (const alt of alternates) {
+            const candidate = path.join(dir, alt);
+            if (fs.existsSync(candidate)) {
+                return { buf: fs.readFileSync(candidate), foundPath: candidate };
+            }
+        }
+        const parent = path.dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+    }
+    return null;
 }
 
 class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocument> {
+    constructor(private readonly extensionUri: vscode.Uri) {}
+
     async openCustomDocument(
         uri: vscode.Uri,
         _openContext: vscode.CustomDocumentOpenContext,
         _token: vscode.CancellationToken
     ): Promise<BlpDocument> {
-        return {
-            uri,
-            dispose: () => {},
-        };
+        return { uri, dispose: () => {} };
     }
 
     async resolveCustomEditor(
@@ -126,17 +274,19 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
         webviewPanel: vscode.WebviewPanel,
         _token: vscode.CancellationToken
     ): Promise<void> {
+        const viewerScriptUri = webviewPanel.webview.asWebviewUri(
+            vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', 'mdxViewer.js')
+        );
         webviewPanel.webview.options = {
             enableScripts: true,
+            localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview')],
         };
 
         const getFileName = () => path.basename(document.uri.fsPath || document.uri.path);
-        webviewPanel.webview.html = this.buildHtml(webviewPanel.webview, getFileName());
+        webviewPanel.webview.html = this.buildHtml(webviewPanel.webview, getFileName(), viewerScriptUri);
         let requestId = 0;
         let webviewReady = false;
         let pendingRender = true;
-        let selectedSequenceIndex = -1;
-        let selectedSequenceFrame: number | undefined;
         let cachedBytes: Uint8Array | undefined;
         const dbg = (msg: string) => console.log(`[wurst-preview] ${msg}`);
         dbg(`resolve editor for ${document.uri.toString()}`);
@@ -157,10 +307,14 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
                     cachedBytes = bytes;
                     dbg(`read ${bytes.byteLength} bytes for ${fileName}`);
                 }
-                const decoded = decodePreview(bytes, document.uri, selectedSequenceIndex, selectedSequenceFrame);
+                const decoded = decodePreview(bytes, document.uri);
                 if (id !== requestId) return;
-                await webviewPanel.webview.postMessage({ type: 'image', fileName, decoded });
-                dbg(`posted image payload for ${fileName}`);
+                if (decoded.kind === 'mdx-raw') {
+                    await webviewPanel.webview.postMessage({ type: 'mdx', mdxBase64: decoded.mdxBase64, fileName: decoded.fileName });
+                } else {
+                    await webviewPanel.webview.postMessage({ type: 'image', fileName, decoded });
+                }
+                dbg(`posted payload for ${fileName}`);
             } catch (error) {
                 if (id !== requestId) return;
                 const message = error instanceof Error ? error.message : String(error);
@@ -194,10 +348,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
             const watcher = vscode.workspace.createFileSystemWatcher(
                 new vscode.RelativePattern(path.dirname(filePath), path.basename(filePath))
             );
-            const rerender = () => {
-                cachedBytes = undefined;
-                requestRender();
-            };
+            const rerender = () => { cachedBytes = undefined; requestRender(); };
             watcher.onDidChange(rerender);
             watcher.onDidCreate(rerender);
             webviewPanel.onDidDispose(() => watcher.dispose());
@@ -209,51 +360,84 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
             if (type === 'ready') {
                 webviewReady = true;
                 dbg(`webview ready`);
-                if (pendingRender) {
-                    pendingRender = false;
-                    await render();
-                }
+                if (pendingRender) { pendingRender = false; await render(); }
                 return;
             }
             if (type === 'debug') {
-                const message = (msg as { message?: string }).message ?? '';
-                dbg(`webview: ${message}`);
+                dbg(`webview: ${(msg as { message?: string }).message ?? ''}`);
                 return;
             }
             if (type === 'refresh') {
-                dbg(`refresh requested by webview`);
+                dbg(`refresh requested`);
                 cachedBytes = undefined;
                 requestRender();
                 return;
             }
-            if (type === 'selectSequence') {
-                const raw = (msg as { index?: unknown }).index;
-                const next = typeof raw === 'number' && Number.isFinite(raw) ? Math.max(-1, Math.floor(raw)) : -1;
-                selectedSequenceIndex = next;
-                 selectedSequenceFrame = undefined;
-                dbg(`sequence selected index=${selectedSequenceIndex}`);
-                requestRender({ showLoading: false, preferCached: true });
-                return;
-            }
-            if (type === 'selectSequenceFrame') {
-                const rawIndex = (msg as { index?: unknown }).index;
-                const rawFrame = (msg as { frame?: unknown }).frame;
-                const nextIndex = typeof rawIndex === 'number' && Number.isFinite(rawIndex) ? Math.max(-1, Math.floor(rawIndex)) : -1;
-                const nextFrame = typeof rawFrame === 'number' && Number.isFinite(rawFrame) ? rawFrame : undefined;
-                selectedSequenceIndex = nextIndex;
-                selectedSequenceFrame = nextFrame;
-                requestRender({ showLoading: false, preferCached: true });
+            if (type === 'requestTextures') {
+                const rawPaths = (msg as { paths?: unknown }).paths;
+                if (!Array.isArray(rawPaths)) return;
+                const texPaths: string[] = rawPaths.filter((p): p is string => typeof p === 'string');
+                const mdxFsPath = document.uri.scheme === 'file' ? document.uri.fsPath : '';
+                dbg(`texture request: ${texPaths.length} paths`);
+
+                // Resolve textures concurrently
+                await Promise.all(texPaths.map(async (texPath) => {
+                    try {
+                        let texBuf: Buffer | null = null;
+                        let texExt: 'blp' | 'dds' | null = null;
+
+                        // 1. Local file lookup (also tries .dds for .blp references)
+                        if (mdxFsPath) {
+                            const found = findLocalTexture(texPath, mdxFsPath);
+                            if (found) {
+                                texBuf = found.buf;
+                                texExt = found.foundPath.toLowerCase().endsWith('.dds') ? 'dds' : 'blp';
+                            }
+                        }
+
+                        // 2. CASC local archive fallback (uses wurst.wc3path)
+                        if (!texBuf) {
+                            const casc = await findCascTexture(texPath, dbg);
+                            if (casc) { texBuf = casc.buf; texExt = casc.ext; }
+                        }
+
+                        if (!texBuf || !texExt) {
+                            await webviewPanel.webview.postMessage({ type: 'texture', path: texPath, blpBase64: null });
+                            dbg(`texture ${texPath}: not found`);
+                            return;
+                        }
+
+                        if (texExt === 'dds') {
+                            const decoded = decodeDds(new Uint8Array(texBuf));
+                            if (decoded.mode === 'rgba') {
+                                await webviewPanel.webview.postMessage({
+                                    type: 'texture', path: texPath,
+                                    blpBase64: null, rgbaBase64: decoded.rgbaBase64,
+                                    width: decoded.width, height: decoded.height,
+                                });
+                            } else {
+                                await webviewPanel.webview.postMessage({ type: 'texture', path: texPath, blpBase64: null });
+                            }
+                        } else {
+                            await webviewPanel.webview.postMessage({ type: 'texture', path: texPath, blpBase64: texBuf.toString('base64') });
+                        }
+                        dbg(`texture ${texPath}: found (${texExt})`);
+                    } catch (e) {
+                        dbg(`texture error ${texPath}: ${String(e)}`);
+                        await webviewPanel.webview.postMessage({ type: 'texture', path: texPath, blpBase64: null });
+                    }
+                }));
             }
         });
     }
 
-    private buildHtml(webview: vscode.Webview, initialFileName: string): string {
+    private buildHtml(webview: vscode.Webview, initialFileName: string, viewerScriptUri: vscode.Uri): string {
         const nonce = makeNonce();
         const fileName = escapeHtml(initialFileName);
         const csp = [
             "default-src 'none'",
             `img-src ${webview.cspSource} blob: data:`,
-            `script-src 'nonce-${nonce}'`,
+            `script-src ${webview.cspSource} 'nonce-${nonce}'`,
             "style-src 'unsafe-inline'",
         ].join('; ');
 
@@ -279,84 +463,141 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       --cb-b: color-mix(in srgb, var(--vscode-editorWidget-border) 55%, transparent);
     }
     * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
     body {
-      margin: 0;
       background: var(--bg);
       color: var(--text);
       font-family: var(--vscode-font-family);
       font-size: var(--vscode-font-size);
-      display: grid;
-      grid-template-rows: auto 1fr;
-      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
     }
     header {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      display: flex;
       align-items: center;
-      gap: 12px;
-      padding: 10px 14px;
+      gap: 8px;
+      padding: 6px 12px;
       border-bottom: 1px solid var(--border);
       background: var(--panel);
-      position: sticky;
-      top: 0;
+      flex-shrink: 0;
+      min-width: 0;
     }
     .meta {
+      flex: 1;
+      min-width: 0;
       color: var(--muted);
       font-size: 12px;
-      line-height: 1.4;
-      min-width: 0;
+      line-height: 1.3;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .meta strong {
-      color: var(--text);
-      font-size: 13px;
-    }
+    .meta strong { color: var(--text); font-size: 13px; }
     .toolbar {
       display: flex;
       align-items: center;
-      gap: 6px;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-      min-width: 0;
+      gap: 4px;
+      flex-shrink: 0;
     }
+    .sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; }
     button {
-      border: 1px solid transparent;
-      background: var(--btn-bg);
-      color: var(--btn-fg);
-      padding: 6px 10px;
-      border-radius: 4px;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      padding: 4px 8px;
+      border-radius: 3px;
       cursor: pointer;
       font-size: 12px;
+      white-space: nowrap;
     }
-    button:hover { background: var(--btn-hover); }
-    button:focus-visible {
-      outline: 1px solid var(--vscode-focusBorder);
-      outline-offset: 1px;
-    }
+    button:hover { background: color-mix(in srgb, var(--btn-bg) 60%, transparent); color: var(--text); }
+    button.active { background: var(--btn-bg); color: var(--btn-fg); }
+    button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
     .zoom-label {
-      min-width: 52px;
+      min-width: 38px;
       text-align: center;
       color: var(--muted);
       font-size: 12px;
       font-variant-numeric: tabular-nums;
     }
-    main {
-      display: grid;
-      place-items: center;
-      padding: 18px;
+    .content-area {
+      flex: 1;
+      display: flex;
+      min-height: 0;
+      overflow: hidden;
+    }
+    /* ── Sidebar ── */
+    .sidebar {
+      width: 210px;
+      min-width: 210px;
+      display: none;
+      flex-direction: column;
+      overflow-y: auto;
+      border-right: 1px solid var(--border);
+      background: color-mix(in srgb, var(--panel) 70%, transparent);
+      padding: 10px;
       gap: 12px;
+      flex-shrink: 0;
+    }
+    .sidebar.visible { display: flex; }
+    .sb-section { display: flex; flex-direction: column; gap: 5px; }
+    .sb-label {
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      opacity: 0.7;
+    }
+    .sb-name { font-weight: 600; font-size: 13px; color: var(--text); word-break: break-word; }
+    .sb-info { font-size: 11px; color: var(--muted); line-height: 1.4; }
+    .sb-divider { height: 1px; background: var(--border); opacity: 0.5; margin: 2px 0; }
+    .anim-select {
       width: 100%;
+      background: var(--vscode-dropdown-background);
+      color: var(--vscode-dropdown-foreground);
+      border: 1px solid var(--vscode-dropdown-border);
+      border-radius: 3px;
+      padding: 4px 6px;
+      font-size: 12px;
+    }
+    .autoplay-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .autoplay-row input { cursor: pointer; }
+    .frame-label {
+      font-size: 11px;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .seq-slider { width: 100%; cursor: pointer; }
+    .seq-name {
+      font-size: 11px;
+      color: var(--text);
+      opacity: 0.8;
+      word-break: break-word;
+    }
+    /* ── Canvas area ── */
+    .canvas-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
       min-width: 0;
+      padding: 12px;
+      gap: 8px;
+      overflow: hidden;
     }
     .viewport {
+      flex: 1;
       position: relative;
-      width: min(100%, 1000px);
-      max-width: 100%;
-      height: min(72vh, calc(100vh - 180px));
+      min-height: 0;
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: 6px;
       overflow: hidden;
       background: repeating-conic-gradient(var(--cb-a) 0% 25%, var(--cb-b) 0% 50%) 50% / 20px 20px;
       cursor: grab;
@@ -367,123 +608,47 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       position: absolute;
       right: 8px;
       bottom: 8px;
-      width: 92px;
-      height: 92px;
-      border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
-      border-radius: 8px;
-      background: color-mix(in srgb, var(--panel) 65%, transparent);
+      width: 80px;
+      height: 80px;
+      border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+      border-radius: 6px;
+      background: color-mix(in srgb, var(--panel) 55%, transparent);
       pointer-events: none;
     }
     .viewport.dragging { cursor: grabbing; }
     .stage {
       position: absolute;
-      left: 0;
-      top: 0;
+      left: 0; top: 0;
       transform-origin: 0 0;
       will-change: transform;
       transition: opacity 130ms ease;
     }
-    canvas {
-      display: block;
-      image-rendering: pixelated;
-      image-rendering: crisp-edges;
-    }
-    .stage-canvas {
-      position: static;
-      width: auto;
-      height: auto;
-    }
+    canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; }
+    .stage-canvas { position: static; width: auto; height: auto; }
+    .viewport.model-mode > .stage { width: 100%; height: 100%; }
+    .viewport.model-mode #canvas3d { width: 100%; height: 100%; }
     .warnings {
-      max-width: min(980px, calc(100vw - 40px));
       color: var(--warn);
       font-size: 12px;
       line-height: 1.45;
       white-space: pre-wrap;
+      flex-shrink: 0;
     }
     .debuglog {
-      max-width: min(980px, calc(100vw - 40px));
       color: var(--muted);
       font-size: 11px;
-      line-height: 1.35;
+      line-height: 1.3;
       white-space: pre-wrap;
-      max-height: 160px;
+      max-height: 130px;
       overflow: auto;
       border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-      border-radius: 6px;
-      padding: 8px;
-      background: color-mix(in srgb, var(--panel) 70%, transparent);
-      display: none;
-    }
-    .debuglog.visible {
-      display: block;
-    }
-    .model-panel {
-      width: min(100%, 1000px);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: color-mix(in srgb, var(--panel) 75%, transparent);
-      padding: 10px;
-      display: none;
-      grid-template-columns: 1fr auto;
-      align-items: center;
-      gap: 10px;
-      color: var(--muted);
-      font-size: 12px;
-    }
-    .model-panel.visible {
-      display: grid;
-    }
-    .seq-panel {
-      width: min(100%, 1000px);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: color-mix(in srgb, var(--panel) 72%, transparent);
-      padding: 10px;
-      display: none;
-      gap: 8px;
-      color: var(--muted);
-      font-size: 12px;
-    }
-    .seq-panel.visible {
-      display: grid;
-    }
-    .seq-row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-    .seq-frame {
-      min-width: 100px;
-      font-variant-numeric: tabular-nums;
-    }
-    .seq-slider {
-      width: min(420px, 100%);
-      flex: 1;
-    }
-    .seq-stats {
-      white-space: pre-wrap;
-      color: var(--text);
-      line-height: 1.4;
-      font-family: var(--vscode-editor-font-family, var(--vscode-font-family));
-    }
-    .model-meta strong {
-      color: var(--text);
-      font-size: 13px;
-    }
-    .model-anim {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
-    .model-anim select {
-      background: var(--vscode-dropdown-background);
-      color: var(--vscode-dropdown-foreground);
-      border: 1px solid var(--vscode-dropdown-border);
       border-radius: 4px;
-      padding: 4px 6px;
-      min-width: 220px;
+      padding: 6px 8px;
+      background: color-mix(in srgb, var(--panel) 60%, transparent);
+      display: none;
+      flex-shrink: 0;
     }
+    .debuglog.visible { display: block; }
     .loading-overlay {
       position: absolute;
       inset: 0;
@@ -495,104 +660,87 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       pointer-events: none;
       transition: opacity 130ms ease;
     }
-    .loading-overlay.visible {
-      opacity: 1;
-    }
+    .loading-overlay.visible { opacity: 1; }
     .spinner {
-      width: 24px;
-      height: 24px;
-      border: 2px solid color-mix(in srgb, var(--text) 25%, transparent);
+      width: 22px; height: 22px;
+      border: 2px solid color-mix(in srgb, var(--text) 20%, transparent);
       border-top-color: var(--text);
       border-radius: 50%;
       animation: spin 0.8s linear infinite;
     }
-    .loading-text {
-      font-size: 12px;
-      color: var(--muted);
-      text-align: center;
-    }
-    .loading-stage {
-      opacity: 0.4;
-    }
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-    @media (max-width: 760px) {
-      header {
-        grid-template-columns: 1fr;
-      }
-      .meta {
-        white-space: normal;
-      }
-      .toolbar {
-        justify-content: flex-start;
-      }
+    .loading-text { font-size: 12px; color: var(--muted); text-align: center; }
+    .loading-stage { opacity: 0.4; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (max-width: 640px) {
+      .content-area { flex-direction: column; }
+      .sidebar { width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid var(--border); flex-direction: row; flex-wrap: wrap; }
+      .sidebar.visible { display: flex; }
     }
   </style>
 </head>
 <body>
   <header>
     <div class="meta">
-      <strong id="fileName">${fileName}</strong><br/>
-      <span id="fileMeta">Loading...</span>
+      <strong id="fileName">${fileName}</strong>
+      <span id="fileMeta"> &mdash; Loading...</span>
     </div>
     <div class="toolbar">
-      <button id="zoomOutBtn" type="button" title="Zoom out">-</button>
+      <button id="zoomOutBtn" type="button" title="Zoom out">&minus;</button>
       <button id="zoomInBtn" type="button" title="Zoom in">+</button>
-      <button id="zoomResetBtn" type="button" title="Reset zoom to 100%">100%</button>
-      <button id="fitBtn" type="button" title="Fit image to viewport">Fit</button>
-      <button id="renderModeBtn" type="button" title="Model render mode">Mode: Fill</button>
       <span id="zoomLabel" class="zoom-label">100%</span>
-      <button id="refreshBtn" type="button">Refresh</button>
+      <div class="sep" id="imgSep"></div>
+      <button id="fitBtn" type="button" title="Fit to viewport" id="fitBtn">Fit</button>
+      <div class="sep" id="modelSep" style="display:none"></div>
+      <button id="resetCamBtn" type="button" title="Reset camera" style="display:none">&#8635; Reset</button>
+      <button id="renderModeBtn" type="button" title="Toggle wireframe" style="display:none">Fill</button>
+      <div class="sep"></div>
+      <button id="debugBtn" type="button" title="Toggle debug log">&#8801;</button>
     </div>
   </header>
-  <main>
-    <div id="viewport" class="viewport">
-      <div id="stage" class="stage">
-        <canvas id="canvas2d" class="stage-canvas" width="1" height="1"></canvas>
-        <canvas id="canvas3d" class="stage-canvas" width="1" height="1" style="display:none;"></canvas>
+  <div class="content-area">
+    <aside id="sidebar" class="sidebar">
+      <div class="sb-section">
+        <div id="sbName" class="sb-name"></div>
+        <div id="sbInfo" class="sb-info"></div>
       </div>
-      <canvas id="gizmo" class="gizmo" width="92" height="92"></canvas>
-      <div id="loadingOverlay" class="loading-overlay visible">
-        <div class="spinner"></div>
-        <div id="loadingText" class="loading-text">Loading image...</div>
+      <div class="sb-divider"></div>
+      <div class="sb-section">
+        <div class="sb-label">Animation</div>
+        <select id="animSelect" class="anim-select"></select>
+        <label class="autoplay-row"><input id="autoplayChk" type="checkbox" checked><span>Auto play</span></label>
       </div>
-    </div>
-    <div id="modelPanel" class="model-panel">
-      <div id="modelMeta" class="model-meta"></div>
-      <div class="model-anim">
-        <label for="animSelect">Animation</label>
-        <select id="animSelect"></select>
-        <label><input id="autoplayChk" type="checkbox" checked> Auto play</label>
-      </div>
-    </div>
-    <div id="seqPanel" class="seq-panel">
-      <div class="seq-row">
-        <strong>Sequence Timeline</strong>
-        <span id="seqFrameLabel" class="seq-frame">frame: -</span>
-      </div>
-      <div class="seq-row">
+      <div class="sb-divider" id="seqDivider" style="display:none"></div>
+      <div class="sb-section" id="seqSection" style="display:none">
+        <div class="sb-label">Timeline</div>
+        <div id="seqFrameLabel" class="frame-label">frame: &mdash;</div>
         <input id="seqSlider" class="seq-slider" type="range" min="0" max="1" step="1" value="0" />
+        <div id="seqStats" class="seq-name"></div>
       </div>
-      <div id="seqStats" class="seq-stats"></div>
+    </aside>
+    <div class="canvas-area">
+      <div id="viewport" class="viewport">
+        <div id="stage" class="stage">
+          <canvas id="canvas2d" class="stage-canvas" width="1" height="1"></canvas>
+          <canvas id="canvas3d" class="stage-canvas" width="1" height="1" style="display:none;"></canvas>
+        </div>
+        <canvas id="gizmo" class="gizmo" width="80" height="80"></canvas>
+        <div id="loadingOverlay" class="loading-overlay visible">
+          <div class="spinner"></div>
+          <div id="loadingText" class="loading-text">Loading...</div>
+        </div>
+      </div>
+      <div id="warnings" class="warnings"></div>
+      <div id="debugLog" class="debuglog"></div>
     </div>
-    <div id="warnings" class="warnings"></div>
-    <div id="debugLog" class="debuglog"></div>
-  </main>
+  </div>
+  <script nonce="${nonce}" src="${viewerScriptUri}"></script>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
-    let currentData = null;
-    let modelState = null;
+    const w3v = window.War3Viewer;
+    let isModelMode = false;
     let currentFileName = '';
-    let playbackHandle = 0;
-    let playbackSequenceIndex = -1;
-    let playbackStartMs = 0;
-    let playbackLastSentMs = 0;
-    let playbackNeedsRestart = true;
-    let renderLoopHandle = 0;
-    let renderLoopLastTs = 0;
     const debugLines = [];
-    const debugLimit = 120;
+    const debugLimit = 200;
 
     function debug(msg) {
       const now = new Date();
@@ -602,7 +750,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       if (debugLines.length > debugLimit) debugLines.shift();
       const el = document.getElementById('debugLog');
       el.textContent = debugLines.join('\\n');
-      el.classList.add('visible');
+      // don't auto-show debug log — user must toggle it
       try { vscode.postMessage({ type: 'debug', message: line }); } catch {}
     }
 
@@ -615,19 +763,9 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       return bytes;
     }
 
-    function bytesToFloat32(base64) {
+    function base64ToArrayBuffer(base64) {
       const bytes = base64ToBytes(base64);
-      return new Float32Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 4));
-    }
-
-    function bytesToUint32(base64) {
-      const bytes = base64ToBytes(base64);
-      return new Uint32Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 4));
-    }
-
-    function bytesToInt32(base64) {
-      const bytes = base64ToBytes(base64);
-      return new Int32Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 4));
+      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     }
 
     function showWarnings(messages) {
@@ -658,587 +796,109 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
 
     function setMeta(fileName, metaText) {
       document.getElementById('fileName').textContent = fileName;
-      document.getElementById('fileMeta').textContent = metaText;
+      document.getElementById('fileMeta').textContent = ' \u2014 ' + metaText;
       debug('meta: ' + fileName + ' | ' + metaText);
     }
 
-    function setModelPanelVisible(visible) {
-      const panel = document.getElementById('modelPanel');
-      if (visible) panel.classList.add('visible');
-      else panel.classList.remove('visible');
+    function setSidebarVisible(visible) {
+      const sb = document.getElementById('sidebar');
+      if (visible) sb.classList.add('visible');
+      else sb.classList.remove('visible');
     }
 
-    function buildModelState(data) {
-      const rawPositions = bytesToFloat32(data.positionsBase64);
-      const rawNormals = bytesToFloat32(data.normalsBase64);
-      const indices = bytesToUint32(data.indicesBase64);
-      const rawNodePositions = data.nodeDebugPositionsBase64 ? bytesToFloat32(data.nodeDebugPositionsBase64) : new Float32Array(0);
-      const rawNodeParents = data.nodeDebugParentIndexBase64 ? bytesToInt32(data.nodeDebugParentIndexBase64) : new Int32Array(0);
-      const rawNodeAnimated = data.nodeDebugAnimatedBase64 ? base64ToBytes(data.nodeDebugAnimatedBase64) : new Uint8Array(0);
-      const rawNodeMoved = data.nodeDebugMovedBase64 ? base64ToBytes(data.nodeDebugMovedBase64) : new Uint8Array(0);
-      const bounds = {
-        minX: Infinity, minY: Infinity, minZ: Infinity,
-        maxX: -Infinity, maxY: -Infinity, maxZ: -Infinity,
-      };
-      for (let i = 0; i + 2 < rawPositions.length; i += 3) {
-        const x = rawPositions[i], y = rawPositions[i + 1], z = rawPositions[i + 2];
-        if (x < bounds.minX) bounds.minX = x;
-        if (y < bounds.minY) bounds.minY = y;
-        if (z < bounds.minZ) bounds.minZ = z;
-        if (x > bounds.maxX) bounds.maxX = x;
-        if (y > bounds.maxY) bounds.maxY = y;
-        if (z > bounds.maxZ) bounds.maxZ = z;
-      }
-      const cx = isFinite(bounds.minX) ? (bounds.minX + bounds.maxX) * 0.5 : 0;
-      const cy = isFinite(bounds.minY) ? (bounds.minY + bounds.maxY) * 0.5 : 0;
-      const cz = isFinite(bounds.minZ) ? (bounds.minZ + bounds.maxZ) * 0.5 : 0;
-      const sx = isFinite(bounds.minX) ? (bounds.maxX - bounds.minX) : 1;
-      const sy = isFinite(bounds.minY) ? (bounds.maxY - bounds.minY) : 1;
-      const sz = isFinite(bounds.minZ) ? (bounds.maxZ - bounds.minZ) : 1;
-      const radius = Math.max(1e-4, Math.max(sx, Math.max(sy, sz)) * 0.5);
-      const positions = new Float32Array(rawPositions.length);
-      for (let i = 0; i + 2 < rawPositions.length; i += 3) {
-        const srcX = (rawPositions[i] - cx) / radius;
-        const srcY = (rawPositions[i + 1] - cy) / radius;
-        const srcZ = (rawPositions[i + 2] - cz) / radius;
-        // MDX Z-up to viewer Y-up.
-        positions[i] = srcX;
-        positions[i + 1] = srcZ;
-        positions[i + 2] = srcY;
-      }
-
-      const normals = new Float32Array(positions.length);
-      if (rawNormals.length >= normals.length) {
-        for (let i = 0; i + 2 < normals.length; i += 3) {
-          const nx = rawNormals[i];
-          const ny = rawNormals[i + 1];
-          const nz = rawNormals[i + 2];
-          normals[i] = nx;
-          normals[i + 1] = nz;
-          normals[i + 2] = ny;
-        }
-      } else {
-        // Fallback: derive averaged vertex normals from indices.
-        for (let i = 0; i + 2 < indices.length; i += 3) {
-          const ia = indices[i] * 3, ib = indices[i + 1] * 3, ic = indices[i + 2] * 3;
-          if (ic + 2 >= positions.length || ib + 2 >= positions.length || ia + 2 >= positions.length) continue;
-          const ax = positions[ia], ay = positions[ia + 1], az = positions[ia + 2];
-          const bx = positions[ib], by = positions[ib + 1], bz = positions[ib + 2];
-          const cxv = positions[ic], cyv = positions[ic + 1], czv = positions[ic + 2];
-          const ux = bx - ax, uy = by - ay, uz = bz - az;
-          const vx = cxv - ax, vy = cyv - ay, vz = czv - az;
-          const nx = uy * vz - uz * vy;
-          const ny = uz * vx - ux * vz;
-          const nz = ux * vy - uy * vx;
-          normals[ia] += nx; normals[ia + 1] += ny; normals[ia + 2] += nz;
-          normals[ib] += nx; normals[ib + 1] += ny; normals[ib + 2] += nz;
-          normals[ic] += nx; normals[ic + 1] += ny; normals[ic + 2] += nz;
-        }
-      }
-      for (let i = 0; i + 2 < normals.length; i += 3) {
-        const nx = normals[i], ny = normals[i + 1], nz = normals[i + 2];
-        const nlen = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
-        normals[i] = nx / nlen; normals[i + 1] = ny / nlen; normals[i + 2] = nz / nlen;
-      }
-
-      const nodePositions = new Float32Array(rawNodePositions.length);
-      for (let i = 0; i + 2 < rawNodePositions.length; i += 3) {
-        const srcX = (rawNodePositions[i] - cx) / radius;
-        const srcY = (rawNodePositions[i + 1] - cy) / radius;
-        const srcZ = (rawNodePositions[i + 2] - cz) / radius;
-        nodePositions[i] = srcX;
-        nodePositions[i + 1] = srcZ;
-        nodePositions[i + 2] = srcY;
-      }
-
-      let movedCount = 0;
-      let animatedCount = 0;
-      for (let i = 0; i < rawNodeMoved.length; i++) if (rawNodeMoved[i]) movedCount++;
-      for (let i = 0; i < rawNodeAnimated.length; i++) if (rawNodeAnimated[i]) animatedCount++;
-
-      return {
-        positions,
-        normals,
-        indices,
-        nodePositions,
-        nodeParents: rawNodeParents,
-        nodeAnimated: rawNodeAnimated,
-        nodeMoved: rawNodeMoved,
-        nodeAnimatedCount: animatedCount,
-        nodeMovedCount: movedCount,
-        version: Date.now() + Math.random(),
-        yaw: Math.PI * 0.5,
-        pitch: -0.52,
-        distance: 3.2,
-      };
+    function setModelButtons(visible) {
+      document.getElementById('modelSep').style.display = visible ? '' : 'none';
+      document.getElementById('resetCamBtn').style.display = visible ? '' : 'none';
+      document.getElementById('renderModeBtn').style.display = visible ? '' : 'none';
+      document.getElementById('imgSep').style.display = visible ? 'none' : '';
+      document.getElementById('fitBtn').style.display = visible ? 'none' : '';
     }
 
-    const glState = {
-      gl: null,
-      modelProgram: null,
-      gridProgram: null,
-      modelPosBuffer: null,
-      modelNrmBuffer: null,
-      modelIdxBuffer: null,
-      wireIdxBuffer: null,
-      gridBuffer: null,
-      nodeDebugBuffer: null,
-      modelIndexCount: 0,
-      wireIndexCount: 0,
-      gridVertexCount: 0,
-      uploadedVersion: null,
-    };
-
-    function createProgram(gl, vsSource, fsSource) {
-      const compile = (type, source) => {
-        const shader = gl.createShader(type);
-        gl.shaderSource(shader, source);
-        gl.compileShader(shader);
-        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-          const log = gl.getShaderInfoLog(shader) || 'shader compile failed';
-          gl.deleteShader(shader);
-          throw new Error(log);
-        }
-        return shader;
-      };
-      const vs = compile(gl.VERTEX_SHADER, vsSource);
-      const fs = compile(gl.FRAGMENT_SHADER, fsSource);
-      const program = gl.createProgram();
-      gl.attachShader(program, vs);
-      gl.attachShader(program, fs);
-      gl.linkProgram(program);
-      gl.deleteShader(vs);
-      gl.deleteShader(fs);
-      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-        const log = gl.getProgramInfoLog(program) || 'program link failed';
-        gl.deleteProgram(program);
-        throw new Error(log);
-      }
-      return program;
+    // ── War3Viewer init ────────────────────────────────────────────────────────
+    if (w3v) {
+      w3v.init({
+        canvas3d: document.getElementById('canvas3d'),
+        gizmo: document.getElementById('gizmo'),
+        viewport: document.getElementById('viewport'),
+        vscodeApi: vscode,
+        callbacks: {
+          onModelLoaded(info) {
+            isModelMode = true;
+            setMeta(info.name || 'Model', 'geosets: ' + info.geosetCount + ' · textures: ' + info.textureCount);
+            document.getElementById('sbName').textContent = info.name || 'Model';
+            document.getElementById('sbInfo').textContent = info.geosetCount + ' geosets · ' + info.textureCount + ' textures';
+            animSelect.innerHTML = '';
+            if (!info.sequences.length) {
+              const opt = document.createElement('option');
+              opt.textContent = 'Bind pose';
+              animSelect.appendChild(opt);
+            } else {
+              for (const seq of info.sequences) {
+                const opt = document.createElement('option');
+                opt.textContent = seq.name + ' [' + seq.start + '\u2013' + seq.end + ']' + (seq.looping ? '' : ' \u2205');
+                animSelect.appendChild(opt);
+              }
+              animSelect.selectedIndex = 0;
+            }
+            setSidebarVisible(true);
+            if (info.sequences.length) {
+              const s = info.sequences[0];
+              document.getElementById('seqSection').style.display = '';
+              document.getElementById('seqDivider').style.display = '';
+              seqSlider.min = String(s.start);
+              seqSlider.max = String(s.end);
+              seqSlider.value = String(s.start);
+              seqStats.textContent = s.name;
+            }
+            stage.style.transform = 'translate(0px, 0px) scale(1)';
+            zoomLabel.textContent = '3D';
+            setModelButtons(true);
+            setLoading(false);
+          },
+          onFrameUpdate(frame, seqStart, seqEnd) {
+            seqSlider.min = String(seqStart);
+            seqSlider.max = String(seqEnd);
+            seqSlider.value = String(Math.floor(frame));
+            const tMs = Math.max(0, frame - seqStart);
+            seqFrameLabel.textContent = Math.floor(frame) + ' · ' + Math.floor(tMs) + 'ms';
+          },
+          onDebug(msg) { debug('w3v: ' + msg); },
+        },
+      });
     }
 
-    function ensureGl(canvas, state) {
-      let gl = glState.gl;
-      if (!gl) {
-        gl = canvas.getContext('webgl2', { antialias: true, alpha: true, depth: true });
-        if (!gl) {
-          debug('webgl2 context unavailable');
-          return null;
-        }
-        debug('webgl2 context created');
-        glState.gl = gl;
-        const modelVs = '#version 300 es\\n'
-          + 'precision highp float;\\n'
-          + 'in vec3 aPos;\\n'
-          + 'in vec3 aNormal;\\n'
-          + 'uniform mat4 uProj;\\n'
-          + 'uniform mat4 uView;\\n'
-          + 'out vec3 vNormal;\\n'
-          + 'out vec3 vWorld;\\n'
-          + 'void main() {\\n'
-          + '  vec4 w = vec4(aPos, 1.0);\\n'
-          + '  vWorld = w.xyz;\\n'
-          + '  vNormal = normalize(aNormal);\\n'
-          + '  gl_Position = uProj * uView * w;\\n'
-          + '}\\n';
-        const modelFs = '#version 300 es\\n'
-          + 'precision highp float;\\n'
-          + 'in vec3 vNormal;\\n'
-          + 'in vec3 vWorld;\\n'
-          + 'uniform vec3 uLightDir;\\n'
-          + 'out vec4 outColor;\\n'
-          + 'void main() {\\n'
-          + '  float ndotl = dot(normalize(vNormal), normalize(uLightDir));\\n'
-          + '  float h = ndotl * 0.5 + 0.5;\\n'
-          + '  float halfLambert = h * h;\\n'
-          + '  float light = 0.2 + 0.8 * halfLambert;\\n'
-          + '  vec3 base = vec3(0.50, 0.57, 0.64);\\n'
-          + '  vec3 warm = vec3(0.13, 0.09, 0.04);\\n'
-          + '  vec3 col = base * light + warm * light * 0.25;\\n'
-          + '  outColor = vec4(col, 1.0);\\n'
-          + '}\\n';
-        const gridVs = '#version 300 es\\n'
-          + 'precision highp float;\\n'
-          + 'in vec3 aPos;\\n'
-          + 'uniform mat4 uProj;\\n'
-          + 'uniform mat4 uView;\\n'
-          + 'void main() { gl_Position = uProj * uView * vec4(aPos, 1.0); }\\n';
-        const gridFs = '#version 300 es\\n'
-          + 'precision highp float;\\n'
-          + 'uniform vec4 uColor;\\n'
-          + 'out vec4 outColor;\\n'
-          + 'void main() { outColor = uColor; }\\n';
-        glState.modelProgram = createProgram(gl, modelVs, modelFs);
-        glState.gridProgram = createProgram(gl, gridVs, gridFs);
-        glState.modelPosBuffer = gl.createBuffer();
-        glState.modelNrmBuffer = gl.createBuffer();
-        glState.modelIdxBuffer = gl.createBuffer();
-        glState.wireIdxBuffer = gl.createBuffer();
-        glState.gridBuffer = gl.createBuffer();
-        glState.nodeDebugBuffer = gl.createBuffer();
-
-        const grid = [];
-        const half = 1.6;
-        const step = 0.2;
-        for (let g = -half; g <= half + 1e-6; g += step) {
-          grid.push(-half, 0, g, half, 0, g);
-          grid.push(g, 0, -half, g, 0, half);
-        }
-        gl.bindBuffer(gl.ARRAY_BUFFER, glState.gridBuffer);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(grid), gl.STATIC_DRAW);
-        glState.gridVertexCount = grid.length / 3;
-      }
-
-      if (glState.uploadedVersion !== state.version) {
-        debug('upload mesh buffers version=' + state.version);
-        gl.bindBuffer(gl.ARRAY_BUFFER, glState.modelPosBuffer);
-        gl.bufferData(gl.ARRAY_BUFFER, state.positions, gl.STATIC_DRAW);
-        gl.bindBuffer(gl.ARRAY_BUFFER, glState.modelNrmBuffer);
-        gl.bufferData(gl.ARRAY_BUFFER, state.normals, gl.STATIC_DRAW);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, glState.modelIdxBuffer);
-        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, state.indices, gl.STATIC_DRAW);
-        glState.modelIndexCount = state.indices.length;
-
-        const edges = [];
-        const seen = new Set();
-        for (let i = 0; i + 2 < state.indices.length; i += 3) {
-          const tri = [state.indices[i], state.indices[i + 1], state.indices[i + 2]];
-          for (let e = 0; e < 3; e++) {
-            const a = tri[e];
-            const b = tri[(e + 1) % 3];
-            const lo = Math.min(a, b);
-            const hi = Math.max(a, b);
-            const key = lo + ':' + hi;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            edges.push(lo, hi);
-          }
-        }
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, glState.wireIdxBuffer);
-        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(edges), gl.STATIC_DRAW);
-        glState.wireIndexCount = edges.length;
-        glState.uploadedVersion = state.version;
-      }
-
-      return gl;
-    }
-
-    function mat4Perspective(fovY, aspect, near, far) {
-      const f = 1 / Math.tan(fovY / 2);
-      const nf = 1 / (near - far);
-      return new Float32Array([
-        f / aspect, 0, 0, 0,
-        0, f, 0, 0,
-        0, 0, (far + near) * nf, -1,
-        0, 0, (2 * far * near) * nf, 0,
-      ]);
-    }
-
-    function mat4LookAt(ex, ey, ez, tx, ty, tz, ux, uy, uz) {
-      let z0 = ex - tx;
-      let z1 = ey - ty;
-      let z2 = ez - tz;
-      let len = Math.sqrt(z0 * z0 + z1 * z1 + z2 * z2);
-      if (len === 0) {
-        z2 = 1;
-      } else {
-        z0 /= len;
-        z1 /= len;
-        z2 /= len;
-      }
-
-      let x0 = uy * z2 - uz * z1;
-      let x1 = uz * z0 - ux * z2;
-      let x2 = ux * z1 - uy * z0;
-      len = Math.sqrt(x0 * x0 + x1 * x1 + x2 * x2);
-      if (len !== 0) {
-        x0 /= len;
-        x1 /= len;
-        x2 /= len;
-      }
-
-      const y0 = z1 * x2 - z2 * x1;
-      const y1 = z2 * x0 - z0 * x2;
-      const y2 = z0 * x1 - z1 * x0;
-
-      return new Float32Array([
-        x0, y0, z0, 0,
-        x1, y1, z1, 0,
-        x2, y2, z2, 0,
-        -(x0 * ex + x1 * ey + x2 * ez),
-        -(y0 * ex + y1 * ey + y2 * ez),
-        -(z0 * ex + z1 * ey + z2 * ez),
-        1,
-      ]);
-    }
-
-    function drawNodeDebug(gl, proj, view, state) {
-      if (!state.nodePositions || state.nodePositions.length < 3) return;
-      const nodePositions = state.nodePositions;
-      const nodeParents = state.nodeParents || new Int32Array(0);
-      const nodeAnimated = state.nodeAnimated || new Uint8Array(0);
-      const nodeMoved = state.nodeMoved || new Uint8Array(0);
-
-      const links = [];
-      for (let i = 0; i < nodeParents.length; i++) {
-        const parent = nodeParents[i];
-        if (parent < 0 || parent >= nodeParents.length) continue;
-        const a = i * 3;
-        const b = parent * 3;
-        if (a + 2 >= nodePositions.length || b + 2 >= nodePositions.length) continue;
-        links.push(
-          nodePositions[a], nodePositions[a + 1], nodePositions[a + 2],
-          nodePositions[b], nodePositions[b + 1], nodePositions[b + 2]
-        );
-      }
-
-      const staticCrosses = [];
-      const animatedCrosses = [];
-      const movedCrosses = [];
-      const s = 0.018;
-      function pushCross(out, x, y, z) {
-        out.push(x - s, y, z, x + s, y, z);
-        out.push(x, y - s, z, x, y + s, z);
-        out.push(x, y, z - s, x, y, z + s);
-      }
-      for (let i = 0; i * 3 + 2 < nodePositions.length; i++) {
-        const x = nodePositions[i * 3];
-        const y = nodePositions[i * 3 + 1];
-        const z = nodePositions[i * 3 + 2];
-        if (i < nodeMoved.length && nodeMoved[i]) pushCross(movedCrosses, x, y, z);
-        else if (i < nodeAnimated.length && nodeAnimated[i]) pushCross(animatedCrosses, x, y, z);
-        else pushCross(staticCrosses, x, y, z);
-      }
-
-      gl.useProgram(glState.gridProgram);
-      const aPos = gl.getAttribLocation(glState.gridProgram, 'aPos');
-      gl.bindBuffer(gl.ARRAY_BUFFER, glState.nodeDebugBuffer);
-      gl.enableVertexAttribArray(aPos);
-      gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
-      gl.uniformMatrix4fv(gl.getUniformLocation(glState.gridProgram, 'uProj'), false, proj);
-      gl.uniformMatrix4fv(gl.getUniformLocation(glState.gridProgram, 'uView'), false, view);
-
-      if (links.length) {
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(links), gl.DYNAMIC_DRAW);
-        gl.uniform4f(gl.getUniformLocation(glState.gridProgram, 'uColor'), 0.20, 0.73, 0.84, 0.65);
-        gl.drawArrays(gl.LINES, 0, links.length / 3);
-      }
-      if (staticCrosses.length) {
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(staticCrosses), gl.DYNAMIC_DRAW);
-        gl.uniform4f(gl.getUniformLocation(glState.gridProgram, 'uColor'), 0.40, 0.44, 0.48, 0.80);
-        gl.drawArrays(gl.LINES, 0, staticCrosses.length / 3);
-      }
-      if (animatedCrosses.length) {
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(animatedCrosses), gl.DYNAMIC_DRAW);
-        gl.uniform4f(gl.getUniformLocation(glState.gridProgram, 'uColor'), 0.90, 0.86, 0.30, 0.95);
-        gl.drawArrays(gl.LINES, 0, animatedCrosses.length / 3);
-      }
-      if (movedCrosses.length) {
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(movedCrosses), gl.DYNAMIC_DRAW);
-        gl.uniform4f(gl.getUniformLocation(glState.gridProgram, 'uColor'), 0.96, 0.26, 0.26, 0.98);
-        gl.drawArrays(gl.LINES, 0, movedCrosses.length / 3);
-      }
-    }
-
-    function renderModel(canvas, state) {
-      const gl = ensureGl(canvas, state);
-      if (!gl) throw new Error('WebGL2 is unavailable in this webview environment.');
-      const width = Math.max(2, viewport.clientWidth);
-      const height = Math.max(2, viewport.clientHeight);
-      canvas.width = width;
-      canvas.height = height;
-      gl.viewport(0, 0, width, height);
-      gl.enable(gl.DEPTH_TEST);
-      gl.disable(gl.CULL_FACE);
-      gl.clearColor(0, 0, 0, 0);
-      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
-      const cp = Math.cos(state.pitch);
-      const eyeX = Math.sin(state.yaw) * cp * state.distance;
-      const eyeY = Math.sin(-state.pitch) * state.distance;
-      const eyeZ = Math.cos(state.yaw) * cp * state.distance;
-      const proj = mat4Perspective(50 * Math.PI / 180, width / height, 0.03, 80);
-      const view = mat4LookAt(eyeX, eyeY, eyeZ, 0, 0, 0, 0, 1, 0);
-
-      // Grid
-      gl.useProgram(glState.gridProgram);
-      let loc = gl.getAttribLocation(glState.gridProgram, 'aPos');
-      gl.bindBuffer(gl.ARRAY_BUFFER, glState.gridBuffer);
-      gl.enableVertexAttribArray(loc);
-      gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
-      gl.uniformMatrix4fv(gl.getUniformLocation(glState.gridProgram, 'uProj'), false, proj);
-      gl.uniformMatrix4fv(gl.getUniformLocation(glState.gridProgram, 'uView'), false, view);
-      gl.uniform4f(gl.getUniformLocation(glState.gridProgram, 'uColor'), 0.50, 0.56, 0.64, 0.32);
-      gl.drawArrays(gl.LINES, 0, glState.gridVertexCount);
-      drawNodeDebug(gl, proj, view, state);
-
-      // Solid model
-      if (modelRenderMode === 'fill' || modelRenderMode === 'both') {
-        gl.useProgram(glState.modelProgram);
-        const aPos = gl.getAttribLocation(glState.modelProgram, 'aPos');
-        const aNrm = gl.getAttribLocation(glState.modelProgram, 'aNormal');
-        gl.bindBuffer(gl.ARRAY_BUFFER, glState.modelPosBuffer);
-        gl.enableVertexAttribArray(aPos);
-        gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
-        gl.bindBuffer(gl.ARRAY_BUFFER, glState.modelNrmBuffer);
-        gl.enableVertexAttribArray(aNrm);
-        gl.vertexAttribPointer(aNrm, 3, gl.FLOAT, false, 0, 0);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, glState.modelIdxBuffer);
-        gl.uniformMatrix4fv(gl.getUniformLocation(glState.modelProgram, 'uProj'), false, proj);
-        gl.uniformMatrix4fv(gl.getUniformLocation(glState.modelProgram, 'uView'), false, view);
-        gl.uniform3f(gl.getUniformLocation(glState.modelProgram, 'uLightDir'), 0.12, 0.98, 0.18);
-        gl.drawElements(gl.TRIANGLES, glState.modelIndexCount, gl.UNSIGNED_INT, 0);
-      }
-
-      // Wire overlay
-      if (modelRenderMode === 'wire' || modelRenderMode === 'both') {
-        gl.useProgram(glState.gridProgram);
-        const aPos = gl.getAttribLocation(glState.gridProgram, 'aPos');
-        gl.bindBuffer(gl.ARRAY_BUFFER, glState.modelPosBuffer);
-        gl.enableVertexAttribArray(aPos);
-        gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, glState.wireIdxBuffer);
-        gl.uniformMatrix4fv(gl.getUniformLocation(glState.gridProgram, 'uProj'), false, proj);
-        gl.uniformMatrix4fv(gl.getUniformLocation(glState.gridProgram, 'uView'), false, view);
-        if (modelRenderMode === 'both') gl.uniform4f(gl.getUniformLocation(glState.gridProgram, 'uColor'), 0.16, 0.20, 0.24, 0.40);
-        else gl.uniform4f(gl.getUniformLocation(glState.gridProgram, 'uColor'), 0.28, 0.34, 0.40, 0.95);
-        gl.drawElements(gl.LINES, glState.wireIndexCount, gl.UNSIGNED_INT, 0);
-      }
-
-      renderGizmo(state);
-      // Intentionally quiet per-frame to avoid flooding debug log during animation/render loop.
-    }
-
-    function renderGizmo(state) {
-      const gizmo = document.getElementById('gizmo');
-      const g = gizmo.getContext('2d', { alpha: true });
-      const w = gizmo.width;
-      const h = gizmo.height;
-      const cx = w * 0.5;
-      const cy = h * 0.5;
-      g.clearRect(0, 0, w, h);
-
-      const cosY = Math.cos(state.yaw), sinY = Math.sin(state.yaw);
-      const cosX = Math.cos(state.pitch), sinX = Math.sin(state.pitch);
-      const axes = [
-        { name: 'X', color: '#e35d6a', v: [1, 0, 0] },
-        { name: 'Y', color: '#68c07a', v: [0, 1, 0] },
-        { name: 'Z', color: '#5ca0e3', v: [0, 0, 1] },
-      ];
-
-      function rot(vx, vy, vz) {
-        const x1 = vx * cosY + vz * sinY;
-        const z1 = -vx * sinY + vz * cosY;
-        const y1 = vy * cosX - z1 * sinX;
-        const z2 = vy * sinX + z1 * cosX;
-        return [x1, y1, z2];
-      }
-
-      axes.sort((a, b) => rot(a.v[0], a.v[1], a.v[2])[2] - rot(b.v[0], b.v[1], b.v[2])[2]);
-      for (const axis of axes) {
-        const r = rot(axis.v[0], axis.v[1], axis.v[2]);
-        const sx = cx + r[0] * 24;
-        const sy = cy - r[1] * 24;
-        g.strokeStyle = axis.color;
-        g.fillStyle = axis.color;
-        g.lineWidth = 2;
-        g.beginPath();
-        g.moveTo(cx, cy);
-        g.lineTo(sx, sy);
-        g.stroke();
-        g.font = '11px sans-serif';
-        g.fillText(axis.name, sx + 3, sy - 3);
-      }
-      g.fillStyle = '#888b';
-      g.beginPath();
-      g.arc(cx, cy, 3, 0, Math.PI * 2);
-      g.fill();
-    }
-
-    async function renderCurrent() {
-      if (!currentData) return;
-      const data = currentData;
+    async function renderCurrent(data) {
       debug('renderCurrent kind=' + data.kind);
       const canvas2d = document.getElementById('canvas2d');
       const canvas3d = document.getElementById('canvas3d');
-      if (data.kind === 'model') {
-        const prevState = modelState;
-        modelState = buildModelState(data);
-        if (prevState) {
-          modelState.yaw = prevState.yaw;
-          modelState.pitch = prevState.pitch;
-          modelState.distance = prevState.distance;
-        }
-        canvas3d.style.display = '';
-        canvas2d.style.display = 'none';
-        setModelPanelVisible(true);
-        stage.style.transform = 'translate(0px, 0px) scale(1)';
-        const meta = document.getElementById('modelMeta');
-        meta.innerHTML = '<strong>' + data.modelName + '</strong><br/>' +
-          'Geosets: ' + data.geosetsCount + ' | Nodes: ' + data.nodesCount + ' | Triangles: ' + data.trianglesCount +
-          ' | NodeAnim: ' + modelState.nodeAnimatedCount + ' | NodeMoved: ' + modelState.nodeMovedCount;
-        animSelect.innerHTML = '';
-        if (data.sequences.length === 0) {
-          const opt = document.createElement('option');
-          opt.textContent = 'Bind pose';
-          opt.selected = true;
-          animSelect.appendChild(opt);
-        } else {
-          for (const seq of data.sequences) {
-            const opt = document.createElement('option');
-            opt.textContent = seq.name + ' [' + seq.intervalStart + '-' + seq.intervalEnd + ']' + (seq.looping ? ' (loop)' : '');
-            animSelect.appendChild(opt);
-          }
-          const sel = data.activeSequenceIndex >= 0 && data.activeSequenceIndex < data.sequences.length ? data.activeSequenceIndex : 0;
-          animSelect.selectedIndex = sel;
-        }
-        updateSequencePanel(data);
-        renderModel(canvas3d, modelState);
-        showWarnings(data.warnings);
-        return;
-      }
-
-      modelState = null;
       canvas3d.style.display = 'none';
       canvas2d.style.display = '';
       setModelPanelVisible(false);
       seqPanel.classList.remove('visible');
-      const canvas = canvas2d;
-      const ctx = canvas.getContext('2d', { alpha: true });
-      if (!ctx) {
-        throw new Error('2D canvas context is unavailable.');
-      }
-      debug('2d context ready');
-      canvas.width = data.width;
-      canvas.height = data.height;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
+      const ctx = canvas2d.getContext('2d', { alpha: true });
+      if (!ctx) throw new Error('2D canvas context is unavailable.');
+      canvas2d.width = data.width;
+      canvas2d.height = data.height;
+      ctx.clearRect(0, 0, canvas2d.width, canvas2d.height);
       if (data.mode === 'rgba') {
         const rgba = base64ToBytes(data.rgbaBase64);
-        const image = new ImageData(new Uint8ClampedArray(rgba.buffer), data.width, data.height);
-        ctx.putImageData(image, 0, 0);
+        ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer), data.width, data.height), 0, 0);
       } else {
-        const jpegBytes = base64ToBytes(data.jpegBase64);
-        const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
+        const blob = new Blob([base64ToBytes(data.jpegBase64)], { type: 'image/jpeg' });
         const objectUrl = URL.createObjectURL(blob);
         const image = await createImageBitmap(blob);
         try {
           ctx.drawImage(image, 0, 0, data.width, data.height);
-          // Match Java ImageIO raster channel interpretation used by wc3libs:
-          // BLP JPEG payloads are treated as BGR, then mapped to RGB.
           const img = ctx.getImageData(0, 0, data.width, data.height);
           const px = img.data;
           for (let i = 0; i < px.length; i += 4) {
-            const r = px[i];
-            px[i] = px[i + 2];
-            px[i + 2] = r;
+            const r = px[i]; px[i] = px[i + 2]; px[i + 2] = r;
           }
           ctx.putImageData(img, 0, 0);
         } finally {
           URL.revokeObjectURL(objectUrl);
         }
       }
-
       showWarnings(data.warnings);
       debug('raster rendered');
     }
@@ -1248,12 +908,10 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
     const zoomLabel = document.getElementById('zoomLabel');
     const zoomInBtn = document.getElementById('zoomInBtn');
     const zoomOutBtn = document.getElementById('zoomOutBtn');
-    const zoomResetBtn = document.getElementById('zoomResetBtn');
     const fitBtn = document.getElementById('fitBtn');
     const renderModeBtn = document.getElementById('renderModeBtn');
     const animSelect = document.getElementById('animSelect');
     const autoplayChk = document.getElementById('autoplayChk');
-    const seqPanel = document.getElementById('seqPanel');
     const seqSlider = document.getElementById('seqSlider');
     const seqFrameLabel = document.getElementById('seqFrameLabel');
     const seqStats = document.getElementById('seqStats');
@@ -1266,21 +924,16 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
     let dragStartY = 0;
     let dragTx = 0;
     let dragTy = 0;
-    let modelRenderMode = 'fill'; // both | fill | wire
+    let modelRenderMode = 'fill'; // fill | wire
+    let lastRasterWidth = 1;
+    let lastRasterHeight = 1;
 
     function updateRenderModeUi() {
-      if (modelRenderMode === 'fill') renderModeBtn.textContent = 'Mode: Fill';
-      else if (modelRenderMode === 'wire') renderModeBtn.textContent = 'Mode: Wire';
-      else renderModeBtn.textContent = 'Mode: Both';
+      renderModeBtn.textContent = modelRenderMode === 'fill' ? 'Fill' : 'Wire';
     }
 
     function clampZoom(value) {
       return Math.min(64, Math.max(0.05, value));
-    }
-
-    function clampPitch(value) {
-      const limit = (Math.PI * 0.5) - 0.02;
-      return Math.max(-limit, Math.min(limit, value));
     }
 
     function applyTransform() {
@@ -1292,10 +945,8 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       const rect = viewport.getBoundingClientRect();
       const px = clientX - rect.left;
       const py = clientY - rect.top;
-
       const nextZoom = clampZoom(zoom * factor);
       if (nextZoom === zoom) return;
-
       const imageX = (px - tx) / zoom;
       const imageY = (py - ty) / zoom;
       zoom = nextZoom;
@@ -1311,153 +962,22 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
     }
 
     function centerImage() {
-      if (currentData && currentData.kind === 'model') {
-        stage.style.transform = 'translate(0px, 0px) scale(1)';
-        zoomLabel.textContent = '3D';
-        return;
-      }
       const vw = viewport.clientWidth;
       const vh = viewport.clientHeight;
-      const w = currentData ? currentData.width : 1;
-      const h = currentData ? currentData.height : 1;
-      tx = (vw - w * zoom) / 2;
-      ty = (vh - h * zoom) / 2;
+      tx = (vw - lastRasterWidth * zoom) / 2;
+      ty = (vh - lastRasterHeight * zoom) / 2;
       applyTransform();
     }
 
     function fitToView() {
-      if (!currentData || currentData.kind === 'model') return;
       const vw = Math.max(1, viewport.clientWidth);
       const vh = Math.max(1, viewport.clientHeight);
-      zoom = Math.min(vw / currentData.width, vh / currentData.height);
-      zoom = clampZoom(zoom);
+      zoom = clampZoom(Math.min(vw / lastRasterWidth, vh / lastRasterHeight));
       centerImage();
     }
 
-    function stopPlayback() {
-      if (playbackHandle) {
-        cancelAnimationFrame(playbackHandle);
-        playbackHandle = 0;
-      }
-    }
-
-    function restartPlaybackIfNeeded(forceReset) {
-      if (!autoplayChk.checked || !currentData || currentData.kind !== 'model') {
-        stopPlayback();
-        return;
-      }
-      if (!currentData.sequences || currentData.sequences.length === 0) {
-        stopPlayback();
-        return;
-      }
-      const seqIndex = Math.max(0, Math.min(currentData.sequences.length - 1, animSelect.selectedIndex));
-      const seq = currentData.sequences[seqIndex];
-      if (!seq) {
-        stopPlayback();
-        return;
-      }
-
-      const minIntervalMs = 16;
-      if (forceReset || playbackSequenceIndex !== seqIndex || playbackNeedsRestart) {
-        playbackSequenceIndex = seqIndex;
-        playbackStartMs = performance.now();
-        playbackLastSentMs = 0;
-        playbackNeedsRestart = false;
-      }
-      stopPlayback();
-
-      const tick = (now) => {
-        if (!autoplayChk.checked || !currentData || currentData.kind !== 'model') {
-          stopPlayback();
-          return;
-        }
-        const activeSeq = currentData.sequences[playbackSequenceIndex];
-        if (!activeSeq) {
-          stopPlayback();
-          return;
-        }
-        const start = activeSeq.intervalStart;
-        const end = Math.max(start, activeSeq.intervalEnd);
-        const span = Math.max(1, end - start);
-        let frame = start;
-        if (activeSeq.looping) {
-          const elapsedFrames = Math.floor(now - playbackStartMs);
-          frame = start + (elapsedFrames % span);
-        } else {
-          const elapsedFrames = Math.floor(now - playbackStartMs);
-          frame = Math.min(end, start + elapsedFrames);
-        }
-
-        if ((now - playbackLastSentMs) >= minIntervalMs) {
-          playbackLastSentMs = now;
-          vscode.postMessage({ type: 'selectSequenceFrame', index: playbackSequenceIndex, frame });
-        }
-
-        if (!activeSeq.looping && frame >= end) {
-          stopPlayback();
-          return;
-        }
-        playbackHandle = requestAnimationFrame(tick);
-      };
-
-      playbackHandle = requestAnimationFrame(tick);
-    }
-
-    function updateSequencePanel(data) {
-      if (!data || data.kind !== 'model' || !data.sequences || data.sequences.length === 0) {
-        seqPanel.classList.remove('visible');
-        seqStats.textContent = '';
-        seqFrameLabel.textContent = 'frame: -';
-        return;
-      }
-      const seqIndex = Math.max(0, Math.min(data.sequences.length - 1, animSelect.selectedIndex));
-      const seq = data.sequences[seqIndex];
-      seqPanel.classList.add('visible');
-      const minF = seq.intervalStart;
-      const maxF = Math.max(seq.intervalStart, seq.intervalEnd);
-      const frame = Number.isFinite(data.sampledFrame) ? data.sampledFrame : minF;
-      seqSlider.min = String(minF);
-      seqSlider.max = String(maxF);
-      seqSlider.value = String(Math.max(minF, Math.min(maxF, Math.floor(frame))));
-      const tMs = Math.max(0, frame - minF);
-      seqFrameLabel.textContent = 'frame: ' + Math.floor(frame) + ' | t=' + Math.floor(tMs) + 'ms';
-
-      const summary = data.sequenceTrackSummaries && data.sequenceTrackSummaries.length > seqIndex
-        ? data.sequenceTrackSummaries[seqIndex]
-        : null;
-      const nodeIds = (data.activeNodeTrackObjectIds || []).slice(0, 32).join(', ');
-      const geosetIds = (data.activeGeosetAlphaIds || []).slice(0, 32).join(', ');
-      seqStats.textContent =
-        'Seq: ' + seq.name + ' [' + seq.intervalStart + ' - ' + seq.intervalEnd + ']\\n'
-        + 'Node channels: ' + (summary ? summary.nodeChannels : 0)
-        + ' | Node keys: ' + (summary ? summary.nodeKeys : 0) + '\\n'
-        + 'Geoset alpha channels: ' + (summary ? summary.geosetAlphaChannels : 0)
-        + ' | Alpha keys: ' + (summary ? summary.geosetAlphaKeys : 0) + '\\n'
-        + 'Active node ids: ' + (nodeIds || '(none)') + '\\n'
-        + 'Active geoset alpha ids: ' + (geosetIds || '(none)');
-    }
-
-    function ensureRenderLoop() {
-      if (renderLoopHandle) return;
-      const tick = (ts) => {
-        renderLoopHandle = requestAnimationFrame(tick);
-        if (!modelState) {
-          renderLoopLastTs = ts;
-          return;
-        }
-        if (!renderLoopLastTs) renderLoopLastTs = ts;
-        renderLoopLastTs = ts;
-        try {
-          const canvas = document.getElementById('canvas3d');
-          renderModel(canvas, modelState);
-        } catch (err) {
-          // Keep loop alive even if a frame errors.
-        }
-      };
-      renderLoopHandle = requestAnimationFrame(tick);
-    }
-
     viewport.addEventListener('pointerdown', (ev) => {
+      if (isModelMode) return;
       dragActive = true;
       dragStartX = ev.clientX;
       dragStartY = ev.clientY;
@@ -1468,18 +988,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
     });
 
     viewport.addEventListener('pointermove', (ev) => {
-      if (!dragActive) return;
-      if (modelState) {
-        const dx = ev.clientX - dragStartX;
-        const dy = ev.clientY - dragStartY;
-        dragStartX = ev.clientX;
-        dragStartY = ev.clientY;
-        modelState.yaw += dx * 0.008;
-        modelState.pitch = clampPitch(modelState.pitch + dy * 0.008);
-        const canvas = document.getElementById('canvas3d');
-        renderModel(canvas, modelState);
-        return;
-      }
+      if (isModelMode || !dragActive) return;
       tx = dragTx + (ev.clientX - dragStartX);
       ty = dragTy + (ev.clientY - dragStartY);
       applyTransform();
@@ -1489,109 +998,59 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       if (!dragActive) return;
       dragActive = false;
       viewport.classList.remove('dragging');
-      try {
-        viewport.releasePointerCapture(ev.pointerId);
-      } catch {}
+      try { viewport.releasePointerCapture(ev.pointerId); } catch {}
     }
 
     viewport.addEventListener('pointerup', stopDrag);
     viewport.addEventListener('pointercancel', stopDrag);
     viewport.addEventListener('wheel', (ev) => {
       ev.preventDefault();
-      if (modelState) {
-        const zoomFactor = ev.deltaY < 0 ? 0.9 : 1.1;
-        modelState.distance = Math.max(0.2, Math.min(200, modelState.distance * zoomFactor));
-        const canvas = document.getElementById('canvas3d');
-        renderModel(canvas, modelState);
-        return;
-      }
+      if (isModelMode) return;
       const factor = ev.deltaY < 0 ? 1.12 : 1 / 1.12;
       zoomAt(factor, ev.clientX, ev.clientY);
     }, { passive: false });
 
     zoomInBtn.addEventListener('click', () => {
-      if (modelState) {
-        modelState.distance = Math.max(0.2, modelState.distance * 0.88);
-        const canvas = document.getElementById('canvas3d');
-        renderModel(canvas, modelState);
-        return;
-      }
+      if (isModelMode) { if (w3v) w3v.zoomIn(); return; }
       zoomByStep(1);
     });
     zoomOutBtn.addEventListener('click', () => {
-      if (modelState) {
-        modelState.distance = Math.min(200, modelState.distance * 1.12);
-        const canvas = document.getElementById('canvas3d');
-        renderModel(canvas, modelState);
-        return;
-      }
+      if (isModelMode) { if (w3v) w3v.zoomOut(); return; }
       zoomByStep(-1);
     });
-    zoomResetBtn.addEventListener('click', () => {
-      if (modelState) {
-        modelState.yaw = Math.PI * 0.5;
-        modelState.pitch = clampPitch(-0.52);
-        modelState.distance = 3.2;
-        const canvas = document.getElementById('canvas3d');
-        renderModel(canvas, modelState);
-        return;
-      }
-      zoom = 1;
-      centerImage();
+    document.getElementById('resetCamBtn').addEventListener('click', () => {
+      if (w3v) w3v.resetCamera();
     });
-    fitBtn.addEventListener('click', fitToView);
+    fitBtn.addEventListener('click', () => {
+      if (!isModelMode) fitToView();
+    });
     window.addEventListener('resize', () => {
-      if (modelState) {
-        const canvas = document.getElementById('canvas3d');
-        renderModel(canvas, modelState);
-      } else {
-        centerImage();
-      }
+      if (!isModelMode) centerImage();
     });
 
     renderModeBtn.addEventListener('click', () => {
-      if (modelRenderMode === 'both') modelRenderMode = 'fill';
-      else if (modelRenderMode === 'fill') modelRenderMode = 'wire';
-      else modelRenderMode = 'both';
+      modelRenderMode = modelRenderMode === 'fill' ? 'wire' : 'fill';
       updateRenderModeUi();
-      if (modelState) {
-        const canvas = document.getElementById('canvas3d');
-        renderModel(canvas, modelState);
-      }
+      if (w3v) w3v.setRenderMode(modelRenderMode);
+    });
+
+    document.getElementById('debugBtn').addEventListener('click', () => {
+      const el = document.getElementById('debugLog');
+      el.classList.toggle('visible');
     });
 
     animSelect.addEventListener('change', () => {
-      const idx = animSelect.selectedIndex;
-      vscode.postMessage({ type: 'selectSequence', index: idx });
-      playbackNeedsRestart = true;
-      restartPlaybackIfNeeded(true);
-      if (currentData && currentData.kind === 'model') {
-        updateSequencePanel(currentData);
-      }
+      if (w3v) w3v.setSequence(animSelect.selectedIndex);
     });
 
     autoplayChk.addEventListener('change', () => {
-      playbackNeedsRestart = true;
-      if (autoplayChk.checked) {
-        restartPlaybackIfNeeded(true);
-      } else {
-        stopPlayback();
-      }
+      if (w3v) w3v.setAutoplay(autoplayChk.checked);
     });
 
     seqSlider.addEventListener('input', () => {
-      if (!currentData || currentData.kind !== 'model') return;
-      const idx = Math.max(0, animSelect.selectedIndex);
       const frame = Math.floor(Number(seqSlider.value));
-      if (autoplayChk.checked) {
-        autoplayChk.checked = false;
-      }
-      stopPlayback();
-      vscode.postMessage({ type: 'selectSequenceFrame', index: idx, frame });
-    });
-
-    document.getElementById('refreshBtn').addEventListener('click', () => {
-      vscode.postMessage({ type: 'refresh' });
+      if (autoplayChk.checked) autoplayChk.checked = false;
+      if (w3v) w3v.setFrame(frame);
     });
 
     window.addEventListener('message', async (event) => {
@@ -1608,28 +1067,44 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
         setLoading(false);
         return;
       }
-      if (msg.type === 'image') {
-        const incomingFileName = msg.fileName || '';
-        if (incomingFileName !== currentFileName) {
-          currentFileName = incomingFileName;
-          playbackNeedsRestart = true;
-        }
-        currentData = msg.decoded;
-        if (currentData.kind === 'model') {
-          setMeta(msg.fileName || 'Model', currentData.description + ' | geosets: ' + currentData.geosetsCount + ', tris: ' + currentData.trianglesCount);
-        } else {
-          setMeta(msg.fileName || 'Image', currentData.description + ' | ' + currentData.width + ' x ' + currentData.height);
-        }
-        try {
-          await renderCurrent();
-          if (!modelState) {
-            stopPlayback();
-            zoom = 1;
-            centerImage();
+      if (msg.type === 'mdx') {
+        isModelMode = true;
+        viewport.classList.add('model-mode');
+        document.getElementById('canvas2d').style.display = 'none';
+        document.getElementById('canvas3d').style.display = '';
+        stage.style.transform = 'translate(0px, 0px) scale(1)';
+        zoomLabel.textContent = '3D';
+        setMeta(msg.fileName || 'Model', 'Loading model...');
+        setLoading(true, 'Loading model...');
+        if (w3v) w3v.loadModel(base64ToArrayBuffer(msg.mdxBase64), msg.fileName || '');
+        return;
+      }
+      if (msg.type === 'texture') {
+        if (w3v) {
+          if (msg.rgbaBase64 && msg.width && msg.height) {
+            const rgba = base64ToBytes(msg.rgbaBase64);
+            const imageData = new ImageData(new Uint8ClampedArray(rgba.buffer), msg.width, msg.height);
+            w3v.onTextureImageData(msg.path, imageData);
           } else {
-            zoomLabel.textContent = '3D';
-            restartPlaybackIfNeeded(false);
+            const buf = msg.blpBase64 ? base64ToArrayBuffer(msg.blpBase64) : null;
+            w3v.onTexture(msg.path, buf);
           }
+        }
+        return;
+      }
+      if (msg.type === 'image') {
+        isModelMode = false;
+        viewport.classList.remove('model-mode');
+        setSidebarVisible(false);
+        setModelButtons(false);
+        const data = msg.decoded;
+        lastRasterWidth = data.width;
+        lastRasterHeight = data.height;
+        setMeta(msg.fileName || 'Image', data.description + ' · ' + data.width + ' × ' + data.height);
+        try {
+          await renderCurrent(data);
+          zoom = 1;
+          centerImage();
           setLoading(false);
         } catch (err) {
           const message = err && err.message ? err.message : String(err);
@@ -1650,7 +1125,6 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
 
     debug('script boot');
     updateRenderModeUi();
-    ensureRenderLoop();
     vscode.postMessage({ type: 'ready' });
     debug('ready posted');
   </script>
@@ -1660,13 +1134,15 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
 
 }
 
-function decodePreview(sourceBytes: Uint8Array, uri: vscode.Uri, sequenceIndex = -1, sequenceFrame?: number): DecodedBlpImage {
+function decodePreview(sourceBytes: Uint8Array, uri: vscode.Uri): DecodedBlpImage {
     const ext = path.extname(uri.fsPath || uri.path).toLowerCase();
     if (ext === '.dds') {
         return decodeDds(sourceBytes);
     }
     if (ext === '.mdx') {
-        return decodeMdx(sourceBytes, sequenceIndex, sequenceFrame);
+        const mdxBase64 = Buffer.from(sourceBytes).toString('base64');
+        const fileName = path.basename(uri.fsPath || uri.path);
+        return { kind: 'mdx-raw', mdxBase64, fileName };
     }
     return decodeBlp(sourceBytes);
 }

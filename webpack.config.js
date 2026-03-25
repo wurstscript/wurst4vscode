@@ -65,4 +65,36 @@ const webExtensionConfig = {
 	devtool: 'nosources-source-map', // create a source map that points to the original source file
 };
 
-module.exports = [webExtensionConfig];
+/** @type WebpackConfig */
+const viewerConfig = {
+	mode: 'none',
+	target: 'web',
+	entry: {
+		mdxViewer: './src/webview/mdxViewer.ts',
+	},
+	output: {
+		filename: '[name].js',
+		path: path.join(__dirname, './dist/webview'),
+	},
+	resolve: {
+		mainFields: ['browser', 'module', 'main'],
+		extensions: ['.ts', '.js'],
+	},
+	module: {
+		rules: [
+			{
+				test: /\.ts$/,
+				exclude: /node_modules/,
+				use: [
+					{
+						loader: 'ts-loader',
+						options: { configFile: 'tsconfig.webview.json' },
+					},
+				],
+			},
+		],
+	},
+	performance: { hints: false },
+};
+
+module.exports = [webExtensionConfig, viewerConfig];

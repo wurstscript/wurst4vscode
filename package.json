@@ -173,6 +173,11 @@
                 "category": "wurst"
             },
             {
+                "command": "wurst.testCascExtraction",
+                "title": "Test CASC Texture Extraction (Smoketest)",
+                "category": "wurst"
+            },
+            {
                 "command": "wurst.newProject",
                 "title": "New Wurst Project",
                 "category": "wurst"
@@ -259,6 +264,11 @@
                     "default": "20",
                     "description": "Timeout in seconds after which tests will be cancelled and considered failed, if they did not yet succeed."
                 },
+                "wurst.cascTextures": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When previewing MDX models, fetch missing textures from the Warcraft III CDN (requires internet access)."
+                },
                 "wurst.trace.server": {
                     "scope": "window",
                     "type": "string",
@@ -293,9 +303,12 @@
         "webpack-cli": "^5.1.4"
     },
     "dependencies": {
+        "@dschu012/casclib": "^1.0.5",
+        "casc-cdn": "^0.1.1",
         "node-stream-zip": "^1.15.0",
         "semver": "^7.6.3",
-        "vscode-languageclient": "^9.0.1"
+        "vscode-languageclient": "^9.0.1",
+        "war3-model": "^4.0.1"
     },
     "extensionPack": [
         "redhat.vscode-yaml",

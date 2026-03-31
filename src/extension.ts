@@ -1114,10 +1114,37 @@ function getBundledJava(): string {
     return path.join(RUNTIME_DIR, 'bin', exe);
 }
 
+/** Checks that the given java binary exists and is version >= 25. Throws with a user-facing message if not. */
+function checkCustomJavaVersion(javaBin: string): void {
+    if (!fs.existsSync(javaBin)) {
+        throw new Error(`Custom Java executable not found: "${javaBin}". Check your wurst.javaExecutable setting.`);
+    }
+    const res = spawnSync(javaBin, ['-version'], { encoding: 'utf8', windowsHide: true });
+    // java -version writes to stderr; combine both just in case
+    const output = `${res.stderr || ''}${res.stdout || ''}`.trim();
+    if (res.error || res.status !== 0) {
+        throw new Error(`Failed to run custom Java at "${javaBin}": ${res.error?.message ?? output}`);
+    }
+    // Version line looks like: openjdk version "25.0.1" or java version "25"
+    const match = output.match(/version "(\d+)/);
+    if (!match) {
+        throw new Error(`Could not determine Java version from output:\n${output}`);
+    }
+    const major = parseInt(match[1], 10);
+    if (major < 25) {
+        throw new Error(
+            `WurstScript requires Java 25 or newer, but "${javaBin}" reports version ${major}.\n` +
+            `On NixOS, add jdk25 (or newer) to your environment and update wurst.javaExecutable accordingly.`
+        );
+    }
+}
+
 function getInstalledVersionString(): string | null {
     try {
-        const java = getBundledJava();
-        if (!fs.existsSync(java) || !fs.existsSync(COMPILER_JAR)) return null;
+        const customJava = workspace.getConfiguration('wurst').get<string>('javaExecutable')?.trim() || '';
+        const java = customJava || getBundledJava();
+        if (!customJava && (!fs.existsSync(java) || !fs.existsSync(COMPILER_JAR))) return null;
+        if (customJava && !fs.existsSync(COMPILER_JAR)) return null;
 
         const res = spawnSync(java, ['-jar', COMPILER_JAR, '--version'], {
             encoding: 'utf8',
@@ -1305,13 +1332,18 @@ async function getServerOptions(): Promise<ServerOptions> {
     const config = workspace.getConfiguration('wurst');
     const javaOpts = config.get<string[]>('javaOpts') ?? []; // still useful for power users
     const debugMode = config.get<boolean>('debugMode');
+    const customJava = config.get<string>('javaExecutable')?.trim() || '';
 
     // Validate installation
-    if (!fs.existsSync(RUNTIME_DIR) || !fs.existsSync(COMPILER_JAR)) {
+    if (!customJava && (!fs.existsSync(RUNTIME_DIR) || !fs.existsSync(COMPILER_JAR))) {
         throw new Error('WurstScript is not installed. Use the "Wurst: Install/Update" command.');
     }
+    if (customJava && !fs.existsSync(COMPILER_JAR)) {
+        throw new Error('WurstScript compiler not found. Use the "Wurst: Install/Update" command.');
+    }
 
-    const java = getBundledJava();
+    const java = customJava || getBundledJava();
+    if (customJava) checkCustomJavaVersion(customJava);
     const args = [...javaOpts, '-jar', COMPILER_JAR, '-languageServer'];
 
     if (debugMode && (await isPortOpen(5005))) {

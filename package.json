@@ -214,6 +214,11 @@
             "type": "object",
             "title": "Wurst configuration",
             "properties": {
+                "wurst.javaExecutable": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Path to a custom Java executable (Java 25+) to use for the language server. Leave empty to use the bundled JRE (default). Useful on NixOS or other systems where the bundled JRE does not work. NixOS example: add `jdk25` to your environment packages and set this to the output of `which java`, e.g. /run/current-system/sw/bin/java or $(nix-build '<nixpkgs>' -A jdk25 --no-out-link)/bin/java"
+                },
                 "wurst.javaOpts": {
                     "type": "array",
                     "default": [],

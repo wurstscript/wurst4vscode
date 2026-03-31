@@ -10,7 +10,19 @@
 /** @typedef {import('webpack').Configuration} WebpackConfig **/
 
 const path = require('path');
+const fs = require('fs');
 const webpack = require('webpack');
+
+/** Copies a file from src to dst after webpack emits — used for files that can't be bundled (e.g. native-addon workers). */
+class CopyFilePlugin {
+	constructor(src, dst) { this.src = src; this.dst = dst; }
+	apply(compiler) {
+		compiler.hooks.afterEmit.tap('CopyFilePlugin', () => {
+			fs.mkdirSync(path.dirname(this.dst), { recursive: true });
+			fs.copyFileSync(this.src, this.dst);
+		});
+	}
+}
 
 /** @type WebpackConfig */
 const webExtensionConfig = {
@@ -97,4 +109,41 @@ const viewerConfig = {
 	performance: { hints: false },
 };
 
-module.exports = [webExtensionConfig, viewerConfig];
+/** @type WebpackConfig */
+const nodeExtensionConfig = {
+	mode: 'none',
+	target: 'node',
+	entry: {
+		extension: './src/extension.ts',
+	},
+	output: {
+		filename: '[name].js',
+		path: path.join(__dirname, './dist'),
+		libraryTarget: 'commonjs2',
+	},
+	resolve: {
+		extensions: ['.ts', '.js'],
+	},
+	module: {
+		rules: [
+			{
+				test: /\.ts$/,
+				exclude: /node_modules/,
+				use: [{ loader: 'ts-loader' }],
+			},
+		],
+	},
+	externals: {
+		vscode: 'commonjs vscode',
+	},
+	plugins: [
+		new CopyFilePlugin(
+			path.join(__dirname, 'src', 'casc-extract-worker.js'),
+			path.join(__dirname, 'dist', 'casc-extract-worker.js')
+		),
+	],
+	performance: { hints: false },
+	devtool: 'nosources-source-map',
+};
+
+module.exports = [webExtensionConfig, viewerConfig, nodeExtensionConfig];

@@ -9,7 +9,8 @@
 			"runtimeExecutable": "${execPath}",
 			"args": ["--extensionDevelopmentPath=${workspaceRoot}" ],
 			"sourceMaps": true,
-			"preLaunchTask": "npm"
+			"outFiles": ["${workspaceRoot}/dist/**/*.js"],
+			"preLaunchTask": "npm: watch-web"
 		},
 		{
 			"name": "Launch Extension For Web",

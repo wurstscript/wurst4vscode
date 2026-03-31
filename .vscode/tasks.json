@@ -56,10 +56,18 @@
 			"script": "watch-web",
 			"group": "build",
 			"isBackground": true,
-			"problemMatcher": [
-				"$ts-webpack-watch",
-				"$tslint-webpack-watch"
-			]
+			"problemMatcher": {
+				"owner": "webpack",
+				"pattern": {
+					"regexp": "^ERROR in (.+)$",
+					"file": 1
+				},
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": "webpack\\.config\\.js",
+					"endsPattern": "compiled (successfully|with \\d+ warning)"
+				}
+			}
 		}
 	]
 }

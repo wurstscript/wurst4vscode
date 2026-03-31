@@ -35,7 +35,7 @@
         "onCommand:wurst.buildmap",
         "onCommand:wurst.tests_file"
     ],
-    "main": "./out/extension",
+    "main": "./dist/extension",
     "browser": "./dist/web/extension.js",
     "contributes": {
         "languages": [
@@ -289,7 +289,7 @@
         }
     },
     "scripts": {
-        "vscode:prepublish": "tsc -p ./ && npm run package-web",
+        "vscode:prepublish": "npm run package-web",
         "compile": "tsc -watch -p ./",
         "compile-web": "webpack",
         "watch-web": "webpack --watch",
@@ -313,7 +313,7 @@
         "node-stream-zip": "^1.15.0",
         "semver": "^7.6.3",
         "vscode-languageclient": "^9.0.1",
-        "war3-model": "^4.0.1"
+        "war3-model": "file:../war3-model"
     },
     "extensionPack": [
         "redhat.vscode-yaml",

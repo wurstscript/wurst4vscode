@@ -42,6 +42,34 @@ let callbacks: War3ViewerCallbacks | null = null;
 let animLoopHandle = 0;
 let lastTimestamp = 0;
 let autoplay = true;
+let war3ModelConsoleHooked = false;
+let originalConsoleLog: typeof console.log | null = null;
+
+function isWar3ModelDebugEnabled(): boolean {
+    const runtime = window as Window & typeof globalThis & {
+        __WAR3_MODEL_DEBUG?: boolean | string | number;
+    };
+    const debugFlag = runtime.__WAR3_MODEL_DEBUG;
+    if (debugFlag === true || debugFlag === '1' || debugFlag === 1 || debugFlag === 'true') {
+        return true;
+    }
+    try {
+        if (/(?:\?|&)war3ModelDebug=(?:1|true)(?:&|$)/i.test(window.location.search)) {
+            return true;
+        }
+    } catch {
+        // ignore URL access issues
+    }
+    try {
+        const storedValue = window.localStorage.getItem('war3-model-debug');
+        if (storedValue === '1' || storedValue === 'true') {
+            return true;
+        }
+    } catch {
+        // ignore storage access issues
+    }
+    return false;
+}
 
 // camera (Z-up, WC3 space)
 let yaw = Math.PI * 0.5;
@@ -54,6 +82,26 @@ let currentSeqs: SequenceInfo[] = [];
 let currentSeqIndex = 0;
 const initialCenter: [number, number, number] = [0, 0, 0];
 let initialDistance = 3.0;
+
+function hookWar3ModelConsole() {
+    if (war3ModelConsoleHooked) return;
+    war3ModelConsoleHooked = true;
+    originalConsoleLog = console.log.bind(console);
+    console.log = (...args: unknown[]) => {
+        originalConsoleLog?.(...args);
+        if (args[0] === '[war3-model]' && isWar3ModelDebugEnabled()) {
+            const msg = args.slice(1).map((part) => {
+                if (typeof part === 'string') return part;
+                try {
+                    return JSON.stringify(part);
+                } catch {
+                    return String(part);
+                }
+            }).join(' ');
+            callbacks?.onDebug(`[war3-model] ${msg}`);
+        }
+    };
+}
 
 // ─── matrix math ─────────────────────────────────────────────────────────────
 
@@ -109,8 +157,9 @@ function renderFrame(ts: number) {
         renderer.update(delta);
     }
 
-    const w = Math.max(2, canvas.clientWidth);
-    const h = Math.max(2, canvas.clientHeight);
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.max(2, Math.round(canvas.clientWidth * pixelRatio));
+    const h = Math.max(2, Math.round(canvas.clientHeight * pixelRatio));
     if (canvas.width !== w || canvas.height !== h) {
         canvas.width = w;
         canvas.height = h;
@@ -260,6 +309,7 @@ const War3Viewer = {
         gizmoCanvas = opts.gizmo;
         vscodeApi = opts.vscodeApi;
         callbacks = opts.callbacks;
+        hookWar3ModelConsole();
         setupOrbitCamera(opts.viewport);
         if (!animLoopHandle) {
             lastTimestamp = performance.now();

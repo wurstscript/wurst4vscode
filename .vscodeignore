@@ -1,0 +1,14 @@
+.vscode/**
+.github/**
+src/**
+out/**
+node_modules/**
+*.vsix
+tsconfig*.json
+webpack.config.js
+.gitignore
+.eslintrc*
+# dist/ is in .gitignore so vsce would exclude it — explicitly re-include the built output
+!dist/**
+# casclib is a native addon used by casc-extract-worker.js (spawned as plain node, can't be webpack-bundled)
+!node_modules/@dschu012/casclib/**

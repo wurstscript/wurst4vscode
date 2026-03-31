@@ -182,7 +182,7 @@ function getCascDataRoot(log: (msg: string) => void): string | null {
 
 /** Spawn casc-extract-worker.js (plain Node) to extract one file from CASC into outputFile. */
 function cascExtractViaWorker(wc3Root: string, cascPath: string, outputFile: string): Promise<number> {
-    const workerScript = path.join(__dirname, '..', '..', 'src', 'casc-extract-worker.js');
+    const workerScript = path.join(__dirname, 'casc-extract-worker.js');
     // Use system node, not process.execPath (which is Electron)
     const nodeBin = 'node';
     return new Promise((resolve, reject) => {
@@ -385,6 +385,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
                     try {
                         let texBuf: Buffer | null = null;
                         let texExt: 'blp' | 'dds' | null = null;
+                        let resolvedFsPath: string | null = null;
 
                         // 1. Local file lookup (also tries .dds for .blp references)
                         if (mdxFsPath) {
@@ -392,17 +393,26 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
                             if (found) {
                                 texBuf = found.buf;
                                 texExt = found.foundPath.toLowerCase().endsWith('.dds') ? 'dds' : 'blp';
+                                resolvedFsPath = found.foundPath;
                             }
                         }
 
                         // 2. CASC local archive fallback (uses wurst.wc3path)
                         if (!texBuf) {
                             const casc = await findCascTexture(texPath, dbg);
-                            if (casc) { texBuf = casc.buf; texExt = casc.ext; }
+                            if (casc) {
+                                texBuf = casc.buf;
+                                texExt = casc.ext;
+                                // Reconstruct the cache path so the webview can offer an "open" link
+                                const cacheDir = getCacheDir();
+                                const normalized = texPath.replace(/\//g, '\\').toLowerCase();
+                                const rel = texExt === 'dds' ? normalized.replace(/\.blp$/, '.dds') : normalized;
+                                resolvedFsPath = path.join(cacheDir, rel);
+                            }
                         }
 
                         if (!texBuf || !texExt) {
-                            await webviewPanel.webview.postMessage({ type: 'texture', path: texPath, blpBase64: null });
+                            await webviewPanel.webview.postMessage({ type: 'texture', path: texPath, resolvedFsPath: null, blpBase64: null });
                             dbg(`texture ${texPath}: not found`);
                             return;
                         }
@@ -411,22 +421,30 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
                             const decoded = decodeDds(new Uint8Array(texBuf));
                             if (decoded.mode === 'rgba') {
                                 await webviewPanel.webview.postMessage({
-                                    type: 'texture', path: texPath,
+                                    type: 'texture', path: texPath, resolvedFsPath,
                                     blpBase64: null, rgbaBase64: decoded.rgbaBase64,
                                     width: decoded.width, height: decoded.height,
                                 });
                             } else {
-                                await webviewPanel.webview.postMessage({ type: 'texture', path: texPath, blpBase64: null });
+                                await webviewPanel.webview.postMessage({ type: 'texture', path: texPath, resolvedFsPath, blpBase64: null });
                             }
                         } else {
-                            await webviewPanel.webview.postMessage({ type: 'texture', path: texPath, blpBase64: texBuf.toString('base64') });
+                            await webviewPanel.webview.postMessage({ type: 'texture', path: texPath, resolvedFsPath, blpBase64: texBuf.toString('base64') });
                         }
                         dbg(`texture ${texPath}: found (${texExt})`);
                     } catch (e) {
                         dbg(`texture error ${texPath}: ${String(e)}`);
-                        await webviewPanel.webview.postMessage({ type: 'texture', path: texPath, blpBase64: null });
+                        await webviewPanel.webview.postMessage({ type: 'texture', path: texPath, resolvedFsPath: null, blpBase64: null });
                     }
                 }));
+                return;
+            }
+            if (type === 'openTexture') {
+                const fsPath = (msg as { fsPath?: unknown }).fsPath;
+                if (typeof fsPath === 'string' && fsPath && fs.existsSync(fsPath)) {
+                    vscode.commands.executeCommand('vscode.open', vscode.Uri.file(fsPath));
+                }
+                return;
             }
         });
     }
@@ -582,6 +600,22 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       opacity: 0.8;
       word-break: break-word;
     }
+    .tex-list { display: flex; flex-direction: column; gap: 3px; }
+    .tex-item {
+      font-size: 11px;
+      color: var(--muted);
+      word-break: break-all;
+      line-height: 1.4;
+    }
+    .tex-item a {
+      color: var(--vscode-textLink-foreground, #4da3ff);
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .tex-item a:hover { text-decoration: underline; }
+    .tex-item.missing { opacity: 0.45; }
+    /* When alpha mode is off, draw a solid bg behind the canvas */
+    .viewport.alpha-off { background: #1e1e1e; }
     /* ── Canvas area ── */
     .canvas-area {
       flex: 1;
@@ -625,6 +659,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
     }
     canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; }
     .stage-canvas { position: static; width: auto; height: auto; }
+    .viewport.model-mode { background: color-mix(in srgb, var(--vscode-editor-background) 85%, #000); }
     .viewport.model-mode > .stage { width: 100%; height: 100%; }
     .viewport.model-mode #canvas3d { width: 100%; height: 100%; }
     .warnings {
@@ -689,7 +724,8 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       <button id="zoomInBtn" type="button" title="Zoom in">+</button>
       <span id="zoomLabel" class="zoom-label">100%</span>
       <div class="sep" id="imgSep"></div>
-      <button id="fitBtn" type="button" title="Fit to viewport" id="fitBtn">Fit</button>
+      <button id="fitBtn" type="button" title="Fit to viewport">Fit</button>
+      <button id="alphaBtn" type="button" title="Toggle alpha channel display">Alpha</button>
       <div class="sep" id="modelSep" style="display:none"></div>
       <button id="resetCamBtn" type="button" title="Reset camera" style="display:none">&#8635; Reset</button>
       <button id="renderModeBtn" type="button" title="Toggle wireframe" style="display:none">Fill</button>
@@ -705,6 +741,24 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       </div>
       <div class="sb-divider"></div>
       <div class="sb-section">
+        <div class="sb-label">Team Color</div>
+        <select id="teamColorSelect" class="anim-select">
+          <option value="#ff0303">1 Red</option>
+          <option value="#0042ff">2 Blue</option>
+          <option value="#1ce6b9">3 Teal</option>
+          <option value="#540081">4 Purple</option>
+          <option value="#fffc00">5 Yellow</option>
+          <option value="#fe8a0e">6 Orange</option>
+          <option value="#20c000">7 Green</option>
+          <option value="#e55bb0">8 Pink</option>
+          <option value="#959697">9 Gray</option>
+          <option value="#7ebff1">10 Light Blue</option>
+          <option value="#106246">11 Dark Green</option>
+          <option value="#4e2a04">12 Brown</option>
+        </select>
+      </div>
+      <div class="sb-divider"></div>
+      <div class="sb-section">
         <div class="sb-label">Animation</div>
         <select id="animSelect" class="anim-select"></select>
         <label class="autoplay-row"><input id="autoplayChk" type="checkbox" checked><span>Auto play</span></label>
@@ -715,6 +769,11 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
         <div id="seqFrameLabel" class="frame-label">frame: &mdash;</div>
         <input id="seqSlider" class="seq-slider" type="range" min="0" max="1" step="1" value="0" />
         <div id="seqStats" class="seq-name"></div>
+      </div>
+      <div class="sb-divider" id="texListDivider" style="display:none"></div>
+      <div class="sb-section" id="texListSection" style="display:none">
+        <div class="sb-label">Textures</div>
+        <div id="texList" class="tex-list"></div>
       </div>
     </aside>
     <div class="canvas-area">
@@ -812,6 +871,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       document.getElementById('renderModeBtn').style.display = visible ? '' : 'none';
       document.getElementById('imgSep').style.display = visible ? 'none' : '';
       document.getElementById('fitBtn').style.display = visible ? 'none' : '';
+      document.getElementById('alphaBtn').style.display = visible ? 'none' : '';
     }
 
     // ── War3Viewer init ────────────────────────────────────────────────────────
@@ -841,6 +901,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
               animSelect.selectedIndex = 0;
             }
             setSidebarVisible(true);
+            if (w3v) w3v.setTeamColor(teamColorSelect.value);
             if (info.sequences.length) {
               const s = info.sequences[0];
               document.getElementById('seqSection').style.display = '';
@@ -849,6 +910,21 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
               seqSlider.max = String(s.end);
               seqSlider.value = String(s.start);
               seqStats.textContent = s.name;
+            }
+            // Build texture list (items get updated with links when textures resolve)
+            const texList = document.getElementById('texList');
+            texList.innerHTML = '';
+            if (info.texturePaths && info.texturePaths.length) {
+              document.getElementById('texListSection').style.display = '';
+              document.getElementById('texListDivider').style.display = '';
+              for (const tp of info.texturePaths) {
+                const item = document.createElement('div');
+                item.className = 'tex-item missing';
+                item.dataset.path = tp;
+                item.textContent = tp.split(/[\\\\/]/).pop() || tp;
+                item.title = tp;
+                texList.appendChild(item);
+              }
             }
             stage.style.transform = 'translate(0px, 0px) scale(1)';
             zoomLabel.textContent = '3D';
@@ -873,8 +949,11 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       const canvas3d = document.getElementById('canvas3d');
       canvas3d.style.display = 'none';
       canvas2d.style.display = '';
-      setModelPanelVisible(false);
-      seqPanel.classList.remove('visible');
+      setModelButtons(false);
+      document.getElementById('seqSection').style.display = 'none';
+      document.getElementById('seqDivider').style.display = 'none';
+      document.getElementById('texListSection').style.display = 'none';
+      document.getElementById('texListDivider').style.display = 'none';
       const ctx = canvas2d.getContext('2d', { alpha: true });
       if (!ctx) throw new Error('2D canvas context is unavailable.');
       canvas2d.width = data.width;
@@ -910,12 +989,15 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
     const zoomOutBtn = document.getElementById('zoomOutBtn');
     const fitBtn = document.getElementById('fitBtn');
     const renderModeBtn = document.getElementById('renderModeBtn');
+    const alphaBtn = document.getElementById('alphaBtn');
+    const teamColorSelect = document.getElementById('teamColorSelect');
     const animSelect = document.getElementById('animSelect');
     const autoplayChk = document.getElementById('autoplayChk');
     const seqSlider = document.getElementById('seqSlider');
     const seqFrameLabel = document.getElementById('seqFrameLabel');
     const seqStats = document.getElementById('seqStats');
 
+    let showAlpha = true;
     let zoom = 1;
     let tx = 0;
     let ty = 0;
@@ -930,6 +1012,15 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
 
     function updateRenderModeUi() {
       renderModeBtn.textContent = modelRenderMode === 'fill' ? 'Fill' : 'Wire';
+    }
+
+    function applyAlphaMode() {
+      if (showAlpha) {
+        viewport.classList.remove('alpha-off');
+      } else {
+        viewport.classList.add('alpha-off');
+      }
+      alphaBtn.classList.toggle('active', showAlpha);
     }
 
     function clampZoom(value) {
@@ -1034,9 +1125,18 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       if (w3v) w3v.setRenderMode(modelRenderMode);
     });
 
+    alphaBtn.addEventListener('click', () => {
+      showAlpha = !showAlpha;
+      applyAlphaMode();
+    });
+
     document.getElementById('debugBtn').addEventListener('click', () => {
       const el = document.getElementById('debugLog');
       el.classList.toggle('visible');
+    });
+
+    teamColorSelect.addEventListener('change', () => {
+      if (w3v) w3v.setTeamColor(teamColorSelect.value);
     });
 
     animSelect.addEventListener('change', () => {
@@ -1090,6 +1190,28 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
             w3v.onTexture(msg.path, buf);
           }
         }
+        // Update texture list item with resolved path (or mark as missing)
+        const item = document.querySelector('.tex-item[data-path="' + CSS.escape(msg.path) + '"]');
+        if (item) {
+          if (msg.resolvedFsPath) {
+            item.classList.remove('missing');
+            const a = item.querySelector('a') || document.createElement('a');
+            a.textContent = msg.path.split(/[\\\\/]/).pop() || msg.path;
+            a.title = msg.resolvedFsPath;
+            a.href = '#';
+            a.onclick = (e) => { e.preventDefault(); vscode.postMessage({ type: 'openTexture', fsPath: msg.resolvedFsPath }); };
+            if (!item.querySelector('a')) {
+              item.textContent = '';
+              item.appendChild(a);
+              const full = document.createElement('span');
+              full.style.cssText = 'display:block;opacity:0.55;font-size:10px;margin-top:1px;word-break:break-all;';
+              full.textContent = msg.path;
+              item.appendChild(full);
+            }
+          } else {
+            item.classList.add('missing');
+          }
+        }
         return;
       }
       if (msg.type === 'image') {
@@ -1125,6 +1247,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
 
     debug('script boot');
     updateRenderModeUi();
+    applyAlphaMode();
     vscode.postMessage({ type: 'ready' });
     debug('ready posted');
   </script>

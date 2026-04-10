@@ -195,6 +195,10 @@ function cascExtractViaWorker(wc3Root: string, cascPath: string, outputFile: str
 
 /** Look up a texture. Checks disk cache first; if missing, extracts via child process and caches. */
 async function findCascTexture(texPath: string, log: (msg: string) => void): Promise<{ buf: Buffer; ext: 'dds' | 'blp' } | null> {
+    if (process.platform !== 'win32') {
+        log('CASC skip: texture extraction from the WC3 game files is only available on Windows');
+        return null;
+    }
     const cacheDir = getCacheDir();
     // CASC paths are lowercase with backslash separators
     const normalized = texPath.replace(/\//g, '\\').toLowerCase();
@@ -1262,6 +1266,9 @@ function decodePreview(sourceBytes: Uint8Array, uri: vscode.Uri): DecodedBlpImag
     if (ext === '.dds') {
         return decodeDds(sourceBytes);
     }
+    if (ext === '.tga') {
+        return decodeTga(sourceBytes);
+    }
     if (ext === '.mdx') {
         const mdxBase64 = Buffer.from(sourceBytes).toString('base64');
         const fileName = path.basename(uri.fsPath || uri.path);
@@ -1286,6 +1293,123 @@ function decodeDds(sourceBytes: Uint8Array): DecodedRasterImage {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(`failed reading DDS: ${message}`);
     }
+}
+
+function decodeTga(sourceBytes: Uint8Array): DecodedRasterImage {
+    try {
+        return decodeTgaInternal(sourceBytes);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`failed reading TGA: ${message}`);
+    }
+}
+
+function decodeTgaInternal(src: Uint8Array): DecodedRasterImage {
+    const warnings: string[] = [];
+    if (src.length < 18) throw new Error('TGA header is truncated');
+
+    const idLen        = src[0];
+    const colorMapType = src[1];
+    const imageType    = src[2];
+    // image descriptor bytes
+    const width  = src[12] | (src[13] << 8);
+    const height = src[14] | (src[15] << 8);
+    const bpp    = src[16]; // bits per pixel
+    const descriptor = src[17];
+    const originTop  = (descriptor & 0x20) !== 0; // bit 5: top-left origin
+
+    if (width <= 0 || height <= 0 || width > MAX_DIMENSION || height > MAX_DIMENSION) {
+        throw new Error(`invalid TGA dimensions ${width}x${height}`);
+    }
+    if (colorMapType !== 0) throw new Error('colour-mapped TGA not supported');
+
+    // Supported types: 2 = uncompressed RGB/RGBA, 3 = uncompressed greyscale,
+    //                  10 = RLE RGB/RGBA, 11 = RLE greyscale
+    const isRle       = imageType === 10 || imageType === 11;
+    const isGrey      = imageType === 3  || imageType === 11;
+    const isRgb       = imageType === 2  || imageType === 10;
+    if (!isRgb && !isGrey) throw new Error(`unsupported TGA image type ${imageType}`);
+
+    const bytesPerPixel = bpp >> 3; // 3 = BGR, 4 = BGRA, 1 = grey
+    if (bytesPerPixel !== 1 && bytesPerPixel !== 3 && bytesPerPixel !== 4) {
+        throw new Error(`unsupported TGA bpp ${bpp}`);
+    }
+
+    let offset = 18 + idLen; // skip header + image ID
+    const pixelCount = width * height;
+    const rgba = new Uint8Array(pixelCount * 4);
+
+    const readPixel = (dst: Uint8Array, dstOff: number): void => {
+        if (isGrey) {
+            const v = src[offset++];
+            dst[dstOff]     = v;
+            dst[dstOff + 1] = v;
+            dst[dstOff + 2] = v;
+            dst[dstOff + 3] = 255;
+        } else if (bytesPerPixel === 3) {
+            dst[dstOff]     = src[offset + 2]; // R
+            dst[dstOff + 1] = src[offset + 1]; // G
+            dst[dstOff + 2] = src[offset];     // B
+            dst[dstOff + 3] = 255;
+            offset += 3;
+        } else {
+            dst[dstOff]     = src[offset + 2]; // R
+            dst[dstOff + 1] = src[offset + 1]; // G
+            dst[dstOff + 2] = src[offset];     // B
+            dst[dstOff + 3] = src[offset + 3]; // A
+            offset += 4;
+        }
+    };
+
+    if (!isRle) {
+        for (let i = 0; i < pixelCount; i++) readPixel(rgba, i * 4);
+    } else {
+        let i = 0;
+        while (i < pixelCount) {
+            const rep = src[offset++];
+            const count = (rep & 0x7f) + 1;
+            if (rep & 0x80) {
+                // RLE packet — read one pixel, repeat it
+                const tmp = new Uint8Array(4);
+                readPixel(tmp, 0);
+                for (let c = 0; c < count && i < pixelCount; c++, i++) {
+                    rgba[i * 4]     = tmp[0];
+                    rgba[i * 4 + 1] = tmp[1];
+                    rgba[i * 4 + 2] = tmp[2];
+                    rgba[i * 4 + 3] = tmp[3];
+                }
+            } else {
+                // Raw packet
+                for (let c = 0; c < count && i < pixelCount; c++, i++) readPixel(rgba, i * 4);
+            }
+        }
+    }
+
+    // TGA default origin is bottom-left; flip vertically unless top-left flag is set
+    if (!originTop) {
+        const rowBytes = width * 4;
+        const tmp = new Uint8Array(rowBytes);
+        for (let y = 0; y < Math.floor(height / 2); y++) {
+            const top = y * rowBytes;
+            const bot = (height - 1 - y) * rowBytes;
+            tmp.set(rgba.subarray(top, top + rowBytes));
+            rgba.copyWithin(top, bot, bot + rowBytes);
+            rgba.set(tmp, bot);
+        }
+    }
+
+    const hasAlpha = bytesPerPixel === 4;
+    if (!hasAlpha) warnings.push('No alpha channel — opacity set to 100%.');
+
+    return {
+        kind: 'raster',
+        mode: 'rgba',
+        width,
+        height,
+        rgbaBase64: Buffer.from(rgba).toString('base64'),
+        warnings,
+        description: `TGA ${isRle ? 'RLE ' : ''}${isGrey ? 'Greyscale' : bpp === 32 ? 'RGBA' : 'RGB'} ${width}×${height}`,
+    };
 }
 
 function decodeDdsInternal(sourceBytes: Uint8Array): DecodedRasterImage {

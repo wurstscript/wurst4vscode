@@ -21,36 +21,83 @@
     "categories": [
         "Programming Languages"
     ],
-    "activationEvents": [
-        "onLanguage:wurst",
-        "onCustomEditor:wurst.blpPreview",
-        "onCommand:wurst.startmap",
-        "onCommand:wurst.runmap",
-        "onCommand:wurst.startlast",
-        "onCommand:wurst.tests",
-        "onCommand:wurst.tests_file",
-        "onCommand:wurst.tests_func",
-        "onCommand:wurst.fix_all_quickfixes",
-        "onCommand:wurst.perform_code_action",
-        "onCommand:wurst.buildmap",
-        "onCommand:wurst.tests_file"
-    ],
+    "activationEvents": [],
     "main": "./dist/extension",
     "browser": "./dist/web/extension.js",
     "contributes": {
         "languages": [
             {
                 "id": "wurst",
-                "aliases": [
-                    "Wurst",
-                    "wurst"
-                ],
-                "extensions": [
-                    ".wurst",
-                    ".jurst",
-                    ".j"
-                ],
+                "aliases": ["Wurst", "wurst"],
+                "extensions": [".wurst", ".jurst", ".j"],
                 "configuration": "./wurst.configuration.json"
+            },
+            {
+                "id": "wc3-image",
+                "aliases": ["WC3 Image"],
+                "extensions": [".blp", ".BLP", ".dds", ".DDS", ".tga", ".TGA"],
+                "icon": {
+                    "light": "./images/icons/blp.svg",
+                    "dark": "./images/icons/blp.svg"
+                }
+            },
+            {
+                "id": "wc3-model",
+                "aliases": ["WC3 Model"],
+                "extensions": [".mdx", ".MDX", ".mdl", ".MDL"],
+                "icon": {
+                    "light": "./images/icons/mdx.svg",
+                    "dark": "./images/icons/mdx.svg"
+                }
+            },
+            {
+                "id": "wc3-map",
+                "aliases": ["WC3 Map"],
+                "extensions": [".w3x", ".W3X", ".w3m", ".W3M"],
+                "icon": {
+                    "light": "./images/icons/w3map.svg",
+                    "dark": "./images/icons/w3map.svg"
+                }
+            },
+            {
+                "id": "wc3-objdata",
+                "aliases": ["WC3 Object Data"],
+                "extensions": [
+                    ".w3i", ".w3u", ".w3t", ".w3a", ".w3b",
+                    ".w3d", ".w3h", ".w3q", ".w3o", ".w3e",
+                    ".w3r", ".w3c", ".w3s", ".w3l"
+                ],
+                "icon": {
+                    "light": "./images/icons/w3data.svg",
+                    "dark": "./images/icons/w3data.svg"
+                }
+            },
+            {
+                "id": "wc3-trigger",
+                "aliases": ["WC3 Triggers"],
+                "extensions": [".wtg", ".wct", ".wts"],
+                "icon": {
+                    "light": "./images/icons/wtg.svg",
+                    "dark": "./images/icons/wtg.svg"
+                }
+            },
+            {
+                "id": "wc3-slk",
+                "aliases": ["WC3 SLK Data"],
+                "extensions": [".slk", ".SLK"],
+                "icon": {
+                    "light": "./images/icons/slk.svg",
+                    "dark": "./images/icons/slk.svg"
+                }
+            },
+            {
+                "id": "wc3-terrain",
+                "aliases": ["WC3 Terrain"],
+                "extensions": [".wpm", ".shd", ".mmp", ".doo"],
+                "icon": {
+                    "light": "./images/icons/terrain.svg",
+                    "dark": "./images/icons/terrain.svg"
+                }
             }
         ],
         "documentFormattingEditProvider": {
@@ -88,11 +135,28 @@
                         "filenamePattern": "*.DDS"
                     },
                     {
+                        "filenamePattern": "*.tga"
+                    },
+                    {
+                        "filenamePattern": "*.TGA"
+                    },
+                    {
                         "filenamePattern": "*.mdx"
                     },
                     {
                         "filenamePattern": "*.MDX"
                     }
+                ],
+                "priority": "default"
+            },
+            {
+                "viewType": "wurst.mpqViewer",
+                "displayName": "WC3 Map Archive",
+                "selector": [
+                    { "filenamePattern": "*.w3x" },
+                    { "filenamePattern": "*.W3X" },
+                    { "filenamePattern": "*.w3m" },
+                    { "filenamePattern": "*.W3M" }
                 ],
                 "priority": "default"
             }
@@ -305,15 +369,15 @@
         "ts-loader": "^9.5.1",
         "typescript": "^5.9.3",
         "webpack": "^5.105.0",
-        "webpack-cli": "^5.1.4"
+        "webpack-cli": "^5.1.4",
+        "war3-model": "file:../war3-model"
     },
     "dependencies": {
         "@dschu012/casclib": "^1.0.5",
         "casc-cdn": "^0.1.1",
         "node-stream-zip": "^1.15.0",
         "semver": "^7.6.3",
-        "vscode-languageclient": "^9.0.1",
-        "war3-model": "file:../war3-model"
+        "vscode-languageclient": "^9.0.1"
     },
     "extensionPack": [
         "redhat.vscode-yaml",

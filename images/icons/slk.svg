@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <rect x="1" y="1" width="14" height="14" rx="2.5" fill="#ce9178"/>
+  <!-- table grid -->
+  <rect x="3" y="3.5" width="10" height="9" rx="1" fill="none" stroke="white" stroke-width="1.1"/>
+  <line x1="3" y1="6" x2="13" y2="6" stroke="white" stroke-width="1.1"/>
+  <line x1="7.5" y1="3.5" x2="7.5" y2="12.5" stroke="white" stroke-width="1.1"/>
+  <line x1="3" y1="9" x2="13" y2="9" stroke="white" stroke-width="0.8" stroke-dasharray="1.5,1"/>
+</svg>

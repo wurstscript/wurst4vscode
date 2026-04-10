@@ -7,8 +7,18 @@ import { workspace, window } from 'vscode';
 
 export function registerCommands(client: LanguageClient): vscode.Disposable {
     let _lastMapConfig: string | undefined = undefined;
-    const isMapFilePath = (value: string | undefined): value is string =>
-        !!value && (value.toLowerCase().endsWith('.w3x') || value.toLowerCase().endsWith('.w3m'));
+
+    // Accepts both archive files (*.w3x, *.w3m) and folder-mode directories (*.w3x/, *.w3m/)
+    const isMapPath = (value: string | undefined): value is string => {
+        if (!value) return false;
+        const lower = value.toLowerCase().replace(/[\\/]+$/, '');
+        if (lower.endsWith('.w3x') || lower.endsWith('.w3m')) return true;
+        try { return fs.statSync(value).isDirectory() && (lower.endsWith('.w3x') || lower.endsWith('.w3m')); }
+        catch { return false; }
+    };
+
+    // Keep old name as alias so nothing else breaks
+    const isMapFilePath = isMapPath;
 
     const getMapPathFromArg = (arg: any): string | undefined => {
         if (!arg) return undefined;
@@ -27,6 +37,32 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
         return getMapPathFromArg(args);
     };
 
+    // Finds both *.w3x/*.w3m archive files and *.w3x/*.w3m folder-mode directories
+    const findMapPaths = (): Thenable<string[]> =>
+        workspace.findFiles('{*.w3x,*.w3m}', null, 10).then((uris) => {
+            // Collect archive files
+            const files = uris.map((u) => u.fsPath);
+            // Also scan workspace roots for map-folders (dirs ending in .w3x/.w3m)
+            const folders: string[] = [];
+            for (const wsFolder of workspace.workspaceFolders ?? []) {
+                try {
+                    for (const entry of fs.readdirSync(wsFolder.uri.fsPath)) {
+                        const lower = entry.toLowerCase();
+                        if (lower.endsWith('.w3x') || lower.endsWith('.w3m')) {
+                            const full = `${wsFolder.uri.fsPath}${require('path').sep}${entry}`;
+                            try {
+                                if (fs.statSync(full).isDirectory()) folders.push(full);
+                            } catch { /* ignore */ }
+                        }
+                    }
+                } catch { /* ignore */ }
+            }
+            return [...files, ...folders].sort((a, b) => {
+                try { return fs.statSync(b).mtime.getTime() - fs.statSync(a).mtime.getTime(); }
+                catch { return 0; }
+            });
+        });
+
     let buildMap = async (args: any) => {
         let config = vscode.workspace.getConfiguration('wurst');
         let wc3path = config.get<string>('wc3path');
@@ -36,22 +72,14 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
         if (isMapFilePath(mapPathFromArgs)) {
             mapPromise = Promise.resolve(mapPathFromArgs);
         } else {
-            let items = workspace
-                .findFiles('{*.w3x,*.w3m}', null, 10)
-                .then((uris) =>
-                    uris.sort(function (a, b) {
-                        return fs.statSync(b.fsPath).mtime.getTime() - fs.statSync(a.fsPath).mtime.getTime();
-                    })
-                )
-                .then((uris) => uris.map((uri) => uri.path));
-            mapPromise = window.showQuickPick(items, {
+            mapPromise = window.showQuickPick(findMapPaths(), {
                 title: 'Wurst: Select map to build',
-                placeHolder: 'Choose a .w3x/.w3m map file',
+                placeHolder: 'Choose a .w3x/.w3m map file or folder',
             });
         }
         let mappath = await mapPromise;
         if (!mappath) {
-            window.showWarningMessage('No map selected for build. Choose a .w3x or .w3m map file and try again.');
+            window.showWarningMessage('No map selected for build. Choose a .w3x or .w3m map file or folder and try again.');
             return;
         }
 
@@ -77,22 +105,14 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
         if (isMapFilePath(mapPathFromArgs)) {
             mapPromise = Promise.resolve(mapPathFromArgs);
         } else {
-            let items = workspace
-                .findFiles('{*.w3x,*.w3m}', null, 10)
-                .then((uris) =>
-                    uris.sort(function (a, b) {
-                        return fs.statSync(b.fsPath).mtime.getTime() - fs.statSync(a.fsPath).mtime.getTime();
-                    })
-                )
-                .then((uris) => uris.map((uri) => uri.path));
-            mapPromise = window.showQuickPick(items, {
+            mapPromise = window.showQuickPick(findMapPaths(), {
                 title: cmd === 'wurst.hotstartmap' ? 'Wurst: Select map to hot run' : 'Wurst: Select map to run',
-                placeHolder: 'Choose a .w3x/.w3m map file',
+                placeHolder: 'Choose a .w3x/.w3m map file or folder',
             });
         }
         let mappath = await mapPromise;
         if (!mappath) {
-            window.showWarningMessage('No map selected to run. Choose a .w3x or .w3m map file and try again.');
+            window.showWarningMessage('No map selected to run. Choose a .w3x or .w3m map file or folder and try again.');
             return;
         }
 

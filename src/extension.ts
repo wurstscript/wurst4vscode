@@ -12,6 +12,8 @@ import { spawn, spawnSync } from 'child_process';
 import { registerCommands } from './features/commands';
 import { registerFileCreation } from './features/fileCreation';
 import { registerBlpPreview } from './features/blpPreview';
+import { registerMpqViewer } from './features/mpqViewer';
+import { registerAssetLinks } from './features/assetLinks';
 import StreamZip = require('node-stream-zip');
 
 const WURST_HOME = path.join(os.homedir(), '.wurst');
@@ -214,6 +216,8 @@ export async function activate(context: ExtensionContext) {
 
     setupDecorators(context);
     context.subscriptions.push(registerBlpPreview(context));
+    context.subscriptions.push(registerMpqViewer(context));
+    context.subscriptions.push(registerAssetLinks(context));
 
     registerBasicCommands(context);
 

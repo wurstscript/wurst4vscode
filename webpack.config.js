@@ -83,6 +83,7 @@ const viewerConfig = {
 	target: 'web',
 	entry: {
 		mdxViewer: './src/webview/mdxViewer.ts',
+		mpqViewerWebview: './src/webview/mpqViewerWebview.ts',
 	},
 	output: {
 		filename: '[name].js',

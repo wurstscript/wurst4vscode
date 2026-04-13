@@ -45,6 +45,8 @@ let lastTimestamp = 0;
 let autoplay = true;
 let war3ModelConsoleHooked = false;
 let originalConsoleLog: typeof console.log | null = null;
+let lastRenderError: string | null = null;
+const retiredRenderers = new Set<ModelRenderer>();
 
 function isWar3ModelDebugEnabled(): boolean {
     const runtime = window as Window & typeof globalThis & {
@@ -90,6 +92,39 @@ let initialDistance = 3.0;
 function resetCameraOrientation() {
     yaw = DEFAULT_YAW;
     pitch = DEFAULT_PITCH;
+}
+
+function clearRendererState() {
+    if (renderer) {
+        retireRenderer(renderer);
+    }
+    renderer = null;
+    gl = null;
+    autoplay = false;
+}
+
+function reportRenderError(message: string) {
+    if (lastRenderError === message) {
+        return;
+    }
+    lastRenderError = message;
+    clearRendererState();
+    callbacks?.onDebug('render error: ' + message);
+    callbacks?.onError(message);
+}
+
+function retireRenderer(instance: ModelRenderer) {
+    retiredRenderers.add(instance);
+    window.setTimeout(() => {
+        if (!retiredRenderers.delete(instance)) {
+            return;
+        }
+        try {
+            instance.destroy();
+        } catch {
+            // ignore renderer cleanup issues
+        }
+    }, 0);
 }
 
 function preferredTargetAxis(min: number, max: number): number {
@@ -169,45 +204,50 @@ function renderFrame(ts: number) {
     animLoopHandle = requestAnimationFrame(renderFrame);
     if (!canvas || !gl) { lastTimestamp = ts; return; }
 
-    const delta = Math.min(ts - lastTimestamp, 100);
-    lastTimestamp = ts;
-    const activeRenderer = renderer;
+        const delta = Math.min(ts - lastTimestamp, 100);
+        lastTimestamp = ts;
+        const activeRenderer = renderer;
 
-    if (activeRenderer && autoplay) {
-        activeRenderer.update(delta);
-    }
+    try {
+        if (activeRenderer && autoplay) {
+            activeRenderer.update(delta);
+        }
 
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-    const w = Math.max(2, Math.round(canvas.clientWidth * pixelRatio));
-    const h = Math.max(2, Math.round(canvas.clientHeight * pixelRatio));
-    if (canvas.width !== w || canvas.height !== h) {
-        canvas.width = w;
-        canvas.height = h;
-    }
-    gl.viewport(0, 0, w, h);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+        const w = Math.max(2, Math.round(canvas.clientWidth * pixelRatio));
+        const h = Math.max(2, Math.round(canvas.clientHeight * pixelRatio));
+        if (canvas.width !== w || canvas.height !== h) {
+            canvas.width = w;
+            canvas.height = h;
+        }
+        gl.viewport(0, 0, w, h);
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    if (activeRenderer) {
-        const proj = mat4Perspective(50 * Math.PI / 180, w / h, 1, 100000);
-        // Z-up orbit camera
-        const cosP = Math.cos(pitch), sinP = Math.sin(pitch);
-        const ex = center[0] + distance * Math.cos(yaw) * cosP;
-        const ey = center[1] + distance * Math.sin(yaw) * cosP;
-        const ez = center[2] + distance * sinP;
-        const mv = mat4LookAt(ex, ey, ez, center[0], center[1], center[2], 0, 0, 1);
-        activeRenderer.render(mv as unknown as import('gl-matrix').mat4, proj as unknown as import('gl-matrix').mat4, { wireframe });
+        if (activeRenderer) {
+            const proj = mat4Perspective(50 * Math.PI / 180, w / h, 1, 100000);
+            // Z-up orbit camera
+            const cosP = Math.cos(pitch), sinP = Math.sin(pitch);
+            const ex = center[0] + distance * Math.cos(yaw) * cosP;
+            const ey = center[1] + distance * Math.sin(yaw) * cosP;
+            const ez = center[2] + distance * sinP;
+            const mv = mat4LookAt(ex, ey, ez, center[0], center[1], center[2], 0, 0, 1);
+            activeRenderer.render(mv as unknown as import('gl-matrix').mat4, proj as unknown as import('gl-matrix').mat4, { wireframe });
 
-        // report frame to inline script for slider
-        if (callbacks && currentSeqs.length > 0) {
-            const seq = currentSeqs[currentSeqIndex];
-            if (seq) {
-                callbacks.onFrameUpdate(activeRenderer.getFrame(), seq.start, seq.end);
+            // report frame to inline script for slider
+            if (callbacks && currentSeqs.length > 0) {
+                const seq = currentSeqs[currentSeqIndex];
+                if (seq) {
+                    callbacks.onFrameUpdate(activeRenderer.getFrame(), seq.start, seq.end);
+                }
             }
         }
-    }
 
-    renderGizmo();
+        renderGizmo();
+    } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        reportRenderError(message);
+    }
 }
 
 // ─── gizmo ────────────────────────────────────────────────────────────────────
@@ -340,7 +380,12 @@ const War3Viewer = {
     loadModel(buffer: ArrayBuffer, fileName: string) {
         const cb = callbacks;
         try {
-            if (renderer) { renderer.destroy(); renderer = null; }
+            lastRenderError = null;
+            const previousRenderer = renderer;
+            if (previousRenderer) {
+                retireRenderer(previousRenderer);
+            }
+            renderer = null;
             gl = null;
 
             const model = parseMDX(buffer);
@@ -411,6 +456,7 @@ const War3Viewer = {
             }
         } catch (e) {
             const message = e instanceof Error ? e.message : String(e);
+            clearRendererState();
             cb?.onDebug('loadModel error: ' + message);
             cb?.onError(message);
         }

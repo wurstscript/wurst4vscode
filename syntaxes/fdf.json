@@ -1,0 +1,92 @@
+{
+    "name": "WC3 Frame Definition",
+    "scopeName": "source.fdf",
+    "fileTypes": ["fdf"],
+    "foldingStartMarker": "\\{\\s*(?://.*)?$",
+    "foldingStopMarker": "^\\s*\\}",
+    "patterns": [
+        { "include": "#comment" },
+        { "include": "#include" },
+        { "include": "#frame_decl" },
+        { "include": "#flag_only_prop" },
+        { "include": "#property" },
+        { "include": "#anchor_constant" },
+        { "include": "#number" },
+        { "include": "#string" },
+        { "include": "#punctuation" }
+    ],
+    "repository": {
+        "comment": {
+            "match": "//.*$",
+            "name": "comment.line.double-slash.fdf"
+        },
+
+        "include": {
+            "match": "\\b(IncludeFile)\\b",
+            "name": "keyword.control.include.fdf"
+        },
+
+        "frame_decl": {
+            "comment": "Frame \"TYPE\" \"Name\" [INHERITS [WITHCHILDREN] [\"Parent\"]]",
+            "match": "\\b(Frame)\\b|\\b(INHERITS|WITHCHILDREN)\\b",
+            "captures": {
+                "1": { "name": "keyword.control.frame.fdf" },
+                "2": { "name": "keyword.control.inherit.fdf" }
+            }
+        },
+
+        "flag_only_prop": {
+            "comment": "Properties that stand alone with no value — treated as boolean flags",
+            "match": "^\\s*(UseActiveContext|DecorateFileNames|BackdropTileBackground|BackdropBlendAll|BackdropTileNoFill|UseFrameDefinedFont|FontJustifyCenter|FontJustifyLeft|FontJustifyRight|FontJustifyTop|FontJustifyBottom|AbsWidth|AbsHeight|Protected)\\b",
+            "captures": {
+                "1": { "name": "constant.language.flag.fdf" }
+            }
+        },
+
+        "property": {
+            "comment": "Property keyword at the start of a statement",
+            "match": "^\\s*([A-Z][A-Za-z]+)\\b",
+            "captures": {
+                "1": { "name": "support.function.property.fdf" }
+            }
+        },
+
+        "anchor_constant": {
+            "comment": "Layout anchor point constants",
+            "match": "\\b(TOPLEFT|TOPRIGHT|BOTTOMLEFT|BOTTOMRIGHT|CENTER|TOP|BOTTOM|LEFT|RIGHT)\\b",
+            "name": "constant.language.anchor.fdf"
+        },
+
+        "number": {
+            "comment": "Integer or float, optionally with f suffix",
+            "match": "-?\\b\\d+(\\.\\d+)?f?\\b",
+            "name": "constant.numeric.fdf"
+        },
+
+        "string": {
+            "name": "string.quoted.double.fdf",
+            "begin": "\"",
+            "end": "\"",
+            "patterns": [
+                {
+                    "comment": "Pipe-separated flag lists inside strings like UL|UR|BL|BR",
+                    "match": "\\|",
+                    "name": "punctuation.separator.pipe.fdf"
+                },
+                {
+                    "comment": "Backslash path separator",
+                    "match": "\\\\",
+                    "name": "constant.character.escape.fdf"
+                }
+            ]
+        },
+
+        "punctuation": {
+            "patterns": [
+                { "match": "\\{", "name": "punctuation.section.block.begin.fdf" },
+                { "match": "\\}", "name": "punctuation.section.block.end.fdf" },
+                { "match": ",",  "name": "punctuation.separator.comma.fdf" }
+            ]
+        }
+    }
+}

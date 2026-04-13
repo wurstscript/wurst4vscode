@@ -3,7 +3,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { execFile } from 'child_process';
+import { execFile, spawnSync } from 'child_process';
 import * as vscode from 'vscode';
 
 const BLP_VIEW_TYPE = 'wurst.blpPreview';
@@ -147,6 +147,7 @@ const WC3_DEFAULT_PATHS = [
     'D:\\Program Files (x86)\\Warcraft III',
     'D:\\Program Files\\Warcraft III',
 ];
+const WURST_HOME = path.join(os.homedir(), '.wurst');
 
 /** Walk up from `startPath` until we find a directory containing a `Data` subdirectory. */
 function findCascDataRoot(startPath: string): string | null {
@@ -162,9 +163,16 @@ function findCascDataRoot(startPath: string): string | null {
     return null;
 }
 
+export function getCascCacheDir(): string {
+    return path.join(WURST_HOME, 'casc_cache');
+}
+
 function getCacheDir(): string {
-    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    return ws ? path.join(ws, '_build', 'casc_cache') : path.join(os.tmpdir(), 'wurst_casc_cache');
+    return getCascCacheDir();
+}
+
+function normalizeCascAssetPath(assetPath: string): string {
+    return assetPath.replace(/\\\\/g, '\\').replace(/\//g, '\\').toLowerCase();
 }
 
 function getCascDataRoot(log: (msg: string) => void): string | null {
@@ -201,7 +209,7 @@ async function findCascTexture(texPath: string, log: (msg: string) => void): Pro
     }
     const cacheDir = getCacheDir();
     // CASC paths are lowercase with backslash separators
-    const normalized = texPath.replace(/\//g, '\\').toLowerCase();
+    const normalized = normalizeCascAssetPath(texPath);
     const ddsPath = normalized.replace(/\.blp$/, '.dds');
 
     // Check disk cache
@@ -233,6 +241,41 @@ async function findCascTexture(texPath: string, log: (msg: string) => void): Pro
             log(`CASC miss: ${cascPath} — ${String(e)}`);
         }
     }
+    return null;
+}
+
+async function findCascAsset(assetPath: string, log: (msg: string) => void): Promise<Buffer | null> {
+    if (process.platform !== 'win32') {
+        log('CASC skip: asset extraction from the WC3 game files is only available on Windows');
+        return null;
+    }
+
+    const cacheDir = getCacheDir();
+    const normalized = normalizeCascAssetPath(assetPath);
+    const cachePath = path.join(cacheDir, normalized);
+    if (fs.existsSync(cachePath)) {
+        log(`CASC cache hit: ${normalized}`);
+        return fs.readFileSync(cachePath);
+    }
+
+    const wc3Root = getCascDataRoot(log);
+    if (!wc3Root) return null;
+
+    const candidates = [
+        `war3.w3mod:${normalized}`,
+        `war3.w3mod:_hd.w3mod:${normalized}`,
+    ];
+
+    for (const cascPath of candidates) {
+        try {
+            const bytes = await cascExtractViaWorker(wc3Root, cascPath, cachePath);
+            log(`CASC extracted: ${cascPath} (${bytes} bytes) → ${cachePath}`);
+            return fs.readFileSync(cachePath);
+        } catch (e) {
+            log(`CASC miss: ${cascPath} — ${String(e)}`);
+        }
+    }
+
     return null;
 }
 
@@ -942,6 +985,12 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
             const tMs = Math.max(0, frame - seqStart);
             seqFrameLabel.textContent = Math.floor(frame) + ' · ' + Math.floor(tMs) + 'ms';
           },
+          onError(message) {
+            showWarnings(['Model error: ' + message]);
+            setMeta(currentFileName || 'Model', 'Render failed');
+            setLoading(false);
+            debug('w3v error: ' + message);
+          },
           onDebug(msg) { debug('w3v: ' + msg); },
         },
       });
@@ -1275,6 +1324,106 @@ function decodePreview(sourceBytes: Uint8Array, uri: vscode.Uri): DecodedBlpImag
         return { kind: 'mdx-raw', mdxBase64, fileName };
     }
     return decodeBlp(sourceBytes);
+}
+
+/**
+ * Exported for inline decorations / hover — ensures `assetPath` is present in
+ * the CASC disk cache, extracting from the WC3 game files if needed.
+ *
+ * Returns the absolute path to the cached file (DDS or BLP), or undefined if
+ * the path cannot be resolved (no wc3path configured, file not in CASC, etc.).
+ */
+export async function ensureCascCached(assetPath: string): Promise<string | undefined> {
+    const noop = () => { /* silent */ };
+    const result = await findCascTexture(assetPath, noop);
+    if (!result) return undefined;
+    const cacheDir = getCacheDir();
+    const normalized = normalizeCascAssetPath(assetPath);
+    const rel = result.ext === 'dds' ? normalized.replace(/\.blp$/, '.dds') : normalized;
+    return path.join(cacheDir, rel);
+}
+
+export async function ensureCascAssetCached(assetPath: string): Promise<string | undefined> {
+    const noop = () => { /* silent */ };
+    const result = await findCascAsset(assetPath, noop);
+    if (!result) return undefined;
+    return path.join(getCacheDir(), normalizeCascAssetPath(assetPath));
+}
+
+/** Exported for use by imagePreviewHover — decodes BLP/DDS/TGA to raw RGBA. */
+export function decodeToRgba(bytes: Uint8Array, ext: string): { width: number; height: number; rgba: Uint8Array; description: string } {
+    const result = ext === '.dds' ? decodeDds(bytes)
+                 : ext === '.tga' ? decodeTga(bytes)
+                 : decodeBlp(bytes);
+    if (result.mode !== 'rgba') throw new Error('jpeg-mode BLP not supported for hover preview');
+    return { width: result.width, height: result.height, rgba: Buffer.from(result.rgbaBase64, 'base64'), description: result.description };
+}
+
+export function decodeRasterPreview(bytes: Uint8Array, ext: string): DecodedRasterImage {
+    return ext === '.dds' ? decodeDds(bytes)
+         : ext === '.tga' ? decodeTga(bytes)
+         : decodeBlp(bytes);
+}
+
+function escapePowerShellLiteral(value: string): string {
+    return value.replace(/'/g, "''");
+}
+
+export function writeJpegPreviewPngSync(jpegBase64: string, maxDim: number, outputPath: string): void {
+    if (process.platform !== 'win32') {
+        throw new Error('JPEG-mode BLP preview scaling is only available on Windows');
+    }
+
+    const tempDir = path.join(os.tmpdir(), 'wurst_jpeg_preview');
+    fs.mkdirSync(tempDir, { recursive: true });
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    const key = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const inputPath = path.join(tempDir, `${key}.jpg`);
+    fs.writeFileSync(inputPath, Buffer.from(jpegBase64, 'base64'));
+
+    const command = [
+        "$ErrorActionPreference='Stop'",
+        "Add-Type -AssemblyName System.Drawing",
+        `$in='${escapePowerShellLiteral(inputPath)}'`,
+        `$out='${escapePowerShellLiteral(outputPath)}'`,
+        `$max=${Math.max(1, Math.floor(maxDim))}`,
+        "$src=[System.Drawing.Bitmap]::FromFile($in)",
+        "try {",
+        "  $scale=[Math]::Min(1.0, $max / [Math]::Max($src.Width, $src.Height))",
+        "  $dw=[Math]::Max(1, [int][Math]::Round($src.Width * $scale))",
+        "  $dh=[Math]::Max(1, [int][Math]::Round($src.Height * $scale))",
+        "  $dst=New-Object System.Drawing.Bitmap($dw, $dh, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)",
+        "  try {",
+        "    $g=[System.Drawing.Graphics]::FromImage($dst)",
+        "    try {",
+        "      $g.InterpolationMode=[System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic",
+        "      $g.PixelOffsetMode=[System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality",
+        "      $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::HighQuality",
+        "      $g.DrawImage($src, 0, 0, $dw, $dh)",
+        "    } finally { $g.Dispose() }",
+        "    for ($y = 0; $y -lt $dh; $y++) {",
+        "      for ($x = 0; $x -lt $dw; $x++) {",
+        "        $c = $dst.GetPixel($x, $y)",
+        "        $dst.SetPixel($x, $y, [System.Drawing.Color]::FromArgb($c.A, $c.B, $c.G, $c.R))",
+        "      }",
+        "    }",
+        "    $dst.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)",
+        "  } finally { $dst.Dispose() }",
+        "} finally {",
+        "  $src.Dispose()",
+        "  Remove-Item -LiteralPath $in -Force -ErrorAction SilentlyContinue",
+        "}",
+    ].join('; ');
+
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', command], {
+        encoding: 'utf8',
+        windowsHide: true,
+        maxBuffer: 1024 * 1024,
+    });
+
+    if (result.status !== 0) {
+        throw new Error((result.stderr || result.stdout || 'JPEG preview scaling failed').trim());
+    }
 }
 
 function decodeBlp(sourceBytes: Uint8Array): DecodedRasterImage {

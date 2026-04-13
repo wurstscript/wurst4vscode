@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <rect x="1" y="1" width="14" height="14" rx="2.5" fill="#9b59b6"/>
+  <!-- outer frame -->
+  <rect x="2.5" y="2.5" width="11" height="11" rx="1" fill="none" stroke="white" stroke-width="1.1"/>
+  <!-- title bar -->
+  <rect x="2.5" y="2.5" width="11" height="3" rx="1" fill="white" opacity="0.35"/>
+  <!-- inner nested frame -->
+  <rect x="4.5" y="7" width="7" height="4.5" rx="0.5" fill="none" stroke="white" stroke-width="0.9" opacity="0.85"/>
+</svg>

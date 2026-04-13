@@ -21,6 +21,7 @@ export interface War3ViewerCallbacks {
     onModelLoaded(info: ModelLoadedInfo): void;
     onFrameUpdate(frame: number, seqStart: number, seqEnd: number): void;
     onDebug(msg: string): void;
+    onError(message: string): void;
 }
 
 export interface War3ViewerInitOptions {
@@ -72,8 +73,11 @@ function isWar3ModelDebugEnabled(): boolean {
 }
 
 // camera (Z-up, WC3 space)
-let yaw = Math.PI * 0.5;
-let pitch = -0.3;
+// WC3 preview windows tend to show units from a front-facing diagonal, slightly above ground level.
+const DEFAULT_YAW = 0;
+const DEFAULT_PITCH = 0.85;
+let yaw = DEFAULT_YAW;
+let pitch = DEFAULT_PITCH;
 let distance = 3.0;
 const center: [number, number, number] = [0, 0, 0];
 
@@ -82,6 +86,21 @@ let currentSeqs: SequenceInfo[] = [];
 let currentSeqIndex = 0;
 const initialCenter: [number, number, number] = [0, 0, 0];
 let initialDistance = 3.0;
+
+function resetCameraOrientation() {
+    yaw = DEFAULT_YAW;
+    pitch = DEFAULT_PITCH;
+}
+
+function preferredTargetAxis(min: number, max: number): number {
+    // Warcraft III models are usually authored around the world origin.
+    // When the bounds span 0, prefer that stable origin over the raw extents midpoint,
+    // which can get pulled sideways by weapons, effects, or carried props.
+    if (min <= 0 && max >= 0) {
+        return 0;
+    }
+    return (min + max) / 2;
+}
 
 function hookWar3ModelConsole() {
     if (war3ModelConsoleHooked) return;
@@ -152,9 +171,10 @@ function renderFrame(ts: number) {
 
     const delta = Math.min(ts - lastTimestamp, 100);
     lastTimestamp = ts;
+    const activeRenderer = renderer;
 
-    if (renderer && autoplay) {
-        renderer.update(delta);
+    if (activeRenderer && autoplay) {
+        activeRenderer.update(delta);
     }
 
     const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
@@ -168,7 +188,7 @@ function renderFrame(ts: number) {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    if (renderer) {
+    if (activeRenderer) {
         const proj = mat4Perspective(50 * Math.PI / 180, w / h, 1, 100000);
         // Z-up orbit camera
         const cosP = Math.cos(pitch), sinP = Math.sin(pitch);
@@ -176,13 +196,13 @@ function renderFrame(ts: number) {
         const ey = center[1] + distance * Math.sin(yaw) * cosP;
         const ez = center[2] + distance * sinP;
         const mv = mat4LookAt(ex, ey, ez, center[0], center[1], center[2], 0, 0, 1);
-        renderer.render(mv as unknown as import('gl-matrix').mat4, proj as unknown as import('gl-matrix').mat4, { wireframe });
+        activeRenderer.render(mv as unknown as import('gl-matrix').mat4, proj as unknown as import('gl-matrix').mat4, { wireframe });
 
         // report frame to inline script for slider
         if (callbacks && currentSeqs.length > 0) {
             const seq = currentSeqs[currentSeqIndex];
             if (seq) {
-                callbacks.onFrameUpdate(renderer.getFrame(), seq.start, seq.end);
+                callbacks.onFrameUpdate(activeRenderer.getFrame(), seq.start, seq.end);
             }
         }
     }
@@ -336,16 +356,19 @@ const War3Viewer = {
             // camera from model bounds
             const info = model.Info;
             const min = info.MinimumExtent, max = info.MaximumExtent;
-            center[0] = (min[0] + max[0]) / 2;
-            center[1] = (min[1] + max[1]) / 2;
-            center[2] = (min[2] + max[2]) / 2;
+            const sizeX = max[0] - min[0];
+            const sizeY = max[1] - min[1];
+            const sizeZ = max[2] - min[2];
+            center[0] = preferredTargetAxis(min[0], max[0]);
+            center[1] = preferredTargetAxis(min[1], max[1]);
+            // Bias the initial target upward toward the torso so ground-based units read like the WC3 preview.
+            center[2] = min[2] + sizeZ * 0.64;
             initialCenter[0] = center[0]; initialCenter[1] = center[1]; initialCenter[2] = center[2];
             const radius = info.BoundsRadius > 0 ? info.BoundsRadius
-                : Math.sqrt(Math.pow(max[0] - min[0], 2) + Math.pow(max[1] - min[1], 2) + Math.pow(max[2] - min[2], 2)) / 2 || 100;
-            distance = Math.max(1, radius * 2.5);
+                : Math.sqrt(sizeX * sizeX + sizeY * sizeY + sizeZ * sizeZ) / 2 || 100;
+            distance = Math.max(1, radius * 2.2);
             initialDistance = distance;
-            yaw = Math.PI * 0.5;
-            pitch = -0.3;
+            resetCameraOrientation();
 
             // sequences
             currentSeqs = model.Sequences.map(s => ({
@@ -387,7 +410,9 @@ const War3Viewer = {
                 cb?.onDebug(`no non-replaceable textures to request (${model.Textures.length} total slots)`);
             }
         } catch (e) {
-            cb?.onDebug('loadModel error: ' + String(e));
+            const message = e instanceof Error ? e.message : String(e);
+            cb?.onDebug('loadModel error: ' + message);
+            cb?.onError(message);
         }
     },
 
@@ -447,8 +472,7 @@ const War3Viewer = {
     },
 
     resetCamera() {
-        yaw = Math.PI * 0.5;
-        pitch = -0.3;
+        resetCameraOrientation();
         distance = initialDistance;
         center[0] = initialCenter[0]; center[1] = initialCenter[1]; center[2] = initialCenter[2];
     },

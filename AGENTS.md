@@ -27,8 +27,12 @@
 - Prefer clear command names and explicit request objects.
 - Avoid introducing unrelated formatting churn in JSON/TS files.
 
+## Asset/Preview handling
+- Prefer centralized asset decoding and preview handling over adding parallel per-feature decoder paths.
+- Before adding new image/model decode logic, check whether `src/features/blpPreview.ts` or the existing webview preview pipeline already handles the format correctly.
+- If inline previews, hovers, or links need the same asset behavior, reuse or factor shared helpers instead of introducing a second implementation.
+
 ## Validation checklist
 - Compile TypeScript (`npx tsc -p . --noEmit`) after command or API wiring changes.
 - Ensure command appears in Command Palette via `contributes.commands`.
 - Ensure command can activate extension when run from a cold start (`activationEvents`).
-

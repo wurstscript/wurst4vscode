@@ -1,0 +1,17 @@
+{
+    "name": "WC3 TOC",
+    "scopeName": "source.toc",
+    "fileTypes": ["toc"],
+    "patterns": [
+        { "include": "#path" }
+    ],
+    "repository": {
+        "path": {
+            "comment": "Each non-empty line is a path to an .fdf file",
+            "match": "^\\s*(.+\\.fdf)\\s*$",
+            "captures": {
+                "1": { "name": "string.unquoted.path.toc" }
+            }
+        }
+    }
+}

@@ -470,8 +470,7 @@
         "publish": "vsce publish"
     },
     "devDependencies": {
-        "@types/node": "^25.3.3",
-        "@types/os-homedir": "^1.0.2",
+        "@types/node": "^22.19.17",
         "@types/vscode": "^1.109.0",
         "@types/webpack-env": "^1.18.8",
         "@vscode/vsce": "^3.7.1",
@@ -479,13 +478,11 @@
         "typescript": "^5.9.3",
         "war3-model": "file:../war3-model",
         "webpack": "^5.105.0",
-        "webpack-cli": "^5.1.4"
+        "webpack-cli": "^7.0.2"
     },
     "dependencies": {
         "@dschu012/casclib": "^1.0.5",
-        "casc-cdn": "^0.1.1",
         "node-stream-zip": "^1.15.0",
-        "semver": "^7.6.3",
         "vscode-languageclient": "^9.0.1"
     },
     "extensionPack": [

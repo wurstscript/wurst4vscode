@@ -6,10 +6,18 @@
 - The extension is the client-side glue to the Wurst language server and exposes editor features and user commands.
 
 ## Architecture at a glance
-- `src/extension.ts`: extension activation, runtime/bootstrap logic, and language client startup.
+- `src/extension.ts`: minimal `activate()` entry point — wires up features and starts the language client.
+- `src/paths.ts`: all `~/.wurst` path constants and GitHub API URLs.
+- `src/languageServer.ts`: language client lifecycle (`startLanguageClient`, `stopLanguageServerIfRunning`, file watcher).
+- `src/install/installer.ts`: install/update orchestration (checks layout, downloads nightly, runs grill).
+- `src/install/downloader.ts`: GitHub API helpers, file download with progress, zip extraction.
+- `src/install/fsUtils.ts`: pure filesystem helpers (retry, copy, migrate legacy layout, cleanup).
+- `src/install/pathManager.ts`: PATH management for terminals and shell profiles.
 - `src/features/commands.ts`: command registration and forwarding to language-server execute-command requests.
-- `package.json`: VS Code contributions (commands, activation events, menus, keybindings, configuration).
+- `src/features/newProject.ts`: `wurst.newProject` command — interactive project scaffold via grill.
+- `src/features/compileTimeDecorator.ts`: gutter icon decorator for `@compiletime` functions.
 - `src/features/*`: focused feature modules (file creation, preview features, custom editor support).
+- `package.json`: VS Code contributions (commands, activation events, menus, keybindings, configuration).
 
 ## Command integration rules
 - Add user-facing command IDs to `package.json`:
@@ -26,6 +34,9 @@
 - Reuse existing helper patterns in `commands.ts` instead of introducing new abstractions unless needed.
 - Prefer clear command names and explicit request objects.
 - Avoid introducing unrelated formatting churn in JSON/TS files.
+- Keep `extension.ts` minimal — it is the entry point only. New features belong in `src/features/` or the appropriate module under `src/install/`.
+- Do not add new top-level files to `src/` for logic that belongs in an existing module. Follow the existing split: paths → `paths.ts`, install logic → `src/install/`, LS lifecycle → `languageServer.ts`, editor features → `src/features/`.
+- Do not create utility files, helper files, or abstractions for one-off operations. Three similar lines of code is better than a premature abstraction.
 
 ## Asset/Preview handling
 - Prefer centralized asset decoding and preview handling over adding parallel per-feature decoder paths.

@@ -481,7 +481,7 @@
         "webpack-cli": "^7.0.2"
     },
     "dependencies": {
-        "@dschu012/casclib": "^1.0.5",
+        "casc-ts": "file:../casc-ts",
         "node-stream-zip": "^1.15.0",
         "vscode-languageclient": "^9.0.1"
     },

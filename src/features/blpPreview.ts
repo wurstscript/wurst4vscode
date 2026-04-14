@@ -3,8 +3,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { execFile, spawnSync } from 'child_process';
 import * as vscode from 'vscode';
+import { CascStorage, closeAllSegments } from 'casc-ts';
 
 const BLP_VIEW_TYPE = 'wurst.blpPreview';
 const CONTENT_JPEG = 0;
@@ -175,6 +175,15 @@ function normalizeCascAssetPath(assetPath: string): string {
     return assetPath.replace(/\\\\/g, '\\').replace(/\//g, '\\').toLowerCase();
 }
 
+function getDisabledButtonFallbackPath(assetPath: string): string | null {
+    const normalized = normalizeCascAssetPath(assetPath);
+    const prefix = 'replaceabletextures\\commandbuttonsdisabled\\disbtn';
+    if (!normalized.startsWith(prefix)) {
+        return null;
+    }
+    return 'replaceabletextures\\commandbuttons\\disbtn' + normalized.slice(prefix.length);
+}
+
 function getCascDataRoot(log: (msg: string) => void): string | null {
     let wc3path = vscode.workspace.getConfiguration('wurst').get<string>('wc3path', '');
     if (!wc3path) {
@@ -188,20 +197,75 @@ function getCascDataRoot(log: (msg: string) => void): string | null {
     return dataRoot;
 }
 
-/** Spawn casc-extract-worker.js (plain Node) to extract one file from CASC into outputFile. */
-function cascExtractViaWorker(wc3Root: string, cascPath: string, outputFile: string): Promise<number> {
-    const workerScript = path.join(__dirname, 'casc-extract-worker.js');
-    // Use system node, not process.execPath (which is Electron)
-    const nodeBin = 'node';
-    return new Promise((resolve, reject) => {
-        execFile(nodeBin, [workerScript, wc3Root, cascPath, outputFile], { timeout: 30000 }, (err, stdout, stderr) => {
-            if (err) { reject(new Error(stderr || err.message)); return; }
-            resolve(parseInt(stdout.trim(), 10) || 0);
-        });
-    });
+// ---------------------------------------------------------------------------
+// In-process CASC singleton — open once, reuse for all extractions.
+// This eliminates the per-file child-process spawn + repeated index loading.
+// ---------------------------------------------------------------------------
+
+let cascStorageInstance: CascStorage | null = null;
+let cascStorageRoot: string | null = null;
+let cascStorageOpening: Promise<CascStorage | null> | null = null;
+
+async function getCascStorageInstance(wc3Root: string, log: (msg: string) => void): Promise<CascStorage | null> {
+    if (cascStorageInstance && cascStorageRoot === wc3Root) {
+        return cascStorageInstance;
+    }
+    if (cascStorageOpening && cascStorageRoot === wc3Root) {
+        return cascStorageOpening;
+    }
+    // Root changed or first open — (re-)initialise
+    cascStorageInstance = null;
+    cascStorageRoot = wc3Root;
+    cascStorageOpening = (async () => {
+        try {
+            log(`CASC opening storage at: ${wc3Root}`);
+            cascStorageInstance = await CascStorage.openAsync(wc3Root, log);
+            log(`CASC storage opened (${cascStorageInstance.fileCount} files)`);
+            return cascStorageInstance;
+        } catch (e) {
+            log(`CASC open failed: ${String(e)}`);
+            cascStorageRoot = null;
+            return null;
+        } finally {
+            cascStorageOpening = null;
+        }
+    })();
+    return cascStorageOpening;
 }
 
-/** Look up a texture. Checks disk cache first; if missing, extracts via child process and caches. */
+/** Reset the singleton (e.g. when wc3path setting changes). */
+export function resetCascStorage(): void {
+    closeAllSegments();
+    cascStorageInstance = null;
+    cascStorageRoot = null;
+    cascStorageOpening = null;
+}
+
+function normalizeCascPath(p: string): string {
+    const colonIdx = p.indexOf(':');
+    if (colonIdx !== -1) {
+        return p.slice(0, colonIdx + 1) + p.slice(colonIdx + 1).replace(/\\/g, '/');
+    }
+    return p.replace(/\\/g, '/');
+}
+
+/** Read one file directly from the in-process CascStorage. No child process, no disk cache write. */
+async function cascReadDirect(wc3Root: string, cascPath: string, log: (msg: string) => void): Promise<Buffer | null> {
+    const storage = await getCascStorageInstance(wc3Root, log);
+    if (!storage) return null;
+    try {
+        const t = Date.now();
+        const buf = await storage.readFileAsync(normalizeCascPath(cascPath));
+        if (!buf || buf.length === 0) { log(`CASC empty: ${cascPath}`); return null; }
+        log(`CASC read: ${cascPath} (${buf.length} bytes, ${Date.now() - t}ms)`);
+        return buf;
+    } catch (e) {
+        log(`CASC miss: ${cascPath} — ${String(e)}`);
+        return null;
+    }
+}
+
+/** Look up a texture. Checks disk cache first; if missing, extracts in-process and caches to disk. */
 async function findCascTexture(texPath: string, log: (msg: string) => void): Promise<{ buf: Buffer; ext: 'dds' | 'blp' } | null> {
     if (process.platform !== 'win32') {
         log('CASC skip: texture extraction from the WC3 game files is only available on Windows');
@@ -211,14 +275,20 @@ async function findCascTexture(texPath: string, log: (msg: string) => void): Pro
     // CASC paths are lowercase with backslash separators
     const normalized = normalizeCascAssetPath(texPath);
     const ddsPath = normalized.replace(/\.blp$/, '.dds');
+    const fallbackNormalized = getDisabledButtonFallbackPath(texPath);
+    const fallbackDdsPath = fallbackNormalized?.replace(/\.blp$/, '.dds') ?? null;
 
     // Check disk cache
-    for (const [rel, ext] of [[ddsPath, 'dds'], [normalized, 'blp']] as const) {
+    const cacheCandidates: Array<[string, 'dds' | 'blp']> = [[ddsPath, 'dds'], [normalized, 'blp']];
+    if (fallbackDdsPath) cacheCandidates.push([fallbackDdsPath, 'dds']);
+    if (fallbackNormalized) cacheCandidates.push([fallbackNormalized, 'blp']);
+    for (const [rel, ext] of cacheCandidates) {
         const cachePath = path.join(cacheDir, rel);
-        if (fs.existsSync(cachePath)) {
+        try {
+            const buf = await fs.promises.readFile(cachePath);
             log(`CASC cache hit: ${rel}`);
-            return { buf: fs.readFileSync(cachePath), ext };
-        }
+            return { buf, ext };
+        } catch {}
     }
 
     const wc3Root = getCascDataRoot(log);
@@ -229,16 +299,23 @@ async function findCascTexture(texPath: string, log: (msg: string) => void): Pro
         [`war3.w3mod:_hd.w3mod:${ddsPath}`, 'dds'],
         [`war3.w3mod:${normalized}`, 'blp'],
     ];
+    if (fallbackDdsPath) {
+        candidates.push([`war3.w3mod:${fallbackDdsPath}`, 'dds']);
+        candidates.push([`war3.w3mod:_hd.w3mod:${fallbackDdsPath}`, 'dds']);
+    }
+    if (fallbackNormalized) {
+        candidates.push([`war3.w3mod:${fallbackNormalized}`, 'blp']);
+    }
 
     for (const [cascPath, ext] of candidates) {
         const rel = ext === 'dds' ? ddsPath : normalized;
         const cachePath = path.join(cacheDir, rel);
-        try {
-            const bytes = await cascExtractViaWorker(wc3Root, cascPath, cachePath);
-            log(`CASC extracted: ${cascPath} (${bytes} bytes) → ${cachePath}`);
-            return { buf: fs.readFileSync(cachePath), ext };
-        } catch (e) {
-            log(`CASC miss: ${cascPath} — ${String(e)}`);
+        const buf = await cascReadDirect(wc3Root, cascPath, log);
+        if (buf) {
+            log(`CASC extracted: ${cascPath} (${buf.length} bytes) → ${cachePath}`);
+            await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
+            await fs.promises.writeFile(cachePath, buf);
+            return { buf, ext };
         }
     }
     return null;
@@ -253,10 +330,11 @@ async function findCascAsset(assetPath: string, log: (msg: string) => void): Pro
     const cacheDir = getCacheDir();
     const normalized = normalizeCascAssetPath(assetPath);
     const cachePath = path.join(cacheDir, normalized);
-    if (fs.existsSync(cachePath)) {
+    try {
+        const cached = await fs.promises.readFile(cachePath);
         log(`CASC cache hit: ${normalized}`);
-        return fs.readFileSync(cachePath);
-    }
+        return cached;
+    } catch {}
 
     const wc3Root = getCascDataRoot(log);
     if (!wc3Root) return null;
@@ -267,12 +345,12 @@ async function findCascAsset(assetPath: string, log: (msg: string) => void): Pro
     ];
 
     for (const cascPath of candidates) {
-        try {
-            const bytes = await cascExtractViaWorker(wc3Root, cascPath, cachePath);
-            log(`CASC extracted: ${cascPath} (${bytes} bytes) → ${cachePath}`);
-            return fs.readFileSync(cachePath);
-        } catch (e) {
-            log(`CASC miss: ${cascPath} — ${String(e)}`);
+        const buf = await cascReadDirect(wc3Root, cascPath, log);
+        if (buf) {
+            log(`CASC extracted: ${cascPath} (${buf.length} bytes) → ${cachePath}`);
+            await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
+            await fs.promises.writeFile(cachePath, buf);
+            return buf;
         }
     }
 
@@ -1334,8 +1412,8 @@ function decodePreview(sourceBytes: Uint8Array, uri: vscode.Uri): DecodedBlpImag
  * the path cannot be resolved (no wc3path configured, file not in CASC, etc.).
  */
 export async function ensureCascCached(assetPath: string): Promise<string | undefined> {
-    const noop = () => { /* silent */ };
-    const result = await findCascTexture(assetPath, noop);
+    const log = (msg: string) => console.log(`[wurst-casc] ${msg}`);
+    const result = await findCascTexture(assetPath, log);
     if (!result) return undefined;
     const cacheDir = getCacheDir();
     const normalized = normalizeCascAssetPath(assetPath);
@@ -1344,9 +1422,10 @@ export async function ensureCascCached(assetPath: string): Promise<string | unde
 }
 
 export async function ensureCascAssetCached(assetPath: string): Promise<string | undefined> {
-    const noop = () => { /* silent */ };
-    const result = await findCascAsset(assetPath, noop);
-    if (!result) return undefined;
+    const log = (msg: string) => console.log(`[wurst-casc] ${msg}`);
+    log(`ensureCascAssetCached: ${assetPath}`);
+    const result = await findCascAsset(assetPath, log);
+    if (!result) { log(`ensureCascAssetCached: failed for ${assetPath}`); return undefined; }
     return path.join(getCacheDir(), normalizeCascAssetPath(assetPath));
 }
 
@@ -1365,65 +1444,9 @@ export function decodeRasterPreview(bytes: Uint8Array, ext: string): DecodedRast
          : decodeBlp(bytes);
 }
 
-function escapePowerShellLiteral(value: string): string {
-    return value.replace(/'/g, "''");
-}
-
-export function writeJpegPreviewPngSync(jpegBase64: string, maxDim: number, outputPath: string): void {
-    if (process.platform !== 'win32') {
-        throw new Error('JPEG-mode BLP preview scaling is only available on Windows');
-    }
-
-    const tempDir = path.join(os.tmpdir(), 'wurst_jpeg_preview');
-    fs.mkdirSync(tempDir, { recursive: true });
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-    const key = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const inputPath = path.join(tempDir, `${key}.jpg`);
-    fs.writeFileSync(inputPath, Buffer.from(jpegBase64, 'base64'));
-
-    const command = [
-        "$ErrorActionPreference='Stop'",
-        "Add-Type -AssemblyName System.Drawing",
-        `$in='${escapePowerShellLiteral(inputPath)}'`,
-        `$out='${escapePowerShellLiteral(outputPath)}'`,
-        `$max=${Math.max(1, Math.floor(maxDim))}`,
-        "$src=[System.Drawing.Bitmap]::FromFile($in)",
-        "try {",
-        "  $scale=[Math]::Min(1.0, $max / [Math]::Max($src.Width, $src.Height))",
-        "  $dw=[Math]::Max(1, [int][Math]::Round($src.Width * $scale))",
-        "  $dh=[Math]::Max(1, [int][Math]::Round($src.Height * $scale))",
-        "  $dst=New-Object System.Drawing.Bitmap($dw, $dh, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)",
-        "  try {",
-        "    $g=[System.Drawing.Graphics]::FromImage($dst)",
-        "    try {",
-        "      $g.InterpolationMode=[System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic",
-        "      $g.PixelOffsetMode=[System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality",
-        "      $g.SmoothingMode=[System.Drawing.Drawing2D.SmoothingMode]::HighQuality",
-        "      $g.DrawImage($src, 0, 0, $dw, $dh)",
-        "    } finally { $g.Dispose() }",
-        "    for ($y = 0; $y -lt $dh; $y++) {",
-        "      for ($x = 0; $x -lt $dw; $x++) {",
-        "        $c = $dst.GetPixel($x, $y)",
-        "        $dst.SetPixel($x, $y, [System.Drawing.Color]::FromArgb($c.A, $c.B, $c.G, $c.R))",
-        "      }",
-        "    }",
-        "    $dst.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)",
-        "  } finally { $dst.Dispose() }",
-        "} finally {",
-        "  $src.Dispose()",
-        "  Remove-Item -LiteralPath $in -Force -ErrorAction SilentlyContinue",
-        "}",
-    ].join('; ');
-
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', command], {
-        encoding: 'utf8',
-        windowsHide: true,
-        maxBuffer: 1024 * 1024,
-    });
-
-    if (result.status !== 0) {
-        throw new Error((result.stderr || result.stdout || 'JPEG preview scaling failed').trim());
-    }
+export async function writeJpegPreviewFile(jpegBase64: string, outputPath: string): Promise<void> {
+    await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
+    await fs.promises.writeFile(outputPath, Buffer.from(jpegBase64, 'base64'));
 }
 
 function decodeBlp(sourceBytes: Uint8Array): DecodedRasterImage {

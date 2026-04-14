@@ -116,6 +116,7 @@ const nodeExtensionConfig = {
 	target: 'node',
 	entry: {
 		extension: './src/extension.ts',
+		'casc-extract-worker': './src/casc-extract-worker.ts',
 	},
 	output: {
 		filename: '[name].js',
@@ -137,12 +138,6 @@ const nodeExtensionConfig = {
 	externals: {
 		vscode: 'commonjs vscode',
 	},
-	plugins: [
-		new CopyFilePlugin(
-			path.join(__dirname, 'src', 'casc-extract-worker.js'),
-			path.join(__dirname, 'dist', 'casc-extract-worker.js')
-		),
-	],
 	performance: { hints: false },
 	devtool: 'nosources-source-map',
 };

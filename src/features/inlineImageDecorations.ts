@@ -12,19 +12,22 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import * as crypto from 'crypto';
-import { decodeRasterPreview, ensureCascCached, getCascCacheDir, writeJpegPreviewPngSync } from './blpPreview';
+import { decodeRasterPreview, ensureCascCached, writeJpegPreviewFile } from './blpPreview';
+import {
+    getCandidateRoots,
+    getTempPreviewDir,
+    resolveAssetPath,
+} from './imageAssetSupport';
 import * as zlib from 'zlib';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const THUMB_DIM = 16;          // thumbnail size in px
 const ICON_CSS  = '12px';      // rendered size in editor
-const IMAGE_EXTS = new Set(['blp', 'dds', 'tga', 'png', 'jpg', 'jpeg']);
-const THUMB_DIR  = path.join(os.tmpdir(), 'wurst_inline_thumbs');
+const THUMB_DIR  = getTempPreviewDir('wurst_inline_thumbs');
 const MAX_CONCURRENT_THUMB_JOBS = 2;
-const MAX_CONCURRENT_CASC_JOBS = 2;
+const MAX_CONCURRENT_CASC_JOBS = 8;
 const UPDATE_DEBOUNCE_MS = 120;
 
 // Matches "some\\path\\file.blp" style strings
@@ -40,6 +43,7 @@ type AssetIndex = Map<string, string>;
 let assetIndex: AssetIndex | null = null;
 let assetIndexBuiltForWs: string | null = null;
 const output = vscode.window.createOutputChannel('Wurst Inline Icons');
+let isDisposed = false;
 
 // static constant foo = "path"  (with optional public/private modifier)
 const WURST_CONST_RE = /^\s*(?:(?:public|private|protected)\s+)?static\s+constant\s+(\w+)\s*=\s*"([^"]+\.(blp|dds|tga|png|jpg|jpeg))"/;
@@ -113,64 +117,12 @@ function shouldUseAssetIndex(text: string): boolean {
 
 // ── Path resolution ───────────────────────────────────────────────────────────
 
-function cascCacheDir(): string {
-    return getCascCacheDir();
+async function candidateRoots(docFsPath: string): Promise<string[]> {
+    return getCandidateRoots(docFsPath);
 }
 
-function candidateRoots(docFsPath: string): string[] {
-    const seen = new Set<string>();
-    const roots: string[] = [];
-    const add = (p: string) => { if (p && !seen.has(p)) { seen.add(p); roots.push(p); } };
-
-    add(path.dirname(docFsPath));
-    for (const wsf of vscode.workspace.workspaceFolders ?? []) {
-        const root = wsf.uri.fsPath;
-        add(root);
-        for (const sub of ['imports', 'war3mapImported', 'war3map', 'assets', 'UI']) add(path.join(root, sub));
-        try {
-            for (const entry of fs.readdirSync(root)) {
-                const lower = entry.toLowerCase();
-                if (lower.endsWith('.w3x') || lower.endsWith('.w3m')) {
-                    const full = path.join(root, entry);
-                    try { if (fs.statSync(full).isDirectory()) add(full); } catch { /**/ }
-                }
-            }
-        } catch { /**/ }
-    }
-    add(cascCacheDir());
-    return roots;
-}
-
-function resolveImagePath(assetPath: string, roots: string[]): string | undefined {
-    const norm  = assetPath.replace(/\\\\/g, '\\').replace(/[/\\]/g, path.sep);
-    const lower = norm.toLowerCase();
-    // CASC cache stores BLPs converted to DDS — build the DDS variant of the lowercase path
-    const lowerDds = lower.replace(/\.blp$/, '.dds');
-
-    for (const root of roots) {
-        // Exact case (local project files)
-        const c = path.join(root, norm);
-        if (fs.existsSync(c)) return c;
-        // Lowercase (CASC cache — BLP still as BLP)
-        if (lower !== norm) {
-            const cl = path.join(root, lower);
-            if (fs.existsSync(cl)) return cl;
-        }
-        // Lowercase with .blp → .dds (CASC cache — BLP converted to DDS)
-        if (lowerDds !== lower) {
-            const cd = path.join(root, lowerDds);
-            if (fs.existsSync(cd)) return cd;
-        }
-    }
-
-    // Fallback for imported assets stored flat in imports/ or war3mapImported/
-    // but referenced via their in-game path.
-    const fileName = path.basename(norm);
-    for (const root of roots) {
-        const candidate = path.join(root, fileName);
-        if (fs.existsSync(candidate)) return candidate;
-    }
-    return undefined;
+async function resolveImagePath(assetPath: string, roots: string[]): Promise<string | undefined> {
+    return resolveAssetPath(assetPath, roots);
 }
 
 // ── PNG encoder (minimal — no deps) ──────────────────────────────────────────
@@ -246,31 +198,65 @@ function scaleDown(rgba: Uint8Array, sw: number, sh: number, dim: number): { rgb
 
 // ── Thumbnail cache ───────────────────────────────────────────────────────────
 
+const IMAGE_EXTS = new Set(['blp', 'dds', 'tga', 'png', 'jpg', 'jpeg']);
+
 interface ThumbEntry { pngPath: string; mtime: number; }
 const thumbCache = new Map<string, ThumbEntry>();
 
-function log(message: string): void {
-    output.appendLine(`[inline-icons] ${message}`);
-    console.log(`[inline-icons] ${message}`);
+async function getFreshPreviewPath(basePath: string, sourceMtime: number): Promise<string | undefined> {
+    for (const ext of ['.png', '.jpg']) {
+        const candidate = basePath + ext;
+        if (await isFreshThumbFile(candidate, sourceMtime)) {
+            return candidate;
+        }
+    }
+    return undefined;
 }
 
-function isFreshThumbFile(thumbPath: string, sourceMtime: number): boolean {
+let logEpoch = 0;
+function log(message: string): void {
+    if (isDisposed) return;
+    if (logEpoch === 0) logEpoch = Date.now();
+    const ms = Date.now() - logEpoch;
+    const ts = `+${ms}ms`;
     try {
-        return fs.statSync(thumbPath).mtimeMs >= sourceMtime;
+        output.appendLine(`[inline-icons] ${ts} ${message}`);
+    } catch {
+        return;
+    }
+    console.log(`[inline-icons] ${ts} ${message}`);
+}
+
+function safeSetDecorations(
+    editor: vscode.TextEditor,
+    decorationType: vscode.TextEditorDecorationType,
+    decorations: vscode.Range[] | vscode.DecorationOptions[],
+): void {
+    if (isDisposed) return;
+    try {
+        editor.setDecorations(decorationType, decorations);
+    } catch {
+        // Ignore teardown races while the extension host/editor is closing.
+    }
+}
+
+async function isFreshThumbFile(thumbPath: string, sourceMtime: number): Promise<boolean> {
+    try {
+        return (await fs.promises.stat(thumbPath)).mtimeMs >= sourceMtime;
     } catch {
         return false;
     }
 }
 
-function getCachedThumbnailUri(fsPath: string): vscode.Uri | undefined {
+async function getCachedThumbnailUri(fsPath: string): Promise<vscode.Uri | undefined> {
     const ext = path.extname(fsPath).toLowerCase();
     if (!IMAGE_EXTS.has(ext.slice(1))) return undefined;
 
     let mtime = 0;
-    try { mtime = fs.statSync(fsPath).mtimeMs; } catch { return undefined; }
+    try { mtime = (await fs.promises.stat(fsPath)).mtimeMs; } catch { return undefined; }
 
     const cached = thumbCache.get(fsPath);
-    if (cached && cached.mtime === mtime && isFreshThumbFile(cached.pngPath, mtime)) {
+    if (cached && cached.mtime === mtime && await isFreshThumbFile(cached.pngPath, mtime)) {
         log(`thumb cache hit: ${path.basename(fsPath)}`);
         return vscode.Uri.file(cached.pngPath);
     }
@@ -282,13 +268,13 @@ function getCachedThumbnailUri(fsPath: string): vscode.Uri | undefined {
     }
 
     try {
-        fs.mkdirSync(THUMB_DIR, { recursive: true });
+        await fs.promises.mkdir(THUMB_DIR, { recursive: true });
         const key = crypto.createHash('sha1').update(fsPath).digest('hex');
-        const pngPath = path.join(THUMB_DIR, key + '.png');
-        if (isFreshThumbFile(pngPath, mtime)) {
-            thumbCache.set(fsPath, { pngPath, mtime });
+        const previewPath = await getFreshPreviewPath(path.join(THUMB_DIR, key), mtime);
+        if (previewPath) {
+            thumbCache.set(fsPath, { pngPath: previewPath, mtime });
             log(`thumb disk cache hit: ${path.basename(fsPath)}`);
-            return vscode.Uri.file(pngPath);
+            return vscode.Uri.file(previewPath);
         }
     } catch {
         return undefined;
@@ -297,8 +283,8 @@ function getCachedThumbnailUri(fsPath: string): vscode.Uri | undefined {
     return undefined;
 }
 
-function getThumbnailUri(fsPath: string): vscode.Uri | undefined {
-    const cachedUri = getCachedThumbnailUri(fsPath);
+async function getThumbnailUri(fsPath: string): Promise<vscode.Uri | undefined> {
+    const cachedUri = await getCachedThumbnailUri(fsPath);
     if (cachedUri) {
         return cachedUri;
     }
@@ -307,27 +293,28 @@ function getThumbnailUri(fsPath: string): vscode.Uri | undefined {
     if (!IMAGE_EXTS.has(ext.slice(1))) return undefined;
 
     let mtime = 0;
-    try { mtime = fs.statSync(fsPath).mtimeMs; } catch { return undefined; }
+    try { mtime = (await fs.promises.stat(fsPath)).mtimeMs; } catch { return undefined; }
 
     try {
-        fs.mkdirSync(THUMB_DIR, { recursive: true });
+        await fs.promises.mkdir(THUMB_DIR, { recursive: true });
         const key = crypto.createHash('sha1').update(fsPath).digest('hex');
-        const pngPath = path.join(THUMB_DIR, key + '.png');
+        const basePath = path.join(THUMB_DIR, key);
 
-        const bytes = new Uint8Array(fs.readFileSync(fsPath));
+        const bytes = new Uint8Array(await fs.promises.readFile(fsPath));
         const decoded = decodeRasterPreview(bytes, ext);
+        const previewPath = decoded.mode === 'jpeg' ? `${basePath}.jpg` : `${basePath}.png`;
         if (decoded.mode === 'jpeg') {
-            writeJpegPreviewPngSync(decoded.jpegBase64, THUMB_DIM, pngPath);
+            await writeJpegPreviewFile(decoded.jpegBase64, previewPath);
         } else {
             const rgba = Buffer.from(decoded.rgbaBase64, 'base64');
             const scaled = scaleDown(rgba, decoded.width, decoded.height, THUMB_DIM);
             const png = encodePng(scaled.w, scaled.h, scaled.rgba);
-            fs.writeFileSync(pngPath, png);
+            await fs.promises.writeFile(previewPath, png);
         }
 
-        thumbCache.set(fsPath, { pngPath, mtime });
-        log(`thumb generated: ${path.basename(fsPath)} -> ${pngPath}`);
-        return vscode.Uri.file(pngPath);
+        thumbCache.set(fsPath, { pngPath: previewPath, mtime });
+        log(`thumb generated: ${path.basename(fsPath)} -> ${previewPath}`);
+        return vscode.Uri.file(previewPath);
     } catch (error) {
         log(`thumb failed: ${fsPath} :: ${error instanceof Error ? error.message : String(error)}`);
         return undefined;
@@ -338,24 +325,9 @@ function getThumbnailUri(fsPath: string): vscode.Uri | undefined {
 
 // Maps fsPath → active DecorationType so we can dispose old ones
 const activeTypes = new Map<string, vscode.TextEditorDecorationType>();
+const missingRangesByPath = new Map<string, vscode.Range[]>();
 
-// Single shared type for paths that don't resolve to a local file
-let fallbackType: vscode.TextEditorDecorationType | undefined;
-function getFallbackType(): vscode.TextEditorDecorationType {
-    if (!fallbackType) {
-        fallbackType = vscode.window.createTextEditorDecorationType({
-            before: {
-                contentText: '\u{1F5BC}', // 🖼 framed picture
-                color: new vscode.ThemeColor('editorCodeLens.foreground'),
-                width: ICON_CSS,
-                margin: `0 4px 2px 0`,
-                fontStyle: 'normal',
-            },
-        });
-    }
-    return fallbackType;
-}
-
+// Single shared type for all paths not yet rendered (CASC pending + thumb loading)
 let loadingType: vscode.TextEditorDecorationType | undefined;
 function getLoadingType(): vscode.TextEditorDecorationType {
     if (!loadingType) {
@@ -370,6 +342,22 @@ function getLoadingType(): vscode.TextEditorDecorationType {
         });
     }
     return loadingType;
+}
+
+let missingType: vscode.TextEditorDecorationType | undefined;
+function getMissingType(): vscode.TextEditorDecorationType {
+    if (!missingType) {
+        missingType = vscode.window.createTextEditorDecorationType({
+            before: {
+                contentText: '×',
+                color: new vscode.ThemeColor('editorError.foreground'),
+                width: ICON_CSS,
+                margin: `0 4px 2px 0`,
+                fontStyle: 'normal',
+            },
+        });
+    }
+    return missingType;
 }
 
 function makeDecorationType(iconUri: vscode.Uri): vscode.TextEditorDecorationType {
@@ -387,10 +375,6 @@ function makeDecorationOptions(ranges: vscode.Range[], hoverMessage?: vscode.Mar
     return ranges.map((range) => ({ range, hoverMessage }));
 }
 
-function intersectsVisibleRange(range: vscode.Range, visibleRanges: readonly vscode.Range[]): boolean {
-    return visibleRanges.some((visible) => visible.intersection(range) !== undefined);
-}
-
 interface CollectedRanges {
     /** fsPath → ranges where we have a local file */
     resolved: Map<string, vscode.Range[]>;
@@ -398,14 +382,36 @@ interface CollectedRanges {
     pending: Map<string, vscode.Range[]>;
 }
 
-function collectImageRanges(
+function getScanRanges(editor: vscode.TextEditor): vscode.Range[] {
+    const lineCount = editor.document.lineCount;
+    const seen = new Set<string>();
+    const scanRanges: vscode.Range[] = [];
+
+    for (const visible of editor.visibleRanges) {
+        const startLine = Math.max(0, visible.start.line - 20);
+        const endLine = Math.min(lineCount - 1, visible.end.line + 20);
+        const key = `${startLine}:${endLine}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        scanRanges.push(new vscode.Range(startLine, 0, endLine, editor.document.lineAt(endLine).text.length));
+    }
+
+    if (scanRanges.length === 0 && lineCount > 0) {
+        scanRanges.push(new vscode.Range(0, 0, Math.min(lineCount - 1, 200), editor.document.lineAt(Math.min(lineCount - 1, 200)).text.length));
+    }
+
+    return scanRanges;
+}
+
+async function collectImageRanges(
     document: vscode.TextDocument,
     roots: string[],
+    scanRanges: readonly vscode.Range[],
     index?: AssetIndex,
-): CollectedRanges {
-    const text = document.getText();
+): Promise<CollectedRanges> {
     const resolved = new Map<string, vscode.Range[]>();
     const pending = new Map<string, vscode.Range[]>();
+    const matches: Array<{ assetPath: string; start: number; len: number }> = [];
 
     const addTo = (map: Map<string, vscode.Range[]>, key: string, start: number, len: number) => {
         const range = new vscode.Range(document.positionAt(start), document.positionAt(start + len));
@@ -414,32 +420,40 @@ function collectImageRanges(
         arr.push(range);
     };
 
-    // 1. Raw string literals
-    STRING_IMAGE_RE.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = STRING_IMAGE_RE.exec(text)) !== null) {
-        const assetPath = m[1];
-        const fsPath = resolveImagePath(assetPath, roots);
-        if (fsPath) {
-            addTo(resolved, fsPath, m.index, m[0].length);
-        } else {
-            addTo(pending, assetPath, m.index, m[0].length);
+    for (const scanRange of scanRanges) {
+        const text = document.getText(scanRange);
+        const baseOffset = document.offsetAt(scanRange.start);
+
+        // 1. Raw string literals
+        STRING_IMAGE_RE.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = STRING_IMAGE_RE.exec(text)) !== null) {
+            matches.push({ assetPath: m[1], start: baseOffset + m.index, len: m[0].length });
+        }
+
+        // 2. ClassName.member  (e.g. Icons.bTNHeal)
+        if (index) {
+            MEMBER_ACCESS_RE.lastIndex = 0;
+            while ((m = MEMBER_ACCESS_RE.exec(text)) !== null) {
+                const key = `${m[1]}.${m[2]}`;
+                const assetPath = index.get(key);
+                if (!assetPath) continue;
+                matches.push({ assetPath, start: baseOffset + m.index, len: m[0].length });
+            }
         }
     }
 
-    // 2. ClassName.member  (e.g. Icons.bTNHeal)
-    if (index) {
-        MEMBER_ACCESS_RE.lastIndex = 0;
-        while ((m = MEMBER_ACCESS_RE.exec(text)) !== null) {
-            const key = `${m[1]}.${m[2]}`;
-            const assetPath = index.get(key);
-            if (!assetPath) continue;
-            const fsPath = resolveImagePath(assetPath, roots);
-            if (fsPath) {
-                addTo(resolved, fsPath, m.index, m[0].length);
-            } else {
-                addTo(pending, assetPath, m.index, m[0].length);
-            }
+    const uniqueAssetPaths = Array.from(new Set(matches.map((match) => match.assetPath)));
+    const resolvedPaths = new Map<string, string | undefined>(
+        await Promise.all(uniqueAssetPaths.map(async (assetPath): Promise<[string, string | undefined]> => [assetPath, await resolveImagePath(assetPath, roots)]))
+    );
+
+    for (const match of matches) {
+        const fsPath = resolvedPaths.get(match.assetPath);
+        if (fsPath) {
+            addTo(resolved, fsPath, match.start, match.len);
+        } else {
+            addTo(pending, match.assetPath, match.start, match.len);
         }
     }
 
@@ -448,64 +462,17 @@ function collectImageRanges(
 
 // Track CASC extractions in progress so we don't fire duplicates
 const extracting = new Set<string>();
+const unresolvedAssets = new Set<string>();
 const decorationVersions = new Map<string, number>();
 const pendingThumbJobs = new Set<string>();
+// Maps fsPath/assetPath → the ranges currently showing the ◌ glyph for that path.
+// Cleared per-path when a thumb is applied, so the glyph doesn't linger.
+const loadingRangesByPath = new Map<string, vscode.Range[]>();
 const thumbQueue: Array<() => Promise<void>> = [];
 let runningThumbJobs = 0;
 const cascQueue: Array<() => Promise<void>> = [];
 let runningCascJobs = 0;
 const updateTimers = new Map<string, ReturnType<typeof setTimeout>>();
-let cascProgress:
-    | {
-          progress: vscode.Progress<{ message?: string; increment?: number }>;
-          resolve: () => void;
-      }
-    | undefined;
-let cascProgressTotal = 0;
-let cascProgressDone = 0;
-
-function reportCascProgress(currentAsset?: string): void {
-    if (!cascProgress) return;
-    const remaining = Math.max(0, cascProgressTotal - cascProgressDone);
-    const prefix = cascProgressTotal > 0
-        ? `${cascProgressDone}/${cascProgressTotal} assets`
-        : 'Preparing assets';
-    const suffix = currentAsset ? ` · ${path.basename(currentAsset)}` : '';
-    cascProgress.progress.report({
-        message: remaining > 0 ? `${prefix}${suffix}` : 'Finalizing…',
-    });
-}
-
-function ensureCascProgressVisible(): void {
-    if (cascProgress) {
-        reportCascProgress();
-        return;
-    }
-    void vscode.window.withProgress(
-        {
-            location: vscode.ProgressLocation.Notification,
-            title: 'Resolving Warcraft III assets',
-            cancellable: false,
-        },
-        async (progress) => {
-            await new Promise<void>((resolve) => {
-                cascProgress = { progress, resolve };
-                reportCascProgress();
-            });
-            cascProgress = undefined;
-        }
-    );
-}
-
-function finishCascProgressIfIdle(): void {
-    if (!cascProgress) return;
-    if (runningCascJobs === 0 && cascQueue.length === 0 && cascProgressDone >= cascProgressTotal) {
-        const resolve = cascProgress.resolve;
-        cascProgressTotal = 0;
-        cascProgressDone = 0;
-        resolve();
-    }
-}
 
 function scheduleThumbJob(job: () => Promise<void>): void {
     thumbQueue.push(job);
@@ -541,74 +508,97 @@ function runCascQueue(): void {
     }
 }
 
+function setLoadingRanges(key: string, ranges: vscode.Range[]): void {
+    if (ranges.length > 0) {
+        loadingRangesByPath.set(key, ranges);
+    } else {
+        loadingRangesByPath.delete(key);
+    }
+}
+
+function clearLoadingRanges(editor: vscode.TextEditor, key: string): void {
+    if (!loadingRangesByPath.delete(key)) return;
+    safeSetDecorations(editor, getLoadingType(), [...loadingRangesByPath.values()].flat());
+}
+
+function setMissingRanges(key: string, ranges: vscode.Range[]): void {
+    if (ranges.length > 0) {
+        missingRangesByPath.set(key, ranges);
+    } else {
+        missingRangesByPath.delete(key);
+    }
+}
+
+function clearMissingRanges(editor: vscode.TextEditor, key: string): void {
+    if (!missingRangesByPath.delete(key)) return;
+    safeSetDecorations(editor, getMissingType(), [...missingRangesByPath.values()].flat());
+}
+
 async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
+    if (isDisposed) return;
     const document = editor.document;
     const docKey = document.uri.toString();
     const version = (decorationVersions.get(docKey) ?? 0) + 1;
     decorationVersions.set(docKey, version);
-    const roots = candidateRoots(document.uri.fsPath);
+    const roots = await candidateRoots(document.uri.fsPath);
+    const scanRanges = getScanRanges(editor);
     const text = document.getText();
     const useAssetIndex = shouldUseAssetIndex(text);
     const index = useAssetIndex ? getAssetIndex() : undefined;
     if (useAssetIndex) log(`asset index enabled for ${path.basename(document.uri.fsPath)}`);
 
-    const { resolved, pending } = collectImageRanges(document, roots, index);
-    log(`scan ${path.basename(document.uri.fsPath)}: resolved=${resolved.size} pending=${pending.size} version=${version}`);
+    const { resolved, pending } = await collectImageRanges(document, roots, scanRanges, index);
+    log(`scan ${path.basename(document.uri.fsPath)}: ranges=${scanRanges.length} resolved=${resolved.size} pending=${pending.size} version=${version}`);
 
     // Dispose types for paths no longer needed
     const wanted = new Set(resolved.keys());
     for (const [fp, type] of activeTypes) {
         if (!wanted.has(fp)) {
-            editor.setDecorations(type, []);
+            safeSetDecorations(editor, type, []);
             type.dispose();
             activeTypes.delete(fp);
         }
     }
 
-    // Show fallback glyph only for paths that are still pending.
-    const allPendingRanges = [...pending.values()].flat();
-    editor.setDecorations(getFallbackType(), allPendingRanges);
-
-    const allLoadingRanges: vscode.Range[] = [];
+    loadingRangesByPath.clear();
+    missingRangesByPath.clear();
 
     // Apply thumbnail decorations for already-cached paths and queue the rest.
     for (const [fsPath, ranges] of resolved) {
-        const iconUri = getCachedThumbnailUri(fsPath);
+        const iconUri = await getCachedThumbnailUri(fsPath);
         if (iconUri) {
+            setLoadingRanges(fsPath, []);
+            setMissingRanges(fsPath, []);
             let type = activeTypes.get(fsPath);
             if (!type) {
                 type = makeDecorationType(iconUri);
                 activeTypes.set(fsPath, type);
             }
-            editor.setDecorations(type, makeDecorationOptions(ranges));
+            safeSetDecorations(editor, type, makeDecorationOptions(ranges));
             continue;
         }
 
-        allLoadingRanges.push(...ranges);
+        setLoadingRanges(fsPath, ranges);
         if (pendingThumbJobs.has(fsPath)) continue;
         pendingThumbJobs.add(fsPath);
+        const thumbQueuedAt = Date.now();
         log(`queue thumb: ${fsPath}`);
         scheduleThumbJob(async () => {
+            const thumbStartedAt = Date.now();
+            const thumbQueueWait = thumbStartedAt - thumbQueuedAt;
             try {
-                const iconUri = getThumbnailUri(fsPath);
-                if (!iconUri) return;
+                const iconUri = await getThumbnailUri(fsPath);
+                const thumbElapsed = Date.now() - thumbStartedAt;
+                if (!iconUri) {
+                    log(`thumb failed: ${path.basename(fsPath)} (queue ${thumbQueueWait}ms, gen ${thumbElapsed}ms)`);
+                    return;
+                }
+                log(`thumb ready: ${path.basename(fsPath)} (queue ${thumbQueueWait}ms, gen ${thumbElapsed}ms)`);
 
                 const active = vscode.window.activeTextEditor;
                 const latestVersion = decorationVersions.get(docKey);
                 if (!active || active.document !== document || latestVersion !== version) {
                     log(`skip stale thumb apply: ${fsPath}`);
-                    return;
-                }
-
-                const latestText = document.getText();
-                const latestNeedsAssetIndex = shouldUseAssetIndex(latestText);
-                const currentRanges = collectImageRanges(
-                    document,
-                    candidateRoots(document.uri.fsPath),
-                    latestNeedsAssetIndex ? getAssetIndex() : undefined,
-                ).resolved.get(fsPath);
-                if (!currentRanges || currentRanges.length === 0) {
-                    log(`skip thumb apply, path no longer visible: ${fsPath}`);
                     return;
                 }
 
@@ -618,44 +608,85 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
                 }
                 type = makeDecorationType(iconUri);
                 activeTypes.set(fsPath, type);
-                active.setDecorations(type, makeDecorationOptions(currentRanges));
-                log(`applied thumb: ${fsPath} ranges=${currentRanges.length}`);
+                safeSetDecorations(active, type, makeDecorationOptions(ranges));
+                clearLoadingRanges(active, fsPath);
+                log(`applied thumb: ${fsPath} ranges=${ranges.length}`);
             } finally {
                 pendingThumbJobs.delete(fsPath);
             }
         });
     }
 
-    editor.setDecorations(getLoadingType(), allLoadingRanges);
+    for (const [assetPath, ranges] of pending) {
+        setLoadingRanges(assetPath, ranges);
+        if (unresolvedAssets.has(assetPath)) {
+            setLoadingRanges(assetPath, []);
+            setMissingRanges(assetPath, ranges);
+        }
+    }
+    safeSetDecorations(editor, getLoadingType(), [...loadingRangesByPath.values()].flat());
+    safeSetDecorations(editor, getMissingType(), [...missingRangesByPath.values()].flat());
 
     // Fire off CASC extraction for pending asset paths (deduplicated, non-blocking)
-    for (const [assetPath, ranges] of pending) {
-        if (!ranges.some((range) => intersectsVisibleRange(range, editor.visibleRanges))) continue;
+    for (const [assetPath] of pending) {
+        if (unresolvedAssets.has(assetPath)) continue;
         if (extracting.has(assetPath)) continue;
         extracting.add(assetPath);
-        cascProgressTotal += 1;
-        ensureCascProgressVisible();
-        reportCascProgress(assetPath);
+        const queuedAt = Date.now();
         log(`queue casc extract: ${assetPath}`);
         scheduleCascJob(async () => {
             try {
-                reportCascProgress(assetPath);
-                log(`start casc extract: ${assetPath}`);
+                const startedAt = Date.now();
+                const queueWait = startedAt - queuedAt;
+                log(`start casc extract: ${assetPath} (queued ${queueWait}ms)`);
                 const cachedPath = await ensureCascCached(assetPath);
+                const elapsed = Date.now() - startedAt;
                 if (!cachedPath) {
-                    log(`casc unresolved: ${assetPath}`);
+                    unresolvedAssets.add(assetPath);
+                    const active = vscode.window.activeTextEditor;
+                    if (active && active.document === document) {
+                        const missingRanges = pending.get(assetPath) ?? [];
+                        clearLoadingRanges(active, assetPath);
+                        setMissingRanges(assetPath, missingRanges);
+                        safeSetDecorations(active, getMissingType(), [...missingRangesByPath.values()].flat());
+                    }
+                    log(`casc unresolved: ${assetPath} (${elapsed}ms)`);
                     return;
                 }
-                log(`casc resolved: ${assetPath} -> ${cachedPath}`);
+                log(`casc resolved: ${assetPath} -> ${cachedPath} (${elapsed}ms)`);
                 const active = vscode.window.activeTextEditor;
-                if (active && active.document === document) void updateDecorations(active);
+                if (!active || active.document !== document) return;
+                // Directly queue a thumb job for the resolved path instead of
+                // re-scanning the full document (which would iterate 2000+ pending paths).
+                const pendingRanges = pending.get(assetPath);
+                if (pendingRanges && pendingRanges.length > 0) {
+                    const thumbQueuedAt2 = Date.now();
+                    scheduleThumbJob(async () => {
+                        const thumbStartedAt2 = Date.now();
+                        const iconUri = await getThumbnailUri(cachedPath);
+                        const thumbElapsed2 = Date.now() - thumbStartedAt2;
+                        if (!iconUri) {
+                            log(`thumb failed for casc-resolved: ${path.basename(cachedPath)} (gen ${thumbElapsed2}ms)`);
+                            return;
+                        }
+                        log(`thumb ready (casc): ${path.basename(cachedPath)} (queue ${thumbStartedAt2 - thumbQueuedAt2}ms, gen ${thumbElapsed2}ms)`);
+                        const currentActive = vscode.window.activeTextEditor;
+                        if (!currentActive || currentActive.document !== document) return;
+                        // Use the ranges captured at scan time — no re-scan needed.
+                        let type = activeTypes.get(cachedPath);
+                        if (type) type.dispose();
+                        type = makeDecorationType(iconUri);
+                        activeTypes.set(cachedPath, type);
+                        safeSetDecorations(currentActive, type, makeDecorationOptions(pendingRanges));
+                        clearLoadingRanges(currentActive, assetPath);
+                        clearMissingRanges(currentActive, assetPath);
+                        log(`applied thumb (casc): ${cachedPath} ranges=${pendingRanges.length}`);
+                    });
+                }
             } catch (error) {
                 log(`casc error: ${assetPath} :: ${error instanceof Error ? error.message : String(error)}`);
             } finally {
                 extracting.delete(assetPath);
-                cascProgressDone += 1;
-                reportCascProgress();
-                finishCascProgressIfIdle();
             }
         });
     }
@@ -676,7 +707,9 @@ export function registerInlineImageDecorations(_context: vscode.ExtensionContext
         if (existing) clearTimeout(existing);
         updateTimers.set(key, setTimeout(() => {
             updateTimers.delete(key);
-            void updateDecorations(editor);
+            void updateDecorations(editor).catch(() => {
+                // Ignore races from editor/extension shutdown.
+            });
         }, UPDATE_DEBOUNCE_MS));
     };
 
@@ -693,19 +726,18 @@ export function registerInlineImageDecorations(_context: vscode.ExtensionContext
         }),
         // Dispose all active types when extension deactivates
         new vscode.Disposable(() => {
+            isDisposed = true;
             for (const timer of updateTimers.values()) clearTimeout(timer);
             updateTimers.clear();
             for (const t of activeTypes.values()) t.dispose();
             activeTypes.clear();
-            fallbackType?.dispose();
-            fallbackType = undefined;
+            unresolvedAssets.clear();
+            loadingRangesByPath.clear();
+            missingRangesByPath.clear();
             loadingType?.dispose();
             loadingType = undefined;
-            if (cascProgress) {
-                const resolve = cascProgress.resolve;
-                cascProgress = undefined;
-                resolve();
-            }
+            missingType?.dispose();
+            missingType = undefined;
             output.dispose();
         }),
     ];

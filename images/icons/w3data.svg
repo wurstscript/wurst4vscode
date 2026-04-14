@@ -1,9 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
-  <rect x="1" y="1" width="14" height="14" rx="2.5" fill="#6a9955"/>
-  <!-- database cylinders -->
-  <ellipse cx="8" cy="5" rx="4" ry="1.5" fill="none" stroke="white" stroke-width="1.1"/>
-  <line x1="4" y1="5" x2="4" y2="11" stroke="white" stroke-width="1.1"/>
-  <line x1="12" y1="5" x2="12" y2="11" stroke="white" stroke-width="1.1"/>
-  <ellipse cx="8" cy="8" rx="4" ry="1.5" fill="none" stroke="white" stroke-width="1.1"/>
-  <ellipse cx="8" cy="11" rx="4" ry="1.5" fill="none" stroke="white" stroke-width="1.1"/>
+  <path d="M2 2H14V14H2Z" fill="#1a2130"/>
+  <path d="M3 3H13V13H3Z" fill="#49689d"/>
+  <path d="M4 4H12V12H4Z" fill="#d5dfef"/>
+  <path d="M5 5H11V6H5ZM5 7H11V8H5ZM5 9H11V10H5" fill="#6c87b7"/>
+  <path d="M4 11H12V12H4Z" fill="#c2943c"/>
+  <path d="M3 3H13V13H3Z" fill="none" stroke="#09101a" stroke-width="1"/>
 </svg>

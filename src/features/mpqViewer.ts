@@ -121,7 +121,11 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
                     const outPath = path.join(tmpDir, name.replace(/\\/g, path.sep));
                     fs.mkdirSync(path.dirname(outPath), { recursive: true });
                     fs.writeFileSync(outPath, data);
-                    void vscode.commands.executeCommand('vscode.open', vscode.Uri.file(outPath));
+                    void vscode.commands.executeCommand(
+                        'vscode.open',
+                        vscode.Uri.file(outPath),
+                        { preview: false, preserveFocus: false }
+                    );
                 } catch (e) {
                     void vscode.window.showErrorMessage(
                         `Failed to extract ${name}: ${e instanceof Error ? e.message : String(e)}`
@@ -362,7 +366,22 @@ body {
   min-width: 26px; text-align: center; font-family: var(--mono);
 }
 
-.file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-desc {
+  color: var(--muted);
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .size {
   color: var(--muted); font-size: 11px; white-space: nowrap;
@@ -372,24 +391,39 @@ body {
 /* inline open button — only shows on hover / selection */
 .row-action {
   flex-shrink: 0;
-  display: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px; height: 20px;
-  padding: 2px;
-  margin-left: 2px;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  margin-left: 6px;
   background: transparent;
-  border: none;
+  border: 1px solid transparent;
   border-radius: 3px;
   cursor: pointer;
   color: var(--icon-fg);
-  opacity: 0.7;
+  opacity: 0;
+  pointer-events: none;
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
 }
 .row-action svg { width: 13px; height: 13px; fill: currentColor; }
+.row-action span { line-height: 1; }
 .row:hover .row-action,
-.row.selected .row-action { display: flex; }
-.row-action:hover { background: var(--hover); opacity: 1; }
+.row.selected .row-action {
+  opacity: 0.92;
+  pointer-events: auto;
+}
+.row-action:hover {
+  background: var(--hover);
+  border-color: var(--border);
+  opacity: 1;
+}
 .row.selected .row-action:hover { background: rgba(255,255,255,0.15); }
+.row.selected .file-desc,
+.row.selected .size { color: var(--active-fg); opacity: 0.82; }
 
 /* state / error */
 .state {

@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
-  <rect x="1" y="1" width="14" height="14" rx="2.5" fill="#6e7681"/>
-  <!-- terrain hills + grid overlay -->
-  <polyline points="2,11 5,7 7.5,9.5 10,6 14,11" fill="none" stroke="white" stroke-width="1.2" stroke-linejoin="round"/>
-  <rect x="2.5" y="3" width="11" height="10" rx="1" fill="none" stroke="white" stroke-width="0.7" opacity="0.5"/>
-  <line x1="6.5" y1="3" x2="6.5" y2="13" stroke="white" stroke-width="0.7" opacity="0.5"/>
-  <line x1="10.5" y1="3" x2="10.5" y2="13" stroke="white" stroke-width="0.7" opacity="0.5"/>
-  <line x1="2.5" y1="7.5" x2="13.5" y2="7.5" stroke="white" stroke-width="0.7" opacity="0.5"/>
+  <path d="M2 2H14V14H2Z" fill="#212510"/>
+  <path d="M3 3H13V13H3Z" fill="#5a7734"/>
+  <path d="M3 9L6 6L8 7.5L10 5L13 8V13H3Z" fill="#96bb55"/>
+  <path d="M3 10L5 8.5L7 10L6 13H3Z" fill="#6d8d3c"/>
+  <path d="M8 13L10 7.5L13 10V13Z" fill="#4e672e"/>
+  <path d="M6 3V13M10 3V13M3 6.5H13M3 10H13" fill="none" stroke="#dce7a9" stroke-width="1" opacity="0.65"/>
+  <path d="M3 3H13V13H3Z" fill="none" stroke="#0d1004" stroke-width="1"/>
 </svg>

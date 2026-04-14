@@ -193,6 +193,73 @@ function mat4LookAt(
     ]);
 }
 
+function quatFromCameraAxes(
+    forwardX: number, forwardY: number, forwardZ: number,
+    upX: number, upY: number, upZ: number
+): Float32Array {
+    const x0 = -forwardX;
+    const x1 = -forwardY;
+    const x2 = -forwardZ;
+
+    let y0 = forwardY * upZ - forwardZ * upY;
+    let y1 = forwardZ * upX - forwardX * upZ;
+    let y2 = forwardX * upY - forwardY * upX;
+    let yLen = Math.hypot(y0, y1, y2);
+    if (yLen === 0) {
+        y0 = 0; y1 = 1; y2 = 0;
+        yLen = 1;
+    }
+    y0 /= yLen;
+    y1 /= yLen;
+    y2 /= yLen;
+
+    let z0 = upX;
+    let z1 = upY;
+    let z2 = upZ;
+    const zLen = Math.hypot(z0, z1, z2) || 1;
+    z0 /= zLen;
+    z1 /= zLen;
+    z2 /= zLen;
+
+    const m00 = x0, m01 = y0, m02 = z0;
+    const m10 = x1, m11 = y1, m12 = z1;
+    const m20 = x2, m21 = y2, m22 = z2;
+
+    const trace = m00 + m11 + m22;
+    let qx: number;
+    let qy: number;
+    let qz: number;
+    let qw: number;
+
+    if (trace > 0) {
+        const s = Math.sqrt(trace + 1.0) * 2;
+        qw = 0.25 * s;
+        qx = (m21 - m12) / s;
+        qy = (m02 - m20) / s;
+        qz = (m10 - m01) / s;
+    } else if (m00 > m11 && m00 > m22) {
+        const s = Math.sqrt(1.0 + m00 - m11 - m22) * 2;
+        qw = (m21 - m12) / s;
+        qx = 0.25 * s;
+        qy = (m01 + m10) / s;
+        qz = (m02 + m20) / s;
+    } else if (m11 > m22) {
+        const s = Math.sqrt(1.0 + m11 - m00 - m22) * 2;
+        qw = (m02 - m20) / s;
+        qx = (m01 + m10) / s;
+        qy = 0.25 * s;
+        qz = (m12 + m21) / s;
+    } else {
+        const s = Math.sqrt(1.0 + m22 - m00 - m11) * 2;
+        qw = (m10 - m01) / s;
+        qx = (m02 + m20) / s;
+        qy = (m12 + m21) / s;
+        qz = 0.25 * s;
+    }
+
+    return new Float32Array([qx, qy, qz, qw]);
+}
+
 // ─── render loop ─────────────────────────────────────────────────────────────
 
 function clampPitch(p: number): number {
@@ -209,10 +276,6 @@ function renderFrame(ts: number) {
         const activeRenderer = renderer;
 
     try {
-        if (activeRenderer && autoplay) {
-            activeRenderer.update(delta);
-        }
-
         const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
         const w = Math.max(2, Math.round(canvas.clientWidth * pixelRatio));
         const h = Math.max(2, Math.round(canvas.clientHeight * pixelRatio));
@@ -231,6 +294,19 @@ function renderFrame(ts: number) {
             const ex = center[0] + distance * Math.cos(yaw) * cosP;
             const ey = center[1] + distance * Math.sin(yaw) * cosP;
             const ez = center[2] + distance * sinP;
+            const fx = center[0] - ex;
+            const fy = center[1] - ey;
+            const fz = center[2] - ez;
+            const fLen = Math.hypot(fx, fy, fz) || 1;
+            const forwardX = fx / fLen;
+            const forwardY = fy / fLen;
+            const forwardZ = fz / fLen;
+            const cameraQuat = quatFromCameraAxes(forwardX, forwardY, forwardZ, 0, 0, 1);
+            activeRenderer.setCamera(
+                new Float32Array([ex, ey, ez]) as unknown as import('gl-matrix').vec3,
+                cameraQuat as unknown as import('gl-matrix').quat
+            );
+            activeRenderer.update(autoplay ? delta : 0);
             const mv = mat4LookAt(ex, ey, ez, center[0], center[1], center[2], 0, 0, 1);
             activeRenderer.render(mv as unknown as import('gl-matrix').mat4, proj as unknown as import('gl-matrix').mat4, { wireframe });
 

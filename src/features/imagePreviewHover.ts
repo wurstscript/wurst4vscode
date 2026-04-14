@@ -171,6 +171,14 @@ function resolveAssetPath(assetPath: string, roots: string[]): string | undefine
 
 const hoverCacheDir = path.join(os.tmpdir(), 'wurst_hover_preview');
 
+function isFreshPreviewFile(previewPath: string, sourceMtime: number): boolean {
+    try {
+        return fs.statSync(previewPath).mtimeMs >= sourceMtime;
+    } catch {
+        return false;
+    }
+}
+
 function buildPreviewPng(fsPath: string): CacheEntry | undefined {
     const ext = path.extname(fsPath).toLowerCase();
     if (!PREVIEW_EXTS.has(ext.slice(1))) return undefined;
@@ -179,7 +187,7 @@ function buildPreviewPng(fsPath: string): CacheEntry | undefined {
     try { mtime = fs.statSync(fsPath).mtimeMs; } catch { return undefined; }
 
     const cached = previewCache.get(fsPath);
-    if (cached && cached.mtime === mtime) return cached;
+    if (cached && cached.mtime === mtime && isFreshPreviewFile(cached.pngPath, mtime)) return cached;
 
     // Standard formats VSCode can render natively — no conversion needed
     if (ext === '.png' || ext === '.jpg' || ext === '.jpeg') {
@@ -190,12 +198,23 @@ function buildPreviewPng(fsPath: string): CacheEntry | undefined {
 
     // BLP / DDS / TGA → decode → scale → encode PNG to temp file
     try {
-        const bytes = new Uint8Array(fs.readFileSync(fsPath));
-        const decoded = decodeRasterPreview(bytes, ext);
-
         fs.mkdirSync(hoverCacheDir, { recursive: true });
         const hash = crypto.createHash('sha1').update(fsPath).digest('hex');
         const previewPath = path.join(hoverCacheDir, hash + '.png');
+        if (isFreshPreviewFile(previewPath, mtime)) {
+            const entry: CacheEntry = {
+                pngPath: previewPath,
+                mtime,
+                origW: 0,
+                origH: 0,
+                description: ext.slice(1).toUpperCase(),
+            };
+            previewCache.set(fsPath, entry);
+            return entry;
+        }
+
+        const bytes = new Uint8Array(fs.readFileSync(fsPath));
+        const decoded = decodeRasterPreview(bytes, ext);
 
         if (decoded.mode === 'jpeg') {
             writeJpegPreviewPngSync(decoded.jpegBase64, MAX_PREVIEW_DIM, previewPath);

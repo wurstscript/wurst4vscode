@@ -52,6 +52,48 @@ function badgeColor(ext: string): string {
     return EXT_COLORS[ext.toLowerCase()] ?? '#666';
 }
 
+const FILE_DESCRIPTIONS: Record<string, string> = {
+    w3i: 'Map info and player/force settings',
+    w3u: 'Object editor unit data',
+    w3t: 'Object editor item data',
+    w3a: 'Object editor ability data',
+    w3b: 'Object editor destructable data',
+    w3d: 'Object editor doodad data',
+    w3h: 'Object editor buff data',
+    w3q: 'Object editor upgrade data',
+    w3o: 'Imported object editor bundle',
+    w3c: 'Custom camera data',
+    w3e: 'Terrain height and tile data',
+    w3r: 'Regions and triggers regions',
+    w3s: 'Sound editor data',
+    w3l: 'Custom text trigger list data',
+    wpm: 'Pathing map data',
+    shd: 'Shadowmap data',
+    mmp: 'Minimap preview data',
+    doo: 'Doodads and destructables placement',
+    wtg: 'GUI trigger definitions',
+    wct: 'Custom text triggers',
+    wts: 'Trigger strings table',
+    fdf: 'Frame definition data',
+    toc: 'UI table of contents',
+    slk: 'Spreadsheet object data',
+    blp: 'Blizzard texture image',
+    dds: 'Texture image',
+    tga: 'Texture image',
+    mdx: 'Compiled 3D model',
+    mdl: 'Text 3D model',
+    j: 'Map script',
+    lua: 'Lua map script',
+};
+
+function fileDescription(fullPath: string, ext: string): string {
+    const normalized = fullPath.replace(/\//g, '\\').toLowerCase();
+    if (normalized.startsWith('war3map.') || normalized.startsWith('scripts\\war3map.')) {
+        return FILE_DESCRIPTIONS[ext] ?? `${ext ? '.' + ext : 'File'} data`;
+    }
+    return FILE_DESCRIPTIONS[ext] ?? '';
+}
+
 // ── tree building ─────────────────────────────────────────────────────────────
 
 interface Entry { name: string; normalSize: number; compressedSize: number; }
@@ -137,7 +179,7 @@ function renderFolder(node: TreeNode, indent: number, container: HTMLElement): v
         '<span class="folder-meta">' + node.totalFiles + ' \u00b7 ' + fmtSize(node.totalSize) + '</span>';
 
     const children = document.createElement('div');
-    children.className = 'children';
+    children.className = 'children collapsed';
 
     for (const child of node.children) renderNode(child, indent + 1, children);
 
@@ -148,6 +190,7 @@ function renderFolder(node: TreeNode, indent: number, container: HTMLElement): v
 
     wrapper.appendChild(row);
     wrapper.appendChild(children);
+    wrapper.classList.add('collapsed');
     container.appendChild(wrapper);
 }
 
@@ -155,13 +198,14 @@ function renderFile(node: TreeNode, indent: number, container: HTMLElement): voi
     const ext = node.name.includes('.') ? node.name.split('.').pop()! : '';
     const color = badgeColor(ext);
     const label = ext ? ext.toUpperCase().slice(0, 4) : '?';
+    const description = fileDescription(node.fullPath, ext.toLowerCase());
 
     const row = document.createElement('div');
     row.className = 'row';
     row.style.paddingLeft = (indent * 16 + 22) + 'px';
     row.dataset['type'] = 'file';
     row.dataset['fullpath'] = node.fullPath;
-    row.dataset['search'] = node.fullPath.toLowerCase();
+    row.dataset['search'] = (node.fullPath + ' ' + description).toLowerCase();
 
     // Main content
     const badge = document.createElement('span');
@@ -169,10 +213,22 @@ function renderFile(node: TreeNode, indent: number, container: HTMLElement): voi
     badge.style.background = color;
     badge.textContent = label;
 
+    const fileMain = document.createElement('div');
+    fileMain.className = 'file-main';
+    fileMain.title = description ? `${node.fullPath}\n${description}` : node.fullPath;
+
     const fileName = document.createElement('span');
     fileName.className = 'file-name';
-    fileName.title = node.fullPath;
     fileName.textContent = node.name;
+
+    fileMain.appendChild(fileName);
+
+    if (description) {
+        const fileDesc = document.createElement('span');
+        fileDesc.className = 'file-desc';
+        fileDesc.textContent = `.${ext.toLowerCase()} - ${description}`;
+        fileMain.appendChild(fileDesc);
+    }
 
     const size = document.createElement('span');
     size.className = 'size';
@@ -182,16 +238,16 @@ function renderFile(node: TreeNode, indent: number, container: HTMLElement): voi
     const openBtn = document.createElement('button');
     openBtn.className = 'row-action';
     openBtn.title = 'Open in editor';
-    openBtn.innerHTML = ICON_OPEN;
+    openBtn.innerHTML = ICON_OPEN + '<span>Open</span>';
     openBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         vscode.postMessage({ type: 'openFile', name: node.fullPath });
     });
 
     row.appendChild(badge);
-    row.appendChild(fileName);
-    row.appendChild(size);
+    row.appendChild(fileMain);
     row.appendChild(openBtn);
+    row.appendChild(size);
 
     // Click selects the row (does NOT immediately open)
     row.addEventListener('click', () => {
@@ -218,6 +274,8 @@ function applyFilter(query: string): void {
     if (!q) {
         allFiles.forEach(r => r.classList.remove('hidden'));
         treeWrap.querySelectorAll<HTMLElement>('[data-type="folder"]').forEach(f => f.classList.remove('hidden'));
+        treeWrap.querySelectorAll<HTMLElement>('.children').forEach(c => c.classList.add('collapsed'));
+        treeWrap.querySelectorAll<HTMLElement>('[data-type="folder"]').forEach(f => f.classList.add('collapsed'));
         matchCount.textContent = '';
         return;
     }

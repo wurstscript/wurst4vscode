@@ -1,6 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
-  <rect x="1" y="1" width="14" height="14" rx="2.5" fill="#dcb67a"/>
-  <!-- folder with MPQ label -->
-  <path d="M2.5 5.5 Q2.5 4.5 3.5 4.5 L6 4.5 L7 5.5 L12.5 5.5 Q13.5 5.5 13.5 6.5 L13.5 11.5 Q13.5 12.5 12.5 12.5 L3.5 12.5 Q2.5 12.5 2.5 11.5 Z" fill="none" stroke="white" stroke-width="1.1"/>
-  <text x="8" y="10.5" text-anchor="middle" fill="white" font-family="monospace" font-size="4.5" font-weight="bold">MPQ</text>
+  <path d="M3 5L10.5 3L13 5.5L5.5 7.5Z" fill="#f1dfb0"/>
+  <path d="M5.5 7.5L13 5.5V10.5L5.5 12.5Z" fill="#d4b06a"/>
+  <path d="M3 5V10L5.5 12.5V7.5Z" fill="#b48947"/>
+  <path d="M2.1 4.2C1.4 4.5 1 5.1 1 5.9C1 7 1.8 7.8 2.9 7.8C3.6 7.8 4.2 7.5 4.6 6.9C4 6.3 3.5 5.4 3 5Z" fill="#c69b53"/>
+  <path d="M11.6 10.2C12.4 10.1 13.1 10.5 13.7 11.1C14.4 12 14.2 13.1 13.3 13.7C12.7 14.1 12 14 11.4 13.7C11.7 12.9 11.9 12 11.6 10.2Z" fill="#bb873d"/>
+  <path d="M6.5 5.4L8.7 4.8M6.8 7.8L9.2 7.1M7.1 10.1L9.6 9.5" fill="none" stroke="#8c6131" stroke-width="1"/>
+  <path d="M3 5L10.5 3L13 5.5V10.5L5.5 12.5L3 10Z" fill="none" stroke="#2c170d" stroke-width="1"/>
 </svg>

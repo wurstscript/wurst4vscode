@@ -15,7 +15,6 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { decodeRasterPreview, ensureCascCached, getCascCacheDir, writeJpegPreviewPngSync } from './blpPreview';
-import { getImageHoverMarkdown } from './imagePreviewHover';
 import * as zlib from 'zlib';
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -255,7 +254,15 @@ function log(message: string): void {
     console.log(`[inline-icons] ${message}`);
 }
 
-function getThumbnailUri(fsPath: string): vscode.Uri | undefined {
+function isFreshThumbFile(thumbPath: string, sourceMtime: number): boolean {
+    try {
+        return fs.statSync(thumbPath).mtimeMs >= sourceMtime;
+    } catch {
+        return false;
+    }
+}
+
+function getCachedThumbnailUri(fsPath: string): vscode.Uri | undefined {
     const ext = path.extname(fsPath).toLowerCase();
     if (!IMAGE_EXTS.has(ext.slice(1))) return undefined;
 
@@ -263,7 +270,7 @@ function getThumbnailUri(fsPath: string): vscode.Uri | undefined {
     try { mtime = fs.statSync(fsPath).mtimeMs; } catch { return undefined; }
 
     const cached = thumbCache.get(fsPath);
-    if (cached && cached.mtime === mtime) {
+    if (cached && cached.mtime === mtime && isFreshThumbFile(cached.pngPath, mtime)) {
         log(`thumb cache hit: ${path.basename(fsPath)}`);
         return vscode.Uri.file(cached.pngPath);
     }
@@ -275,12 +282,40 @@ function getThumbnailUri(fsPath: string): vscode.Uri | undefined {
     }
 
     try {
-        const bytes = new Uint8Array(fs.readFileSync(fsPath));
-        const decoded = decodeRasterPreview(bytes, ext);
-
         fs.mkdirSync(THUMB_DIR, { recursive: true });
         const key = crypto.createHash('sha1').update(fsPath).digest('hex');
         const pngPath = path.join(THUMB_DIR, key + '.png');
+        if (isFreshThumbFile(pngPath, mtime)) {
+            thumbCache.set(fsPath, { pngPath, mtime });
+            log(`thumb disk cache hit: ${path.basename(fsPath)}`);
+            return vscode.Uri.file(pngPath);
+        }
+    } catch {
+        return undefined;
+    }
+
+    return undefined;
+}
+
+function getThumbnailUri(fsPath: string): vscode.Uri | undefined {
+    const cachedUri = getCachedThumbnailUri(fsPath);
+    if (cachedUri) {
+        return cachedUri;
+    }
+
+    const ext = path.extname(fsPath).toLowerCase();
+    if (!IMAGE_EXTS.has(ext.slice(1))) return undefined;
+
+    let mtime = 0;
+    try { mtime = fs.statSync(fsPath).mtimeMs; } catch { return undefined; }
+
+    try {
+        fs.mkdirSync(THUMB_DIR, { recursive: true });
+        const key = crypto.createHash('sha1').update(fsPath).digest('hex');
+        const pngPath = path.join(THUMB_DIR, key + '.png');
+
+        const bytes = new Uint8Array(fs.readFileSync(fsPath));
+        const decoded = decodeRasterPreview(bytes, ext);
         if (decoded.mode === 'jpeg') {
             writeJpegPreviewPngSync(decoded.jpegBase64, THUMB_DIM, pngPath);
         } else {
@@ -319,6 +354,22 @@ function getFallbackType(): vscode.TextEditorDecorationType {
         });
     }
     return fallbackType;
+}
+
+let loadingType: vscode.TextEditorDecorationType | undefined;
+function getLoadingType(): vscode.TextEditorDecorationType {
+    if (!loadingType) {
+        loadingType = vscode.window.createTextEditorDecorationType({
+            before: {
+                contentText: '◌',
+                color: new vscode.ThemeColor('editorCodeLens.foreground'),
+                width: ICON_CSS,
+                margin: `0 4px 2px 0`,
+                fontStyle: 'normal',
+            },
+        });
+    }
+    return loadingType;
 }
 
 function makeDecorationType(iconUri: vscode.Uri): vscode.TextEditorDecorationType {
@@ -404,6 +455,57 @@ let runningThumbJobs = 0;
 const cascQueue: Array<() => Promise<void>> = [];
 let runningCascJobs = 0;
 const updateTimers = new Map<string, ReturnType<typeof setTimeout>>();
+let cascProgress:
+    | {
+          progress: vscode.Progress<{ message?: string; increment?: number }>;
+          resolve: () => void;
+      }
+    | undefined;
+let cascProgressTotal = 0;
+let cascProgressDone = 0;
+
+function reportCascProgress(currentAsset?: string): void {
+    if (!cascProgress) return;
+    const remaining = Math.max(0, cascProgressTotal - cascProgressDone);
+    const prefix = cascProgressTotal > 0
+        ? `${cascProgressDone}/${cascProgressTotal} assets`
+        : 'Preparing assets';
+    const suffix = currentAsset ? ` · ${path.basename(currentAsset)}` : '';
+    cascProgress.progress.report({
+        message: remaining > 0 ? `${prefix}${suffix}` : 'Finalizing…',
+    });
+}
+
+function ensureCascProgressVisible(): void {
+    if (cascProgress) {
+        reportCascProgress();
+        return;
+    }
+    void vscode.window.withProgress(
+        {
+            location: vscode.ProgressLocation.Notification,
+            title: 'Resolving Warcraft III assets',
+            cancellable: false,
+        },
+        async (progress) => {
+            await new Promise<void>((resolve) => {
+                cascProgress = { progress, resolve };
+                reportCascProgress();
+            });
+            cascProgress = undefined;
+        }
+    );
+}
+
+function finishCascProgressIfIdle(): void {
+    if (!cascProgress) return;
+    if (runningCascJobs === 0 && cascQueue.length === 0 && cascProgressDone >= cascProgressTotal) {
+        const resolve = cascProgress.resolve;
+        cascProgressTotal = 0;
+        cascProgressDone = 0;
+        resolve();
+    }
+}
 
 function scheduleThumbJob(job: () => Promise<void>): void {
     thumbQueue.push(job);
@@ -467,44 +569,22 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
     const allPendingRanges = [...pending.values()].flat();
     editor.setDecorations(getFallbackType(), allPendingRanges);
 
+    const allLoadingRanges: vscode.Range[] = [];
+
     // Apply thumbnail decorations for already-cached paths and queue the rest.
     for (const [fsPath, ranges] of resolved) {
-        const hoverMessage = getImageHoverMarkdown(fsPath);
-        const visibleRanges = ranges.filter((range) => intersectsVisibleRange(range, editor.visibleRanges));
-        const cached = thumbCache.get(fsPath);
-        let mtime = 0;
-        try {
-            mtime = fs.statSync(fsPath).mtimeMs;
-        } catch (error) {
-            log(`stat failed: ${fsPath} :: ${error instanceof Error ? error.message : String(error)}`);
-            continue;
-        }
-
-        if (cached && cached.mtime === mtime) {
+        const iconUri = getCachedThumbnailUri(fsPath);
+        if (iconUri) {
             let type = activeTypes.get(fsPath);
             if (!type) {
-                type = makeDecorationType(vscode.Uri.file(cached.pngPath));
-                activeTypes.set(fsPath, type);
-            }
-            editor.setDecorations(type, makeDecorationOptions(ranges, hoverMessage));
-            continue;
-        }
-
-        if (visibleRanges.length > 0) {
-            const iconUri = getThumbnailUri(fsPath);
-            if (iconUri) {
-                let type = activeTypes.get(fsPath);
-                if (type) {
-                    type.dispose();
-                }
                 type = makeDecorationType(iconUri);
                 activeTypes.set(fsPath, type);
-                editor.setDecorations(type, makeDecorationOptions(ranges, hoverMessage));
-                log(`applied visible thumb immediately: ${fsPath} ranges=${ranges.length}`);
             }
+            editor.setDecorations(type, makeDecorationOptions(ranges));
             continue;
         }
 
+        allLoadingRanges.push(...ranges);
         if (pendingThumbJobs.has(fsPath)) continue;
         pendingThumbJobs.add(fsPath);
         log(`queue thumb: ${fsPath}`);
@@ -538,7 +618,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
                 }
                 type = makeDecorationType(iconUri);
                 activeTypes.set(fsPath, type);
-                active.setDecorations(type, makeDecorationOptions(currentRanges, getImageHoverMarkdown(fsPath)));
+                active.setDecorations(type, makeDecorationOptions(currentRanges));
                 log(`applied thumb: ${fsPath} ranges=${currentRanges.length}`);
             } finally {
                 pendingThumbJobs.delete(fsPath);
@@ -546,14 +626,20 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
         });
     }
 
+    editor.setDecorations(getLoadingType(), allLoadingRanges);
+
     // Fire off CASC extraction for pending asset paths (deduplicated, non-blocking)
     for (const [assetPath, ranges] of pending) {
         if (!ranges.some((range) => intersectsVisibleRange(range, editor.visibleRanges))) continue;
         if (extracting.has(assetPath)) continue;
         extracting.add(assetPath);
+        cascProgressTotal += 1;
+        ensureCascProgressVisible();
+        reportCascProgress(assetPath);
         log(`queue casc extract: ${assetPath}`);
         scheduleCascJob(async () => {
             try {
+                reportCascProgress(assetPath);
                 log(`start casc extract: ${assetPath}`);
                 const cachedPath = await ensureCascCached(assetPath);
                 if (!cachedPath) {
@@ -567,6 +653,9 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
                 log(`casc error: ${assetPath} :: ${error instanceof Error ? error.message : String(error)}`);
             } finally {
                 extracting.delete(assetPath);
+                cascProgressDone += 1;
+                reportCascProgress();
+                finishCascProgressIfIdle();
             }
         });
     }
@@ -610,6 +699,13 @@ export function registerInlineImageDecorations(_context: vscode.ExtensionContext
             activeTypes.clear();
             fallbackType?.dispose();
             fallbackType = undefined;
+            loadingType?.dispose();
+            loadingType = undefined;
+            if (cascProgress) {
+                const resolve = cascProgress.resolve;
+                cascProgress = undefined;
+                resolve();
+            }
             output.dispose();
         }),
     ];

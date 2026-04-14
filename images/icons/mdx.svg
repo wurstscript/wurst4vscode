@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
-  <rect x="1" y="1" width="14" height="14" rx="2.5" fill="#4ec9b0"/>
-  <!-- isometric cube -->
-  <polygon points="8,3 13,5.8 13,10.2 8,13 3,10.2 3,5.8" fill="none" stroke="white" stroke-width="1.1" stroke-linejoin="round"/>
-  <line x1="8" y1="3" x2="8" y2="8" stroke="white" stroke-width="1.1"/>
-  <line x1="8" y1="8" x2="13" y2="5.8" stroke="white" stroke-width="1.1"/>
-  <line x1="8" y1="8" x2="3" y2="5.8" stroke="white" stroke-width="1.1"/>
+  <path d="M3 5L8 2.5L13 5V11L8 13.5L3 11Z" fill="#112521"/>
+  <path d="M8 2.5L13 5L8 7.5L3 5Z" fill="#4aa190"/>
+  <path d="M3 5L8 7.5V13.5L3 11Z" fill="#2f675c"/>
+  <path d="M13 5L8 7.5V13.5L13 11Z" fill="#7fd3bd"/>
+  <path d="M3 5L8 2.5L13 5V11L8 13.5L3 11Z" fill="none" stroke="#06100e" stroke-width="1"/>
+  <path d="M8 2.5V7.5M3 5L8 7.5L13 5" fill="none" stroke="#06100e" stroke-width="1"/>
 </svg>

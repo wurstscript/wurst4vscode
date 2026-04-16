@@ -126,12 +126,57 @@ export function registerBlpPreview(context: vscode.ExtensionContext): vscode.Dis
         log(`wurst.wc3path setting: "${wc3path || '(not set)'}"`);
         log(`cache dir: ${getCacheDir()}`);
 
+        const textureTests = [
+            'Textures\\Abomination.blp',
+        ];
+        const assetTests = [
+            'Abilities\\Weapons\\ZigguratFrostMissile\\ZigguratFrostMissile.mdx',
+            'Abilities\\Weapons\\ZigguratMissile\\ZigguratMissile.mdx',
+            'Abilities\\Spells\\Demon\\DarkConversion\\ZombifyTarget.mdx',
+        ];
+
+        let passed = 0;
+        let failed = 0;
+
+        log('\n--- Texture Tests ---');
+        for (const testPath of textureTests) {
+            log(`\nExtracting texture: ${testPath}`);
+            const textureResult = await findCascTexture(testPath, log);
+            if (textureResult) {
+                passed++;
+                log(`PASS texture: ${testPath} -> ${textureResult.ext} ${textureResult.buf.length} bytes`);
+            } else {
+                failed++;
+                log(`FAIL texture: ${testPath}`);
+            }
+        }
+
+        log('\n--- Asset Tests ---');
+        for (const testPath of assetTests) {
+            log(`\nExtracting asset: ${testPath}`);
+            const assetResult = await findCascAsset(testPath, log);
+            if (assetResult) {
+                passed++;
+                log(`PASS asset: ${testPath} -> ${assetResult.length} bytes`);
+            } else {
+                failed++;
+                log(`FAIL asset: ${testPath}`);
+            }
+        }
+
+        log(`\n=== Summary: ${passed} passed, ${failed} failed ===`);
+        if (failed === 0) {
+            vscode.window.showInformationMessage(`CASC smoketest OK: ${passed} passed`);
+        } else {
+            vscode.window.showWarningMessage(`CASC smoketest: ${passed} passed, ${failed} failed. See output for details.`);
+        }
+        return;
         const testBlpPath = 'Textures\\Abomination.blp';
         log(`\nExtracting: ${testBlpPath}`);
         const result = await findCascTexture(testBlpPath, log);
         if (result) {
-            log(`\nSUCCESS: ${result.ext} ${result.buf.length} bytes`);
-            vscode.window.showInformationMessage(`CASC smoketest OK: ${result.ext} (${result.buf.length} bytes)`);
+            log(`\nSUCCESS: ${result!.ext} ${result!.buf.length} bytes`);
+            vscode.window.showInformationMessage(`CASC smoketest OK: ${result!.ext} (${result!.buf.length} bytes)`);
         } else {
             log(`\nFAILED`);
             vscode.window.showWarningMessage('CASC smoketest failed — see output');
@@ -241,21 +286,13 @@ export function resetCascStorage(): void {
     cascStorageOpening = null;
 }
 
-function normalizeCascPath(p: string): string {
-    const colonIdx = p.indexOf(':');
-    if (colonIdx !== -1) {
-        return p.slice(0, colonIdx + 1) + p.slice(colonIdx + 1).replace(/\\/g, '/');
-    }
-    return p.replace(/\\/g, '/');
-}
-
 /** Read one file directly from the in-process CascStorage. No child process, no disk cache write. */
 async function cascReadDirect(wc3Root: string, cascPath: string, log: (msg: string) => void): Promise<Buffer | null> {
     const storage = await getCascStorageInstance(wc3Root, log);
     if (!storage) return null;
     try {
         const t = Date.now();
-        const buf = await storage.readFileAsync(normalizeCascPath(cascPath));
+        const buf = await storage.readFileAsync(cascPath);
         if (!buf || buf.length === 0) { log(`CASC empty: ${cascPath}`); return null; }
         log(`CASC read: ${cascPath} (${buf.length} bytes, ${Date.now() - t}ms)`);
         return buf;
@@ -264,6 +301,7 @@ async function cascReadDirect(wc3Root: string, cascPath: string, log: (msg: stri
         return null;
     }
 }
+
 
 /** Look up a texture. Checks disk cache first; if missing, extracts in-process and caches to disk. */
 async function findCascTexture(texPath: string, log: (msg: string) => void): Promise<{ buf: Buffer; ext: 'dds' | 'blp' } | null> {

@@ -5,6 +5,10 @@
 - WurstScript is an all-in-one Warcraft III modding toolkit and language ecosystem (compiler, stdlib, package manager, and related tools).
 - The extension is the client-side glue to the Wurst language server and exposes editor features and user commands.
 
+## Sibling repositories (all under the same parent directory, under the user's control)
+- `../casc-ts` — CASC archive reader library; consumed via a local `node_modules` symlink. Edit the source there and rebuild (`npm run build` in that dir) when fixing extraction issues.
+- `../war3-model` — WC3 model (MDX/MDL) parser and renderer; used by the model preview feature.
+
 ## Architecture at a glance
 - `src/extension.ts`: minimal `activate()` entry point — wires up features and starts the language client.
 - `src/paths.ts`: all `~/.wurst` path constants and GitHub API URLs.

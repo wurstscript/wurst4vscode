@@ -1,9 +1,8 @@
 'use strict';
 
 import * as vscode from 'vscode';
-import * as fs from 'fs';
 import * as path from 'path';
-import { ensureCascAssetCached, getCascCacheDir } from './blpPreview';
+import { getCandidateRoots, resolveAssetPath as resolveAssetPathString, resolveAssetPathWithCasc } from './imageAssetSupport';
 
 // Asset file extensions we want to linkify inside string literals
 const ASSET_EXTS = new Set([
@@ -34,96 +33,17 @@ function isModelExt(ext: string): boolean {
     return lower === 'mdx' || lower === 'mdl';
 }
 
-/** Same logic as getCacheDir() in blpPreview.ts — CASC-extracted game files. */
-function cascCacheDir(): string {
-    return getCascCacheDir();
+async function candidateRoots(document: vscode.TextDocument): Promise<string[]> {
+    return getCandidateRoots(document.uri.fsPath);
 }
 
-/** Normalise a WC3 asset path string to OS separators.
- *  Handles both single-backslash (FDF/TOC source) and double-backslash (JASS/Wurst string escapes). */
-function normaliseSeparators(assetPath: string): string {
-    // Double-backslash escape sequences in JASS/Wurst strings appear as \\ in raw document text
-    return assetPath.replace(/\\\\/g, '\\').replace(/[/\\]/g, path.sep);
+async function candidateRootsForFsPath(fsPath?: string): Promise<string[]> {
+    return getCandidateRoots(fsPath || path.join(process.cwd(), 'dummy'));
 }
 
-/** Candidate roots to search for an asset path, in priority order. */
-function candidateRoots(document: vscode.TextDocument): string[] {
-    const seen = new Set<string>();
-    const roots: string[] = [];
-
-    const add = (p: string) => {
-        if (!seen.has(p)) { seen.add(p); roots.push(p); }
-    };
-
-    // 1. Document's own directory
-    add(path.dirname(document.uri.fsPath));
-
-    for (const wsf of vscode.workspace.workspaceFolders ?? []) {
-        const root = wsf.uri.fsPath;
-
-        // 2. Workspace root itself (handles paths like "war3mapImported\file.mp3")
-        add(root);
-
-        // 3. Common asset subdirs directly under workspace root
-        for (const sub of ['imports', 'war3mapImported', 'war3map', 'assets', 'UI']) {
-            add(path.join(root, sub));
-        }
-
-        // 4. Folder-mode map dirs (*.w3x / *.w3m) — the map root IS the archive root,
-        //    so asset paths like "war3mapImported\file" resolve from there directly.
-        //    Do NOT add war3mapImported as a separate root here — that would double-resolve
-        //    paths that already start with "war3mapImported\".
-        try {
-            for (const entry of fs.readdirSync(root)) {
-                const lower = entry.toLowerCase();
-                if (lower.endsWith('.w3x') || lower.endsWith('.w3m')) {
-                    const full = path.join(root, entry);
-                    try {
-                        if (fs.statSync(full).isDirectory()) add(full);
-                    } catch { /* skip */ }
-                }
-            }
-        } catch { /* skip */ }
-    }
-
-    // 5. CASC cache — game-internal paths (e.g. "UI\FrameDef\UI\*.fdf", "Textures\*.blp")
-    //    are stored here if the user has ever triggered a CASC extraction.
-    add(cascCacheDir());
-
-    return roots;
-}
-
-function candidateRootsForFsPath(fsPath?: string): string[] {
-    const fakeDocument = { uri: vscode.Uri.file(fsPath || path.join(process.cwd(), 'dummy')) } as vscode.TextDocument;
-    return candidateRoots(fakeDocument);
-}
-
-function resolveAssetPath(assetPath: string, roots: string[]): vscode.Uri | undefined {
-    const normalised = normaliseSeparators(assetPath);
-    const lower = normaliseSeparators(assetPath.toLowerCase());
-    const lowerDds = lower.replace(/\.blp$/, '.dds');
-    for (const root of roots) {
-        // Exact case first
-        const candidate = path.join(root, normalised);
-        if (fs.existsSync(candidate)) return vscode.Uri.file(candidate);
-        // CASC cache stores everything lowercase — try that too
-        if (lower !== normalised) {
-            const candidateLower = path.join(root, lower);
-            if (fs.existsSync(candidateLower)) return vscode.Uri.file(candidateLower);
-        }
-        // CASC cache may convert BLP → DDS
-        if (lowerDds !== lower) {
-            const candidateDds = path.join(root, lowerDds);
-            if (fs.existsSync(candidateDds)) return vscode.Uri.file(candidateDds);
-        }
-    }
-
-    const fileName = path.basename(normalised);
-    for (const root of roots) {
-        const candidate = path.join(root, fileName);
-        if (fs.existsSync(candidate)) return vscode.Uri.file(candidate);
-    }
-    return undefined;
+async function resolveAssetPath(assetPath: string, roots: string[]): Promise<vscode.Uri | undefined> {
+    const resolved = await resolveAssetPathString(assetPath, roots);
+    return resolved ? vscode.Uri.file(resolved) : undefined;
 }
 
 function addLink(
@@ -164,9 +84,9 @@ function addLazyCascLink(
 // ── Wurst / JASS: string literals containing asset paths ─────────────────────
 
 class WurstAssetLinkProvider implements vscode.DocumentLinkProvider {
-    provideDocumentLinks(document: vscode.TextDocument): vscode.DocumentLink[] {
+    async provideDocumentLinks(document: vscode.TextDocument): Promise<vscode.DocumentLink[]> {
         const text = document.getText();
-        const roots = candidateRoots(document);
+        const roots = await candidateRoots(document);
         const links: vscode.DocumentLink[] = [];
 
         STRING_LITERAL_RE.lastIndex = 0;
@@ -174,7 +94,7 @@ class WurstAssetLinkProvider implements vscode.DocumentLinkProvider {
         while ((m = STRING_LITERAL_RE.exec(text)) !== null) {
             const [, assetPath, ext] = m;
             if (!isAssetExt(ext)) continue;
-            const target = resolveAssetPath(assetPath, roots);
+            const target = await resolveAssetPath(assetPath, roots);
             if (target) {
                 addLink(links, document, text, m.index + 1, assetPath.length, target);
                 continue;
@@ -191,9 +111,9 @@ class WurstAssetLinkProvider implements vscode.DocumentLinkProvider {
 // ── FDF: IncludeFile paths ────────────────────────────────────────────────────
 
 class FdfLinkProvider implements vscode.DocumentLinkProvider {
-    provideDocumentLinks(document: vscode.TextDocument): vscode.DocumentLink[] {
+    async provideDocumentLinks(document: vscode.TextDocument): Promise<vscode.DocumentLink[]> {
         const text = document.getText();
-        const roots = candidateRoots(document);
+        const roots = await candidateRoots(document);
         const links: vscode.DocumentLink[] = [];
 
         // IncludeFile links
@@ -201,7 +121,7 @@ class FdfLinkProvider implements vscode.DocumentLinkProvider {
         let m: RegExpExecArray | null;
         while ((m = FDF_INCLUDE_RE.exec(text)) !== null) {
             const assetPath = m[1];
-            const target = resolveAssetPath(assetPath, roots);
+            const target = await resolveAssetPath(assetPath, roots);
             if (!target) continue;
             // point at the path inside the quotes
             const startOffset = m.index + m[0].indexOf('"') + 1;
@@ -213,7 +133,7 @@ class FdfLinkProvider implements vscode.DocumentLinkProvider {
         while ((m = STRING_LITERAL_RE.exec(text)) !== null) {
             const [, assetPath, ext] = m;
             if (!isAssetExt(ext)) continue;
-            const target = resolveAssetPath(assetPath, roots);
+            const target = await resolveAssetPath(assetPath, roots);
             if (target) {
                 addLink(links, document, text, m.index + 1, assetPath.length, target);
                 continue;
@@ -230,16 +150,16 @@ class FdfLinkProvider implements vscode.DocumentLinkProvider {
 // ── TOC: bare path lines ──────────────────────────────────────────────────────
 
 class TocLinkProvider implements vscode.DocumentLinkProvider {
-    provideDocumentLinks(document: vscode.TextDocument): vscode.DocumentLink[] {
+    async provideDocumentLinks(document: vscode.TextDocument): Promise<vscode.DocumentLink[]> {
         const text = document.getText();
-        const roots = candidateRoots(document);
+        const roots = await candidateRoots(document);
         const links: vscode.DocumentLink[] = [];
 
         TOC_LINE_RE.lastIndex = 0;
         let m: RegExpExecArray | null;
         while ((m = TOC_LINE_RE.exec(text)) !== null) {
             const assetPath = m[1];
-            const target = resolveAssetPath(assetPath, roots);
+            const target = await resolveAssetPath(assetPath, roots);
             if (!target) continue;
             // Offset of the captured path within the full match
             const startOffset = m.index + m[0].indexOf(m[1]);
@@ -255,11 +175,11 @@ class TocLinkProvider implements vscode.DocumentLinkProvider {
 export function registerAssetLinks(_context: vscode.ExtensionContext): vscode.Disposable {
     const openAsset = vscode.commands.registerCommand('wurst.openAssetFromString', async (assetPath: string) => {
         if (!assetPath) return;
-        let target = resolveAssetPath(assetPath, candidateRootsForFsPath(vscode.window.activeTextEditor?.document.uri.fsPath));
-        if (!target) {
-            const cached = await ensureCascAssetCached(assetPath);
-            if (cached) target = vscode.Uri.file(cached);
-        }
+        const resolved = await resolveAssetPathWithCasc(
+            assetPath,
+            await candidateRootsForFsPath(vscode.window.activeTextEditor?.document.uri.fsPath)
+        );
+        const target = resolved ? vscode.Uri.file(resolved) : undefined;
         if (!target) {
             vscode.window.showWarningMessage(`Could not resolve asset: ${assetPath}`);
             return;

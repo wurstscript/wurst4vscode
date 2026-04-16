@@ -122,7 +122,20 @@
                 ],
                 "extensions": [
                     ".wtg",
-                    ".wct",
+                    ".wct"
+                ],
+                "icon": {
+                    "light": "./images/icons/wtg.svg",
+                    "dark": "./images/icons/wtg.svg"
+                }
+            },
+            {
+                "id": "wc3-wts",
+                "aliases": [
+                    "WC3 String Table",
+                    "WTS"
+                ],
+                "extensions": [
                     ".wts"
                 ],
                 "icon": {
@@ -208,6 +221,11 @@
                 "path": "./syntaxes/wurst.json"
             },
             {
+                "language": "wc3-wts",
+                "scopeName": "source.wts",
+                "path": "./syntaxes/wts.json"
+            },
+            {
                 "language": "wc3-fdf",
                 "scopeName": "source.fdf",
                 "path": "./syntaxes/fdf.json"
@@ -247,6 +265,20 @@
                     {
                         "filenamePattern": "*.MDX"
                     }
+                ],
+                "priority": "default"
+            },
+            {
+                "viewType": "wurst.objModPreview",
+                "displayName": "WC3 Object Data",
+                "selector": [
+                    { "filenamePattern": "*.w3u" },
+                    { "filenamePattern": "*.w3t" },
+                    { "filenamePattern": "*.w3a" },
+                    { "filenamePattern": "*.w3b" },
+                    { "filenamePattern": "*.w3d" },
+                    { "filenamePattern": "*.w3h" },
+                    { "filenamePattern": "*.w3q" }
                 ],
                 "priority": "default"
             },

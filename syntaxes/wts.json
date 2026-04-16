@@ -1,0 +1,45 @@
+{
+    "name": "WC3 String Table",
+    "scopeName": "source.wts",
+    "fileTypes": ["wts"],
+    "patterns": [
+        {
+            "include": "#comment"
+        },
+        {
+            "include": "#string_keyword"
+        },
+        {
+            "include": "#number"
+        },
+        {
+            "include": "#block"
+        }
+    ],
+    "repository": {
+        "comment": {
+            "begin": "//",
+            "end": "(?=\\{)|$",
+            "name": "comment.line.double-slash.wts"
+        },
+        "string_keyword": {
+            "match": "\\b(STRING)\\b",
+            "name": "keyword.other.wts"
+        },
+        "number": {
+            "match": "\\b\\d+\\b",
+            "name": "constant.numeric.wts"
+        },
+        "block": {
+            "begin": "\\{",
+            "beginCaptures": {
+                "0": { "name": "punctuation.definition.string.begin.wts" }
+            },
+            "end": "\\}",
+            "endCaptures": {
+                "0": { "name": "punctuation.definition.string.end.wts" }
+            },
+            "name": "string.quoted.other.wts"
+        }
+    }
+}

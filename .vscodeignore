@@ -1,5 +1,6 @@
 .vscode/**
 .github/**
+.claude/**
 src/**
 out/**
 node_modules/**
@@ -10,5 +11,5 @@ webpack.config.js
 .eslintrc*
 # dist/ is in .gitignore so vsce would exclude it — explicitly re-include the built output
 !dist/**
-# casclib is a native addon used by casc-extract-worker.js (spawned as plain node, can't be webpack-bundled)
-!node_modules/@dschu012/casclib/**
+# source maps are only useful for local debugging, don't ship them
+dist/**/*.map

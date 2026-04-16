@@ -13,7 +13,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { decodeRasterPreview, ensureCascCached, writeJpegPreviewFile } from './blpPreview';
+import { decodeRasterPreview, ensureCascAssetCached, ensureCascCached, writeJpegPreviewFile } from './blpPreview';
 import {
     getCandidateRoots,
     getTempPreviewDir,
@@ -32,6 +32,8 @@ const UPDATE_DEBOUNCE_MS = 120;
 
 // Matches "some\\path\\file.blp" style strings
 const STRING_IMAGE_RE  = /"([^"\r\n]+\.(blp|dds|tga|png|jpg|jpeg))"/gi;
+// Matches "some\\path\\file.mdx" style strings (models)
+const STRING_MODEL_RE  = /"([^"\r\n]+\.(mdx|mdl))"/gi;
 // Matches ClassName.memberName  e.g. Icons.bTNHeal
 const MEMBER_ACCESS_RE = /\b([A-Z][A-Za-z0-9_]*)\.([a-z][A-Za-z0-9_]*)\b/g;
 
@@ -360,6 +362,22 @@ function getMissingType(): vscode.TextEditorDecorationType {
     return missingType;
 }
 
+let mdxFoundType: vscode.TextEditorDecorationType | undefined;
+function getMdxFoundType(): vscode.TextEditorDecorationType {
+    if (!mdxFoundType) {
+        mdxFoundType = vscode.window.createTextEditorDecorationType({
+            before: {
+                contentText: '✓',
+                color: new vscode.ThemeColor('charts.green'),
+                width: ICON_CSS,
+                margin: `0 4px 2px 0`,
+                fontStyle: 'normal',
+            },
+        });
+    }
+    return mdxFoundType;
+}
+
 function makeDecorationType(iconUri: vscode.Uri): vscode.TextEditorDecorationType {
     return vscode.window.createTextEditorDecorationType({
         before: {
@@ -380,6 +398,10 @@ interface CollectedRanges {
     resolved: Map<string, vscode.Range[]>;
     /** assetPath → ranges for paths not found on disk (candidates for CASC extraction) */
     pending: Map<string, vscode.Range[]>;
+    /** fsPath → ranges for model files (.mdx/.mdl) found locally */
+    mdxResolved: Map<string, vscode.Range[]>;
+    /** assetPath → ranges for model files not found locally (candidates for CASC lookup) */
+    mdxPending: Map<string, vscode.Range[]>;
 }
 
 function getScanRanges(editor: vscode.TextEditor): vscode.Range[] {
@@ -411,7 +433,10 @@ async function collectImageRanges(
 ): Promise<CollectedRanges> {
     const resolved = new Map<string, vscode.Range[]>();
     const pending = new Map<string, vscode.Range[]>();
+    const mdxResolved = new Map<string, vscode.Range[]>();
+    const mdxPending = new Map<string, vscode.Range[]>();
     const matches: Array<{ assetPath: string; start: number; len: number }> = [];
+    const mdxMatches: Array<{ assetPath: string; start: number; len: number }> = [];
 
     const addTo = (map: Map<string, vscode.Range[]>, key: string, start: number, len: number) => {
         const range = new vscode.Range(document.positionAt(start), document.positionAt(start + len));
@@ -424,14 +449,20 @@ async function collectImageRanges(
         const text = document.getText(scanRange);
         const baseOffset = document.offsetAt(scanRange.start);
 
-        // 1. Raw string literals
+        // 1. Raw image string literals
         STRING_IMAGE_RE.lastIndex = 0;
         let m: RegExpExecArray | null;
         while ((m = STRING_IMAGE_RE.exec(text)) !== null) {
             matches.push({ assetPath: m[1], start: baseOffset + m.index, len: m[0].length });
         }
 
-        // 2. ClassName.member  (e.g. Icons.bTNHeal)
+        // 2. Raw model string literals (.mdx / .mdl)
+        STRING_MODEL_RE.lastIndex = 0;
+        while ((m = STRING_MODEL_RE.exec(text)) !== null) {
+            mdxMatches.push({ assetPath: m[1], start: baseOffset + m.index, len: m[0].length });
+        }
+
+        // 3. ClassName.member  (e.g. Icons.bTNHeal)
         if (index) {
             MEMBER_ACCESS_RE.lastIndex = 0;
             while ((m = MEMBER_ACCESS_RE.exec(text)) !== null) {
@@ -457,12 +488,27 @@ async function collectImageRanges(
         }
     }
 
-    return { resolved, pending };
+    const uniqueMdxPaths = Array.from(new Set(mdxMatches.map((m) => m.assetPath)));
+    const resolvedMdxPaths = new Map<string, string | undefined>(
+        await Promise.all(uniqueMdxPaths.map(async (assetPath): Promise<[string, string | undefined]> => [assetPath, await resolveImagePath(assetPath, roots)]))
+    );
+
+    for (const match of mdxMatches) {
+        const fsPath = resolvedMdxPaths.get(match.assetPath);
+        if (fsPath) {
+            addTo(mdxResolved, fsPath, match.start, match.len);
+        } else {
+            addTo(mdxPending, match.assetPath, match.start, match.len);
+        }
+    }
+
+    return { resolved, pending, mdxResolved, mdxPending };
 }
 
 // Track CASC extractions in progress so we don't fire duplicates
 const extracting = new Set<string>();
 const unresolvedAssets = new Set<string>();
+const mdxFoundRangesByPath = new Map<string, vscode.Range[]>();
 const decorationVersions = new Map<string, number>();
 const pendingThumbJobs = new Set<string>();
 // Maps fsPath/assetPath → the ranges currently showing the ◌ glyph for that path.
@@ -547,8 +593,8 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
     const index = useAssetIndex ? getAssetIndex() : undefined;
     if (useAssetIndex) log(`asset index enabled for ${path.basename(document.uri.fsPath)}`);
 
-    const { resolved, pending } = await collectImageRanges(document, roots, scanRanges, index);
-    log(`scan ${path.basename(document.uri.fsPath)}: ranges=${scanRanges.length} resolved=${resolved.size} pending=${pending.size} version=${version}`);
+    const { resolved, pending, mdxResolved, mdxPending } = await collectImageRanges(document, roots, scanRanges, index);
+    log(`scan ${path.basename(document.uri.fsPath)}: ranges=${scanRanges.length} resolved=${resolved.size} pending=${pending.size} mdxResolved=${mdxResolved.size} mdxPending=${mdxPending.size} version=${version}`);
 
     // Dispose types for paths no longer needed
     const wanted = new Set(resolved.keys());
@@ -562,6 +608,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
 
     loadingRangesByPath.clear();
     missingRangesByPath.clear();
+    mdxFoundRangesByPath.clear();
 
     // Apply thumbnail decorations for already-cached paths and queue the rest.
     for (const [fsPath, ranges] of resolved) {
@@ -624,8 +671,58 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
             setMissingRanges(assetPath, ranges);
         }
     }
+
+    // ── MDX / model path decorations ──────────────────────────────────────────
+
+    // Locally-found model files → populate found-ranges map
+    for (const [fsPath, ranges] of mdxResolved) {
+        mdxFoundRangesByPath.set(fsPath, ranges);
+    }
+    // Already-known-unresolved MDX paths → × ; others → ◌ (loading)
+    for (const [assetPath, ranges] of mdxPending) {
+        if (unresolvedAssets.has(assetPath)) {
+            setMissingRanges(assetPath, ranges);
+        } else {
+            setLoadingRanges(assetPath, ranges);
+        }
+    }
+    safeSetDecorations(editor, getMdxFoundType(), [...mdxFoundRangesByPath.values()].flat());
     safeSetDecorations(editor, getLoadingType(), [...loadingRangesByPath.values()].flat());
     safeSetDecorations(editor, getMissingType(), [...missingRangesByPath.values()].flat());
+
+    // Fire off CASC lookup for pending model paths (deduplicated, non-blocking)
+    for (const [assetPath, ranges] of mdxPending) {
+        if (unresolvedAssets.has(assetPath)) continue;
+        if (extracting.has(assetPath)) continue;
+        extracting.add(assetPath);
+        log(`queue casc model check: ${assetPath}`);
+        scheduleCascJob(async () => {
+            try {
+                const startedAt = Date.now();
+                const cachedPath = await ensureCascAssetCached(assetPath);
+                const elapsed = Date.now() - startedAt;
+                const active = vscode.window.activeTextEditor;
+                if (!active || active.document !== document) return;
+                if (!cachedPath) {
+                    unresolvedAssets.add(assetPath);
+                    clearLoadingRanges(active, assetPath);
+                    setMissingRanges(assetPath, ranges);
+                    safeSetDecorations(active, getMissingType(), [...missingRangesByPath.values()].flat());
+                    log(`casc model unresolved: ${assetPath} (${elapsed}ms)`);
+                    return;
+                }
+                log(`casc model resolved: ${assetPath} (${elapsed}ms)`);
+                mdxFoundRangesByPath.set(assetPath, ranges);
+                clearLoadingRanges(active, assetPath);
+                clearMissingRanges(active, assetPath);
+                safeSetDecorations(active, getMdxFoundType(), [...mdxFoundRangesByPath.values()].flat());
+            } catch (error) {
+                log(`casc model error: ${assetPath} :: ${error instanceof Error ? error.message : String(error)}`);
+            } finally {
+                extracting.delete(assetPath);
+            }
+        });
+    }
 
     // Fire off CASC extraction for pending asset paths (deduplicated, non-blocking)
     for (const [assetPath] of pending) {
@@ -734,10 +831,13 @@ export function registerInlineImageDecorations(_context: vscode.ExtensionContext
             unresolvedAssets.clear();
             loadingRangesByPath.clear();
             missingRangesByPath.clear();
+            mdxFoundRangesByPath.clear();
             loadingType?.dispose();
             loadingType = undefined;
             missingType?.dispose();
             missingType = undefined;
+            mdxFoundType?.dispose();
+            mdxFoundType = undefined;
             output.dispose();
         }),
     ];

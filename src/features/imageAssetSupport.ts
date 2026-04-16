@@ -7,7 +7,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import * as zlib from 'zlib';
 
-import { decodeRasterPreview, getCascCacheDir, writeJpegPreviewFile } from './blpPreview';
+import { decodeRasterPreview, ensureCascAssetCached, getCascCacheDir, writeJpegPreviewFile } from './blpPreview';
 
 export const IMAGE_EXTS = new Set(['blp', 'dds', 'tga', 'png', 'jpg', 'jpeg']);
 
@@ -219,6 +219,14 @@ export async function resolveAssetPath(assetPath: string, roots: readonly string
     }
 
     return undefined;
+}
+
+export async function resolveAssetPathWithCasc(assetPath: string, roots: readonly string[]): Promise<string | undefined> {
+    const resolved = await resolveAssetPath(assetPath, roots);
+    if (resolved) {
+        return resolved;
+    }
+    return ensureCascAssetCached(assetPath);
 }
 
 export async function getCachedPreview(

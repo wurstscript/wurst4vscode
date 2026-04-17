@@ -13,6 +13,9 @@ import { registerAssetLinks } from './features/assetLinks';
 import { registerImagePreviewHover } from './features/imagePreviewHover';
 import { registerInlineImageDecorations } from './features/inlineImageDecorations';
 import { registerObjModPreview } from './features/objModPreview';
+import { registerWpmPreview } from './features/wpmPreview';
+import { registerDooPreview } from './features/dooPreview';
+import { registerTriggerPreview } from './features/triggerPreview';
 
 export async function activate(context: ExtensionContext) {
     console.log('Wurst extension activated!');
@@ -25,6 +28,9 @@ export async function activate(context: ExtensionContext) {
     context.subscriptions.push(registerImagePreviewHover(context));
     context.subscriptions.push(registerInlineImageDecorations(context));
     context.subscriptions.push(registerObjModPreview(context));
+    context.subscriptions.push(...registerWpmPreview(context));
+    context.subscriptions.push(registerDooPreview(context));
+    context.subscriptions.push(...registerTriggerPreview(context));
 
     registerBasicCommands(context);
 

@@ -6,6 +6,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { MpqReader, MpqFileEntry } from './mpq/mpqReader';
 import { makeNonce, escapeHtml } from './webviewUtils';
+import { buildPage, sep } from './webviewShared';
 
 const MPQ_VIEW_TYPE = 'wurst.mpqViewer';
 
@@ -194,96 +195,7 @@ function buildHtml(webview: vscode.Webview, archiveName: string, scriptUri: vsco
         "style-src 'unsafe-inline'",
     ].join('; ');
 
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="${csp}">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(archiveName)}</title>
-<style>
-:root {
-  --bg:         var(--vscode-editor-background);
-  --sidebar:    var(--vscode-sideBar-background, var(--vscode-editor-background));
-  --fg:         var(--vscode-editor-foreground);
-  --muted:      var(--vscode-descriptionForeground);
-  --border:     var(--vscode-panel-border, var(--vscode-widget-border, #454545));
-  --hover:      var(--vscode-list-hoverBackground);
-  --active:     var(--vscode-list-activeSelectionBackground);
-  --active-fg:  var(--vscode-list-activeSelectionForeground, var(--vscode-editor-foreground));
-  --input-bg:   var(--vscode-input-background);
-  --input-fg:   var(--vscode-input-foreground);
-  --input-border: var(--vscode-input-border, transparent);
-  --input-placeholder: var(--vscode-input-placeholderForeground);
-  --icon-fg:    var(--vscode-icon-foreground, var(--vscode-editor-foreground));
-  --btn-bg:     var(--vscode-button-secondaryBackground, var(--vscode-toolbar-hoverBackground));
-  --btn-fg:     var(--vscode-button-secondaryForeground, var(--vscode-editor-foreground));
-  --btn-hover:  var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-activeBackground));
-  --font:       var(--vscode-font-family);
-  --font-size:  var(--vscode-font-size, 13px);
-  --mono:       var(--vscode-editor-font-family, monospace);
-}
-*, *::before, *::after { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; overflow: hidden; }
-body {
-  background: var(--bg);
-  color: var(--fg);
-  font-family: var(--font);
-  font-size: var(--font-size);
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-}
-
-/* ── header ──────────────────────────────────────────────────────────────── */
-.header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--sidebar);
-  flex-shrink: 0;
-}
-.header-icon { flex-shrink: 0; width: 20px; height: 20px; opacity: 0.85; }
-.header-text { flex: 1; min-width: 0; }
-.header-name {
-  font-weight: 600;
-  font-size: calc(var(--font-size) + 1px);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.header-stats { color: var(--muted); font-size: 11px; margin-top: 1px; }
-
-/* ── toolbar ─────────────────────────────────────────────────────────────── */
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--sidebar);
-  flex-shrink: 0;
-}
-.toolbar-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 8px;
-  font-family: var(--font);
-  font-size: 11px;
-  color: var(--btn-fg);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 3px;
-  cursor: pointer;
-  white-space: nowrap;
-  line-height: 1.4;
-}
-.toolbar-btn svg { width: 13px; height: 13px; flex-shrink: 0; fill: currentColor; opacity: 0.85; }
-.toolbar-btn:hover:not(:disabled) { background: var(--btn-hover); border-color: var(--border); }
-.toolbar-btn:disabled { opacity: 0.4; cursor: default; }
-.toolbar-sep { width: 1px; height: 16px; background: var(--border); margin: 0 2px; flex-shrink: 0; }
-
+    const MPQ_CSS = `
 /* ── search ──────────────────────────────────────────────────────────────── */
 .search-wrap {
   padding: 5px 10px;
@@ -301,7 +213,7 @@ body {
   font-family: var(--font); font-size: var(--font-size);
   outline: none;
 }
-.search-input::placeholder { color: var(--input-placeholder); }
+.search-input::placeholder { color: var(--input-ph); }
 .search-input:focus { border-color: var(--vscode-focusBorder, #007fd4); }
 .match-count { color: var(--muted); font-size: 11px; white-space: nowrap; }
 
@@ -413,37 +325,33 @@ body {
 .row.selected .row-action:hover { background: rgba(255,255,255,0.15); }
 .row.selected .file-desc,
 .row.selected .size { color: var(--active-fg); opacity: 0.82; }
+`;
 
-/* state / error */
-.state {
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  height: 100%; gap: 8px; color: var(--muted); font-size: 13px; padding: 24px; text-align: center;
-}
-.state .err { color: var(--vscode-errorForeground, #f14c4c); font-size: 12px; max-width: 360px; }
-</style>
-</head>
-<body>
-
-<div class="header">
-  <svg class="header-icon" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    return buildPage({
+        csp,
+        title: escapeHtml(archiveName),
+        extraCss: MPQ_CSS,
+        body: `
+<div class="wv-header">
+  <svg class="wv-header-icon" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
     <rect x="1" y="3" width="14" height="11" rx="1.5" fill="var(--vscode-symbolIcon-folderForeground,#dcb67a)" opacity="0.9"/>
     <rect x="1" y="5" width="14" height="9" rx="1" fill="var(--vscode-symbolIcon-folderForeground,#dcb67a)"/>
     <rect x="1" y="2" width="6" height="4" rx="1" fill="var(--vscode-symbolIcon-folderForeground,#dcb67a)" opacity="0.7"/>
     <text x="8" y="11.5" text-anchor="middle" font-size="5" font-weight="bold" fill="#1e1e1e" font-family="monospace">MPQ</text>
   </svg>
-  <div class="header-text">
-    <div class="header-name" id="archiveName">Loading\u2026</div>
-    <div class="header-stats" id="archiveStats"></div>
+  <div class="wv-header-text">
+    <div class="wv-header-name" id="archiveName">Loading\u2026</div>
+    <div class="wv-header-meta" id="archiveStats"></div>
   </div>
 </div>
 
-<div class="toolbar">
-  <button class="toolbar-btn" id="btnExtractAll" disabled title="Extract all files to a subfolder next to the archive">
+<div class="wv-toolbar">
+  <button class="wv-btn" id="btnExtractAll" disabled title="Extract all files to a subfolder next to the archive">
     <svg viewBox="0 0 16 16"><path d="M8 1a.5.5 0 0 1 .5.5v7.793l2.646-2.647a.5.5 0 0 1 .708.708l-3.5 3.5a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L7.5 9.293V1.5A.5.5 0 0 1 8 1zM2.5 13a.5.5 0 0 0 0 1h11a.5.5 0 0 0 0-1h-11z"/></svg>
     Extract All
   </button>
-  <div class="toolbar-sep"></div>
-  <button class="toolbar-btn" id="btnExportFolder" disabled title="Export as map folder (WC3 folder mode) — creates a .w3x folder next to the archive">
+  ${sep()}
+  <button class="wv-btn" id="btnExportFolder" disabled title="Export as map folder (WC3 folder mode) — creates a .w3x folder next to the archive">
     <svg viewBox="0 0 16 16"><path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.672a1.5 1.5 0 0 1 1.06.44l.83.83A1.5 1.5 0 0 0 9.12 3.7H13.5A1.5 1.5 0 0 1 15 5.2V5h-1v-.8a.5.5 0 0 0-.5-.5H9.12a2.5 2.5 0 0 1-1.768-.732l-.828-.828A.5.5 0 0 0 6.172 3H2.5a.5.5 0 0 0-.5.5V5H1V3.5zm0 2.5h14v6.5A1.5 1.5 0 0 1 13.5 14h-11A1.5 1.5 0 0 1 1 12.5V6zm6 2v2.293l-.646-.647a.5.5 0 0 0-.708.708l1.5 1.5a.5.5 0 0 0 .708 0l1.5-1.5a.5.5 0 0 0-.708-.708L8 10.293V8a.5.5 0 0 0-1 0z"/></svg>
     Export to Map Folder
   </button>
@@ -458,12 +366,11 @@ body {
 </div>
 
 <div class="tree-wrap" id="treeWrap">
-  <div class="state"><span>Loading archive\u2026</span></div>
+  <div class="wv-state"><span>Loading archive\u2026</span></div>
 </div>
 
-<script nonce="${nonce}" src="${scriptUri}"></script>
-</body>
-</html>`;
+<script nonce="${nonce}" src="${scriptUri}"></script>`,
+    });
 }
 
 // ---------------------------------------------------------------------------

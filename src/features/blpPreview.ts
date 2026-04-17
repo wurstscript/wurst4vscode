@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { makeNonce, escapeHtml } from './webviewUtils';
+import { buildPage, sep } from './webviewShared';
 import {
     getCascCacheDir,
     findCascTexture,
@@ -295,49 +296,12 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
             "style-src 'unsafe-inline'",
         ].join('; ');
 
-        return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="${csp}">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${escapeHtml(fileName)}</title>
-  <style>
+        const BLP_CSS = `
     :root {
-      --bg: var(--vscode-editor-background);
-      --panel: var(--vscode-sideBar-background);
-      --text: var(--vscode-editor-foreground);
-      --muted: var(--vscode-descriptionForeground);
-      --warn: var(--vscode-editorWarning-foreground);
-      --border: var(--vscode-panel-border);
-      --btn-bg: var(--vscode-button-background);
-      --btn-fg: var(--vscode-button-foreground);
-      --btn-hover: var(--vscode-button-hoverBackground);
       --cb-a: color-mix(in srgb, var(--vscode-editorWidget-background) 65%, transparent);
       --cb-b: color-mix(in srgb, var(--vscode-editorWidget-border) 55%, transparent);
     }
-    * { box-sizing: border-box; }
-    html, body { height: 100%; margin: 0; }
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: var(--vscode-font-family);
-      font-size: var(--vscode-font-size);
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
-      overflow: hidden;
-    }
-    header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 12px;
-      border-bottom: 1px solid var(--border);
-      background: var(--panel);
-      flex-shrink: 0;
-      min-width: 0;
-    }
+    .wv-header { padding: 6px 12px; }
     .meta {
       flex: 1;
       min-width: 0;
@@ -349,26 +313,12 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       white-space: nowrap;
     }
     .meta strong { color: var(--text); font-size: 13px; }
-    .toolbar {
+    .blp-toolbar {
       display: flex;
       align-items: center;
       gap: 4px;
       flex-shrink: 0;
     }
-    .sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; }
-    button {
-      border: none;
-      background: transparent;
-      color: var(--muted);
-      padding: 4px 8px;
-      border-radius: 3px;
-      cursor: pointer;
-      font-size: 12px;
-      white-space: nowrap;
-    }
-    button:hover { background: color-mix(in srgb, var(--btn-bg) 60%, transparent); color: var(--text); }
-    button.active { background: var(--btn-bg); color: var(--btn-fg); }
-    button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
     .zoom-label {
       min-width: 38px;
       text-align: center;
@@ -390,7 +340,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       flex-direction: column;
       overflow-y: auto;
       border-right: 1px solid var(--border);
-      background: color-mix(in srgb, var(--panel) 70%, transparent);
+      background: color-mix(in srgb, var(--sidebar) 70%, transparent);
       padding: 10px;
       gap: 12px;
       flex-shrink: 0;
@@ -482,7 +432,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       height: 80px;
       border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
       border-radius: 6px;
-      background: color-mix(in srgb, var(--panel) 55%, transparent);
+      background: color-mix(in srgb, var(--sidebar) 55%, transparent);
       pointer-events: none;
     }
     .viewport.dragging { cursor: grabbing; }
@@ -515,60 +465,43 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
       border-radius: 4px;
       padding: 6px 8px;
-      background: color-mix(in srgb, var(--panel) 60%, transparent);
+      background: color-mix(in srgb, var(--sidebar) 60%, transparent);
       display: none;
       flex-shrink: 0;
     }
     .debuglog.visible { display: block; }
-    .loading-overlay {
-      position: absolute;
-      inset: 0;
-      display: grid;
-      place-items: center;
-      gap: 10px;
-      background: color-mix(in srgb, var(--bg) 60%, transparent);
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 130ms ease;
-    }
-    .loading-overlay.visible { opacity: 1; }
-    .spinner {
-      width: 22px; height: 22px;
-      border: 2px solid color-mix(in srgb, var(--text) 20%, transparent);
-      border-top-color: var(--text);
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-    .loading-text { font-size: 12px; color: var(--muted); text-align: center; }
     .loading-stage { opacity: 0.4; }
-    @keyframes spin { to { transform: rotate(360deg); } }
     @media (max-width: 640px) {
       .content-area { flex-direction: column; }
       .sidebar { width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid var(--border); flex-direction: row; flex-wrap: wrap; }
       .sidebar.visible { display: flex; }
     }
-  </style>
-</head>
-<body>
-  <header>
+`;
+
+        return buildPage({
+            csp,
+            title: fileName,
+            extraCss: BLP_CSS,
+            body: `
+  <div class="wv-header">
     <div class="meta">
       <strong id="fileName">${fileName}</strong>
       <span id="fileMeta"> &mdash; Loading...</span>
     </div>
-    <div class="toolbar">
-      <button id="zoomOutBtn" type="button" title="Zoom out">&minus;</button>
-      <button id="zoomInBtn" type="button" title="Zoom in">+</button>
+    <div class="blp-toolbar">
+      <button class="wv-btn" id="zoomOutBtn" type="button" title="Zoom out">&minus;</button>
+      <button class="wv-btn" id="zoomInBtn" type="button" title="Zoom in">+</button>
       <span id="zoomLabel" class="zoom-label">100%</span>
-      <div class="sep" id="imgSep"></div>
-      <button id="fitBtn" type="button" title="Fit to viewport">Fit</button>
-      <button id="alphaBtn" type="button" title="Toggle alpha channel display">Alpha</button>
-      <div class="sep" id="modelSep" style="display:none"></div>
-      <button id="resetCamBtn" type="button" title="Reset camera" style="display:none">&#8635; Reset</button>
-      <button id="renderModeBtn" type="button" title="Toggle wireframe" style="display:none">Fill</button>
-      <div class="sep"></div>
-      <button id="debugBtn" type="button" title="Toggle debug log">&#8801;</button>
+      ${sep().replace('wv-sep"', 'wv-sep" id="imgSep"')}
+      <button class="wv-btn" id="fitBtn" type="button" title="Fit to viewport">Fit</button>
+      <button class="wv-btn" id="alphaBtn" type="button" title="Toggle alpha channel display">Alpha</button>
+      <div class="wv-sep" id="modelSep" style="display:none"></div>
+      <button class="wv-btn" id="resetCamBtn" type="button" title="Reset camera" style="display:none">&#8635; Reset</button>
+      <button class="wv-btn" id="renderModeBtn" type="button" title="Toggle wireframe" style="display:none">Fill</button>
+      ${sep()}
+      <button class="wv-btn" id="debugBtn" type="button" title="Toggle debug log">&#8801;</button>
     </div>
-  </header>
+  </div>
   <div class="content-area">
     <aside id="sidebar" class="sidebar">
       <div class="sb-section">
@@ -619,9 +552,9 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
           <canvas id="canvas3d" class="stage-canvas" width="1" height="1" style="display:none;"></canvas>
         </div>
         <canvas id="gizmo" class="gizmo" width="80" height="80"></canvas>
-        <div id="loadingOverlay" class="loading-overlay visible">
-          <div class="spinner"></div>
-          <div id="loadingText" class="loading-text">Loading...</div>
+        <div id="loadingOverlay" class="wv-loading-overlay visible">
+          <div class="wv-spinner"></div>
+          <div id="loadingText" class="wv-loading-text">Loading...</div>
         </div>
       </div>
       <div id="warnings" class="warnings"></div>
@@ -1092,9 +1025,8 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
     applyAlphaMode();
     vscode.postMessage({ type: 'ready' });
     debug('ready posted');
-  </script>
-</body>
-</html>`;
+  </script>`,
+        });
     }
 
 }

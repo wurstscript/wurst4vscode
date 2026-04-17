@@ -61,8 +61,13 @@ Preview features are split across focused modules — pick the slice you need:
 
 - **src/features/webviewUtils.ts** — `makeNonce()` + `escapeHtml()` only. Shared by all webview builders.
 
+- **src/features/webviewShared.ts** — shared CSS (VS Code theme token mapping, `.wv-header`, `.wv-toolbar`, `.wv-btn`, `.wv-sep`, `.wv-scroll`, spinner overlay), plus `buildPage()`, `sep()`, `spinnerOverlay()` helpers. All webview panels use this as their CSS/HTML base.
+  Touch for: cross-viewer style changes, new shared components, VS Code theme token additions.
+  Do NOT put viewer-specific CSS here — pass it via `buildPage({ extraCss })` instead.
+
 Rule: Before adding new image/model decode logic, check `imageDecoders.ts`.
 Before adding new CASC extraction logic, check `cascStorage.ts`.
+Before adding new webview CSS that should be consistent across viewers, add it to `webviewShared.ts`.
 Do not duplicate decoders across features.
 
 ## Validation checklist

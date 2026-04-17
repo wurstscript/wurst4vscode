@@ -18,8 +18,9 @@ import {
     getCandidateRoots,
     getTempPreviewDir,
     resolveAssetPath,
+    encodePng,
+    scaleDown,
 } from './imageAssetSupport';
-import * as zlib from 'zlib';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -125,77 +126,6 @@ async function candidateRoots(docFsPath: string): Promise<string[]> {
 
 async function resolveImagePath(assetPath: string, roots: string[]): Promise<string | undefined> {
     return resolveAssetPath(assetPath, roots);
-}
-
-// ── PNG encoder (minimal — no deps) ──────────────────────────────────────────
-
-const CRC32_TABLE = (() => {
-    const t = new Uint32Array(256);
-    for (let i = 0; i < 256; i++) {
-        let c = i;
-        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
-        t[i] = c;
-    }
-    return t;
-})();
-
-function crc32(buf: Buffer): number {
-    let c = 0xffffffff;
-    for (let i = 0; i < buf.length; i++) c = CRC32_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
-    return (c ^ 0xffffffff) >>> 0;
-}
-
-function pngChunk(type: string, data: Buffer): Buffer {
-    const tb = Buffer.from(type, 'ascii');
-    const lb = Buffer.alloc(4); lb.writeUInt32BE(data.length, 0);
-    const cb = Buffer.alloc(4); cb.writeUInt32BE(crc32(Buffer.concat([tb, data])), 0);
-    return Buffer.concat([lb, tb, data, cb]);
-}
-
-function encodePng(w: number, h: number, rgba: Uint8Array): Buffer {
-    const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-    const ihdr = Buffer.alloc(13);
-    ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
-    ihdr[8] = 8; ihdr[9] = 6;
-    const raw = Buffer.alloc((w * 4 + 1) * h);
-    for (let y = 0; y < h; y++) {
-        raw[y * (w * 4 + 1)] = 0;
-        for (let x = 0; x < w; x++) {
-            const s = (y * w + x) * 4, d = y * (w * 4 + 1) + 1 + x * 4;
-            raw[d] = rgba[s]; raw[d+1] = rgba[s+1]; raw[d+2] = rgba[s+2]; raw[d+3] = rgba[s+3];
-        }
-    }
-    return Buffer.concat([sig, pngChunk('IHDR', ihdr), pngChunk('IDAT', zlib.deflateSync(raw, { level: 3 })), pngChunk('IEND', Buffer.alloc(0))]);
-}
-
-function scaleDown(rgba: Uint8Array, sw: number, sh: number, dim: number): { rgba: Uint8Array; w: number; h: number } {
-    if (sw <= dim && sh <= dim) return { rgba, w: sw, h: sh };
-    const s = dim / Math.max(sw, sh);
-    const dw = Math.max(1, Math.round(sw * s)), dh = Math.max(1, Math.round(sh * s));
-    const out = new Uint8Array(dw * dh * 4);
-    for (let y = 0; y < dh; y++) {
-        for (let x = 0; x < dw; x++) {
-            const srcX = (x + 0.5) / s - 0.5;
-            const srcY = (y + 0.5) / s - 0.5;
-            const x0 = Math.max(0, Math.floor(srcX));
-            const y0 = Math.max(0, Math.floor(srcY));
-            const x1 = Math.min(sw - 1, x0 + 1);
-            const y1 = Math.min(sh - 1, y0 + 1);
-            const tx = Math.max(0, Math.min(1, srcX - x0));
-            const ty = Math.max(0, Math.min(1, srcY - y0));
-            const dst = (y * dw + x) * 4;
-            for (let c = 0; c < 4; c++) {
-                const p00 = rgba[(y0 * sw + x0) * 4 + c];
-                const p10 = rgba[(y0 * sw + x1) * 4 + c];
-                const p01 = rgba[(y1 * sw + x0) * 4 + c];
-                const p11 = rgba[(y1 * sw + x1) * 4 + c];
-                const top = p00 + (p10 - p00) * tx;
-                const bottom = p01 + (p11 - p01) * tx;
-                out[dst + c] = Math.round(top + (bottom - top) * ty);
-            }
-        }
-    }
-    return { rgba: out, w: dw, h: dh };
 }
 
 // ── Thumbnail cache ───────────────────────────────────────────────────────────

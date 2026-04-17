@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { MpqReader, MpqFileEntry } from './mpq/mpqReader';
+import { makeNonce, escapeHtml } from './webviewUtils';
 
 const MPQ_VIEW_TYPE = 'wurst.mpqViewer';
 
@@ -16,18 +17,6 @@ function getOut(): vscode.OutputChannel {
 function log(msg: string): void {
     console.log('[MpqViewer] ' + msg);
     getOut().appendLine(msg);
-}
-
-function makeNonce(): string {
-    const alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let s = '';
-    for (let i = 0; i < 24; i++) s += alpha[Math.floor(Math.random() * alpha.length)];
-    return s;
-}
-
-function escapeHtml(s: string): string {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // ---------------------------------------------------------------------------

@@ -43,9 +43,27 @@
 - Do not create utility files, helper files, or abstractions for one-off operations. Three similar lines of code is better than a premature abstraction.
 
 ## Asset/Preview handling
-- Prefer centralized asset decoding and preview handling over adding parallel per-feature decoder paths.
-- Before adding new image/model decode logic, check whether `src/features/blpPreview.ts` or the existing webview preview pipeline already handles the format correctly.
-- If inline previews, hovers, or links need the same asset behavior, reuse or factor shared helpers instead of introducing a second implementation.
+
+Preview features are split across focused modules — pick the slice you need:
+
+- **src/features/preview/imageDecoders.ts** — pure binary decoders (BLP, DDS, TGA → RGBA). No VS Code imports, no CASC.
+  To add a new raster format: add a `decodeXxx()` function and a branch in `decodeRasterPreview()`.
+
+- **src/features/preview/cascStorage.ts** — CASC singleton and WC3 game-file extraction.
+  Touch for: new WC3 install paths, CASC API changes, disk-cache invalidation.
+
+- **src/features/preview/mdxDecode.ts** — MDX/MDL binary model parser (existing, unchanged).
+
+- **src/features/blpPreview.ts** — VS Code custom editor provider + webview HTML for BLP/DDS/TGA/MDX.
+  Touch for: UI changes, preview toolbar controls, message protocol between host and webview.
+
+- **src/features/imageAssetSupport.ts** — shared Node-side image utilities (PNG encode, scale, preview cache).
+
+- **src/features/webviewUtils.ts** — `makeNonce()` + `escapeHtml()` only. Shared by all webview builders.
+
+Rule: Before adding new image/model decode logic, check `imageDecoders.ts`.
+Before adding new CASC extraction logic, check `cascStorage.ts`.
+Do not duplicate decoders across features.
 
 ## Validation checklist
 - Compile TypeScript (`npx tsc -p . --noEmit`) after command or API wiring changes.

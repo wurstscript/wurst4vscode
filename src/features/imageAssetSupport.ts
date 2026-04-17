@@ -7,7 +7,8 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import * as zlib from 'zlib';
 
-import { decodeRasterPreview, ensureCascAssetCached, getCascCacheDir, writeJpegPreviewFile } from './blpPreview';
+import { decodeRasterPreview, ensureCascAssetCached, writeJpegPreviewFile } from './blpPreview';
+import { getCascCacheDir } from './preview/cascStorage';
 
 export const IMAGE_EXTS = new Set(['blp', 'dds', 'tga', 'png', 'jpg', 'jpeg']);
 
@@ -31,7 +32,7 @@ const CRC32_TABLE = (() => {
     return table;
 })();
 
-function crc32(buf: Buffer): number {
+export function crc32(buf: Buffer): number {
     let c = 0xffffffff;
     for (let i = 0; i < buf.length; i++) {
         c = CRC32_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
@@ -39,7 +40,7 @@ function crc32(buf: Buffer): number {
     return (c ^ 0xffffffff) >>> 0;
 }
 
-function pngChunk(type: string, data: Buffer): Buffer {
+export function pngChunk(type: string, data: Buffer): Buffer {
     const typeBuffer = Buffer.from(type, 'ascii');
     const lengthBuffer = Buffer.alloc(4);
     lengthBuffer.writeUInt32BE(data.length, 0);
@@ -48,7 +49,7 @@ function pngChunk(type: string, data: Buffer): Buffer {
     return Buffer.concat([lengthBuffer, typeBuffer, data, checksumBuffer]);
 }
 
-function encodePng(width: number, height: number, rgba: Uint8Array): Buffer {
+export function encodePng(width: number, height: number, rgba: Uint8Array): Buffer {
     const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
     const ihdr = Buffer.alloc(13);
     ihdr.writeUInt32BE(width, 0);
@@ -77,7 +78,7 @@ function encodePng(width: number, height: number, rgba: Uint8Array): Buffer {
     ]);
 }
 
-function scaleDown(rgba: Uint8Array, srcW: number, srcH: number, maxDim: number): { rgba: Uint8Array; w: number; h: number } {
+export function scaleDown(rgba: Uint8Array, srcW: number, srcH: number, maxDim: number): { rgba: Uint8Array; w: number; h: number } {
     if (srcW <= maxDim && srcH <= maxDim) {
         return { rgba, w: srcW, h: srcH };
     }

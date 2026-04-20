@@ -13,7 +13,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { decodeRasterPreview, decodeToRgba, ensureCascAssetCached, ensureCascCached } from './blpPreview';
+import { decodeToRgba, ensureCascAssetCached, ensureCascCached } from './blpPreview';
 import {
     getCandidateRoots,
     getTempPreviewDir,

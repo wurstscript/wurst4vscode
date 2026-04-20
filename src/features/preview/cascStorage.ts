@@ -14,11 +14,12 @@ const WC3_DEFAULT_PATHS = [
 ];
 const WURST_HOME = path.join(os.homedir(), '.wurst');
 
-/** Walk up from `startPath` until we find a directory containing a `Data` subdirectory. */
+/** Walk up from `startPath` until we find a WC3 CASC root (has Data/ AND .build.info or .build.db). */
 function findCascDataRoot(startPath: string): string | null {
     let dir = startPath;
     for (let i = 0; i < 5; i++) {
-        if (fs.existsSync(path.join(dir, 'Data'))) {
+        if (fs.existsSync(path.join(dir, 'Data')) &&
+            (fs.existsSync(path.join(dir, '.build.info')) || fs.existsSync(path.join(dir, '.build.db')))) {
             return dir;
         }
         const parent = path.dirname(dir);
@@ -50,16 +51,21 @@ function getDisabledButtonFallbackPath(assetPath: string): string | null {
 }
 
 function getCascDataRoot(log: (msg: string) => void): string | null {
-    let wc3path = vscode.workspace.getConfiguration('wurst').get<string>('wc3path', '');
-    if (!wc3path) {
-        const found = WC3_DEFAULT_PATHS.find(p => fs.existsSync(p));
-        if (found) { log(`CASC wc3path not set, using default: ${found}`); wc3path = found; }
-        else { log(`CASC skip: wurst.wc3path not set and no default path found`); return null; }
+    const wc3path = vscode.workspace.getConfiguration('wurst').get<string>('wc3path', '');
+    if (wc3path) {
+        const dataRoot = findCascDataRoot(wc3path);
+        if (dataRoot) {
+            if (dataRoot !== wc3path) log(`CASC resolved data root: ${dataRoot} (from ${wc3path})`);
+            return dataRoot;
+        }
+        log(`CASC wurst.wc3path "${wc3path}" has no WC3 CASC root — falling back to default paths`);
     }
-    const dataRoot = findCascDataRoot(wc3path);
-    if (!dataRoot) { log(`CASC skip: no Data/ folder found walking up from: ${wc3path}`); return null; }
-    if (dataRoot !== wc3path) { log(`CASC resolved data root: ${dataRoot} (from ${wc3path})`); }
-    return dataRoot;
+    for (const p of WC3_DEFAULT_PATHS) {
+        const dataRoot = findCascDataRoot(p);
+        if (dataRoot) { log(`CASC using default path: ${dataRoot}`); return dataRoot; }
+    }
+    log(`CASC skip: no WC3 install found (checked wurst.wc3path and default paths)`);
+    return null;
 }
 
 // ---------------------------------------------------------------------------

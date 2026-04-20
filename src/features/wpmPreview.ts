@@ -2,9 +2,9 @@
 
 /** VS Code preview for WC3 war3map.wpm (pathing). Parser lives in `casc-ts/formats`. */
 
-import * as path from 'path';
 import * as vscode from 'vscode';
 import { parseWpm, WpmFile } from 'casc-ts/formats';
+import { registerParsedPreviewer } from './preview/framework';
 export { WpmFile } from 'casc-ts/formats';
 
 // ── HTML Rendering ────────────────────────────────────────────────────────────
@@ -343,53 +343,18 @@ function buildWpmHtml(wpm: WpmFile, fileName: string): string {
 </html>`;
 }
 
-// ── VSCode Custom Editor ──────────────────────────────────────────────────────
-
-class WpmDocument implements vscode.CustomDocument {
-    constructor(
-        readonly uri: vscode.Uri,
-        readonly html: string,
-    ) {}
-    dispose(): void {}
-}
-
-export class WpmEditorProvider implements vscode.CustomReadonlyEditorProvider<WpmDocument> {
-    static readonly VIEW_TYPE = 'wurst.wpmPreview';
-
-    async openCustomDocument(uri: vscode.Uri): Promise<WpmDocument> {
-        const data = Buffer.from(await vscode.workspace.fs.readFile(uri));
-        const parsed = parseWpm(data);
-
-        if (parsed.error) {
-            return new WpmDocument(uri, `<div style="color:red;padding:20px;">Failed to parse WPM: ${parsed.error}</div>`);
-        }
-
-        const html = buildWpmHtml(parsed, path.basename(uri.fsPath));
-        return new WpmDocument(uri, html);
-    }
-
-    resolveCustomEditor(doc: WpmDocument, panel: vscode.WebviewPanel): void {
-        panel.webview.options = {
-            enableScripts: true,
-            localResourceRoots: []
-        };
-        panel.webview.html = doc.html;
-    }
-}
-
 // ── Registration ──────────────────────────────────────────────────────────────
 
 export function registerWpmPreview(_context: vscode.ExtensionContext): vscode.Disposable[] {
     return [
-        vscode.window.registerCustomEditorProvider(
-            WpmEditorProvider.VIEW_TYPE,
-            new WpmEditorProvider(),
-            {
-                supportsMultipleEditorsPerDocument: true,
-                webviewOptions: {
-                    retainContextWhenHidden: true
-                }
-            },
-        ),
+        registerParsedPreviewer<WpmFile>({
+            viewType: 'wurst.wpmPreview',
+            parse:  (data) => parseWpm(data),
+            render: (parsed, fileName) => parsed.error
+                ? `<div style="color:red;padding:20px;">Failed to parse WPM: ${parsed.error}</div>`
+                : buildWpmHtml(parsed, fileName),
+            webviewOptions: { enableScripts: true, localResourceRoots: [] },
+            panelOptions:   { retainContextWhenHidden: true },
+        }),
     ];
 }

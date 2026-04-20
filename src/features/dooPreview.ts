@@ -2,12 +2,12 @@
 
 /** VS Code preview for WC3 .doo files. Parser lives in `casc-ts/formats`. */
 
-import * as path from 'path';
 import * as vscode from 'vscode';
 import {
     parseDoo,
     DooFile, DooDoodad, DooSpecialDoodad, DooUnit, DooDropSet,
 } from 'casc-ts/formats';
+import { registerParsedPreviewer } from './preview/framework';
 
 export {
     DooFile, DooDoodad, DooSpecialDoodad, DooUnit, DooDropSet,
@@ -217,42 +217,12 @@ ${mainSection}
 </html>`;
 }
 
-// ── VSCode custom editor ──────────────────────────────────────────────────────
-
-class DooDocument implements vscode.CustomDocument {
-    constructor(
-        readonly uri: vscode.Uri,
-        readonly parsed: DooFile,
-    ) {}
-
-    dispose(): void {}
-}
-
-class DooEditorProvider implements vscode.CustomReadonlyEditorProvider<DooDocument> {
-    static readonly VIEW_TYPE = 'wurst.dooPreview';
-
-    async openCustomDocument(uri: vscode.Uri): Promise<DooDocument> {
-        const data   = Buffer.from(await vscode.workspace.fs.readFile(uri));
-        const parsed = parseDoo(data, path.basename(uri.fsPath));
-        return new DooDocument(uri, parsed);
-    }
-
-    resolveCustomEditor(
-        document: DooDocument,
-        webviewPanel: vscode.WebviewPanel,
-    ): void {
-        webviewPanel.webview.options = { enableScripts: false };
-        const fileName = path.basename(document.uri.fsPath);
-        webviewPanel.webview.html = buildHtml(document.parsed, fileName);
-    }
-}
-
 // ── Registration ──────────────────────────────────────────────────────────────
 
 export function registerDooPreview(_context: vscode.ExtensionContext): vscode.Disposable {
-    return vscode.window.registerCustomEditorProvider(
-        DooEditorProvider.VIEW_TYPE,
-        new DooEditorProvider(),
-        { supportsMultipleEditorsPerDocument: true },
-    );
+    return registerParsedPreviewer<DooFile>({
+        viewType: 'wurst.dooPreview',
+        parse:  (data, fileName) => parseDoo(data, fileName),
+        render: (parsed, fileName) => buildHtml(parsed, fileName),
+    });
 }

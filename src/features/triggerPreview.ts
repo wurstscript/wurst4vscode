@@ -2,12 +2,12 @@
 
 /** VS Code preview for WC3 .wct / .wtg trigger files. Parsers live in `casc-ts/formats`. */
 
-import * as path from 'path';
 import * as vscode from 'vscode';
 import {
     parseWct, parseWtg,
     WctFile, WctTrig, WtgFile,
 } from 'casc-ts/formats';
+import { registerParsedPreviewer } from './preview/framework';
 export { WctFile, WctTrig, WtgFile, WtgCategory, WtgVar, WtgTrig } from 'casc-ts/formats';
 
 // ── HTML helpers ──────────────────────────────────────────────────────────────
@@ -240,61 +240,19 @@ ${trigsSection}
 </html>`;
 }
 
-// ── VSCode custom editors ─────────────────────────────────────────────────────
-
-class TriggerDocument implements vscode.CustomDocument {
-    constructor(
-        readonly uri: vscode.Uri,
-        readonly html: string,
-    ) {}
-    dispose(): void {}
-}
-
-class WctEditorProvider implements vscode.CustomReadonlyEditorProvider<TriggerDocument> {
-    static readonly VIEW_TYPE = 'wurst.wctPreview';
-
-    async openCustomDocument(uri: vscode.Uri): Promise<TriggerDocument> {
-        const data   = Buffer.from(await vscode.workspace.fs.readFile(uri));
-        const parsed = parseWct(data);
-        const html   = buildWctHtml(parsed, path.basename(uri.fsPath));
-        return new TriggerDocument(uri, html);
-    }
-
-    resolveCustomEditor(doc: TriggerDocument, panel: vscode.WebviewPanel): void {
-        panel.webview.options = { enableScripts: false };
-        panel.webview.html = doc.html;
-    }
-}
-
-class WtgEditorProvider implements vscode.CustomReadonlyEditorProvider<TriggerDocument> {
-    static readonly VIEW_TYPE = 'wurst.wtgPreview';
-
-    async openCustomDocument(uri: vscode.Uri): Promise<TriggerDocument> {
-        const data   = Buffer.from(await vscode.workspace.fs.readFile(uri));
-        const parsed = parseWtg(data);
-        const html   = buildWtgHtml(parsed, path.basename(uri.fsPath));
-        return new TriggerDocument(uri, html);
-    }
-
-    resolveCustomEditor(doc: TriggerDocument, panel: vscode.WebviewPanel): void {
-        panel.webview.options = { enableScripts: false };
-        panel.webview.html = doc.html;
-    }
-}
-
 // ── Registration ──────────────────────────────────────────────────────────────
 
 export function registerTriggerPreview(_context: vscode.ExtensionContext): vscode.Disposable[] {
     return [
-        vscode.window.registerCustomEditorProvider(
-            WctEditorProvider.VIEW_TYPE,
-            new WctEditorProvider(),
-            { supportsMultipleEditorsPerDocument: true },
-        ),
-        vscode.window.registerCustomEditorProvider(
-            WtgEditorProvider.VIEW_TYPE,
-            new WtgEditorProvider(),
-            { supportsMultipleEditorsPerDocument: true },
-        ),
+        registerParsedPreviewer<WctFile>({
+            viewType: 'wurst.wctPreview',
+            parse:  (data) => parseWct(data),
+            render: (parsed, fileName) => buildWctHtml(parsed, fileName),
+        }),
+        registerParsedPreviewer<WtgFile>({
+            viewType: 'wurst.wtgPreview',
+            parse:  (data) => parseWtg(data),
+            render: (parsed, fileName) => buildWtgHtml(parsed, fileName),
+        }),
     ];
 }

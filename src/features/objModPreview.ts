@@ -2,9 +2,9 @@
 
 /** VS Code preview for WC3 Object Modification files. Parser lives in `casc-ts/formats`. */
 
-import * as path from 'path';
 import * as vscode from 'vscode';
 import { parseObjMod, ObjModFile, ObjModEntry, ObjModMod } from 'casc-ts/formats';
+import { registerParsedPreviewer } from './preview/framework';
 export { ObjModFile, ObjModEntry, ObjModMod, ObjModVarType } from 'casc-ts/formats';
 
 // ── HTML rendering ────────────────────────────────────────────────────────────
@@ -152,43 +152,12 @@ ${customSection}
 </html>`;
 }
 
-// ── VSCode custom editor ──────────────────────────────────────────────────────
-
-class ObjModDocument implements vscode.CustomDocument {
-    constructor(
-        readonly uri: vscode.Uri,
-        readonly parsed: ObjModFile,
-    ) {}
-
-    dispose(): void {}
-}
-
-class ObjModEditorProvider implements vscode.CustomReadonlyEditorProvider<ObjModDocument> {
-    static readonly VIEW_TYPE = 'wurst.objModPreview';
-
-    async openCustomDocument(uri: vscode.Uri): Promise<ObjModDocument> {
-        const data = Buffer.from(await vscode.workspace.fs.readFile(uri));
-        const ext = path.extname(uri.fsPath);
-        const parsed = parseObjMod(data, ext);
-        return new ObjModDocument(uri, parsed);
-    }
-
-    resolveCustomEditor(
-        document: ObjModDocument,
-        webviewPanel: vscode.WebviewPanel,
-    ): void {
-        webviewPanel.webview.options = { enableScripts: false };
-        const fileName = path.basename(document.uri.fsPath);
-        webviewPanel.webview.html = buildHtml(document.parsed, fileName);
-    }
-}
-
 // ── Registration ──────────────────────────────────────────────────────────────
 
 export function registerObjModPreview(_context: vscode.ExtensionContext): vscode.Disposable {
-    return vscode.window.registerCustomEditorProvider(
-        ObjModEditorProvider.VIEW_TYPE,
-        new ObjModEditorProvider(),
-        { supportsMultipleEditorsPerDocument: true },
-    );
+    return registerParsedPreviewer<ObjModFile>({
+        viewType: 'wurst.objModPreview',
+        parse:  (data, fileName) => parseObjMod(data, fileName.slice(fileName.lastIndexOf('.'))),
+        render: (parsed, fileName) => buildHtml(parsed, fileName),
+    });
 }

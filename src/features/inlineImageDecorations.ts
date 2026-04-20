@@ -13,7 +13,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { decodeRasterPreview, ensureCascAssetCached, ensureCascCached, writeJpegPreviewFile } from './blpPreview';
+import { decodeRasterPreview, decodeToRgba, ensureCascAssetCached, ensureCascCached } from './blpPreview';
 import {
     getCandidateRoots,
     getTempPreviewDir,
@@ -21,6 +21,7 @@ import {
     encodePng,
     scaleDown,
 } from './imageAssetSupport';
+import { AssetIndex, getAssetIndex, invalidateAssetIndex } from '../utils/assetIndex';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -38,76 +39,9 @@ const STRING_MODEL_RE  = /"([^"\r\n]+\.(mdx|mdl))"/gi;
 // Matches ClassName.memberName  e.g. Icons.bTNHeal
 const MEMBER_ACCESS_RE = /\b([A-Z][A-Za-z0-9_]*)\.([a-z][A-Za-z0-9_]*)\b/g;
 
-// ── Wurst asset class index ───────────────────────────────────────────────────
-// Maps "ClassName.memberName" → raw asset path string
-
-type AssetIndex = Map<string, string>;
-
-let assetIndex: AssetIndex | null = null;
-let assetIndexBuiltForWs: string | null = null;
 const output = vscode.window.createOutputChannel('Wurst Inline Icons');
 let isDisposed = false;
 
-// static constant foo = "path"  (with optional public/private modifier)
-const WURST_CONST_RE = /^\s*(?:(?:public|private|protected)\s+)?static\s+constant\s+(\w+)\s*=\s*"([^"]+\.(blp|dds|tga|png|jpg|jpeg))"/;
-
-function buildAssetIndex(): AssetIndex {
-    const index: AssetIndex = new Map();
-    const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!wsRoot) return index;
-
-    // Search for asset wurst files — typically under _build/dependencies
-    const searchRoots = [wsRoot];
-    // Recursively find *.wurst files that look like asset packages (by scanning _build/dependencies)
-    const depsDir = path.join(wsRoot, '_build', 'dependencies');
-    if (fs.existsSync(depsDir)) searchRoots.push(depsDir);
-
-    for (const searchRoot of searchRoots) {
-        findWurstFiles(searchRoot, (filePath) => {
-            parseAssetFile(filePath, index);
-        }, 8 /* max depth */);
-    }
-
-    return index;
-}
-
-function findWurstFiles(dir: string, cb: (p: string) => void, maxDepth: number): void {
-    if (maxDepth <= 0) return;
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-        const full = path.join(dir, e.name);
-        if (e.isDirectory()) {
-            findWurstFiles(full, cb, maxDepth - 1);
-        } else if (e.isFile() && e.name.endsWith('.wurst')) {
-            cb(full);
-        }
-    }
-}
-
-function parseAssetFile(filePath: string, index: AssetIndex): void {
-    let text: string;
-    try { text = fs.readFileSync(filePath, 'utf8'); } catch { return; }
-
-    // Determine the class name from the file (first `class` or `public class` declaration)
-    const classMatch = /^\s*(?:public\s+)?class\s+(\w+)/m.exec(text);
-    if (!classMatch) return;
-    const className = classMatch[1];
-
-    for (const line of text.split('\n')) {
-        const m = WURST_CONST_RE.exec(line);
-        if (m) index.set(`${className}.${m[1]}`, m[2]);
-    }
-}
-
-function getAssetIndex(): AssetIndex {
-    const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-    if (!assetIndex || assetIndexBuiltForWs !== wsRoot) {
-        assetIndex = buildAssetIndex();
-        assetIndexBuiltForWs = wsRoot;
-    }
-    return assetIndex;
-}
 
 function stripStringLiterals(text: string): string {
     return text.replace(/"([^"\\]|\\.)*"/g, '""');
@@ -233,16 +167,11 @@ async function getThumbnailUri(fsPath: string): Promise<vscode.Uri | undefined> 
         const basePath = path.join(THUMB_DIR, key);
 
         const bytes = new Uint8Array(await fs.promises.readFile(fsPath));
-        const decoded = decodeRasterPreview(bytes, ext);
-        const previewPath = decoded.mode === 'jpeg' ? `${basePath}.jpg` : `${basePath}.png`;
-        if (decoded.mode === 'jpeg') {
-            await writeJpegPreviewFile(decoded.jpegBase64, previewPath);
-        } else {
-            const rgba = Buffer.from(decoded.rgbaBase64, 'base64');
-            const scaled = scaleDown(rgba, decoded.width, decoded.height, THUMB_DIM);
-            const png = encodePng(scaled.w, scaled.h, scaled.rgba);
-            await fs.promises.writeFile(previewPath, png);
-        }
+        const { width, height, rgba } = decodeToRgba(bytes, ext);
+        const previewPath = `${basePath}.png`;
+        const scaled = scaleDown(Buffer.from(rgba), width, height, THUMB_DIM);
+        const png = encodePng(scaled.w, scaled.h, scaled.rgba);
+        await fs.promises.writeFile(previewPath, png);
 
         thumbCache.set(fsPath, { pngPath: previewPath, mtime });
         log(`thumb generated: ${path.basename(fsPath)} -> ${previewPath}`);
@@ -749,7 +678,7 @@ export function registerInlineImageDecorations(_context: vscode.ExtensionContext
         }),
         // Invalidate asset index when .wurst files change
         vscode.workspace.onDidSaveTextDocument(doc => {
-            if (doc.fileName.endsWith('.wurst')) { assetIndex = null; update(vscode.window.activeTextEditor); }
+            if (doc.fileName.endsWith('.wurst')) { invalidateAssetIndex(); update(vscode.window.activeTextEditor); }
         }),
         // Dispose all active types when extension deactivates
         new vscode.Disposable(() => {

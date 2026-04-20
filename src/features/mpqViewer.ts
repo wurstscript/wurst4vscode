@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
-import { MpqReader, MpqFileEntry } from './mpq/mpqReader';
+import { MpqReader, MpqFileEntry } from 'casc-ts/formats';
 import { makeNonce, escapeHtml } from './webviewUtils';
 import { buildPage, sep } from './webviewShared';
 
@@ -54,7 +54,7 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
             archiveSize = bytes.byteLength;
             const buf = Buffer.from(bytes);
             reader = MpqReader.open(buf);
-            entries = reader.getFilesWithInfo();
+            entries = await reader.getFilesWithInfoAsync();
             log(`MPQ opened: ${entries.length} files, ${archiveSize} bytes`);
         } catch (e) {
             parseError = e instanceof Error ? e.message : String(e);
@@ -106,7 +106,7 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
                 const name = (msg as { name?: string }).name;
                 if (!name || !document.reader) return;
                 try {
-                    const data = document.reader.readFile(name);
+                    const data = await document.reader.readFileAsync(name);
                     const tmpDir = path.join(os.tmpdir(), 'wurst_mpq_extract', archiveName);
                     const outPath = path.join(tmpDir, name.replace(/\\/g, path.sep));
                     fs.mkdirSync(path.dirname(outPath), { recursive: true });
@@ -161,7 +161,7 @@ async function extractAllFiles(
         let failed = 0;
         for (const entry of entries) {
             try {
-                const data = reader.readFile(entry.name);
+                const data = await reader.readFileAsync(entry.name);
                 const outPath = path.join(destDir, entry.name.replace(/\\/g, path.sep));
                 fs.mkdirSync(path.dirname(outPath), { recursive: true });
                 fs.writeFileSync(outPath, data);

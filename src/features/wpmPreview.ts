@@ -1,77 +1,11 @@
 'use strict';
 
+/** VS Code preview for WC3 war3map.wpm (pathing). Parser lives in `casc-ts/formats`. */
+
 import * as path from 'path';
 import * as vscode from 'vscode';
-
-// ── Binary Reader ─────────────────────────────────────────────────────────────
-
-class BinReader {
-    private pos = 0;
-    constructor(private readonly buf: Buffer) {}
-
-    get offset(): number { return this.pos; }
-    get remaining(): number { return this.buf.length - this.pos; }
-    get eof(): boolean { return this.pos >= this.buf.length; }
-
-    readI32(): number {
-        if (this.remaining < 4) throw new Error(`Buffer underflow: need i32`);
-        const v = this.buf.readInt32LE(this.pos);
-        this.pos += 4;
-        return v;
-    }
-
-    readU8(): number {
-        if (this.remaining < 1) throw new Error(`Buffer underflow: need u8`);
-        return this.buf[this.pos++];
-    }
-
-    readId(): string {
-        if (this.remaining < 4) throw new Error(`Buffer underflow: need id`);
-        const b = this.buf.slice(this.pos, this.pos + 4);
-        this.pos += 4;
-        return String.fromCharCode(b[0], b[1], b[2], b[3]);
-    }
-}
-
-// ── WPM Parser ────────────────────────────────────────────────────────────────
-
-export interface WpmFile {
-    version: number;
-    width: number;
-    height: number;
-    data: Buffer;
-    error?: string;
-}
-
-export function parseWpm(data: Buffer): WpmFile {
-    const r = new BinReader(data);
-    try {
-        const magic = r.readId();
-        if (magic !== 'MP3W') {
-            throw new Error(`Unexpected magic "${magic}", expected "MP3W"`);
-        }
-        const version = r.readI32();
-        const width = r.readI32();
-        const height = r.readI32();
-
-        const expectedSize = width * height;
-        if (r.remaining < expectedSize) {
-            throw new Error(`Buffer too small: expected ${expectedSize} bytes, got ${r.remaining}`);
-        }
-
-        return {
-            version,
-            width,
-            height,
-            data: data.slice(r.offset, r.offset + expectedSize)
-        };
-    } catch (e) {
-        return {
-            version: 0, width: 0, height: 0, data: Buffer.alloc(0),
-            error: e instanceof Error ? e.message : String(e)
-        };
-    }
-}
+import { parseWpm, WpmFile } from 'casc-ts/formats';
+export { WpmFile } from 'casc-ts/formats';
 
 // ── HTML Rendering ────────────────────────────────────────────────────────────
 

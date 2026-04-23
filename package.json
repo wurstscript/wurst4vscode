@@ -13,7 +13,7 @@
         "type": "git",
         "url": "https://github.com/wurstscript/wurst4vscode.git"
     },
-    "version": "0.10.0",
+    "version": "0.11.0",
     "publisher": "peterzeller",
     "engines": {
         "vscode": "^1.109.0"
@@ -272,13 +272,27 @@
                 "viewType": "wurst.objModPreview",
                 "displayName": "WC3 Object Data",
                 "selector": [
-                    { "filenamePattern": "*.w3u" },
-                    { "filenamePattern": "*.w3t" },
-                    { "filenamePattern": "*.w3a" },
-                    { "filenamePattern": "*.w3b" },
-                    { "filenamePattern": "*.w3d" },
-                    { "filenamePattern": "*.w3h" },
-                    { "filenamePattern": "*.w3q" }
+                    {
+                        "filenamePattern": "*.w3u"
+                    },
+                    {
+                        "filenamePattern": "*.w3t"
+                    },
+                    {
+                        "filenamePattern": "*.w3a"
+                    },
+                    {
+                        "filenamePattern": "*.w3b"
+                    },
+                    {
+                        "filenamePattern": "*.w3d"
+                    },
+                    {
+                        "filenamePattern": "*.w3h"
+                    },
+                    {
+                        "filenamePattern": "*.w3q"
+                    }
                 ],
                 "priority": "default"
             },

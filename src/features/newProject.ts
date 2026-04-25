@@ -41,8 +41,9 @@ export async function createNewWurstProject(): Promise<void> {
         { location: vscode.ProgressLocation.Notification, title: 'Creating Wurst project', cancellable: false },
         async (progress) => {
             progress.report({ message: 'Ensuring WurstScript/Grill installation…', increment: 10 });
-            await ensureInstalledOrOfferMigration(false);
-            await ensureGrillAvailable();
+            const installOptions = { offerPostInstallActions: false };
+            await ensureInstalledOrOfferMigration(false, installOptions);
+            await ensureGrillAvailable(installOptions);
 
             progress.report({ message: 'Generating project with Grill…', increment: 30 });
             if (fs.existsSync(destDir) && fs.readdirSync(destDir).length > 0) {

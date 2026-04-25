@@ -18,6 +18,10 @@ import { fetchNightlyZipAsset, fetchLatestGrillAsset, fetchNightlyCommitSha, dow
 import { ensureCliOnPath, offerPostInstallActions, prependPathForVsCodeTerminals } from './pathManager';
 import { stopLanguageServerIfRunning } from '../languageServer';
 
+type InstallOptions = {
+    offerPostInstallActions?: boolean;
+};
+
 export function hasNewLayout(): boolean {
     return fs.existsSync(RUNTIME_DIR) && fs.existsSync(COMPILER_DIR);
 }
@@ -96,7 +100,7 @@ async function repairInstallationLayout() {
     cleanupWurstSetupJar();
 }
 
-export async function ensureInstalledOrOfferMigration(forcePrompt: boolean): Promise<void> {
+export async function ensureInstalledOrOfferMigration(forcePrompt: boolean, options: InstallOptions = {}): Promise<void> {
     migrateLegacyGrillLayout();
     const newLayout = hasNewLayout();
     const hasHomeDir = fs.existsSync(WURST_HOME);
@@ -110,7 +114,7 @@ export async function ensureInstalledOrOfferMigration(forcePrompt: boolean): Pro
                 );
                 if (choice !== 'Install') throw new Error('WurstScript is not installed.');
             }
-            await installWithRetry();
+            await installWithRetry(options);
             return;
         }
 
@@ -130,28 +134,28 @@ export async function ensureInstalledOrOfferMigration(forcePrompt: boolean): Pro
         ].join('\n');
 
         await vscode.window.showInformationMessage(msg, { modal: true }, 'Continue');
-        await installWithRetry();
+        await installWithRetry(options);
         return;
     }
 
     if (!fs.existsSync(COMPILER_JAR)) {
-        await installWithRetry();
+        await installWithRetry(options);
     }
 }
 
-export async function ensureGrillAvailable(): Promise<void> {
+export async function ensureGrillAvailable(options: InstallOptions = {}): Promise<void> {
     if (getBundledGrillExecutable() || isGrillOnPath()) return;
-    await installWithRetry();
+    await installWithRetry(options);
     if (!getBundledGrillExecutable() && !isGrillOnPath()) {
         throw new Error('Grill CLI is not available. Please run "Wurst: Install/Update" and try again.');
     }
 }
 
-export async function installWithRetry(): Promise<void> {
+export async function installWithRetry(options: InstallOptions = {}): Promise<void> {
     let autoRepairAttempted = false;
     while (true) {
         try {
-            await installFreshFromNightly();
+            await installFreshFromNightly(options);
             return;
         } catch (error) {
             if (!autoRepairAttempted && isRecoverableInstallError(error)) {
@@ -168,7 +172,7 @@ export async function installWithRetry(): Promise<void> {
     }
 }
 
-async function installFreshFromNightly(): Promise<void> {
+async function installFreshFromNightly(options: InstallOptions): Promise<void> {
     await stopLanguageServerIfRunning();
 
     await vscode.window.withProgress(
@@ -236,7 +240,9 @@ async function installFreshFromNightly(): Promise<void> {
             progress.report({ message: 'Finishing up installation…', increment: Math.max(0, 100 - last) });
 
             const pathUpdate = await ensureCliOnPath();
-            await offerPostInstallActions(pathUpdate);
+            if (options.offerPostInstallActions !== false) {
+                await offerPostInstallActions(pathUpdate);
+            }
         }
     );
 }
@@ -267,6 +273,8 @@ export async function maybeOfferUpdate(): Promise<void> {
 export async function runGrillGenerate(destDir: string): Promise<void> {
     const bundled = getBundledGrillExecutable();
     const grillCmd = bundled ?? 'grill';
+    const parentDir = path.dirname(destDir);
+    const projectName = path.basename(destDir);
     if (bundled) prependPathForVsCodeTerminals(WURST_HOME);
 
     await new Promise<void>((resolve, reject) => {
@@ -280,9 +288,9 @@ export async function runGrillGenerate(destDir: string): Promise<void> {
 
         let child;
         if (process.platform === 'win32') {
-            child = spawn('cmd.exe', ['/c', grillCmd, 'generate', destDir], { windowsHide: true });
+            child = spawn('cmd.exe', ['/c', grillCmd, 'generate', projectName], { cwd: parentDir, windowsHide: true });
         } else {
-            child = spawn(grillCmd, ['generate', destDir], { stdio: ['ignore', 'pipe', 'pipe'] });
+            child = spawn(grillCmd, ['generate', projectName], { cwd: parentDir, stdio: ['ignore', 'pipe', 'pipe'] });
         }
 
         child.on('error', (err: any) => {

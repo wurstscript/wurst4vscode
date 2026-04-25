@@ -18,6 +18,8 @@ export async function stopLanguageServerIfRunning(): Promise<void> {
 }
 
 export async function startLanguageClient(context: ExtensionContext): Promise<void> {
+    if (clientRef) return;
+
     await ensureInstalledOrOfferMigration(false);
     await maybeOfferUpdate();
 
@@ -30,18 +32,19 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
     const client = new LanguageClient('Wurstscript Language Server', serverOptions, clientOptions);
     clientRef = client;
 
-    const startResult = client.start();
-    if (isDisposable(startResult)) {
-        context.subscriptions.push(startResult);
-    } else {
-        context.subscriptions.push({ dispose: () => client.stop() });
-        await startResult;
-    }
-
-    const anyClient = client as LanguageClient & { onReady?: () => Promise<void> };
     try {
+        const startResult = client.start();
+        if (isDisposable(startResult)) {
+            context.subscriptions.push(startResult);
+        } else {
+            context.subscriptions.push({ dispose: () => client.stop() });
+            await startResult;
+        }
+
+        const anyClient = client as LanguageClient & { onReady?: () => Promise<void> };
         if (typeof anyClient.onReady === 'function') await anyClient.onReady();
     } catch (error) {
+        clientRef = null;
         const message = error instanceof Error ? error.message : String(error);
         vscode.window.showErrorMessage(`Wurst language server failed to start: ${message}`);
         throw error;

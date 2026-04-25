@@ -34,12 +34,7 @@ export async function activate(context: ExtensionContext) {
 
     registerBasicCommands(context);
 
-    try {
-        await startLanguageClient(context);
-    } catch (err) {
-        console.error('Failed to start language client:', err);
-        vscode.window.showWarningMessage(`Wurst language features disabled: ${err}`);
-    }
+    await startLanguageClientWhenWorkspaceIsOpen(context);
 }
 
 function registerBasicCommands(context: ExtensionContext) {
@@ -73,4 +68,22 @@ function registerBasicCommands(context: ExtensionContext) {
             }
         })
     );
+}
+
+async function startLanguageClientWhenWorkspaceIsOpen(context: ExtensionContext): Promise<void> {
+    if (!workspace.workspaceFolders?.length) {
+        context.subscriptions.push(workspace.onDidChangeWorkspaceFolders(async () => {
+            if (workspace.workspaceFolders?.length) {
+                await startLanguageClientWhenWorkspaceIsOpen(context);
+            }
+        }));
+        return;
+    }
+
+    try {
+        await startLanguageClient(context);
+    } catch (err) {
+        console.error('Failed to start language client:', err);
+        vscode.window.showWarningMessage(`Wurst language features disabled: ${err}`);
+    }
 }

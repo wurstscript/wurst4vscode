@@ -244,7 +244,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
                                 const cacheDir = getCascCacheDir();
                                 const normalized = texPath.replace(/\//g, '\\').toLowerCase();
                                 const rel = texExt === 'dds' ? normalized.replace(/\.blp$/, '.dds') : normalized;
-                                resolvedFsPath = path.join(cacheDir, rel);
+                                resolvedFsPath = path.join(cacheDir, ...rel.split('\\'));
                             }
                         }
 
@@ -1039,7 +1039,7 @@ function decodePreview(sourceBytes: Uint8Array, uri: vscode.Uri): DecodedBlpImag
     if (ext === '.tga') {
         return decodeTga(sourceBytes);
     }
-    if (ext === '.mdx') {
+    if (ext === '.mdx' || ext === '.mdl') {
         const mdxBase64 = Buffer.from(sourceBytes).toString('base64');
         const fileName = path.basename(uri.fsPath || uri.path);
         return { kind: 'mdx-raw', mdxBase64, fileName };

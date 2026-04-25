@@ -34,6 +34,20 @@ export function getBundledJava(): string {
     return path.join(RUNTIME_DIR, 'bin', exe);
 }
 
+function chmodRuntimeExecutables(): void {
+    if (process.platform === 'win32') return;
+    const binDir = path.join(RUNTIME_DIR, 'bin');
+    try {
+        for (const entry of fs.readdirSync(binDir)) {
+            const candidate = path.join(binDir, entry);
+            try {
+                if (fs.lstatSync(candidate).isFile()) fs.chmodSync(candidate, 0o755);
+            } catch {}
+        }
+    } catch {}
+    try { fs.chmodSync(path.join(RUNTIME_DIR, 'lib', 'jspawnhelper'), 0o755); } catch {}
+}
+
 export function checkCustomJavaVersion(javaBin: string): void {
     if (!fs.existsSync(javaBin)) {
         throw new Error(`Custom Java executable not found: "${javaBin}". Check your wurst.javaExecutable setting.`);
@@ -198,9 +212,7 @@ async function installFreshFromNightly(): Promise<void> {
             installLauncherExecutable(srcLauncher);
             installLauncherExecutable(srcGrill);
 
-            if (process.platform !== 'win32') {
-                try { fs.chmodSync(getBundledJava(), 0o755); } catch {}
-            }
+            chmodRuntimeExecutables();
 
             const grillAsset = await fetchLatestGrillAsset();
             ensureDirectoryPath(GRILL_HOME_DIR);

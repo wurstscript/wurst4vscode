@@ -184,7 +184,7 @@ export function registerAssetLinks(_context: vscode.ExtensionContext): vscode.Di
             vscode.window.showWarningMessage(`Could not resolve asset: ${assetPath}`);
             return;
         }
-        if (target.fsPath.toLowerCase().endsWith('.mdx')) {
+        if (path.extname(target.fsPath).toLowerCase() === '.mdx') {
             await vscode.commands.executeCommand('vscode.openWith', target, 'wurst.blpPreview');
             return;
         }

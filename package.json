@@ -234,6 +234,11 @@
                 "language": "wc3-toc",
                 "scopeName": "source.toc",
                 "path": "./syntaxes/toc.json"
+            },
+            {
+                "language": "wc3-model",
+                "scopeName": "source.mdl",
+                "path": "./syntaxes/mdl.json"
             }
         ],
         "customEditors": [
@@ -456,12 +461,12 @@
                 "wurst.wc3path": {
                     "type": "string",
                     "default": "",
-                    "description": "Optional path to a Warcraft installation directory (e.g. C:\\Games\\Warcraft III\\). If no executable can be found, it will be followed by an auto detection attempt."
+                    "description": "Optional path to a Warcraft III installation directory. Examples: C:\\Games\\Warcraft III on Windows, /Applications/Warcraft III on macOS, or a Wine install path on Linux. If empty, the extension tries platform-specific defaults."
                 },
                 "wurst.gameExePath": {
                     "type": "string",
                     "default": "",
-                    "description": "Optional path to a Warcraft executable to override wc3path detection."
+                    "description": "Optional path to a Warcraft executable to override wc3path detection when running maps."
                 },
                 "wurst.wc3RunArgs": {
                     "type": "string",
@@ -471,7 +476,7 @@
                 "wurst.mapDocumentPath": {
                     "type": "string",
                     "default": "",
-                    "description": "The path where to put maps before running them. Usually something like `C:\\Users\\YourName\\Documents\\Warcraft III`."
+                    "description": "The path where maps should be copied before running them. Usually your Warcraft III documents folder."
                 },
                 "wurst.jhcrExe": {
                     "type": "string",
@@ -481,7 +486,7 @@
                 "wurst.customMapDataPath": {
                     "type": "string",
                     "default": "",
-                    "markdownDescription": "The path where Warcraft stores custom map data. This is usually something like `C:\\Users\\lep\\Documents\\Warcraft III\\CustomMapData` or `C:\\Users\\Peter\\OneDrive\\Dokumente\\Warcraft III\\CustomMapData`. This path will be passed to the `--preload-path` option of Jass Hot Code Reload (JHCR)."
+                    "markdownDescription": "The path where Warcraft stores custom map data. This is usually the `CustomMapData` folder inside your Warcraft III documents folder. This path will be passed to the `--preload-path` option of Jass Hot Code Reload (JHCR)."
                 },
                 "wurst.testTimeout": {
                     "type": "number",
@@ -513,7 +518,7 @@
         "compile-web": "webpack",
         "watch-web": "webpack --watch",
         "package-web": "webpack --mode production --devtool hidden-source-map",
-        "publish": "vsce publish"
+        "publish": "vsce publish --no-dependencies"
     },
     "devDependencies": {
         "@types/node": "^22.19.17",

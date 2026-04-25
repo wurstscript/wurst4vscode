@@ -6,13 +6,33 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { CascStorage, closeAllSegments } from 'casc-ts';
 
-const WC3_DEFAULT_PATHS = [
-    'C:\\Program Files (x86)\\Warcraft III',
-    'C:\\Program Files\\Warcraft III',
-    'D:\\Program Files (x86)\\Warcraft III',
-    'D:\\Program Files\\Warcraft III',
-];
 const WURST_HOME = path.join(os.homedir(), '.wurst');
+
+function getDefaultWarcraftPaths(): string[] {
+    if (process.platform === 'win32') {
+        return [
+            'C:\\Program Files (x86)\\Warcraft III',
+            'C:\\Program Files\\Warcraft III',
+            'D:\\Program Files (x86)\\Warcraft III',
+            'D:\\Program Files\\Warcraft III',
+        ];
+    }
+    if (process.platform === 'darwin') {
+        return [
+            '/Applications/Warcraft III',
+            '/Application/Warcraft III',
+        ];
+    }
+    if (process.platform === 'linux') {
+        const winePrefix = process.env.WINEPREFIX || path.join(os.homedir(), '.wine');
+        return [
+            path.join(winePrefix, 'drive_c', 'Program Files (x86)', 'Warcraft III'),
+            path.join(winePrefix, 'drive_c', 'Program Files', 'Warcraft III'),
+            path.join(os.homedir(), 'Games', 'Warcraft III'),
+        ];
+    }
+    return [];
+}
 
 /** Walk up from `startPath` until we find a WC3 CASC root (has Data/ AND .build.info or .build.db). */
 function findCascDataRoot(startPath: string): string | null {
@@ -41,6 +61,10 @@ export function normalizeCascAssetPath(assetPath: string): string {
     return assetPath.replace(/\\\\/g, '\\').replace(/\//g, '\\').toLowerCase();
 }
 
+function getCachedAssetPath(cacheDir: string, normalizedAssetPath: string): string {
+    return path.join(cacheDir, ...normalizedAssetPath.split('\\'));
+}
+
 function getDisabledButtonFallbackPath(assetPath: string): string | null {
     const normalized = normalizeCascAssetPath(assetPath);
     const prefix = 'replaceabletextures\\commandbuttonsdisabled\\disbtn';
@@ -60,7 +84,7 @@ function getCascDataRoot(log: (msg: string) => void): string | null {
         }
         log(`CASC wurst.wc3path "${wc3path}" has no WC3 CASC root — falling back to default paths`);
     }
-    for (const p of WC3_DEFAULT_PATHS) {
+    for (const p of getDefaultWarcraftPaths()) {
         const dataRoot = findCascDataRoot(p);
         if (dataRoot) { log(`CASC using default path: ${dataRoot}`); return dataRoot; }
     }
@@ -130,10 +154,6 @@ async function cascReadDirect(wc3Root: string, cascPath: string, log: (msg: stri
 
 /** Look up a texture. Checks disk cache first; if missing, extracts in-process and caches to disk. */
 export async function findCascTexture(texPath: string, log: (msg: string) => void): Promise<{ buf: Buffer; ext: 'dds' | 'blp' } | null> {
-    if (process.platform !== 'win32') {
-        log('CASC skip: texture extraction from the WC3 game files is only available on Windows');
-        return null;
-    }
     const cacheDir = getCacheDir();
     // CASC paths are lowercase with backslash separators
     const normalized = normalizeCascAssetPath(texPath);
@@ -146,7 +166,7 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
     if (fallbackDdsPath) cacheCandidates.push([fallbackDdsPath, 'dds']);
     if (fallbackNormalized) cacheCandidates.push([fallbackNormalized, 'blp']);
     for (const [rel, ext] of cacheCandidates) {
-        const cachePath = path.join(cacheDir, rel);
+        const cachePath = getCachedAssetPath(cacheDir, rel);
         try {
             const buf = await fs.promises.readFile(cachePath);
             log(`CASC cache hit: ${rel}`);
@@ -172,7 +192,7 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
 
     for (const [cascPath, ext] of candidates) {
         const rel = ext === 'dds' ? ddsPath : normalized;
-        const cachePath = path.join(cacheDir, rel);
+        const cachePath = getCachedAssetPath(cacheDir, rel);
         const buf = await cascReadDirect(wc3Root, cascPath, log);
         if (buf) {
             log(`CASC extracted: ${cascPath} (${buf.length} bytes) → ${cachePath}`);
@@ -185,14 +205,9 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
 }
 
 export async function findCascAsset(assetPath: string, log: (msg: string) => void): Promise<Buffer | null> {
-    if (process.platform !== 'win32') {
-        log('CASC skip: asset extraction from the WC3 game files is only available on Windows');
-        return null;
-    }
-
     const cacheDir = getCacheDir();
     const normalized = normalizeCascAssetPath(assetPath);
-    const cachePath = path.join(cacheDir, normalized);
+    const cachePath = getCachedAssetPath(cacheDir, normalized);
     try {
         const cached = await fs.promises.readFile(cachePath);
         log(`CASC cache hit: ${normalized}`);
@@ -260,7 +275,7 @@ export async function ensureCascCached(assetPath: string): Promise<string | unde
     const cacheDir = getCacheDir();
     const normalized = normalizeCascAssetPath(assetPath);
     const rel = result.ext === 'dds' ? normalized.replace(/\.blp$/, '.dds') : normalized;
-    return path.join(cacheDir, rel);
+    return getCachedAssetPath(cacheDir, rel);
 }
 
 export async function ensureCascAssetCached(assetPath: string): Promise<string | undefined> {
@@ -268,5 +283,5 @@ export async function ensureCascAssetCached(assetPath: string): Promise<string |
     log(`ensureCascAssetCached: ${assetPath}`);
     const result = await findCascAsset(assetPath, log);
     if (!result) { log(`ensureCascAssetCached: failed for ${assetPath}`); return undefined; }
-    return path.join(getCacheDir(), normalizeCascAssetPath(assetPath));
+    return getCachedAssetPath(getCacheDir(), normalizeCascAssetPath(assetPath));
 }

@@ -1,0 +1,87 @@
+{
+    "name": "WC3 Model Text",
+    "scopeName": "source.mdl",
+    "fileTypes": ["mdl"],
+    "foldingStartMarker": "\\{\\s*(?://.*)?$",
+    "foldingStopMarker": "^\\s*\\}",
+    "patterns": [
+        { "include": "#comment" },
+        { "include": "#block_decl" },
+        { "include": "#property" },
+        { "include": "#interpolation" },
+        { "include": "#flag" },
+        { "include": "#time_key" },
+        { "include": "#number" },
+        { "include": "#string" },
+        { "include": "#punctuation" }
+    ],
+    "repository": {
+        "comment": {
+            "match": "//.*$",
+            "name": "comment.line.double-slash.mdl"
+        },
+
+        "block_decl": {
+            "comment": "Model \"Name\" {, Textures 5 {, Bitmap {, Geoset {",
+            "match": "^\\s*([A-Za-z][A-Za-z0-9_]*)\\b(?:\\s+(\\d+))?(?:\\s+(\"(?:[^\"\\\\]|\\\\.)*\"))?\\s*(?=\\{)",
+            "captures": {
+                "1": { "name": "entity.name.section.mdl" },
+                "2": { "name": "constant.numeric.mdl" },
+                "3": { "name": "string.quoted.double.mdl" }
+            }
+        },
+
+        "property": {
+            "comment": "Property names such as FormatVersion, Image, MinimumExtent, static TextureID",
+            "match": "^\\s*(?:(static)\\s+)?([A-Za-z][A-Za-z0-9_]*)\\b",
+            "captures": {
+                "1": { "name": "storage.modifier.static.mdl" },
+                "2": { "name": "support.function.property.mdl" }
+            }
+        },
+
+        "interpolation": {
+            "match": "\\b(DontInterp|Linear|Hermite|Bezier)\\b",
+            "name": "keyword.control.interpolation.mdl"
+        },
+
+        "flag": {
+            "match": "\\b(NonLooping|Unshaded|TwoSided|Unfogged|NoDepthTest|NoDepthSet|ConstantColor|SortPrimsFarZ|FullResolution|Billboarded|BillboardedLockX|BillboardedLockY|BillboardedLockZ|CameraAnchored|DropShadow|Additive|Modulate|Modulate2x|Transparent|Blend|AddAlpha|None|ReplaceableId)\\b",
+            "name": "constant.language.flag.mdl"
+        },
+
+        "time_key": {
+            "match": "\\b(\\d+)\\s*:",
+            "captures": {
+                "1": { "name": "constant.numeric.frame.mdl" },
+                "0": { "name": "meta.animation-key.mdl" }
+            }
+        },
+
+        "number": {
+            "match": "-?\\b\\d+(?:\\.\\d+)?\\b",
+            "name": "constant.numeric.mdl"
+        },
+
+        "string": {
+            "name": "string.quoted.double.mdl",
+            "begin": "\"",
+            "end": "\"",
+            "patterns": [
+                {
+                    "match": "\\\\",
+                    "name": "constant.character.escape.mdl"
+                }
+            ]
+        },
+
+        "punctuation": {
+            "patterns": [
+                { "match": "\\{", "name": "punctuation.section.block.begin.mdl" },
+                { "match": "\\}", "name": "punctuation.section.block.end.mdl" },
+                { "match": ",", "name": "punctuation.separator.comma.mdl" },
+                { "match": ":", "name": "punctuation.separator.keyframe.mdl" }
+            ]
+        }
+    }
+}

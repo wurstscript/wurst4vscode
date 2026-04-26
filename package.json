@@ -450,12 +450,12 @@
                 },
                 "wurst.debugMode": {
                     "type": "boolean",
-                    "default": "false",
+                    "default": false,
                     "description": "Enabling the debugmode will make the VM available for attaching on port 5005"
                 },
                 "wurst.hideExceptions": {
                     "type": "boolean",
-                    "default": "true",
+                    "default": true,
                     "description": "Turn this off to see Wurst Exceptions as vscode notifications"
                 },
                 "wurst.wc3path": {

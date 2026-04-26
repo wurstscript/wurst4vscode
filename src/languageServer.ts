@@ -87,7 +87,7 @@ export function registerFileChanges(client: LanguageClient): vscode.FileSystemWa
 async function getServerOptions(): Promise<ServerOptions> {
     const config = workspace.getConfiguration('wurst');
     const javaOpts = config.get<string[]>('javaOpts') ?? [];
-    const debugMode = config.get<boolean>('debugMode');
+    const debugMode = config.get<boolean>('debugMode', false) === true;
     const customJava = config.get<string>('javaExecutable')?.trim() || '';
 
     if (!customJava && (!fs.existsSync(RUNTIME_DIR) || !fs.existsSync(COMPILER_JAR))) {

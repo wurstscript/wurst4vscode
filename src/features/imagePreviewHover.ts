@@ -3,7 +3,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 
-import { ensureCascCached } from './blpPreview';
+import { ensureGameTextureCached } from './blpPreview';
 import {
     ensurePreview,
     getCandidateRoots,
@@ -35,7 +35,7 @@ class ImagePreviewHoverProvider implements vscode.HoverProvider {
             const roots = await getCandidateRoots(document.uri.fsPath);
             let fsPath = await resolveAssetPath(match[1], roots);
             if (!fsPath) {
-                fsPath = await ensureCascCached(match[1]) ?? undefined;
+                fsPath = await ensureGameTextureCached(match[1]) ?? undefined;
             }
             if (!fsPath) {
                 return undefined;

@@ -16,6 +16,7 @@ import { registerObjModPreview } from './features/objModPreview';
 import { registerWpmPreview } from './features/wpmPreview';
 import { registerDooPreview } from './features/dooPreview';
 import { registerTriggerPreview } from './features/triggerPreview';
+import { registerMapDataPreview } from './features/mapDataPreview';
 import { registerAgentsGuideOffer } from './features/agentsGuide';
 
 export async function activate(context: ExtensionContext) {
@@ -32,6 +33,7 @@ export async function activate(context: ExtensionContext) {
     context.subscriptions.push(...registerWpmPreview(context));
     context.subscriptions.push(registerDooPreview(context));
     context.subscriptions.push(...registerTriggerPreview(context));
+    context.subscriptions.push(registerMapDataPreview(context));
     context.subscriptions.push(registerAgentsGuideOffer(context));
 
     registerBasicCommands(context);

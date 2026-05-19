@@ -13,7 +13,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { decodeToRgba, ensureCascAssetCached, ensureCascCached } from './blpPreview';
+import { decodeToRgba, ensureGameAssetCached, ensureGameTextureCached } from './blpPreview';
 import {
     getCandidateRoots,
     getTempPreviewDir,
@@ -558,7 +558,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
         scheduleCascJob(async () => {
             try {
                 const startedAt = Date.now();
-                const cachedPath = await ensureCascAssetCached(assetPath);
+                const cachedPath = await ensureGameAssetCached(assetPath);
                 const elapsed = Date.now() - startedAt;
                 const active = vscode.window.activeTextEditor;
                 if (!active || active.document !== document) return;
@@ -595,7 +595,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
                 const startedAt = Date.now();
                 const queueWait = startedAt - queuedAt;
                 log(`start casc extract: ${assetPath} (queued ${queueWait}ms)`);
-                const cachedPath = await ensureCascCached(assetPath);
+                const cachedPath = await ensureGameTextureCached(assetPath);
                 const elapsed = Date.now() - startedAt;
                 if (!cachedPath) {
                     unresolvedAssets.add(assetPath);

@@ -269,6 +269,12 @@
                     },
                     {
                         "filenamePattern": "*.MDX"
+                    },
+                    {
+                        "filenamePattern": "*.mdl"
+                    },
+                    {
+                        "filenamePattern": "*.MDL"
                     }
                 ],
                 "priority": "default"
@@ -297,6 +303,140 @@
                     },
                     {
                         "filenamePattern": "*.w3q"
+                    },
+                    {
+                        "filenamePattern": "*.W3U"
+                    },
+                    {
+                        "filenamePattern": "*.W3T"
+                    },
+                    {
+                        "filenamePattern": "*.W3A"
+                    },
+                    {
+                        "filenamePattern": "*.W3B"
+                    },
+                    {
+                        "filenamePattern": "*.W3D"
+                    },
+                    {
+                        "filenamePattern": "*.W3H"
+                    },
+                    {
+                        "filenamePattern": "*.W3Q"
+                    }
+                ],
+                "priority": "default"
+            },
+            {
+                "viewType": "wurst.dooPreview",
+                "displayName": "WC3 Placement Data",
+                "selector": [
+                    {
+                        "filenamePattern": "*.doo"
+                    },
+                    {
+                        "filenamePattern": "*.DOO"
+                    }
+                ],
+                "priority": "default"
+            },
+            {
+                "viewType": "wurst.wpmPreview",
+                "displayName": "WC3 Pathing Map",
+                "selector": [
+                    {
+                        "filenamePattern": "*.wpm"
+                    },
+                    {
+                        "filenamePattern": "*.WPM"
+                    }
+                ],
+                "priority": "default"
+            },
+            {
+                "viewType": "wurst.wtgPreview",
+                "displayName": "WC3 GUI Triggers",
+                "selector": [
+                    {
+                        "filenamePattern": "*.wtg"
+                    },
+                    {
+                        "filenamePattern": "*.WTG"
+                    }
+                ],
+                "priority": "default"
+            },
+            {
+                "viewType": "wurst.wctPreview",
+                "displayName": "WC3 Custom Text Triggers",
+                "selector": [
+                    {
+                        "filenamePattern": "*.wct"
+                    },
+                    {
+                        "filenamePattern": "*.WCT"
+                    }
+                ],
+                "priority": "default"
+            },
+            {
+                "viewType": "wurst.mapDataPreview",
+                "displayName": "WC3 Map Data",
+                "selector": [
+                    {
+                        "filenamePattern": "*.mmp"
+                    },
+                    {
+                        "filenamePattern": "*.MMP"
+                    },
+                    {
+                        "filenamePattern": "*.shd"
+                    },
+                    {
+                        "filenamePattern": "*.SHD"
+                    },
+                    {
+                        "filenamePattern": "*.w3c"
+                    },
+                    {
+                        "filenamePattern": "*.W3C"
+                    },
+                    {
+                        "filenamePattern": "*.w3i"
+                    },
+                    {
+                        "filenamePattern": "*.W3I"
+                    },
+                    {
+                        "filenamePattern": "*.w3r"
+                    },
+                    {
+                        "filenamePattern": "*.W3R"
+                    },
+                    {
+                        "filenamePattern": "*.w3e"
+                    },
+                    {
+                        "filenamePattern": "*.W3E"
+                    },
+                    {
+                        "filenamePattern": "*.w3s"
+                    },
+                    {
+                        "filenamePattern": "*.W3S"
+                    },
+                    {
+                        "filenamePattern": "*.w3l"
+                    },
+                    {
+                        "filenamePattern": "*.W3L"
+                    },
+                    {
+                        "filenamePattern": "*.w3o"
+                    },
+                    {
+                        "filenamePattern": "*.W3O"
                     }
                 ],
                 "priority": "default"
@@ -517,6 +657,7 @@
         "compile": "tsc -watch -p ./",
         "compile-web": "webpack",
         "watch-web": "webpack --watch",
+        "test:wc3-previews": "node ./scripts/wc3-preview-smoke.js",
         "package-web": "webpack --mode production --devtool hidden-source-map",
         "publish": "vsce publish --no-dependencies"
     },

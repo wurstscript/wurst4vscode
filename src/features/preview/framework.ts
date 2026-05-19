@@ -8,6 +8,8 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { buildPage } from '../webviewShared';
+import { escapeHtml } from '../webviewUtils';
 
 export interface ParsedPreviewerOpts<TData> {
     viewType: string;
@@ -20,30 +22,68 @@ export interface ParsedPreviewerOpts<TData> {
     panelOptions?: vscode.WebviewPanelOptions;
 }
 
-class ParsedDocument<TData> implements vscode.CustomDocument {
+class ParsedDocument implements vscode.CustomDocument {
     constructor(
         readonly uri: vscode.Uri,
-        readonly data: TData,
-        readonly html: string,
     ) {}
     dispose(): void {}
 }
 
-class ParsedEditorProvider<TData> implements vscode.CustomReadonlyEditorProvider<ParsedDocument<TData>> {
+class ParsedEditorProvider<TData> implements vscode.CustomReadonlyEditorProvider<ParsedDocument> {
     constructor(private readonly opts: ParsedPreviewerOpts<TData>) {}
 
-    async openCustomDocument(uri: vscode.Uri): Promise<ParsedDocument<TData>> {
-        const fileName = path.basename(uri.fsPath);
-        const raw      = Buffer.from(await vscode.workspace.fs.readFile(uri));
-        const data     = this.opts.parse(raw, fileName);
-        const html     = this.opts.render(data, fileName);
-        return new ParsedDocument(uri, data, html);
+    async openCustomDocument(uri: vscode.Uri): Promise<ParsedDocument> {
+        return new ParsedDocument(uri);
     }
 
-    resolveCustomEditor(doc: ParsedDocument<TData>, panel: vscode.WebviewPanel): void {
+    async resolveCustomEditor(doc: ParsedDocument, panel: vscode.WebviewPanel): Promise<void> {
         panel.webview.options = this.opts.webviewOptions ?? { enableScripts: false };
-        panel.webview.html = doc.html;
+        const fileName = path.basename(doc.uri.fsPath || doc.uri.path);
+        panel.webview.html = buildLoadingHtml(fileName);
+        try {
+            const raw = Buffer.from(await vscode.workspace.fs.readFile(doc.uri));
+            const data = this.opts.parse(raw, fileName);
+            panel.webview.html = this.opts.render(data, fileName);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            panel.webview.html = buildErrorHtml(fileName, message);
+        }
     }
+}
+
+function buildLoadingHtml(fileName: string): string {
+    return buildPage({
+        csp: "default-src 'none'; style-src 'unsafe-inline';",
+        title: escapeHtml(fileName),
+        extraCss: `
+main {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.wv-loading-overlay {
+  opacity: 1;
+}`,
+        body: `<main>
+  <div class="wv-loading-overlay visible">
+    <div>
+      <div class="wv-spinner"></div>
+      <div class="wv-loading-text">Loading ${escapeHtml(fileName)}...</div>
+    </div>
+  </div>
+</main>`,
+    });
+}
+
+function buildErrorHtml(fileName: string, message: string): string {
+    return buildPage({
+        csp: "default-src 'none'; style-src 'unsafe-inline';",
+        title: escapeHtml(fileName),
+        body: `<div class="wv-state">
+  <span>Failed to load ${escapeHtml(fileName)}</span>
+  <span class="err">${escapeHtml(message)}</span>
+</div>`,
+    });
 }
 
 export function registerParsedPreviewer<TData>(

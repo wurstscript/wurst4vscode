@@ -20,15 +20,47 @@ function log(msg: string): void {
     getOut().appendLine(msg);
 }
 
+function getArchiveOutputPath(destDir: string, archiveEntryName: string): string | null {
+    const parts = archiveEntryName
+        .replace(/\//g, '\\')
+        .split('\\')
+        .filter(part => part.length > 0);
+
+    if (parts.length === 0 || parts.some(part => part === '..' || part.includes(':'))) {
+        return null;
+    }
+
+    const root = path.resolve(destDir);
+    const candidate = path.resolve(root, ...parts);
+    const rootPrefix = root.endsWith(path.sep) ? root : root + path.sep;
+    const normalizedCandidate = process.platform === 'win32' ? candidate.toLowerCase() : candidate;
+    const normalizedRootPrefix = process.platform === 'win32' ? rootPrefix.toLowerCase() : rootPrefix;
+
+    return normalizedCandidate.startsWith(normalizedRootPrefix) ? candidate : null;
+}
+
+function getPreviewViewType(fileName: string): string | undefined {
+    const ext = path.extname(fileName).toLowerCase();
+    if (['.blp', '.dds', '.tga', '.mdx', '.mdl'].includes(ext)) return 'wurst.blpPreview';
+    if (['.w3u', '.w3t', '.w3a', '.w3b', '.w3d', '.w3h', '.w3q'].includes(ext)) return 'wurst.objModPreview';
+    if (ext === '.doo') return 'wurst.dooPreview';
+    if (ext === '.wpm') return 'wurst.wpmPreview';
+    if (ext === '.wtg') return 'wurst.wtgPreview';
+    if (ext === '.wct') return 'wurst.wctPreview';
+    if (['.mmp', '.shd', '.w3c', '.w3i', '.w3r', '.w3e', '.w3s', '.w3l', '.w3o'].includes(ext)) return 'wurst.mapDataPreview';
+    return undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Custom document
 // ---------------------------------------------------------------------------
 
 interface MpqDocument extends vscode.CustomDocument {
-    readonly entries: MpqFileEntry[];
-    readonly reader: MpqReader | null;
-    readonly parseError: string | null;
-    readonly archiveSize: number;
+    entries: MpqFileEntry[];
+    reader: MpqReader | null;
+    parseError: string | null;
+    archiveSize: number;
+    loaded: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -44,24 +76,7 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
         _token: vscode.CancellationToken,
     ): Promise<MpqDocument> {
         log(`openCustomDocument: ${uri.fsPath}`);
-        let reader: MpqReader | null = null;
-        let entries: MpqFileEntry[] = [];
-        let parseError: string | null = null;
-        let archiveSize = 0;
-
-        try {
-            const bytes = await vscode.workspace.fs.readFile(uri);
-            archiveSize = bytes.byteLength;
-            const buf = Buffer.from(bytes);
-            reader = MpqReader.open(buf);
-            entries = await reader.getFilesWithInfoAsync();
-            log(`MPQ opened: ${entries.length} files, ${archiveSize} bytes`);
-        } catch (e) {
-            parseError = e instanceof Error ? e.message : String(e);
-            log(`ERROR in openCustomDocument: ${parseError}`);
-        }
-
-        return { uri, entries, reader, parseError, archiveSize, dispose() {} };
+        return { uri, entries: [], reader: null, parseError: null, archiveSize: 0, loaded: false, dispose() {} };
     }
 
     async resolveCustomEditor(
@@ -82,6 +97,38 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
 
         const archiveName = path.basename(document.uri.fsPath || document.uri.path);
         const archiveDir  = path.dirname(document.uri.fsPath || document.uri.path);
+        let webviewReady = false;
+
+        const postArchiveState = () => {
+            if (!webviewReady || !document.loaded) return;
+            if (document.parseError) {
+                void webviewPanel.webview.postMessage({ type: 'error', message: document.parseError });
+            } else {
+                void webviewPanel.webview.postMessage({
+                    type: 'init',
+                    entries: document.entries,
+                    archiveSize: document.archiveSize,
+                    archiveName,
+                });
+            }
+        };
+
+        const loadArchive = async () => {
+            try {
+                const bytes = await vscode.workspace.fs.readFile(document.uri);
+                document.archiveSize = bytes.byteLength;
+                const buf = Buffer.from(bytes);
+                document.reader = MpqReader.open(buf);
+                document.entries = await document.reader.getFilesWithInfoAsync();
+                log(`MPQ opened: ${document.entries.length} files, ${document.archiveSize} bytes`);
+            } catch (e) {
+                document.parseError = e instanceof Error ? e.message : String(e);
+                log(`ERROR loading MPQ: ${document.parseError}`);
+            } finally {
+                document.loaded = true;
+                postArchiveState();
+            }
+        };
 
         webviewPanel.webview.onDidReceiveMessage(async (msg: unknown) => {
             if (typeof msg !== 'object' || !msg) return;
@@ -89,16 +136,8 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
 
             if (type === 'ready') {
                 log('Webview ready');
-                if (document.parseError) {
-                    void webviewPanel.webview.postMessage({ type: 'error', message: document.parseError });
-                } else {
-                    void webviewPanel.webview.postMessage({
-                        type: 'init',
-                        entries: document.entries,
-                        archiveSize: document.archiveSize,
-                        archiveName,
-                    });
-                }
+                webviewReady = true;
+                postArchiveState();
                 return;
             }
 
@@ -108,14 +147,19 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
                 try {
                     const data = await document.reader.readFileAsync(name);
                     const tmpDir = path.join(os.tmpdir(), 'wurst_mpq_extract', archiveName);
-                    const outPath = path.join(tmpDir, name.replace(/\\/g, path.sep));
+                    const outPath = getArchiveOutputPath(tmpDir, name);
+                    if (!outPath) {
+                        throw new Error(`Unsafe archive path: ${name}`);
+                    }
                     fs.mkdirSync(path.dirname(outPath), { recursive: true });
                     fs.writeFileSync(outPath, data);
-                    void vscode.commands.executeCommand(
-                        'vscode.open',
-                        vscode.Uri.file(outPath),
-                        { preview: false, preserveFocus: false }
-                    );
+                    const uri = vscode.Uri.file(outPath);
+                    const viewType = getPreviewViewType(name);
+                    if (viewType) {
+                        void vscode.commands.executeCommand('vscode.openWith', uri, viewType, { preview: false, preserveFocus: false });
+                    } else {
+                        void vscode.commands.executeCommand('vscode.open', uri, { preview: false, preserveFocus: false });
+                    }
                 } catch (e) {
                     void vscode.window.showErrorMessage(
                         `Failed to extract ${name}: ${e instanceof Error ? e.message : String(e)}`
@@ -147,6 +191,7 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
 
         webviewPanel.webview.html = buildHtml(webviewPanel.webview, archiveName, scriptUri);
         log('HTML set');
+        void loadArchive();
     }
 }
 
@@ -162,7 +207,12 @@ async function extractAllFiles(
         for (const entry of entries) {
             try {
                 const data = await reader.readFileAsync(entry.name);
-                const outPath = path.join(destDir, entry.name.replace(/\\/g, path.sep));
+                const outPath = getArchiveOutputPath(destDir, entry.name);
+                if (!outPath) {
+                    failed++;
+                    log(`Skipping unsafe archive path: ${entry.name}`);
+                    continue;
+                }
                 fs.mkdirSync(path.dirname(outPath), { recursive: true });
                 fs.writeFileSync(outPath, data);
             } catch {
@@ -234,7 +284,8 @@ function buildHtml(webview: vscode.Webview, archiveName: string, scriptUri: vsco
 .row:hover { background: var(--hover); }
 .row.selected { background: var(--active); color: var(--active-fg); }
 .row.selected .size, .row.selected .folder-meta { color: var(--active-fg); opacity: 0.75; }
-.row.hidden { display: none !important; }
+.row.hidden,
+[data-type="folder"].hidden { display: none !important; }
 
 /* chevron */
 .chevron {

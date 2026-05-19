@@ -13,9 +13,9 @@ const TYPE_LABELS: Record<string, string> = {
     w3u: 'Unit',
     w3t: 'Item',
     w3a: 'Ability',
-    w3b: 'Buff',
-    w3d: 'Destructable',
-    w3h: 'Effect',
+    w3b: 'Destructable',
+    w3d: 'Doodad',
+    w3h: 'Buff',
     w3q: 'Upgrade',
 };
 

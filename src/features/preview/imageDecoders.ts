@@ -23,6 +23,7 @@ export type DecodedMdxRaw = {
     kind: 'mdx-raw';
     mdxBase64: string;
     fileName: string;
+    format: 'mdx' | 'mdl';
 };
 
 export type DecodedBlpImage = DecodedRasterImage | DecodedMdxRaw;

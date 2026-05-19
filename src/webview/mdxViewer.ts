@@ -1,4 +1,4 @@
-import { parseMDX, ModelRenderer, decodeBLP, getBLPImageData } from 'war3-model';
+import { parseMDL, parseMDX, ModelRenderer, decodeBLP, getBLPImageData } from 'war3-model';
 
 // ─── types ──────────────────────────────────────────────────────────────────
 
@@ -453,7 +453,7 @@ const War3Viewer = {
         }
     },
 
-    loadModel(buffer: ArrayBuffer, fileName: string) {
+    loadModel(buffer: ArrayBuffer, fileName: string, format: 'mdx' | 'mdl' = 'mdx') {
         const cb = callbacks;
         try {
             lastRenderError = null;
@@ -464,7 +464,9 @@ const War3Viewer = {
             renderer = null;
             gl = null;
 
-            const model = parseMDX(buffer);
+            const model = format === 'mdl'
+                ? parseMDL(new TextDecoder('utf-8').decode(buffer))
+                : parseMDX(buffer);
 
             if (!canvas) throw new Error('canvas not initialized');
             const newGl = canvas.getContext('webgl2', { antialias: true, alpha: true, depth: true });

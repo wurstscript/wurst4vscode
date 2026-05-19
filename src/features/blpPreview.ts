@@ -6,9 +6,9 @@ import * as vscode from 'vscode';
 import { makeNonce, escapeHtml } from './webviewUtils';
 import { buildPage, sep } from './webviewShared';
 import {
-    getCascCacheDir,
-    findCascTexture,
-    findCascAsset,
+    getGameAssetCacheDir,
+    findGameTexture,
+    findGameAsset,
     findLocalTexture,
 } from './preview/cascStorage';
 import {
@@ -20,7 +20,12 @@ import {
 
 // Re-exported for backwards-compat with existing callers that import from blpPreview.
 export { decodeRasterPreview, decodeToRgba, writeJpegPreviewFile } from './preview/imageDecoders';
-export { ensureCascCached, ensureCascAssetCached } from './preview/cascStorage';
+export {
+    ensureGameTextureCached,
+    ensureGameAssetCached,
+    ensureCascCached,
+    ensureCascAssetCached,
+} from './preview/cascStorage';
 
 type BlpDocument = vscode.CustomDocument;
 
@@ -43,7 +48,7 @@ export function registerBlpPreview(context: vscode.ExtensionContext): vscode.Dis
         log('=== CASC Smoketest ===');
         const wc3path = vscode.workspace.getConfiguration('wurst').get<string>('wc3path', '');
         log(`wurst.wc3path setting: "${wc3path || '(not set)'}"`);
-        log(`cache dir: ${getCascCacheDir()}`);
+        log(`cache dir: ${getGameAssetCacheDir()}`);
 
         const textureTests = [
             'Textures\\Abomination.blp',
@@ -60,7 +65,7 @@ export function registerBlpPreview(context: vscode.ExtensionContext): vscode.Dis
         log('\n--- Texture Tests ---');
         for (const testPath of textureTests) {
             log(`\nExtracting texture: ${testPath}`);
-            const textureResult = await findCascTexture(testPath, log);
+            const textureResult = await findGameTexture(testPath, log);
             if (textureResult) {
                 passed++;
                 log(`PASS texture: ${testPath} -> ${textureResult.ext} ${textureResult.buf.length} bytes`);
@@ -73,7 +78,7 @@ export function registerBlpPreview(context: vscode.ExtensionContext): vscode.Dis
         log('\n--- Asset Tests ---');
         for (const testPath of assetTests) {
             log(`\nExtracting asset: ${testPath}`);
-            const assetResult = await findCascAsset(testPath, log);
+            const assetResult = await findGameAsset(testPath, log);
             if (assetResult) {
                 passed++;
                 log(`PASS asset: ${testPath} -> ${assetResult.length} bytes`);
@@ -147,7 +152,12 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
                 const decoded = decodePreview(bytes, document.uri);
                 if (id !== requestId) return;
                 if (decoded.kind === 'mdx-raw') {
-                    await webviewPanel.webview.postMessage({ type: 'mdx', mdxBase64: decoded.mdxBase64, fileName: decoded.fileName });
+                    await webviewPanel.webview.postMessage({
+                        type: 'mdx',
+                        mdxBase64: decoded.mdxBase64,
+                        fileName: decoded.fileName,
+                        format: decoded.format,
+                    });
                 } else {
                     await webviewPanel.webview.postMessage({ type: 'image', fileName, decoded });
                 }
@@ -236,12 +246,12 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
 
                         // 2. CASC local archive fallback (uses wurst.wc3path)
                         if (!texBuf) {
-                            const casc = await findCascTexture(texPath, dbg);
+                            const casc = await findGameTexture(texPath, dbg);
                             if (casc) {
                                 texBuf = casc.buf;
                                 texExt = casc.ext;
                                 // Reconstruct the cache path so the webview can offer an "open" link
-                                const cacheDir = getCascCacheDir();
+                                const cacheDir = getGameAssetCacheDir();
                                 const normalized = texPath.replace(/\//g, '\\').toLowerCase();
                                 const rel = texExt === 'dds' ? normalized.replace(/\.blp$/, '.dds') : normalized;
                                 resolvedFsPath = path.join(cacheDir, ...rel.split('\\'));
@@ -951,7 +961,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
         zoomLabel.textContent = '3D';
         setMeta(msg.fileName || 'Model', 'Loading model...');
         setLoading(true, 'Loading model...');
-        if (w3v) w3v.loadModel(base64ToArrayBuffer(msg.mdxBase64), msg.fileName || '');
+        if (w3v) w3v.loadModel(base64ToArrayBuffer(msg.mdxBase64), msg.fileName || '', msg.format || 'mdx');
         return;
       }
       if (msg.type === 'texture') {
@@ -1042,7 +1052,7 @@ function decodePreview(sourceBytes: Uint8Array, uri: vscode.Uri): DecodedBlpImag
     if (ext === '.mdx' || ext === '.mdl') {
         const mdxBase64 = Buffer.from(sourceBytes).toString('base64');
         const fileName = path.basename(uri.fsPath || uri.path);
-        return { kind: 'mdx-raw', mdxBase64, fileName };
+        return { kind: 'mdx-raw', mdxBase64, fileName, format: ext === '.mdl' ? 'mdl' : 'mdx' };
     }
     return decodeBlp(sourceBytes);
 }

@@ -7,8 +7,8 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import * as zlib from 'zlib';
 
-import { decodeRasterPreview, ensureCascAssetCached, writeJpegPreviewFile } from './blpPreview';
-import { getCascCacheDir } from './preview/cascStorage';
+import { decodeRasterPreview, ensureGameAssetCached, writeJpegPreviewFile } from './blpPreview';
+import { getGameAssetCacheDir } from './preview/cascStorage';
 
 export const IMAGE_EXTS = new Set(['blp', 'dds', 'tga', 'png', 'jpg', 'jpeg']);
 
@@ -181,7 +181,7 @@ export async function getCandidateRoots(documentFsPath: string): Promise<string[
         }
     }));
 
-    add(getCascCacheDir());
+    add(getGameAssetCacheDir());
     return roots;
 }
 
@@ -227,7 +227,7 @@ export async function resolveAssetPathWithCasc(assetPath: string, roots: readonl
     if (resolved) {
         return resolved;
     }
-    return ensureCascAssetCached(assetPath);
+    return ensureGameAssetCached(assetPath);
 }
 
 export async function getCachedPreview(

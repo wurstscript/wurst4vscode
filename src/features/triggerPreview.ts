@@ -64,26 +64,26 @@ function buildWctHtml(parsed: WctFile, fileName: string): string {
 
     const sections: string[] = [];
 
-    const renderTrig = (t: WctTrig, label: string): string => {
+    const renderTrig = (t: WctTrig, label: string, note?: string): string => {
         const code = t.text.trim();
+        const noteHtml = note ? `<p class="note">${escHtml(note)}</p>` : '';
         if (!code) {
             return `<section>
 <h2>${escHtml(label)} <span class="count">(empty)</span></h2>
+${noteHtml}
 <p class="empty">no code</p>
 </section>`;
         }
         const lineCount = (code.match(/\n/g)?.length ?? 0) + 1;
         return `<section>
 <h2>${escHtml(label)} <span class="count">(${lineCount} line${lineCount !== 1 ? 's' : ''})</span></h2>
+${noteHtml}
 <pre>${escHtml(code)}</pre>
 </section>`;
     };
 
     if (parsed.headTrig) {
-        const headerLabel = parsed.headComment
-            ? `Header — ${parsed.headComment}`
-            : 'Header (global init script)';
-        sections.push(renderTrig(parsed.headTrig, headerLabel));
+        sections.push(renderTrig(parsed.headTrig, 'Header', parsed.headComment || 'Global init script'));
     }
 
     if (parsed.trigs.length === 0 && !parsed.headTrig) {
@@ -113,6 +113,13 @@ ${COMMON_CSS}
     margin: 0;
   }
   section { margin-bottom: 20px; }
+  .note {
+    color: var(--vscode-descriptionForeground, #888);
+    font-size: .85em;
+    line-height: 1.4;
+    margin: -2px 0 8px;
+    max-width: 900px;
+  }
 </style>
 </head>
 <body>

@@ -53,6 +53,8 @@ export function getCascCacheDir(): string {
     return path.join(WURST_HOME, 'casc_cache');
 }
 
+export const getGameAssetCacheDir = getCascCacheDir;
+
 function getCacheDir(): string {
     return getCascCacheDir();
 }
@@ -60,6 +62,8 @@ function getCacheDir(): string {
 export function normalizeCascAssetPath(assetPath: string): string {
     return assetPath.replace(/\\\\/g, '\\').replace(/\//g, '\\').toLowerCase();
 }
+
+export const normalizeGameAssetPath = normalizeCascAssetPath;
 
 function getCachedAssetPath(cacheDir: string, normalizedAssetPath: string): string {
     return path.join(cacheDir, ...normalizedAssetPath.split('\\'));
@@ -204,6 +208,8 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
     return null;
 }
 
+export const findGameTexture = findCascTexture;
+
 export async function findCascAsset(assetPath: string, log: (msg: string) => void): Promise<Buffer | null> {
     const cacheDir = getCacheDir();
     const normalized = normalizeCascAssetPath(assetPath);
@@ -234,6 +240,8 @@ export async function findCascAsset(assetPath: string, log: (msg: string) => voi
 
     return null;
 }
+
+export const findGameAsset = findCascAsset;
 
 /** Try to read a texture file from the local filesystem relative to the MDX file.
  *  Returns the buffer and the actual path found (may differ in extension). */
@@ -278,6 +286,8 @@ export async function ensureCascCached(assetPath: string): Promise<string | unde
     return getCachedAssetPath(cacheDir, rel);
 }
 
+export const ensureGameTextureCached = ensureCascCached;
+
 export async function ensureCascAssetCached(assetPath: string): Promise<string | undefined> {
     const log = (msg: string) => console.log(`[wurst-casc] ${msg}`);
     log(`ensureCascAssetCached: ${assetPath}`);
@@ -285,3 +295,5 @@ export async function ensureCascAssetCached(assetPath: string): Promise<string |
     if (!result) { log(`ensureCascAssetCached: failed for ${assetPath}`); return undefined; }
     return getCachedAssetPath(getCacheDir(), normalizeCascAssetPath(assetPath));
 }
+
+export const ensureGameAssetCached = ensureCascAssetCached;

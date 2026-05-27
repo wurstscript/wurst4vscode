@@ -4,10 +4,11 @@
 
 import * as vscode from 'vscode';
 import { parseObjMod, ObjModFile, ObjModEntry, ObjModMod } from 'casc-ts/formats';
-import { registerParsedPreviewer } from './preview/framework';
+import { ParsedPreviewContext, registerParsedPreviewer } from './preview/framework';
+import { loadTriggerStringsForUri, resolveTriggerString, ResolvedText, TriggerStringTable } from './preview/triggerStrings';
+import { buildPage } from './webviewShared';
+import { escapeHtml } from './webviewUtils';
 export { ObjModFile, ObjModEntry, ObjModMod, ObjModVarType } from 'casc-ts/formats';
-
-// ── HTML rendering ────────────────────────────────────────────────────────────
 
 const TYPE_LABELS: Record<string, string> = {
     w3u: 'Unit',
@@ -19,145 +20,198 @@ const TYPE_LABELS: Record<string, string> = {
     w3q: 'Upgrade',
 };
 
-function escHtml(s: string): string {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function formatValue(mod: ObjModMod): string {
+function formatValue(mod: ObjModMod, triggerStrings: TriggerStringTable): string {
     if (typeof mod.value === 'number') {
         if (mod.varType === 'real' || mod.varType === 'unreal') {
             return mod.value.toPrecision(6).replace(/\.?0+$/, '');
         }
         return String(mod.value);
     }
-    return escHtml(mod.value);
+    return renderResolvedInline(resolveTriggerString(mod.value, triggerStrings));
 }
 
-function renderModRows(mods: ObjModMod[], extended: boolean): string {
+function renderModRows(mods: ObjModMod[], extended: boolean, triggerStrings: TriggerStringTable): string {
     if (mods.length === 0) return `<tr><td colspan="${extended ? 5 : 3}" class="empty">no modifications</td></tr>`;
     return mods.map(m => {
         const levelCols = extended
             ? `<td class="num">${m.level ?? ''}</td><td class="num">${m.dataPt ?? ''}</td>`
             : '';
         return `<tr>
-  <td class="id">${escHtml(m.fieldId)}</td>
+  <td class="id">${escapeHtml(m.fieldId)}</td>
   <td class="type ${m.varType}">${m.varType}</td>
   ${levelCols}
-  <td class="value">${formatValue(m)}</td>
+  <td class="value">${formatValue(m, triggerStrings)}</td>
 </tr>`;
     }).join('\n');
 }
 
-function renderSection(title: string, entries: ObjModEntry[], extended: boolean): string {
+function renderSection(title: string, entries: ObjModEntry[], extended: boolean, triggerStrings: TriggerStringTable): string {
     if (entries.length === 0) {
-        return `<section><h2>${escHtml(title)} <span class="count">(0)</span></h2><p class="empty">none</p></section>`;
+        return `<section class="section"><h2>${escapeHtml(title)} <span class="count">(0)</span></h2><p class="empty">none</p></section>`;
     }
 
     const extraHeaders = extended ? '<th>Level</th><th>DataPt</th>' : '';
     const parts = entries.map(e => {
         const idLine = e.newId
-            ? `<span class="base-id">${escHtml(e.baseId)}</span><span class="arrow">→</span><span class="new-id">${escHtml(e.newId)}</span>`
-            : `<span class="base-id">${escHtml(e.baseId)}</span>`;
+            ? `<span class="base-id">${escapeHtml(e.baseId)}</span><span class="arrow">-&gt;</span><span class="new-id">${escapeHtml(e.newId)}</span>`
+            : `<span class="base-id">${escapeHtml(e.baseId)}</span>`;
         return `<details open>
   <summary>${idLine}<span class="mod-count">${e.mods.length} mod${e.mods.length !== 1 ? 's' : ''}</span></summary>
-  <table>
+  <div class="table-wrap"><table>
     <thead><tr><th>Field</th><th>Type</th>${extraHeaders}<th>Value</th></tr></thead>
-    <tbody>${renderModRows(e.mods, extended)}</tbody>
-  </table>
+    <tbody>${renderModRows(e.mods, extended, triggerStrings)}</tbody>
+  </table></div>
 </details>`;
     }).join('\n');
 
-    return `<section>
-<h2>${escHtml(title)} <span class="count">(${entries.length})</span></h2>
+    return `<section class="section">
+<h2>${escapeHtml(title)} <span class="count">(${entries.length})</span></h2>
 ${parts}
 </section>`;
 }
 
-function buildHtml(parsed: ObjModFile, fileName: string): string {
+function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPreviewContext): string {
     const typeLabel = TYPE_LABELS[parsed.ext.slice(1)] ?? parsed.ext.slice(1).toUpperCase();
+    const triggerStrings = loadTriggerStringsForUri(context.uri);
     const errorBanner = parsed.error
-        ? `<div class="error">Parse error: ${escHtml(parsed.error)}</div>`
+        ? `<div class="error">Parse error: ${escapeHtml(parsed.error)}</div>`
         : '';
 
-    const origSection = renderSection('Original Object Modifications', parsed.origObjs, parsed.extended);
-    const customSection = renderSection('Custom Objects', parsed.customObjs, parsed.extended);
+    const origSection = renderSection('Original Object Modifications', parsed.origObjs, parsed.extended, triggerStrings);
+    const customSection = renderSection('Custom Objects', parsed.customObjs, parsed.extended, triggerStrings);
 
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
-<title>${escHtml(fileName)}</title>
-<style>
-  :root {
-    --bg: var(--vscode-editor-background, #1e1e1e);
-    --fg: var(--vscode-editor-foreground, #d4d4d4);
-    --border: var(--vscode-panel-border, #444);
-    --th-bg: var(--vscode-editorGroupHeader-tabsBackground, #252526);
-    --row-alt: var(--vscode-list-hoverBackground, #2a2d2e);
-    --accent: var(--vscode-textLink-foreground, #4ec9b0);
-    --error: var(--vscode-errorForeground, #f44747);
-    --summary-bg: var(--vscode-sideBarSectionHeader-background, #383838);
-    font-size: 13px;
-    font-family: var(--vscode-font-family, sans-serif);
-  }
-  body { background: var(--bg); color: var(--fg); margin: 0; padding: 12px 16px; }
-  h1 { font-size: 1.1em; margin: 0 0 4px; color: var(--accent); }
-  .subtitle { color: var(--vscode-descriptionForeground, #888); font-size: 0.85em; margin-bottom: 16px; }
-  h2 { font-size: 0.95em; margin: 16px 0 6px; text-transform: uppercase; letter-spacing: .05em; opacity: .7; }
-  .count { font-weight: normal; opacity: .6; }
-  .error { color: var(--error); border: 1px solid var(--error); padding: 6px 10px; border-radius: 3px; margin-bottom: 12px; }
-  .empty { opacity: .5; font-style: italic; padding: 4px 0; }
-  details { margin-bottom: 6px; }
-  details[open] > table { margin-top: 0; }
-  summary {
-    cursor: pointer;
-    padding: 5px 8px;
-    background: var(--summary-bg);
-    border-radius: 3px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    list-style: none;
-    user-select: none;
-  }
-  summary::-webkit-details-marker { display: none; }
-  summary::before { content: '▶'; font-size: .7em; transition: transform .15s; opacity: .6; }
-  details[open] > summary::before { transform: rotate(90deg); }
-  .base-id { font-family: monospace; font-weight: bold; color: var(--accent); }
-  .new-id  { font-family: monospace; font-weight: bold; }
-  .arrow   { opacity: .5; }
-  .mod-count { margin-left: auto; opacity: .5; font-size: .85em; }
-  table { border-collapse: collapse; width: 100%; font-size: .9em; }
-  th { background: var(--th-bg); text-align: left; padding: 4px 10px; font-weight: 600; border-bottom: 1px solid var(--border); }
-  td { padding: 3px 10px; border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent); }
-  tr:nth-child(even) td { background: var(--row-alt); }
-  td.id    { font-family: monospace; color: var(--accent); }
-  td.num   { font-family: monospace; text-align: center; opacity: .7; }
-  td.value { font-family: monospace; word-break: break-all; }
-  td.type  { font-size: .8em; opacity: .7; }
-  td.type.int    { color: #9cdcfe; }
-  td.type.real   { color: #b5cea8; }
-  td.type.unreal { color: #ce9178; }
-  td.type.string { color: #d7ba7d; }
-</style>
-</head>
-<body>
-<h1>${escHtml(fileName)}</h1>
-<p class="subtitle">WC3 ${escHtml(typeLabel)} Object Modifications &nbsp;·&nbsp; v${parsed.version}${parsed.extended ? ' &nbsp;·&nbsp; extended (level/dataPt)' : ''}</p>
+    return buildPage({
+        csp: "default-src 'none'; style-src 'unsafe-inline';",
+        title: escapeHtml(fileName),
+        extraCss: `
+.content { flex: 1; overflow: auto; }
+.md-header {
+  padding: 10px 16px 9px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar);
+}
+.md-title {
+  color: var(--vscode-textLink-foreground, var(--fg));
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.md-meta { color: var(--muted); font-size: 12px; margin-top: 1px; }
+.readonly-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.dialog { max-width: 1120px; padding: 14px 16px 22px; }
+.section {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  margin-top: 14px;
+}
+.section:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+h2 { font-size: 12px; margin: 0 0 9px; font-weight: 600; color: var(--fg); }
+.count { font-weight: normal; opacity: .6; }
+.error {
+  color: var(--vscode-errorForeground, #f14c4c);
+  border: 1px solid color-mix(in srgb, currentColor 65%, transparent);
+  padding: 7px 9px;
+  margin-bottom: 12px;
+  border-radius: 2px;
+}
+.empty { color: var(--muted); font-style: italic; padding: 4px 0; }
+details { margin-bottom: 7px; }
+summary {
+  cursor: pointer;
+  padding: 6px 8px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 2px 2px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  user-select: none;
+}
+summary::-webkit-details-marker { display: none; }
+summary::before { content: '>'; font-size: 10px; transition: transform .15s; opacity: .65; }
+details[open] > summary::before { transform: rotate(90deg); }
+.base-id { font-family: var(--mono); font-weight: 600; color: var(--vscode-textLink-foreground, var(--fg)); }
+.new-id { font-family: var(--mono); font-weight: 600; }
+.arrow { opacity: .5; }
+.mod-count { margin-left: auto; color: var(--muted); font-size: 12px; }
+.table-wrap { overflow: auto; border: 1px solid var(--border); border-top: 0; }
+table { border-collapse: collapse; width: 100%; font-size: 12px; min-width: 560px; }
+th {
+  background: var(--vscode-editorGroupHeader-tabsBackground, var(--sidebar));
+  text-align: left;
+  padding: 6px 8px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+td { padding: 5px 8px; border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent); }
+tbody tr:last-child td { border-bottom: 0; }
+tr:nth-child(even) td { background: color-mix(in srgb, var(--hover) 55%, transparent); }
+td.id { font-family: var(--mono); color: var(--vscode-textLink-foreground, var(--fg)); }
+td.num { font-family: var(--mono); text-align: center; color: var(--muted); }
+td.value { font-family: var(--mono); word-break: break-all; }
+td.type { font-size: 11px; color: var(--muted); }
+td.type.int { color: #9cdcfe; }
+td.type.real { color: #b5cea8; }
+td.type.unreal { color: #ce9178; }
+td.type.string { color: #d7ba7d; }
+.source-pill {
+  display: inline-block;
+  max-width: 170px;
+  margin-left: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: -2px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 0 4px;
+  color: var(--vscode-textLink-foreground, var(--muted));
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.source-pill.missing {
+  color: var(--vscode-errorForeground, #f14c4c);
+}
+`,
+        body: `<div class="content">
+<div class="md-header">
+  <div class="md-title">${escapeHtml(fileName)}</div>
+  <div class="md-meta">WC3 ${escapeHtml(typeLabel)} object modifications - v${parsed.version}${parsed.extended ? ' - extended (level/dataPt)' : ''}<span class="readonly-badge">read-only</span></div>
+</div>
+<div class="dialog">
 ${errorBanner}
 ${origSection}
 ${customSection}
-</body>
-</html>`;
+</div>
+</div>`,
+    });
 }
 
-// ── Registration ──────────────────────────────────────────────────────────────
+function renderResolvedInline(value: ResolvedText): string {
+    const source = value.source
+        ? ` <span class="source-pill${value.missing ? ' missing' : ''}" title="${escapeHtml(value.missing ? `${value.source} not found in war3map.wts` : `Resolved from ${value.source}`)}">${escapeHtml(value.source)}</span>`
+        : '';
+    return `${escapeHtml(value.value === undefined ? '' : String(value.value))}${source}`;
+}
 
 export function registerObjModPreview(_context: vscode.ExtensionContext): vscode.Disposable {
     return registerParsedPreviewer<ObjModFile>({
         viewType: 'wurst.objModPreview',
         parse:  (data, fileName) => parseObjMod(data, fileName.slice(fileName.lastIndexOf('.'))),
-        render: (parsed, fileName) => buildHtml(parsed, fileName),
+        render: (parsed, fileName, context) => buildHtml(parsed, fileName, context),
     });
 }

@@ -3,7 +3,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { spawn, spawnSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import * as vscode from 'vscode';
 import { workspace } from 'vscode';
 import {
@@ -15,7 +15,7 @@ import {
     removeDirSafe, upgradeFolder, ensureDirectoryPath,
 } from './fsUtils';
 import { fetchNightlyZipAsset, fetchLatestGrillAsset, fetchNightlyCommitSha, downloadFileWithProgress, extractZipWithByteProgress } from './downloader';
-import { ensureCliOnPath, offerPostInstallActions, prependPathForVsCodeTerminals } from './pathManager';
+import { ensureCliOnPath, offerPostInstallActions } from './pathManager';
 import { stopLanguageServerIfRunning } from '../languageServer';
 
 type InstallOptions = {
@@ -268,51 +268,4 @@ export async function maybeOfferUpdate(): Promise<void> {
     } catch (e) {
         console.warn('Update check failed:', e);
     }
-}
-
-export async function runGrillGenerate(destDir: string): Promise<void> {
-    const bundled = getBundledGrillExecutable();
-    const grillCmd = bundled ?? 'grill';
-    const parentDir = path.dirname(destDir);
-    const projectName = path.basename(destDir);
-    if (bundled) prependPathForVsCodeTerminals(WURST_HOME);
-
-    await new Promise<void>((resolve, reject) => {
-        const out: string[] = [];
-        const push = (s: any) => {
-            const str = String(s ?? '');
-            if (!str) return;
-            out.push(str);
-            if (out.length > 2000) out.shift();
-        };
-
-        let child;
-        if (process.platform === 'win32') {
-            child = spawn('cmd.exe', ['/c', grillCmd, 'generate', projectName], { cwd: parentDir, windowsHide: true });
-        } else {
-            child = spawn(grillCmd, ['generate', projectName], { cwd: parentDir, stdio: ['ignore', 'pipe', 'pipe'] });
-        }
-
-        child.on('error', (err: any) => {
-            const details = out.join('').trim();
-            if (err?.code === 'ENOENT') {
-                reject(new Error([
-                    `Could not execute "grill".`,
-                    `Make sure Grill is installed and on PATH, or run "Wurst: Install/Update" once.`,
-                    details ? `\nLast output:\n${details}` : '',
-                ].join('\n')));
-            } else {
-                reject(new Error(`${err?.message ?? String(err)}${details ? `\n\n${details}` : ''}`));
-            }
-        });
-
-        child.stdout?.on('data', push);
-        child.stderr?.on('data', push);
-
-        child.on('close', (code) => {
-            const details = out.join('').trim();
-            if (code === 0) return resolve();
-            reject(new Error([`"grill generate" failed (exit code ${code}).`, details ? `\nOutput:\n${details}` : ''].join('\n')));
-        });
-    });
 }

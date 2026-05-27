@@ -5,6 +5,8 @@
 import * as vscode from 'vscode';
 import { parseWpm, WpmFile } from 'casc-ts/formats';
 import { registerParsedPreviewer } from './preview/framework';
+import { buildPage } from './webviewShared';
+import { escapeHtml } from './webviewUtils';
 export { WpmFile } from 'casc-ts/formats';
 
 // ── HTML Rendering ────────────────────────────────────────────────────────────
@@ -63,6 +65,7 @@ function buildWpmHtml(wpm: WpmFile, fileName: string): string {
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+<title>${escapeHtml(fileName)}</title>
 <style>
   :root {
     --bg:       var(--vscode-editor-background);
@@ -121,7 +124,7 @@ function buildWpmHtml(wpm: WpmFile, fileName: string): string {
 </head>
 <body>
   <header>
-    <span class="title">${fileName}</span>
+    <span class="title">${escapeHtml(fileName)}</span>
     <span class="meta">${wpm.width} × ${wpm.height} &nbsp;·&nbsp; v${wpm.version}</span>
     <div class="toolbar">
       <button id="btnZoomOut" title="Zoom out">−</button>
@@ -351,7 +354,14 @@ export function registerWpmPreview(_context: vscode.ExtensionContext): vscode.Di
             viewType: 'wurst.wpmPreview',
             parse:  (data) => parseWpm(data),
             render: (parsed, fileName) => parsed.error
-                ? `<div style="color:red;padding:20px;">Failed to parse WPM: ${parsed.error}</div>`
+                ? buildPage({
+                    csp: "default-src 'none'; style-src 'unsafe-inline';",
+                    title: escapeHtml(fileName),
+                    body: `<div class="wv-state">
+  <span>Failed to parse WPM</span>
+  <span class="err">${escapeHtml(parsed.error)}</span>
+</div>`,
+                })
                 : buildWpmHtml(parsed, fileName),
             webviewOptions: { enableScripts: true, localResourceRoots: [] },
             panelOptions:   { retainContextWhenHidden: true },

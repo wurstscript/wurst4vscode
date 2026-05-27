@@ -13,8 +13,8 @@ import { escapeHtml } from '../webviewUtils';
 
 export interface ParsedPreviewerOpts<TData> {
     viewType: string;
-    parse: (data: Buffer, fileName: string) => TData;
-    render: (data: TData, fileName: string) => string;
+    parse: (data: Buffer, fileName: string, context: ParsedPreviewContext) => TData | Promise<TData>;
+    render: (data: TData, fileName: string, context: ParsedPreviewContext) => string | Promise<string>;
     supportsMultipleEditorsPerDocument?: boolean;
     /** Options forwarded to panel.webview.options (enableScripts, localResourceRoots, etc.) */
     webviewOptions?: vscode.WebviewOptions;
@@ -27,6 +27,10 @@ class ParsedDocument implements vscode.CustomDocument {
         readonly uri: vscode.Uri,
     ) {}
     dispose(): void {}
+}
+
+export interface ParsedPreviewContext {
+    uri: vscode.Uri;
 }
 
 class ParsedEditorProvider<TData> implements vscode.CustomReadonlyEditorProvider<ParsedDocument> {
@@ -42,8 +46,9 @@ class ParsedEditorProvider<TData> implements vscode.CustomReadonlyEditorProvider
         panel.webview.html = buildLoadingHtml(fileName);
         try {
             const raw = Buffer.from(await vscode.workspace.fs.readFile(doc.uri));
-            const data = this.opts.parse(raw, fileName);
-            panel.webview.html = this.opts.render(data, fileName);
+            const context: ParsedPreviewContext = { uri: doc.uri };
+            const data = await this.opts.parse(raw, fileName, context);
+            panel.webview.html = await this.opts.render(data, fileName, context);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             panel.webview.html = buildErrorHtml(fileName, message);

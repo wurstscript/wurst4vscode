@@ -5,13 +5,14 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { BinReader } from 'casc-ts/formats';
-import { registerParsedPreviewer } from './preview/framework';
+import { ParsedPreviewContext, registerParsedPreviewer } from './preview/framework';
+import { loadTriggerStringsForUri, resolveTriggerString, ResolvedText, TriggerStringTable } from './preview/triggerStrings';
 import { buildPage } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
 
 type MapDataFile =
     | { kind: 'mmp'; version: number; icons: MmpIcon[]; error?: string }
-    | { kind: 'shd'; width: number; height: number; bytes: Buffer; error?: string }
+    | { kind: 'shd'; width: number; height: number; bytes: Buffer; min: number; max: number; error?: string }
     | { kind: 'w3c'; version: number; cameras: W3cCamera[]; error?: string }
     | { kind: 'w3i'; info: W3iInfo; error?: string }
     | { kind: 'w3r'; version: number; regions: W3rRegion[]; error?: string }
@@ -53,6 +54,7 @@ interface W3iInfo {
     height: number;
     flags: number;
     tileset: string;
+    loadingBackground?: number;
     loadingModel?: string;
     loadingTitle?: string;
     loadingText?: string;
@@ -60,6 +62,7 @@ interface W3iInfo {
     gameDataSet?: number;
     prologueTitle?: string;
     prologueText?: string;
+    prologueSubtitle?: string;
     scriptLang?: string;
     graphics?: string;
     gameDataVersion?: string;
@@ -93,6 +96,7 @@ interface W3eInfo {
     centerY: number;
     payloadBytes: number;
 }
+
 
 function parseMapData(data: Buffer, fileName: string): MapDataFile {
     const ext = path.extname(fileName).toLowerCase();
@@ -134,7 +138,14 @@ function parseShd(data: Buffer): MapDataFile {
     const side = Math.sqrt(data.length);
     const width = Number.isInteger(side) ? side : 256;
     const height = Number.isInteger(side) ? side : Math.max(1, Math.ceil(data.length / width));
-    return { kind: 'shd', width, height, bytes: data };
+    let min = 255;
+    let max = 0;
+    for (const value of data) {
+        if (value < min) min = value;
+        if (value > max) max = value;
+    }
+    if (data.length === 0) min = 0;
+    return { kind: 'shd', width, height, bytes: data, min, max };
 }
 
 function parseW3c(data: Buffer): MapDataFile {
@@ -205,7 +216,7 @@ function parseW3i(data: Buffer): MapDataFile {
         info.flags = r.readI32();
         info.tileset = String.fromCharCode(r.readU8());
 
-        const loadingBackground = r.readI32();
+        info.loadingBackground = r.readI32();
         if (info.version >= 25) info.loadingModel = r.readString();
         info.loadingText = r.readString();
         info.loadingTitle = r.readString();
@@ -215,7 +226,7 @@ function parseW3i(data: Buffer): MapDataFile {
         r.readString(); // prologue path
         info.prologueText = r.readString();
         info.prologueTitle = r.readString();
-        r.readString(); // prologue subtitle
+        info.prologueSubtitle = r.readString();
 
         r.skip(4 + 4 + 4 + 4 + 4); // fog type/start/end/density/color
         r.skip(4); // global weather id
@@ -238,7 +249,6 @@ function parseW3i(data: Buffer): MapDataFile {
         skipW3iPlayers(r, info.version, info.playersCount ?? 0);
         if (!r.eof) info.forcesCount = r.readI32();
 
-        void loadingBackground;
         return { kind: 'w3i', info };
     } catch (e) {
         return { kind: 'w3i', info, error: errorMessage(e) };
@@ -330,12 +340,13 @@ function skipW3iPlayers(r: BinReader, version: number, count: number): void {
     }
 }
 
-function renderMapData(parsed: MapDataFile, fileName: string): string {
+function renderMapData(parsed: MapDataFile, fileName: string, context: ParsedPreviewContext): string {
+    const triggerStrings = loadTriggerStringsForUri(context.uri);
     if (parsed.kind === 'mmp') return renderMmp(parsed, fileName);
     if (parsed.kind === 'shd') return renderShd(parsed, fileName);
-    if (parsed.kind === 'w3c') return renderW3c(parsed, fileName);
-    if (parsed.kind === 'w3i') return renderW3i(parsed, fileName);
-    if (parsed.kind === 'w3r') return renderW3r(parsed, fileName);
+    if (parsed.kind === 'w3c') return renderW3c(parsed, fileName, triggerStrings);
+    if (parsed.kind === 'w3i') return renderW3i(parsed, fileName, triggerStrings);
+    if (parsed.kind === 'w3r') return renderW3r(parsed, fileName, triggerStrings);
     if (parsed.kind === 'w3e') return renderW3e(parsed, fileName);
     return renderGeneric(parsed, fileName);
 }
@@ -347,21 +358,184 @@ function page(title: string, body: string, extraCss = '', scripts = false): stri
             : "default-src 'none'; style-src 'unsafe-inline';",
         title: escapeHtml(title),
         extraCss: `
-.content { flex: 1; overflow: auto; padding: 14px 16px; }
-h1 { font-size: 15px; margin: 0 0 3px; color: var(--vscode-textLink-foreground, var(--fg)); }
-.subtitle { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
-.error { color: var(--vscode-errorForeground, #f14c4c); border: 1px solid currentColor; padding: 6px 9px; margin-bottom: 12px; border-radius: 3px; }
+.content { flex: 1; overflow: auto; }
+.md-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px 9px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar);
+}
+.md-title {
+  color: var(--vscode-textLink-foreground, var(--fg));
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.md-meta { color: var(--muted); font-size: 12px; margin-top: 1px; }
+.readonly-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.dialog { max-width: 1060px; padding: 14px 16px 22px; }
+h2 {
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 600;
+  margin: 0 0 9px;
+}
+.section {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  margin-top: 14px;
+}
+.section:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 9px 12px;
+}
+.form-grid.compact { grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); }
+.field { min-width: 0; }
+.field.wide { grid-column: 1 / -1; }
+.field-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+  margin-bottom: 3px;
+}
+.source-pill {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 0 4px;
+  color: var(--vscode-textLink-foreground, var(--muted));
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.source-pill.missing {
+  color: var(--vscode-errorForeground, #f14c4c);
+}
+.field-control {
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  padding: 3px 6px;
+  color: var(--input-fg);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: 2px;
+  font: inherit;
+  line-height: 18px;
+}
+textarea.field-control {
+  height: auto;
+  min-height: 58px;
+  resize: none;
+  line-height: 1.35;
+}
+.field-control:disabled {
+  opacity: 1;
+  cursor: default;
+}
+.field-control.mono { font-family: var(--mono); }
+.checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 7px 14px;
+}
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  min-width: 0;
+  color: var(--fg);
+}
+.check-row input {
+  flex: 0 0 auto;
+  margin: 1px 0 0;
+  accent-color: var(--vscode-checkbox-selectBackground, var(--vscode-button-background));
+}
+.check-row input:disabled { opacity: 1; }
+.check-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .empty { color: var(--muted); font-style: italic; }
-table { border-collapse: collapse; width: 100%; font-size: 12px; }
-th { text-align: left; background: var(--vscode-editorGroupHeader-tabsBackground, #252526); border-bottom: 1px solid var(--border); padding: 5px 8px; }
-td { border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent); padding: 4px 8px; vertical-align: top; }
+.error {
+  color: var(--vscode-errorForeground, #f14c4c);
+  border: 1px solid color-mix(in srgb, currentColor 65%, transparent);
+  padding: 7px 9px;
+  margin-bottom: 12px;
+  border-radius: 2px;
+}
+.table-wrap {
+  overflow: auto;
+  border: 1px solid var(--border);
+}
+table { border-collapse: collapse; width: 100%; font-size: 12px; min-width: 620px; }
+th {
+  text-align: left;
+  background: var(--vscode-editorGroupHeader-tabsBackground, var(--sidebar));
+  border-bottom: 1px solid var(--border);
+  padding: 6px 8px;
+  font-weight: 600;
+}
+td {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  padding: 5px 8px;
+  vertical-align: top;
+}
+tbody tr:last-child td { border-bottom: 0; }
 td.num { text-align: right; font-family: var(--mono); }
 td.mono { font-family: var(--mono); }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px 18px; margin-bottom: 14px; }
-.kv { min-width: 0; }
-.k { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
-.v { word-break: break-word; }
-canvas { image-rendering: pixelated; max-width: min(100%, 768px); border: 1px solid var(--border); background: #000; }
+.metric-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.metric {
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  padding: 4px 7px;
+  border-radius: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.metric strong { color: var(--fg); font-weight: 600; }
+.tag-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.tag {
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  border-radius: 2px;
+  padding: 2px 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+canvas {
+  image-rendering: pixelated;
+  max-width: min(100%, 768px);
+  border: 1px solid var(--border);
+  background: var(--vscode-editor-background, #1e1e1e);
+}
 .swatch { display:inline-block; width:12px; height:12px; border:1px solid var(--border); vertical-align:-2px; margin-right:6px; }
 ${extraCss}`,
         body: `<div class="content">${body}</div>`,
@@ -377,19 +551,26 @@ function renderMmp(parsed: Extract<MapDataFile, { kind: 'mmp' }>, fileName: stri
   <td>${icon.color ? `<span class="swatch" style="background:${icon.color}"></span>${escapeHtml(icon.color)}` : '<span class="empty">default</span>'}</td>
 </tr>`).join('');
     return page(fileName, `
-<h1>${escapeHtml(fileName)}</h1>
-<div class="subtitle">WC3 minimap icons - v${parsed.version}</div>
+${renderHeader(fileName, `WC3 minimap icons - v${parsed.version}`)}
+<div class="dialog">
 ${errorBanner(parsed.error)}
-${parsed.icons.length ? `<table><thead><tr><th>#</th><th>Type</th><th>X</th><th>Y</th><th>Color</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="empty">No minimap icons</p>'}`);
+${parsed.icons.length ? `<div class="table-wrap"><table><thead><tr><th>#</th><th>Type</th><th>X</th><th>Y</th><th>Color</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="empty">No minimap icons</p>'}
+</div>`);
 }
 
 function renderShd(parsed: Extract<MapDataFile, { kind: 'shd' }>, fileName: string): string {
     const base64 = parsed.bytes.toString('base64');
     return page(fileName, `
-<h1>${escapeHtml(fileName)}</h1>
-<div class="subtitle">WC3 shadow map - ${parsed.width} x ${parsed.height} - ${parsed.bytes.length} bytes</div>
+${renderHeader(fileName, 'WC3 shadow map')}
+<div class="dialog">
 ${errorBanner(parsed.error)}
+<div class="metric-strip">
+  <span class="metric"><strong>${parsed.width} x ${parsed.height}</strong></span>
+  <span class="metric"><strong>${parsed.bytes.length}</strong> bytes</span>
+  <span class="metric">values <strong>${parsed.min}..${parsed.max}</strong></span>
+</div>
 <canvas id="shdCanvas" width="${parsed.width}" height="${parsed.height}"></canvas>
+</div>
 <script>
 const raw = atob("${base64}");
 const w = ${parsed.width};
@@ -399,20 +580,21 @@ const ctx = canvas.getContext('2d');
 const img = ctx.createImageData(w, h);
 for (let i = 0; i < w * h; i++) {
   const v = i < raw.length ? raw.charCodeAt(i) : 0;
+  const shade = 255 - v;
   const p = i * 4;
-  img.data[p] = 0;
-  img.data[p + 1] = 0;
-  img.data[p + 2] = 0;
-  img.data[p + 3] = v;
+  img.data[p] = shade;
+  img.data[p + 1] = shade;
+  img.data[p + 2] = shade;
+  img.data[p + 3] = 255;
 }
 ctx.putImageData(img, 0, 0);
 </script>`, '', true);
 }
 
-function renderW3c(parsed: Extract<MapDataFile, { kind: 'w3c' }>, fileName: string): string {
+function renderW3c(parsed: Extract<MapDataFile, { kind: 'w3c' }>, fileName: string, triggerStrings: TriggerStringTable): string {
     const rows = parsed.cameras.map((camera, index) => `<tr>
   <td class="num">${index}</td>
-  <td>${escapeHtml(camera.name || '(unnamed)')}</td>
+  <td>${renderResolvedInline(resolveTriggerString(camera.name || '(unnamed)', triggerStrings))}</td>
   <td class="num">${fmt(camera.targetX)}</td>
   <td class="num">${fmt(camera.targetY)}</td>
   <td class="num">${fmt(camera.zOffset)}</td>
@@ -422,86 +604,125 @@ function renderW3c(parsed: Extract<MapDataFile, { kind: 'w3c' }>, fileName: stri
   <td class="num">${fmt(camera.fieldOfView)}</td>
 </tr>`).join('');
     return page(fileName, `
-<h1>${escapeHtml(fileName)}</h1>
-<div class="subtitle">WC3 cameras - v${parsed.version}</div>
+${renderHeader(fileName, `WC3 cameras - v${parsed.version}`)}
+<div class="dialog">
 ${errorBanner(parsed.error)}
-${parsed.cameras.length ? `<table><thead><tr><th>#</th><th>Name</th><th>Target X</th><th>Target Y</th><th>Z</th><th>Rot</th><th>AoA</th><th>Dist</th><th>FOV</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="empty">No cameras</p>'}`);
+${parsed.cameras.length ? `<div class="table-wrap"><table><thead><tr><th>#</th><th>Name</th><th>Target X</th><th>Target Y</th><th>Z</th><th>Rot</th><th>AoA</th><th>Dist</th><th>FOV</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="empty">No cameras</p>'}
+</div>`);
 }
 
-function renderW3i(parsed: Extract<MapDataFile, { kind: 'w3i' }>, fileName: string): string {
+function renderW3i(parsed: Extract<MapDataFile, { kind: 'w3i' }>, fileName: string, triggerStrings: TriggerStringTable): string {
     const info = parsed.info;
-    const fields: Array<[string, string | number | undefined]> = [
-        ['Format version', info.version],
-        ['Editor version', info.editorVersion],
-        ['Game version', info.gameVersion],
-        ['Map name', info.name],
-        ['Author', info.author],
-        ['Recommended players', info.recommendedPlayers],
-        ['Size', info.width && info.height ? `${info.width} x ${info.height}` : undefined],
-        ['Tileset', info.tileset],
-        ['Flags', `0x${(info.flags >>> 0).toString(16).padStart(8, '0')}`],
-        ['Script', info.scriptLang],
-        ['Graphics', info.graphics],
-        ['Game data', info.gameDataVersion],
-        ['Players', info.playersCount],
-        ['Forces', info.forcesCount],
-    ];
-    const loadingFields: Array<[string, string | undefined]> = [
-        ['Model', info.loadingModel],
-        ['Title', info.loadingTitle],
-        ['Text', info.loadingText],
-        ['Subtitle', info.loadingSubtitle],
-        ['Prologue title', info.prologueTitle],
-        ['Prologue text', info.prologueText],
-    ];
     return page(fileName, `
-<h1>${escapeHtml(fileName)}</h1>
-<div class="subtitle">WC3 map information</div>
+${renderHeader(fileName, 'WC3 map information')}
+<div class="dialog">
 ${errorBanner(parsed.error)}
-<div class="grid">${fields.map(renderKv).join('')}</div>
-<h1>Loading / Prologue</h1>
-<div class="grid">${loadingFields.map(renderKv).join('')}</div>
-<h1>Description</h1>
-<p>${escapeHtml(info.description || '') || '<span class="empty">No description</span>'}</p>`);
+<section class="section">
+  <h2>General</h2>
+  <div class="form-grid">
+    ${renderInput('Map name', resolveTriggerString(info.name, triggerStrings))}
+    ${renderInput('Author', resolveTriggerString(info.author, triggerStrings))}
+    ${renderInput('Recommended players', resolveTriggerString(info.recommendedPlayers, triggerStrings))}
+    ${renderSelect('Tileset', info.tileset, tilesetOptions())}
+    ${renderInput('Width', info.width || undefined, 'mono')}
+    ${renderInput('Height', info.height || undefined, 'mono')}
+    ${renderSelect('Script language', info.scriptLang, optionList(['JASS', 'Lua']))}
+    ${renderSelect('Graphics mode', info.graphics, optionList(['SD', 'HD', 'SD and HD']))}
+  </div>
+</section>
+<section class="section">
+  <h2>Description</h2>
+  ${renderTextarea('Description', resolveTriggerString(info.description, triggerStrings), true)}
+</section>
+<section class="section">
+  <h2>Options</h2>
+  <div class="checkbox-grid">
+    ${W3I_FLAG_DEFS.map(([bit, label]) => renderCheckbox(label, (info.flags & bit) !== 0)).join('')}
+  </div>
+</section>
+<section class="section">
+  <h2>Loading Screen</h2>
+  <div class="form-grid">
+    ${renderSelect('Background', info.loadingBackground, loadingBackgroundOptions())}
+    ${renderInput('Model', resolveTriggerString(info.loadingModel, triggerStrings))}
+    ${renderInput('Title', resolveTriggerString(info.loadingTitle, triggerStrings))}
+    ${renderInput('Subtitle', resolveTriggerString(info.loadingSubtitle, triggerStrings))}
+    ${renderTextarea('Text', resolveTriggerString(info.loadingText, triggerStrings), true)}
+  </div>
+</section>
+<section class="section">
+  <h2>Prologue</h2>
+  <div class="form-grid">
+    ${renderInput('Title', resolveTriggerString(info.prologueTitle, triggerStrings))}
+    ${renderInput('Subtitle', resolveTriggerString(info.prologueSubtitle, triggerStrings))}
+    ${renderTextarea('Text', resolveTriggerString(info.prologueText, triggerStrings), true)}
+  </div>
+</section>
+<section class="section">
+  <h2>Technical</h2>
+  <div class="form-grid compact">
+    ${renderInput('Format version', info.version, 'mono')}
+    ${renderInput('Editor version', info.editorVersion, 'mono')}
+    ${renderInput('Game version', info.gameVersion, 'mono')}
+    ${renderInput('Saves', info.saves, 'mono')}
+    ${renderInput('Flags', `0x${(info.flags >>> 0).toString(16).padStart(8, '0')}`, 'mono')}
+    ${renderSelect('Game data', info.gameDataVersion, optionList(['RoC', 'TFT']))}
+    ${renderInput('Game data set', info.gameDataSet, 'mono')}
+    ${renderInput('Camera zoom', info.forceCameraZoom ? `${info.forceCameraZoom.min}..${info.forceCameraZoom.max} (default ${info.forceCameraZoom.default})` : undefined, 'mono')}
+    ${renderInput('Players', info.playersCount, 'mono')}
+    ${renderInput('Forces', info.forcesCount, 'mono')}
+  </div>
+</section>
+</div>`);
 }
 
-function renderW3r(parsed: Extract<MapDataFile, { kind: 'w3r' }>, fileName: string): string {
+function renderW3r(parsed: Extract<MapDataFile, { kind: 'w3r' }>, fileName: string, triggerStrings: TriggerStringTable): string {
     const rows = parsed.regions.map((region) => `<tr>
   <td class="num">${region.index}</td>
-  <td>${escapeHtml(region.name || '(unnamed)')}</td>
+  <td>${renderResolvedInline(resolveTriggerString(region.name || '(unnamed)', triggerStrings))}</td>
   <td class="num">${fmt(region.minX)}</td>
   <td class="num">${fmt(region.maxX)}</td>
   <td class="num">${fmt(region.minY)}</td>
   <td class="num">${fmt(region.maxY)}</td>
   <td class="mono">${escapeHtml(region.weatherId || '-')}</td>
-  <td>${escapeHtml(region.sound || '-')}</td>
+  <td>${renderResolvedInline(resolveTriggerString(region.sound || '-', triggerStrings))}</td>
   <td><span class="swatch" style="background:${region.color}"></span>${escapeHtml(region.color)}</td>
 </tr>`).join('');
     return page(fileName, `
-<h1>${escapeHtml(fileName)}</h1>
-<div class="subtitle">WC3 regions - v${parsed.version}</div>
+${renderHeader(fileName, `WC3 regions - v${parsed.version}`)}
+<div class="dialog">
 ${errorBanner(parsed.error)}
-${parsed.regions.length ? `<table><thead><tr><th>#</th><th>Name</th><th>Min X</th><th>Max X</th><th>Min Y</th><th>Max Y</th><th>Weather</th><th>Sound</th><th>Color</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="empty">No regions</p>'}`);
+${parsed.regions.length ? `<div class="table-wrap"><table><thead><tr><th>#</th><th>Name</th><th>Min X</th><th>Max X</th><th>Min Y</th><th>Max Y</th><th>Weather</th><th>Sound</th><th>Color</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="empty">No regions</p>'}
+</div>`);
 }
 
 function renderW3e(parsed: Extract<MapDataFile, { kind: 'w3e' }>, fileName: string): string {
     const info = parsed.info;
-    const fields: Array<[string, string | number | undefined]> = [
-        ['Magic', info.magic],
-        ['Version', info.version],
-        ['Tileset', info.tileset],
-        ['Custom tileset', info.customTileset ? 'yes' : 'no'],
-        ['Size', info.width && info.height ? `${info.width} x ${info.height}` : undefined],
-        ['Center', `${fmt(info.centerX)}, ${fmt(info.centerY)}`],
-        ['Ground tiles', info.groundTiles.join(', ')],
-        ['Cliff tiles', info.cliffTiles.join(', ')],
-        ['Tile payload', `${info.payloadBytes} bytes`],
-    ];
     return page(fileName, `
-<h1>${escapeHtml(fileName)}</h1>
-<div class="subtitle">WC3 terrain data</div>
+${renderHeader(fileName, 'WC3 terrain data')}
+<div class="dialog">
 ${errorBanner(parsed.error)}
-<div class="grid">${fields.map(renderKv).join('')}</div>`);
+<section class="section">
+  <h2>Terrain</h2>
+  <div class="form-grid compact">
+    ${renderInput('Magic', info.magic, 'mono')}
+    ${renderInput('Version', info.version, 'mono')}
+    ${renderSelect('Tileset', info.tileset, tilesetOptions())}
+    ${renderInput('Width', info.width || undefined, 'mono')}
+    ${renderInput('Height', info.height || undefined, 'mono')}
+    ${renderInput('Center', `${fmt(info.centerX)}, ${fmt(info.centerY)}`, 'mono')}
+    ${renderInput('Tile payload', `${info.payloadBytes} bytes`, 'mono')}
+  </div>
+</section>
+<section class="section">
+  <h2>Tiles</h2>
+  <div class="checkbox-grid">${renderCheckbox('Custom tileset', info.customTileset)}</div>
+  <div class="form-grid">
+    ${renderTagField('Ground tiles', info.groundTiles)}
+    ${renderTagField('Cliff tiles', info.cliffTiles)}
+  </div>
+</section>
+</div>`);
 }
 
 function renderGeneric(parsed: Extract<MapDataFile, { kind: 'generic' }>, fileName: string): string {
@@ -509,16 +730,140 @@ function renderGeneric(parsed: Extract<MapDataFile, { kind: 'generic' }>, fileNa
         .map(byte => byte.toString(16).padStart(2, '0'))
         .join(' ');
     return page(fileName, `
-<h1>${escapeHtml(fileName)}</h1>
-<div class="subtitle">${escapeHtml(parsed.label)} - ${parsed.bytes.length} bytes</div>
+${renderHeader(fileName, `${parsed.label} - ${parsed.bytes.length} bytes`)}
+<div class="dialog">
 ${errorBanner(parsed.error)}
-<p>${escapeHtml(parsed.note)}</p>
-<h1>Header Bytes</h1>
-<p class="mono">${escapeHtml(preview || '(empty)')}</p>`);
+<section class="section">
+  <h2>Summary</h2>
+  ${renderTextarea('Status', parsed.note, true)}
+</section>
+<section class="section">
+  <h2>Header Bytes</h2>
+  ${renderTextarea('First 128 bytes', preview || '(empty)', true, 'mono')}
+</section>
+</div>`);
 }
 
-function renderKv([key, value]: [string, string | number | undefined]): string {
-    return `<div class="kv"><div class="k">${escapeHtml(key)}</div><div class="v">${value === undefined || value === '' ? '<span class="empty">-</span>' : escapeHtml(String(value))}</div></div>`;
+type SelectOption = { value: string; label: string };
+
+function renderHeader(fileName: string, meta: string): string {
+    return `<div class="md-header">
+  <div>
+    <div class="md-title">${escapeHtml(fileName)}</div>
+    <div class="md-meta">${escapeHtml(meta)}<span class="readonly-badge">read-only</span></div>
+  </div>
+</div>`;
+}
+
+function renderInput(label: string, value: string | number | ResolvedText | undefined, className = ''): string {
+    const resolved = normalizeResolvedText(value);
+    const classes = ['field-control', className].filter(Boolean).join(' ');
+    return `<label class="field">
+  ${renderFieldLabel(label, resolved)}
+  <input class="${classes}" value="${escapeHtml(controlValue(resolved.value))}" placeholder="-" disabled>
+</label>`;
+}
+
+function renderTextarea(label: string, value: string | ResolvedText | undefined, wide = false, className = ''): string {
+    const resolved = normalizeResolvedText(value);
+    const fieldClass = wide ? 'field wide' : 'field';
+    const classes = ['field-control', className].filter(Boolean).join(' ');
+    return `<label class="${fieldClass}">
+  ${renderFieldLabel(label, resolved)}
+  <textarea class="${classes}" placeholder="-" disabled>${escapeHtml(controlValue(resolved.value))}</textarea>
+</label>`;
+}
+
+function renderSelect(label: string, value: string | number | undefined, options: SelectOption[]): string {
+    const selected = controlValue(value);
+    const normalizedOptions = options.some((option) => option.value === selected) || selected === ''
+        ? options
+        : [{ value: selected, label: selected }, ...options];
+    const renderedOptions = [
+        { value: '', label: '-' },
+        ...normalizedOptions,
+    ].map((option) => {
+        const attr = option.value === selected ? ' selected' : '';
+        return `<option value="${escapeHtml(option.value)}"${attr}>${escapeHtml(option.label)}</option>`;
+    }).join('');
+    return `<label class="field">
+  <span class="field-label">${escapeHtml(label)}</span>
+  <select class="field-control" disabled>${renderedOptions}</select>
+</label>`;
+}
+
+function renderCheckbox(label: string, checked: boolean): string {
+    return `<label class="check-row">
+  <input type="checkbox" ${checked ? 'checked ' : ''}disabled>
+  <span>${escapeHtml(label)}</span>
+</label>`;
+}
+
+function renderFieldLabel(label: string, value: ResolvedText): string {
+    const source = value.source
+        ? `<span class="source-pill${value.missing ? ' missing' : ''}" title="${escapeHtml(value.missing ? `${value.source} not found in war3map.wts` : `Resolved from ${value.source}`)}">${escapeHtml(value.source)}</span>`
+        : '';
+    return `<span class="field-label"><span>${escapeHtml(label)}</span>${source}</span>`;
+}
+
+function renderResolvedInline(value: ResolvedText): string {
+    const source = value.source
+        ? ` <span class="source-pill${value.missing ? ' missing' : ''}" title="${escapeHtml(value.missing ? `${value.source} not found in war3map.wts` : `Resolved from ${value.source}`)}">${escapeHtml(value.source)}</span>`
+        : '';
+    return `${escapeHtml(controlValue(value.value))}${source}`;
+}
+
+function normalizeResolvedText(value: string | number | ResolvedText | undefined): ResolvedText {
+    if (typeof value === 'object' && value !== null && 'value' in value) return value;
+    return { value };
+}
+
+function renderTagField(label: string, values: string[]): string {
+    const tags = values.length
+        ? values.map((value) => `<span class="tag">${escapeHtml(value)}</span>`).join('')
+        : '<span class="empty">-</span>';
+    return `<div class="field">
+  <span class="field-label">${escapeHtml(label)}</span>
+  <div class="tag-list">${tags}</div>
+</div>`;
+}
+
+function controlValue(value: string | number | undefined): string {
+    return value === undefined || value === '' ? '' : String(value);
+}
+
+function optionList(values: string[]): SelectOption[] {
+    return values.map((value) => ({ value, label: value }));
+}
+
+function tilesetOptions(): SelectOption[] {
+    return [
+        ['A', 'Ashenvale'],
+        ['B', 'Barrens'],
+        ['C', 'Felwood'],
+        ['D', 'Dungeon'],
+        ['F', 'Lordaeron Fall'],
+        ['G', 'Underground'],
+        ['I', 'Icecrown Glacier'],
+        ['J', 'Dalaran Ruins'],
+        ['K', 'Black Citadel'],
+        ['L', 'Lordaeron Summer'],
+        ['N', 'Northrend'],
+        ['O', 'Outland'],
+        ['Q', 'Village Fall'],
+        ['V', 'Village'],
+        ['W', 'Lordaeron Winter'],
+        ['X', 'Dalaran'],
+        ['Y', 'Cityscape'],
+        ['Z', 'Sunken Ruins'],
+    ].map(([value, label]) => ({ value, label: `${label} (${value})` }));
+}
+
+function loadingBackgroundOptions(): SelectOption[] {
+    return Array.from({ length: 14 }, (_, index) => ({
+        value: String(index),
+        label: `Preset ${index}`,
+    }));
 }
 
 function errorBanner(error?: string): string {
@@ -538,6 +883,21 @@ function graphicsLabel(value: number): string {
     if (value === 3) return 'SD and HD';
     return `Unknown (${value})`;
 }
+
+const W3I_FLAG_DEFS: Array<[number, string]> = [
+    [0x0001, 'Hide minimap in preview'],
+    [0x0002, 'Modify ally priorities'],
+    [0x0004, 'Melee map'],
+    [0x0008, 'Masked areas partially visible'],
+    [0x0010, 'Fixed player settings'],
+    [0x0020, 'Custom forces'],
+    [0x0040, 'Custom techtree'],
+    [0x0080, 'Custom abilities'],
+    [0x0100, 'Custom upgrades'],
+    [0x0200, 'Map properties opened'],
+    [0x0400, 'Water waves on cliff shores'],
+    [0x0800, 'Water waves on rolling shores'],
+];
 
 function fmt(value: number): string {
     return value.toFixed(3).replace(/\.?0+$/, '');

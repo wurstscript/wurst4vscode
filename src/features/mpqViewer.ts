@@ -51,6 +51,29 @@ function getPreviewViewType(fileName: string): string | undefined {
     return undefined;
 }
 
+function shouldExtractTriggerStrings(fileName: string): boolean {
+    const ext = path.extname(fileName).toLowerCase();
+    return ['.w3i', '.w3r', '.w3c', '.w3u', '.w3t', '.w3a', '.w3b', '.w3d', '.w3h', '.w3q'].includes(ext);
+}
+
+async function extractTriggerStringsSidecar(
+    reader: MpqReader,
+    entries: MpqFileEntry[],
+    tmpDir: string,
+): Promise<void> {
+    const wtsEntry = entries.find((entry) => entry.name.toLowerCase().replace(/\//g, '\\') === 'war3map.wts');
+    if (!wtsEntry) return;
+    const outPath = getArchiveOutputPath(tmpDir, wtsEntry.name);
+    if (!outPath) return;
+    try {
+        const data = await reader.readFileAsync(wtsEntry.name);
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        fs.writeFileSync(outPath, data);
+    } catch (e) {
+        log(`Could not extract ${wtsEntry.name} sidecar: ${e instanceof Error ? e.message : String(e)}`);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Custom document
 // ---------------------------------------------------------------------------
@@ -153,6 +176,9 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
                     }
                     fs.mkdirSync(path.dirname(outPath), { recursive: true });
                     fs.writeFileSync(outPath, data);
+                    if (shouldExtractTriggerStrings(name)) {
+                        await extractTriggerStringsSidecar(document.reader, document.entries, tmpDir);
+                    }
                     const uri = vscode.Uri.file(outPath);
                     const viewType = getPreviewViewType(name);
                     if (viewType) {

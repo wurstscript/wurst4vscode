@@ -1,63 +1,58 @@
 'use strict';
 
-import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { ensureInstalledOrOfferMigration, ensureGrillAvailable, runGrillGenerate } from '../install/installer';
+import { WURST_HOME } from '../paths';
+import { ensureInstalledOrOfferMigration, ensureGrillAvailable, getBundledGrillExecutable } from '../install/installer';
+import { prependPathForVsCodeTerminals } from '../install/pathManager';
 
 export async function createNewWurstProject(): Promise<void> {
-    const name = await vscode.window.showInputBox({
-        prompt: 'Enter a name for the new Wurst project (folder name)',
-        value: 'MyWurstProject',
-        validateInput: (value) => {
-            if (!value.trim()) return 'Project name must not be empty';
-            if (value.indexOf('/') >= 0 || value.indexOf('\\') >= 0) return 'Project name must not contain path separators';
-            return undefined;
-        },
-    });
-    if (!name) return;
-
-    const parentPick = await vscode.window.showOpenDialog({
-        canSelectFiles: false,
-        canSelectFolders: true,
-        canSelectMany: false,
-        openLabel: 'Select parent folder for the new Wurst project',
-    });
-    if (!parentPick || parentPick.length === 0) return;
-
-    const destDir = path.join(parentPick[0].fsPath, name);
-
-    if (fs.existsSync(destDir) && fs.readdirSync(destDir).length > 0) {
-        await vscode.window.showWarningMessage(
-            `The folder "${name}" already exists and is not empty.\n\nPlease choose an empty folder for Grill project generation.`,
-            { modal: true }
-        );
-        return;
-    } else if (!fs.existsSync(destDir)) {
-        fs.mkdirSync(destDir, { recursive: true });
-    }
-
     await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Creating Wurst project', cancellable: false },
+        { location: vscode.ProgressLocation.Notification, title: 'Starting Grill project wizard', cancellable: false },
         async (progress) => {
-            progress.report({ message: 'Ensuring WurstScript/Grill installation…', increment: 10 });
+            progress.report({ message: 'Ensuring WurstScript/Grill installation...', increment: 50 });
             const installOptions = { offerPostInstallActions: false };
             await ensureInstalledOrOfferMigration(false, installOptions);
             await ensureGrillAvailable(installOptions);
-
-            progress.report({ message: 'Generating project with Grill…', increment: 30 });
-            if (fs.existsSync(destDir) && fs.readdirSync(destDir).length > 0) {
-                throw new Error(`Destination folder is not empty:\n${destDir}`);
-            }
-            await runGrillGenerate(destDir);
-            progress.report({ message: 'Project created.', increment: 60 });
         }
     );
 
-    const choice = await vscode.window.showInformationMessage(
-        `Wurst project created at:\n${destDir}`, 'Open Folder', 'Close'
-    );
-    if (choice === 'Open Folder') {
-        await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(destDir), true);
+    const cwd = await pickTerminalWorkingDirectory();
+    if (cwd === null) return;
+
+    const hasBundledGrill = !!getBundledGrillExecutable();
+    if (hasBundledGrill) {
+        prependPathForVsCodeTerminals(WURST_HOME);
     }
+
+    const terminal = vscode.window.createTerminal({
+        name: 'Wurst: New Project',
+        cwd: cwd ?? undefined,
+        env: hasBundledGrill ? { PATH: `${WURST_HOME}${path.delimiter}${process.env.PATH ?? ''}` } : undefined,
+    });
+    terminal.show();
+    terminal.sendText('grill generate');
+}
+
+async function pickTerminalWorkingDirectory(): Promise<string | null | undefined> {
+    const activeUri = vscode.window.activeTextEditor?.document.uri;
+    const activeFolder = activeUri ? vscode.workspace.getWorkspaceFolder(activeUri) : undefined;
+    if (activeFolder) return activeFolder.uri.fsPath;
+
+    const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+    if (workspaceFolders.length === 0) return undefined;
+    if (workspaceFolders.length === 1) return workspaceFolders[0].uri.fsPath;
+
+    const picked = await vscode.window.showQuickPick(
+        workspaceFolders.map((folder) => ({
+            label: folder.name,
+            description: folder.uri.fsPath,
+            folder,
+        })),
+        {
+            title: 'Wurst: Select terminal folder',
+            placeHolder: 'Choose where to start the Grill project wizard',
+        }
+    );
+    return picked?.folder.uri.fsPath ?? null;
 }

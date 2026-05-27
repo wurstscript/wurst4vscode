@@ -11,7 +11,7 @@ const ASSET_EXTS = new Set([
     'mp3', 'wav', 'ogg', 'flac',
     'slk', 'txt', 'fdf', 'toc',
     'w3i', 'w3u', 'w3t', 'w3a', 'w3b', 'w3d', 'w3h', 'w3q', 'w3o', 'w3e',
-    'w3r', 'w3c', 'w3s', 'w3l', 'wtg', 'wct', 'wts',
+    'w3r', 'w3c', 'w3s', 'w3l', 'imp', 'wtg', 'wct', 'wts',
     'wpm', 'shd', 'mmp', 'doo',
 ]);
 

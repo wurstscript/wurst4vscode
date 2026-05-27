@@ -70,6 +70,18 @@ Before adding new CASC extraction logic, check `cascStorage.ts`.
 Before adding new webview CSS that should be consistent across viewers, add it to `webviewShared.ts`.
 Do not duplicate decoders across features.
 
+## WC3 binary/data preview notes
+
+- **src/features/preview/framework.ts** supports optional webview message handling via `onMessage`; use it for lazy webview data instead of eagerly serializing large parsed structures.
+- **src/features/objModPreview.ts** is the Object Editor-style preview for `.w3u/.w3t/.w3a/.w3b/.w3d/.w3h/.w3q`.
+  Keep it lazy: send object summaries first, then load field rows for the selected object on demand. `.w3a` files can contain hundreds of objects and become slow if every base-field row is serialized up front.
+- Object editor labels and base values come from WC3 game data in CASC. Metadata paths include `Units\UnitMetaData.slk`, `Units\AbilityMetaData.slk`, `Units\AbilityBuffMetaData.slk`, `Doodads\DoodadMetaData.slk`, and profile/string files under `Units\*.txt`.
+- Reforged object button art often lives in skin TXT files, not the older func files: `Units\UnitSkin.txt`, `Units\ItemSkin.txt`, `Units\AbilitySkin.txt`, `Units\DestructableSkin.txt`, `Doodads\DoodadSkins.txt`, and sometimes `Units\UpgradeSkin.txt`.
+  These files may start with a UTF-8 BOM; strip it before parsing section headers.
+- WESTRING labels are resolved from localized CASC files such as `war3.w3mod:_locales\enus.w3mod:UI\WorldEditStrings.txt` and `WorldEditGameStrings.txt`. If labels show raw `WESTRING_*`, check locale path candidates in `cascStorage.ts`.
+- `TRIGSTR_###` values are map-local string references; resolve them through `war3map.wts` via `src/features/preview/triggerStrings.ts`, but still show the source reference where useful.
+- For icons/thumbnails in webviews, reuse `imageAssetSupport.ensurePreview`, `getCandidateRoots`, and CASC texture extraction (`ensureGameTextureCached`) instead of adding another decoder/cache path.
+
 ## Validation checklist
 - Compile TypeScript (`npx tsc -p . --noEmit`) after command or API wiring changes.
 - Ensure command appears in Command Palette via `contributes.commands`.

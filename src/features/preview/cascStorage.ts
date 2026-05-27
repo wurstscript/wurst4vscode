@@ -226,6 +226,26 @@ export async function findCascAsset(assetPath: string, log: (msg: string) => voi
     const candidates = [
         `war3.w3mod:${normalized}`,
         `war3.w3mod:_hd.w3mod:${normalized}`,
+        `war3.w3mod:enus.w3mod:${normalized}`,
+        `war3.w3mod:enus.w3mod:_hd.w3mod:${normalized}`,
+        `war3.w3mod:_locales\\enus.w3mod:${normalized}`,
+        `war3.w3mod:_locales\\enus.w3mod:_hd.w3mod:${normalized}`,
+        `war3.w3mod:dede.w3mod:${normalized}`,
+        `war3.w3mod:dede.w3mod:_hd.w3mod:${normalized}`,
+        `war3.w3mod:_locales\\dede.w3mod:${normalized}`,
+        `war3.w3mod:_locales\\dede.w3mod:_hd.w3mod:${normalized}`,
+        `war3.w3mod:frfr.w3mod:${normalized}`,
+        `war3.w3mod:_locales\\frfr.w3mod:${normalized}`,
+        `war3.w3mod:eses.w3mod:${normalized}`,
+        `war3.w3mod:_locales\\eses.w3mod:${normalized}`,
+        `war3.w3mod:ruru.w3mod:${normalized}`,
+        `war3.w3mod:_locales\\ruru.w3mod:${normalized}`,
+        `war3.w3mod:kokr.w3mod:${normalized}`,
+        `war3.w3mod:_locales\\kokr.w3mod:${normalized}`,
+        `war3.w3mod:zhcn.w3mod:${normalized}`,
+        `war3.w3mod:_locales\\zhcn.w3mod:${normalized}`,
+        `war3.w3mod:zhtw.w3mod:${normalized}`,
+        `war3.w3mod:_locales\\zhtw.w3mod:${normalized}`,
     ];
 
     for (const cascPath of candidates) {

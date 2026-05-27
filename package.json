@@ -437,6 +437,12 @@
                     },
                     {
                         "filenamePattern": "*.W3O"
+                    },
+                    {
+                        "filenamePattern": "*.imp"
+                    },
+                    {
+                        "filenamePattern": "*.IMP"
                     }
                 ],
                 "priority": "default"

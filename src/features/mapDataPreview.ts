@@ -3,6 +3,7 @@
 /** VS Code previews for compact WC3 map data files without text syntax. */
 
 import * as path from 'path';
+import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { BinReader } from 'casc-ts/formats';
 import { ParsedPreviewContext, registerParsedPreviewer } from './preview/framework';
@@ -11,8 +12,9 @@ import { buildPage } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
 
 type MapDataFile =
+    | { kind: 'imp'; version: number; imports: ImpEntry[]; error?: string }
     | { kind: 'mmp'; version: number; icons: MmpIcon[]; error?: string }
-    | { kind: 'shd'; width: number; height: number; bytes: Buffer; min: number; max: number; error?: string }
+    | { kind: 'shd'; width: number; height: number; bytes: Buffer; min: number; max: number; dimensionsSource: string; error?: string }
     | { kind: 'w3c'; version: number; cameras: W3cCamera[]; error?: string }
     | { kind: 'w3i'; info: W3iInfo; error?: string }
     | { kind: 'w3r'; version: number; regions: W3rRegion[]; error?: string }
@@ -25,6 +27,14 @@ interface MmpIcon {
     x: number;
     y: number;
     color: string | null;
+}
+
+interface ImpEntry {
+    mode: number;
+    modeLabel: string;
+    storedPath: string;
+    effectivePath: string;
+    fileType: string;
 }
 
 interface W3cCamera {
@@ -98,15 +108,45 @@ interface W3eInfo {
 }
 
 
-function parseMapData(data: Buffer, fileName: string): MapDataFile {
+function parseMapData(data: Buffer, fileName: string, context: ParsedPreviewContext): MapDataFile {
     const ext = path.extname(fileName).toLowerCase();
+    if (ext === '.imp') return parseImp(data, fileName);
     if (ext === '.mmp') return parseMmp(data);
-    if (ext === '.shd') return parseShd(data);
+    if (ext === '.shd') return parseShd(data, context);
     if (ext === '.w3c') return parseW3c(data);
     if (ext === '.w3i') return parseW3i(data);
     if (ext === '.w3r') return parseW3r(data);
     if (ext === '.w3e') return parseW3e(data);
     return parseGeneric(data, ext);
+}
+
+function parseImp(data: Buffer, fileName: string): MapDataFile {
+    const r = new BinReader(data);
+    const imports: ImpEntry[] = [];
+    try {
+        const version = r.readI32();
+        const count = r.readI32();
+        const prefix = path.basename(fileName).toLowerCase().startsWith('war3campaign.')
+            ? 'war3campaignImported\\'
+            : 'war3mapImported\\';
+        for (let i = 0; i < count && !r.eof; i++) {
+            const mode = r.readU8();
+            const storedPath = normalizeWc3Path(r.readString());
+            const effectivePath = impModeUsesStandardPrefix(mode)
+                ? normalizeWc3Path(`${prefix}${storedPath}`)
+                : storedPath;
+            imports.push({
+                mode,
+                modeLabel: impModeLabel(mode),
+                storedPath,
+                effectivePath,
+                fileType: importFileType(effectivePath),
+            });
+        }
+        return { kind: 'imp', version, imports };
+    } catch (e) {
+        return { kind: 'imp', version: 0, imports, error: errorMessage(e) };
+    }
 }
 
 function parseMmp(data: Buffer): MapDataFile {
@@ -134,10 +174,8 @@ function parseMmp(data: Buffer): MapDataFile {
     }
 }
 
-function parseShd(data: Buffer): MapDataFile {
-    const side = Math.sqrt(data.length);
-    const width = Number.isInteger(side) ? side : 256;
-    const height = Number.isInteger(side) ? side : Math.max(1, Math.ceil(data.length / width));
+function parseShd(data: Buffer, context: ParsedPreviewContext): MapDataFile {
+    const dimensions = inferShdDimensions(data.length, context.uri);
     let min = 255;
     let max = 0;
     for (const value of data) {
@@ -145,7 +183,78 @@ function parseShd(data: Buffer): MapDataFile {
         if (value > max) max = value;
     }
     if (data.length === 0) min = 0;
-    return { kind: 'shd', width, height, bytes: data, min, max };
+    return { kind: 'shd', width: dimensions.width, height: dimensions.height, bytes: data, min, max, dimensionsSource: dimensions.source };
+}
+
+function inferShdDimensions(byteLength: number, uri: vscode.Uri): { width: number; height: number; source: string } {
+    const fromTerrain = readSiblingW3eDimensions(uri);
+    if (fromTerrain) {
+        const tileWidth = Math.max(0, fromTerrain.width - 1);
+        const tileHeight = Math.max(0, fromTerrain.height - 1);
+        const width = tileWidth * 4;
+        const height = tileHeight * 4;
+        if (width > 0 && height > 0 && width * height === byteLength) {
+            return { width, height, source: 'war3map.w3e tile size' };
+        }
+
+        const vertexWidth = fromTerrain.width * 4;
+        const vertexHeight = fromTerrain.height * 4;
+        if (vertexWidth > 0 && vertexHeight > 0 && vertexWidth * vertexHeight === byteLength) {
+            return { width: vertexWidth, height: vertexHeight, source: 'war3map.w3e vertex size' };
+        }
+    }
+
+    const side = Math.sqrt(byteLength);
+    if (Number.isInteger(side)) {
+        return { width: side, height: side, source: 'square byte count' };
+    }
+
+    const fallback = factorDimensions(byteLength);
+    return { ...fallback, source: 'inferred from byte count' };
+}
+
+function readSiblingW3eDimensions(uri: vscode.Uri): { width: number; height: number } | undefined {
+    if (uri.scheme !== 'file' || !uri.fsPath) return undefined;
+
+    try {
+        const dir = path.dirname(uri.fsPath);
+        const entry = fs.readdirSync(dir).find((name) => name.toLowerCase() === 'war3map.w3e');
+        if (!entry) return undefined;
+        const r = new BinReader(fs.readFileSync(path.join(dir, entry)));
+        r.skip(4); // magic
+        r.skip(4); // version
+        r.skip(1); // tileset
+        r.skip(4); // custom tileset
+        const groundCount = r.readI32();
+        r.skip(groundCount * 4);
+        const cliffCount = r.readI32();
+        r.skip(cliffCount * 4);
+        return { width: r.readI32(), height: r.readI32() };
+    } catch {
+        return undefined;
+    }
+}
+
+function factorDimensions(byteLength: number): { width: number; height: number } {
+    if (byteLength <= 0) return { width: 1, height: 1 };
+
+    let bestWidth = byteLength;
+    let bestHeight = 1;
+    let bestScore = Number.POSITIVE_INFINITY;
+    const limit = Math.floor(Math.sqrt(byteLength));
+    for (let factor = 1; factor <= limit; factor++) {
+        if (byteLength % factor !== 0) continue;
+        const height = factor;
+        const width = byteLength / factor;
+        const ratio = width / height;
+        const score = Math.abs(ratio - 2);
+        if (score < bestScore) {
+            bestScore = score;
+            bestWidth = width;
+            bestHeight = height;
+        }
+    }
+    return { width: bestWidth, height: bestHeight };
 }
 
 function parseW3c(data: Buffer): MapDataFile {
@@ -342,6 +451,7 @@ function skipW3iPlayers(r: BinReader, version: number, count: number): void {
 
 function renderMapData(parsed: MapDataFile, fileName: string, context: ParsedPreviewContext): string {
     const triggerStrings = loadTriggerStringsForUri(context.uri);
+    if (parsed.kind === 'imp') return renderImp(parsed, fileName);
     if (parsed.kind === 'mmp') return renderMmp(parsed, fileName);
     if (parsed.kind === 'shd') return renderShd(parsed, fileName);
     if (parsed.kind === 'w3c') return renderW3c(parsed, fileName, triggerStrings);
@@ -542,6 +652,31 @@ ${extraCss}`,
     });
 }
 
+function renderImp(parsed: Extract<MapDataFile, { kind: 'imp' }>, fileName: string): string {
+    const standardCount = parsed.imports.filter((entry) => impModeUsesStandardPrefix(entry.mode)).length;
+    const customCount = parsed.imports.filter((entry) => impModeUsesCustomPath(entry.mode)).length;
+    const unknownCount = parsed.imports.length - standardCount - customCount;
+    const rows = parsed.imports.map((entry, index) => `<tr>
+  <td class="num">${index}</td>
+  <td><span class="tag">${escapeHtml(entry.fileType)}</span></td>
+  <td>${escapeHtml(entry.modeLabel)} <span class="source-pill" title="Raw import mode byte">${entry.mode}</span></td>
+  <td class="mono">${escapeHtml(entry.storedPath || '-')}</td>
+  <td class="mono">${escapeHtml(entry.effectivePath || '-')}</td>
+</tr>`).join('');
+    return page(fileName, `
+${renderHeader(fileName, `WC3 import table - v${parsed.version}`)}
+<div class="dialog">
+${errorBanner(parsed.error)}
+<div class="metric-strip">
+  <span class="metric"><strong>${parsed.imports.length}</strong> import${parsed.imports.length === 1 ? '' : 's'}</span>
+  <span class="metric"><strong>${standardCount}</strong> standard-path</span>
+  <span class="metric"><strong>${customCount}</strong> custom-path</span>
+  ${unknownCount ? `<span class="metric"><strong>${unknownCount}</strong> unknown-mode</span>` : ''}
+</div>
+${parsed.imports.length ? `<div class="table-wrap"><table><thead><tr><th>#</th><th>Type</th><th>Path Mode</th><th>Stored Path</th><th>Effective Map Path</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="empty">No imported files</p>'}
+</div>`);
+}
+
 function renderMmp(parsed: Extract<MapDataFile, { kind: 'mmp' }>, fileName: string): string {
     const rows = parsed.icons.map((icon, index) => `<tr>
   <td class="num">${index}</td>
@@ -568,6 +703,7 @@ ${errorBanner(parsed.error)}
   <span class="metric"><strong>${parsed.width} x ${parsed.height}</strong></span>
   <span class="metric"><strong>${parsed.bytes.length}</strong> bytes</span>
   <span class="metric">values <strong>${parsed.min}..${parsed.max}</strong></span>
+  <span class="metric">size from <strong>${escapeHtml(parsed.dimensionsSource)}</strong></span>
 </div>
 <canvas id="shdCanvas" width="${parsed.width}" height="${parsed.height}"></canvas>
 </div>
@@ -578,14 +714,18 @@ const h = ${parsed.height};
 const canvas = document.getElementById('shdCanvas');
 const ctx = canvas.getContext('2d');
 const img = ctx.createImageData(w, h);
-for (let i = 0; i < w * h; i++) {
-  const v = i < raw.length ? raw.charCodeAt(i) : 0;
-  const shade = 255 - v;
-  const p = i * 4;
-  img.data[p] = shade;
-  img.data[p + 1] = shade;
-  img.data[p + 2] = shade;
-  img.data[p + 3] = 255;
+for (let y = 0; y < h; y++) {
+  const srcRow = h - 1 - y;
+  for (let x = 0; x < w; x++) {
+    const i = srcRow * w + x;
+    const v = i < raw.length ? raw.charCodeAt(i) : 0;
+    const shade = 255 - v;
+    const p = (y * w + x) * 4;
+    img.data[p] = shade;
+    img.data[p + 1] = shade;
+    img.data[p + 2] = shade;
+    img.data[p + 3] = 255;
+  }
 }
 ctx.putImageData(img, 0, 0);
 </script>`, '', true);
@@ -864,6 +1004,29 @@ function loadingBackgroundOptions(): SelectOption[] {
         value: String(index),
         label: `Preset ${index}`,
     }));
+}
+
+function impModeUsesStandardPrefix(mode: number): boolean {
+    return mode === 5 || mode === 8;
+}
+
+function impModeUsesCustomPath(mode: number): boolean {
+    return mode === 10 || mode === 13;
+}
+
+function impModeLabel(mode: number): string {
+    if (mode === 5 || mode === 8) return 'Standard import path';
+    if (mode === 10 || mode === 13) return 'Custom import path';
+    return 'Unknown path mode';
+}
+
+function normalizeWc3Path(value: string): string {
+    return value.replace(/\//g, '\\').replace(/^\\+/, '');
+}
+
+function importFileType(value: string): string {
+    const ext = path.extname(value).replace(/^\./, '').toLowerCase();
+    return ext || 'file';
 }
 
 function errorBanner(error?: string): string {

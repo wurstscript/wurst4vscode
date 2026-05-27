@@ -47,7 +47,7 @@ export function loadTriggerStringsForUri(uri: vscode.Uri): TriggerStringTable {
 
 function parseWts(text: string): TriggerStringTable {
     const table: TriggerStringTable = new Map();
-    const re = /STRING\s+(\d+)\s*\{([\s\S]*?)\}/gi;
+    const re = /STRING\s+(\d+)(?:\s|\/\/[^\r\n]*(?:\r?\n|$))*\{([\s\S]*?)\}/gi;
     let match: RegExpExecArray | null;
     while ((match = re.exec(text)) !== null) {
         table.set(Number(match[1]), normalizeWtsValue(match[2]));

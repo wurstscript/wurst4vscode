@@ -20,6 +20,7 @@ export interface ParsedPreviewerOpts<TData> {
     webviewOptions?: vscode.WebviewOptions;
     /** Options forwarded to registerCustomEditorProvider (retainContextWhenHidden, etc.) */
     panelOptions?: vscode.WebviewPanelOptions;
+    onMessage?: (message: unknown, webview: vscode.Webview, data: TData, context: ParsedPreviewContext) => void | Promise<void>;
 }
 
 class ParsedDocument implements vscode.CustomDocument {
@@ -31,6 +32,7 @@ class ParsedDocument implements vscode.CustomDocument {
 
 export interface ParsedPreviewContext {
     uri: vscode.Uri;
+    webview: vscode.Webview;
 }
 
 class ParsedEditorProvider<TData> implements vscode.CustomReadonlyEditorProvider<ParsedDocument> {
@@ -46,8 +48,13 @@ class ParsedEditorProvider<TData> implements vscode.CustomReadonlyEditorProvider
         panel.webview.html = buildLoadingHtml(fileName);
         try {
             const raw = Buffer.from(await vscode.workspace.fs.readFile(doc.uri));
-            const context: ParsedPreviewContext = { uri: doc.uri };
+            const context: ParsedPreviewContext = { uri: doc.uri, webview: panel.webview };
             const data = await this.opts.parse(raw, fileName, context);
+            if (this.opts.onMessage) {
+                panel.webview.onDidReceiveMessage((message) => {
+                    void this.opts.onMessage?.(message, panel.webview, data, context);
+                });
+            }
             panel.webview.html = await this.opts.render(data, fileName, context);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);

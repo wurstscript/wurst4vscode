@@ -95,24 +95,180 @@
                     "WC3 Object Data"
                 ],
                 "extensions": [
-                    ".w3i",
-                    ".w3u",
-                    ".w3t",
-                    ".w3a",
-                    ".w3b",
-                    ".w3d",
-                    ".w3h",
-                    ".w3q",
                     ".w3o",
-                    ".w3e",
-                    ".w3r",
-                    ".w3c",
-                    ".w3s",
-                    ".w3l"
+                    ".W3O"
                 ],
                 "icon": {
                     "light": "./images/icons/w3data.svg",
                     "dark": "./images/icons/w3data.svg"
+                }
+            },
+            {
+                "id": "wc3-map-info",
+                "aliases": [
+                    "WC3 Map Info"
+                ],
+                "extensions": [
+                    ".w3i",
+                    ".W3I"
+                ],
+                "icon": {
+                    "light": "./images/icons/w3info.svg",
+                    "dark": "./images/icons/w3info.svg"
+                }
+            },
+            {
+                "id": "wc3-cameras",
+                "aliases": [
+                    "WC3 Cameras"
+                ],
+                "extensions": [
+                    ".w3c",
+                    ".W3C"
+                ],
+                "icon": {
+                    "light": "./images/icons/w3camera.svg",
+                    "dark": "./images/icons/w3camera.svg"
+                }
+            },
+            {
+                "id": "wc3-regions",
+                "aliases": [
+                    "WC3 Regions"
+                ],
+                "extensions": [
+                    ".w3r",
+                    ".W3R"
+                ],
+                "icon": {
+                    "light": "./images/icons/w3region.svg",
+                    "dark": "./images/icons/w3region.svg"
+                }
+            },
+            {
+                "id": "wc3-sounds",
+                "aliases": [
+                    "WC3 Sounds"
+                ],
+                "extensions": [
+                    ".w3s",
+                    ".W3S"
+                ],
+                "icon": {
+                    "light": "./images/icons/w3sound.svg",
+                    "dark": "./images/icons/w3sound.svg"
+                }
+            },
+            {
+                "id": "wc3-lights",
+                "aliases": [
+                    "WC3 Lights"
+                ],
+                "extensions": [
+                    ".w3l",
+                    ".W3L"
+                ],
+                "icon": {
+                    "light": "./images/icons/w3light.svg",
+                    "dark": "./images/icons/w3light.svg"
+                }
+            },
+            {
+                "id": "wc3-units",
+                "aliases": [
+                    "WC3 Units"
+                ],
+                "extensions": [
+                    ".w3u",
+                    ".W3U"
+                ],
+                "icon": {
+                    "light": "./images/icons/w3unit.svg",
+                    "dark": "./images/icons/w3unit.svg"
+                }
+            },
+            {
+                "id": "wc3-items",
+                "aliases": [
+                    "WC3 Items"
+                ],
+                "extensions": [
+                    ".w3t",
+                    ".W3T"
+                ],
+                "icon": {
+                    "light": "./images/icons/w3item.svg",
+                    "dark": "./images/icons/w3item.svg"
+                }
+            },
+            {
+                "id": "wc3-abilities",
+                "aliases": [
+                    "WC3 Abilities"
+                ],
+                "extensions": [
+                    ".w3a",
+                    ".W3A"
+                ],
+                "icon": {
+                    "light": "./images/icons/w3ability.svg",
+                    "dark": "./images/icons/w3ability.svg"
+                }
+            },
+            {
+                "id": "wc3-destructibles",
+                "aliases": [
+                    "WC3 Destructibles"
+                ],
+                "extensions": [
+                    ".w3b",
+                    ".W3B"
+                ],
+                "icon": {
+                    "light": "./images/icons/w3destructible.svg",
+                    "dark": "./images/icons/w3destructible.svg"
+                }
+            },
+            {
+                "id": "wc3-doodads",
+                "aliases": [
+                    "WC3 Doodads"
+                ],
+                "extensions": [
+                    ".w3d",
+                    ".W3D"
+                ],
+                "icon": {
+                    "light": "./images/icons/w3doodad.svg",
+                    "dark": "./images/icons/w3doodad.svg"
+                }
+            },
+            {
+                "id": "wc3-buffs",
+                "aliases": [
+                    "WC3 Buffs and Effects"
+                ],
+                "extensions": [
+                    ".w3h",
+                    ".W3H"
+                ],
+                "icon": {
+                    "light": "./images/icons/w3buff.svg",
+                    "dark": "./images/icons/w3buff.svg"
+                }
+            },
+            {
+                "id": "wc3-upgrades",
+                "aliases": [
+                    "WC3 Upgrades"
+                ],
+                "extensions": [
+                    ".w3q",
+                    ".W3Q"
+                ],
+                "icon": {
+                    "light": "./images/icons/w3upgrade.svg",
+                    "dark": "./images/icons/w3upgrade.svg"
                 }
             },
             {
@@ -166,7 +322,9 @@
                     ".wpm",
                     ".shd",
                     ".mmp",
-                    ".doo"
+                    ".doo",
+                    ".w3e",
+                    ".W3E"
                 ],
                 "icon": {
                     "light": "./images/icons/terrain.svg",

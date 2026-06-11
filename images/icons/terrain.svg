@@ -1,9 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
-  <path d="M2 2H14V14H2Z" fill="#212510"/>
-  <path d="M3 3H13V13H3Z" fill="#5a7734"/>
-  <path d="M3 9L6 6L8 7.5L10 5L13 8V13H3Z" fill="#96bb55"/>
-  <path d="M3 10L5 8.5L7 10L6 13H3Z" fill="#6d8d3c"/>
-  <path d="M8 13L10 7.5L13 10V13Z" fill="#4e672e"/>
-  <path d="M6 3V13M10 3V13M3 6.5H13M3 10H13" fill="none" stroke="#dce7a9" stroke-width="1" opacity="0.65"/>
-  <path d="M3 3H13V13H3Z" fill="none" stroke="#0d1004" stroke-width="1"/>
+  <path d="M0 2H16V15H0Z" fill="#1a1610"/>
+  <path d="M1 3H15V14H1Z" fill="#3a352c"/>
+  <path d="M1 14V9C3 6 5 6 7 9C7 11 6 13 5 14Z" fill="#5a7734"/>
+  <path d="M1 14V9C2 7.5 3 7 4 7.2C2.5 9 2 11.5 2.5 14Z" fill="#6f8d3c"/>
+  <path d="M5 14C6 11 8 7 11 7C13.5 7 15 9 15 12V14Z" fill="#446026"/>
+  <path d="M5 14C6 11 8 7 11 7C9 8 7.5 11 7 14Z" fill="#5a7734"/>
+  <path d="M11 7A1.6 1.6 0 1 0 11 3.8A1.6 1.6 0 1 0 11 7Z" fill="#f0c55a"/>
+  <path d="M11 4.5A0.9 0.9 0 1 0 11 6.3A0.9 0.9 0 1 0 11 4.5Z" fill="#f7e3a4"/>
 </svg>

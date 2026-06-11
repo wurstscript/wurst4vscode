@@ -243,7 +243,13 @@ function makeDecorationType(iconUri: vscode.Uri): vscode.TextEditorDecorationTyp
             contentIconPath: iconUri,
             width: ICON_CSS,
             height: ICON_CSS,
-            margin: `0 4px 2px 0`,
+            margin: `0 4px 0 0`,
+            // Unlike the text glyphs (◌ × ✓), which sit on the baseline with
+            // correct font metrics for free, an image is bottom-aligned to the
+            // baseline and floats high in the line box. Centre it on the line and
+            // nudge it up slightly; em units track the user's editor font size,
+            // where a fixed px margin only looks right at one font/line-height.
+            textDecoration: 'none; vertical-align: middle; transform: translateY(-0.2em)',
         },
     });
 }

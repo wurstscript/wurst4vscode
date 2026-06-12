@@ -195,22 +195,24 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
             }
 
             if (type === 'extractAll') {
-                if (!document.reader) return;
+                const done = () => void webviewPanel.webview.postMessage({ type: 'extractDone' });
+                if (!document.reader) { done(); return; }
                 const baseName = archiveName.replace(/\.[^.]+$/, '');
                 const destDir = path.join(archiveDir, baseName + '-extracted');
-                await extractAllFiles(document.reader, document.entries, destDir, `Extracted to ${destDir}`);
+                await extractAllFiles(document.reader, document.entries, destDir, `Extracted to ${destDir}`, done);
                 return;
             }
 
             if (type === 'exportToMapFolder') {
-                if (!document.reader) return;
+                const done = () => void webviewPanel.webview.postMessage({ type: 'extractDone' });
+                if (!document.reader) { done(); return; }
                 // Map folder mode: folder named exactly like the archive (e.g. MyMap.w3x/)
                 // Since we can't have a file and folder with the same name, append -folder before ext
                 const ext = path.extname(archiveName);
                 const base = path.basename(archiveName, ext);
                 const destDir = path.join(archiveDir, base + '-folder' + ext);
                 await extractAllFiles(document.reader, document.entries, destDir,
-                    `Map folder exported to ${destDir}\n\nThis folder can be used directly as a map in WC3 folder mode.`);
+                    `Map folder exported to ${destDir}\n\nThis folder can be used directly as a map in WC3 folder mode.`, done);
                 return;
             }
         });
@@ -226,6 +228,7 @@ async function extractAllFiles(
     entries: MpqFileEntry[],
     destDir: string,
     successMessage: string,
+    onComplete?: () => void,
 ): Promise<void> {
     try {
         fs.mkdirSync(destDir, { recursive: true });
@@ -245,6 +248,7 @@ async function extractAllFiles(
                 failed++;
             }
         }
+        onComplete?.(); // extraction finished — clear webview busy state before the (awaited) toast
         const msg = failed > 0
             ? `${successMessage}\n\n${failed} file(s) could not be extracted.`
             : successMessage;
@@ -253,6 +257,7 @@ async function extractAllFiles(
             void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(destDir));
         }
     } catch (e) {
+        onComplete?.();
         void vscode.window.showErrorMessage(
             `Extraction failed: ${e instanceof Error ? e.message : String(e)}`
         );
@@ -402,6 +407,23 @@ function buildHtml(webview: vscode.Webview, archiveName: string, scriptUri: vsco
 .row.selected .row-action:hover { background: rgba(255,255,255,0.15); }
 .row.selected .file-desc,
 .row.selected .size { color: var(--active-fg); opacity: 0.82; }
+
+/* ── busy / extraction in progress ───────────────────────────────────────── */
+.btn-spinner {
+  display: none;
+  width: 12px; height: 12px;
+  border: 2px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: mpq-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+.wv-btn.busy .btn-spinner { display: inline-block; }
+.wv-btn.busy svg { display: none; }
+.wv-btn.busy { opacity: 1; cursor: progress; } /* keep the active button readable while disabled */
+@keyframes mpq-spin { to { transform: rotate(360deg); } }
+body.extracting .row-action { opacity: 0.35; pointer-events: none; }
+body.extracting .tree-wrap { cursor: progress; }
 `;
 
     return buildPage({
@@ -424,11 +446,13 @@ function buildHtml(webview: vscode.Webview, archiveName: string, scriptUri: vsco
 
 <div class="wv-toolbar">
   <button class="wv-btn" id="btnExtractAll" disabled title="Extract all files to a subfolder next to the archive">
+    <span class="btn-spinner"></span>
     <svg viewBox="0 0 16 16"><path d="M8 1a.5.5 0 0 1 .5.5v7.793l2.646-2.647a.5.5 0 0 1 .708.708l-3.5 3.5a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L7.5 9.293V1.5A.5.5 0 0 1 8 1zM2.5 13a.5.5 0 0 0 0 1h11a.5.5 0 0 0 0-1h-11z"/></svg>
     Extract All
   </button>
   ${sep()}
   <button class="wv-btn" id="btnExportFolder" disabled title="Export as map folder (WC3 folder mode) — creates a .w3x folder next to the archive">
+    <span class="btn-spinner"></span>
     <svg viewBox="0 0 16 16"><path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.672a1.5 1.5 0 0 1 1.06.44l.83.83A1.5 1.5 0 0 0 9.12 3.7H13.5A1.5 1.5 0 0 1 15 5.2V5h-1v-.8a.5.5 0 0 0-.5-.5H9.12a2.5 2.5 0 0 1-1.768-.732l-.828-.828A.5.5 0 0 0 6.172 3H2.5a.5.5 0 0 0-.5.5V5H1V3.5zm0 2.5h14v6.5A1.5 1.5 0 0 1 13.5 14h-11A1.5 1.5 0 0 1 1 12.5V6zm6 2v2.293l-.646-.647a.5.5 0 0 0-.708.708l1.5 1.5a.5.5 0 0 0 .708 0l1.5-1.5a.5.5 0 0 0-.708-.708L8 10.293V8a.5.5 0 0 0-1 0z"/></svg>
     Export to Map Folder
   </button>

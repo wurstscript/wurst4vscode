@@ -3,12 +3,15 @@
 /** VS Code preview for WC3 Object Modification files. Parser lives in `casc-ts/formats`. */
 
 import * as vscode from 'vscode';
-import { parseObjMod, ObjModFile, ObjModEntry, ObjModMod } from 'casc-ts/formats';
-import { ParsedPreviewContext, registerParsedPreviewer } from './preview/framework';
+import { parseObjMod, serializeObjMod, ObjModFile, ObjModEntry, ObjModMod, ObjModVarType } from 'casc-ts/formats';
+import { ParsedPreviewContext } from './preview/framework';
 import { findGameAsset } from './preview/cascStorage';
-import { ensureGameTextureCached } from './blpPreview';
-import { ensurePreview, getCandidateRoots, getTempPreviewDir, PreviewCacheEntry, resolveAssetPath } from './imageAssetSupport';
-import { loadTriggerStringsForUri, resolveTriggerString, TriggerStringTable } from './preview/triggerStrings';
+import { ensureGameTextureCached, decodeRasterPreview } from './blpPreview';
+import { getCandidateRoots, resolveAssetPath } from './imageAssetSupport';
+import {
+    loadTriggerStringsForUri, resolveTriggerString, TriggerStringTable,
+    findWtsUri, nextTriggerStringId, applyWtsEdits,
+} from './preview/triggerStrings';
 import { buildPage } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
 export { ObjModFile, ObjModEntry, ObjModMod, ObjModVarType } from 'casc-ts/formats';
@@ -23,10 +26,33 @@ const TYPE_LABELS: Record<string, string> = {
     w3q: 'Upgrade',
 };
 
+// Inline string fields in objmod files are length-capped by the World Editor; longer
+// values must be externalized into war3map.wts as a TRIGSTR_ reference. The exact cap
+// isn't authoritatively documented (community reports ~512–1024 bytes); 1024 is a safe
+// upper bound that avoids needless externalization of normal-length names/tooltips.
+// Tune here if WE rejects a value as too long.
+const INLINE_STRING_LIMIT_BYTES = 1024;
+
+// WC3 object-editor metadata 'type' values that are stored as a 32-bit int in objmod files
+// (enums, flags, bools). Everything not listed here (text, codes, models, icons, lists) → string;
+// 'real'/'unreal' handled explicitly. Used to type NEW mods created when editing a base field.
+const META_INT_TYPES = new Set([
+    'int', 'bool', 'armortype', 'attacktype', 'attributetype', 'deathtype', 'defensetype', 'regentype',
+    'teamcolor', 'movetype', 'itemclass', 'unitclass', 'weapontype', 'attackbits', 'channeltype',
+    'channelflags', 'defensetypeint', 'detectiontype', 'fullflags', 'interactionflags', 'morphflags',
+    'pickflags', 'silenceflags', 'stackflags', 'versionflags',
+]);
+
+function metaVarType(type: string): ObjModVarType {
+    const t = (type || '').toLowerCase();
+    if (t === 'real') return 'real';
+    if (t === 'unreal') return 'unreal';
+    if (META_INT_TYPES.has(t)) return 'int';
+    return 'string';
+}
+
 const NAME_FIELDS = new Set(['unam', 'inam', 'anam', 'bnam', 'dnam', 'fnam', 'gnam']);
 const ICON_FIELDS = new Set(['uico', 'iico', 'aart', 'fart', 'gico']);
-const OBJ_ICON_DIR = getTempPreviewDir('wurst_obj_icons');
-const iconPreviewCache = new Map<string, PreviewCacheEntry>();
 
 const FIELD_LABELS: Record<string, string> = {
     unam: 'Name',
@@ -162,6 +188,11 @@ interface PreviewMod {
     overridden: boolean;
     source?: string;
     missingSource?: boolean;
+    // Editing (set only for overrides that live in the opened file).
+    editable?: boolean;
+    varType?: string;        // 'int' | 'real' | 'unreal' | 'string'
+    editValue?: string;      // raw editable text (string fields: resolved wts/inline text)
+    missingWts?: boolean;    // TRIGSTR_ reference with no war3map.wts → not editable
 }
 
 interface ObjEditorData {
@@ -191,6 +222,15 @@ interface MetaField {
     sort: string;
     repeat: number;
     data: number;
+    index?: number; // for fields packed into a comma-list cell (e.g. Buttonpos "x,y": ubpx=0, ubpy=1)
+    // Per-object applicability (parity with the World Editor — which fields a given object shows).
+    useSpecific?: string[]; // ability codes/aliases this field applies to (empty = common)
+    notSpecific?: string[];
+    useUnit: boolean;
+    useHero: boolean;
+    useItem: boolean;
+    useBuilding: boolean;
+    useCreep: boolean;
 }
 
 interface SlkTable {
@@ -203,23 +243,6 @@ const objEditorDataCache = new Map<string, Promise<ObjEditorData | undefined>>()
 const objSummaryDataCache = new Map<string, Promise<ObjSummaryData | undefined>>();
 const objProfileCache = new Map<string, Promise<ProfileTable>>();
 let worldEditStringsPromise: Promise<Map<string, string>> | undefined;
-
-async function parseObjModWithSibling(data: Buffer, fileName: string, context: ParsedPreviewContext): Promise<ObjModFile> {
-    const parsed = parseObjMod(data, fileName.slice(fileName.lastIndexOf('.')));
-    const siblingName = getObjModSiblingFileName(fileName);
-    if (!siblingName) return parsed;
-
-    try {
-        const siblingUri = vscode.Uri.joinPath(context.uri, '..', siblingName);
-        const siblingData = Buffer.from(await vscode.workspace.fs.readFile(siblingUri));
-        const sibling = parseObjMod(siblingData, siblingName.slice(siblingName.lastIndexOf('.')));
-        return fileName.toLowerCase().startsWith('war3mapskin.')
-            ? mergeObjModFiles(sibling, parsed)
-            : mergeObjModFiles(parsed, sibling);
-    } catch {
-        return parsed;
-    }
-}
 
 function getObjModSiblingFileName(fileName: string): string | undefined {
     const lower = fileName.toLowerCase();
@@ -304,7 +327,86 @@ function buildObject(
     };
 }
 
-function buildFieldRows(entry: ObjModEntry, gameData: ObjEditorData, triggerStrings: TriggerStringTable): PreviewMod[] {
+/** Find a mod by exact (fieldId, level, dataPt) — the editing identity shared by render and the host. */
+function locateMod(entry: ObjModEntry | undefined, fieldId: string, level?: number, dataPt?: number): ObjModMod | undefined {
+    if (!entry) return undefined;
+    const norm = (v: number | undefined) => (v === undefined ? null : v);
+    return entry.mods.find((m) =>
+        m.fieldId.toLowerCase() === fieldId.toLowerCase() &&
+        norm(m.level) === norm(level) &&
+        norm(m.dataPt) === norm(dataPt));
+}
+
+/**
+ * Mark an override row editable. The merged-model mod objects are live references into the
+ * underlying war3map.* / war3mapSkin.* files, so any existing override is editable regardless of
+ * which sibling it came from (the host writes both files back on save).
+ */
+function annotateEditable(row: PreviewMod, mod: ObjModMod | undefined, wts: TriggerStringTable): void {
+    if (!mod) return; // base-only row → read-only
+    row.varType = mod.varType;
+    if (mod.varType === 'string') {
+        const raw = typeof mod.value === 'string' ? mod.value : String(mod.value);
+        const resolved = resolveTriggerString(raw, wts);
+        if (resolved.missing) { row.missingWts = true; return; } // TRIGSTR_ with no wts → can't edit safely
+        row.editable = true;
+        row.editValue = resolved.value === undefined ? '' : String(resolved.value);
+    } else {
+        row.editable = true;
+        row.editValue = String(mod.value);
+    }
+}
+
+/**
+ * Per-object field applicability + level count — parity with the World Editor, which only shows the
+ * fields a given object actually uses (abilities filter by useSpecific/code; units by hero/building).
+ */
+interface ObjectContext {
+    applies(field: MetaField): boolean;
+    levelsFor(field: MetaField): Array<number | undefined>;
+}
+
+function makeObjectContext(entry: ObjModEntry, gameData: ObjEditorData, ext: string): ObjectContext {
+    const baseId = entry.baseId;
+    if (ext === '.w3a') {
+        const row = gameData.slkTables.get(SLK_NAME_TO_PATH.AbilityData)?.rows.get(baseId);
+        const code = row?.code || baseId;
+        const isHero = row?.hero === '1';
+        const isItem = row?.item === '1';
+        const levelCount = Math.max(1, Math.min(20, Number(row?.levels) || 1));
+        return {
+            applies: (f) => abilityFieldApplies(f, baseId, code, isHero, isItem),
+            levelsFor: (f) => (f.repeat > 0 ? Array.from({ length: levelCount }, (_, i) => i + 1) : [undefined]),
+        };
+    }
+    if (ext === '.w3u') {
+        const isHero = /^[A-Z]/.test(baseId); // hero unit rawcodes start with a capital letter
+        return {
+            applies: (f) => unitFieldApplies(f, baseId, isHero),
+            levelsFor: (f) => (f.repeat > 0 ? getFieldLevels(baseId, f, gameData) : [undefined]),
+        };
+    }
+    return {
+        applies: () => true,
+        levelsFor: (f) => (f.repeat > 0 ? getFieldLevels(baseId, f, gameData) : [undefined]),
+    };
+}
+
+function abilityFieldApplies(f: MetaField, baseId: string, code: string, isHero: boolean, isItem: boolean): boolean {
+    if (f.useSpecific) return f.useSpecific.includes(baseId) || f.useSpecific.includes(code);
+    if (f.notSpecific && (f.notSpecific.includes(baseId) || f.notSpecific.includes(code))) return false;
+    if (isHero) return f.useHero;
+    if (isItem) return f.useItem;
+    return f.useUnit || f.useCreep;
+}
+
+function unitFieldApplies(f: MetaField, baseId: string, isHero: boolean): boolean {
+    if (f.useSpecific) return f.useSpecific.includes(baseId);
+    if (isHero) return f.useHero;
+    return f.useUnit || f.useBuilding;
+}
+
+function buildFieldRows(entry: ObjModEntry, gameData: ObjEditorData, triggerStrings: TriggerStringTable, extended: boolean, ext: string): PreviewMod[] {
     const overrideMods = new Map<string, ObjModMod[]>();
     for (const mod of entry.mods) {
         const key = modKey(mod);
@@ -313,39 +415,57 @@ function buildFieldRows(entry: ObjModEntry, gameData: ObjEditorData, triggerStri
         overrideMods.set(key, list);
     }
 
+    const ctx = makeObjectContext(entry, gameData, ext);
     const rows: PreviewMod[] = [];
     const usedMods = new Set<ObjModMod>();
     for (const field of gameData.fields) {
-        const levels = field.repeat > 0 ? getFieldLevels(entry.baseId, field, gameData) : [undefined];
+        const applies = ctx.applies(field);
+        const levels = ctx.levelsFor(field);
         for (const level of levels) {
             const key = fieldKey(field.id, level, undefined);
             const override = overrideMods.get(key)?.[0] ?? findOverrideByField(entry.mods, field.id, level);
             if (override) usedMods.add(override);
             const baseValue = resolveBaseFieldValue(entry.baseId, field, gameData, level);
-            if (!override && (baseValue === undefined || baseValue === '')) continue;
+            if (!override && (!applies || baseValue === undefined || baseValue === '')) continue;
             const formattedOverride = override ? formatValue(override, triggerStrings) : undefined;
             const formattedBase = formatRawValue(baseValue, triggerStrings);
             const currentValue = formattedOverride ?? formattedBase;
-            rows.push({
+            // Carry the level/dataPt the mod has (or would have) so the host can locate/create it.
+            const rowLevel = override ? override.level : (extended ? (level ?? 0) : level);
+            const rowDataPt = override ? override.dataPt : (extended ? field.data : undefined);
+            const row: PreviewMod = {
                 key,
                 fieldId: field.id,
                 label: field.label,
                 category: field.category || '-',
                 type: field.type,
-                level,
-                dataPt: override?.dataPt,
+                level: rowLevel,
+                dataPt: rowDataPt,
                 baseValue: formattedBase.value,
                 overrideValue: formattedOverride?.value ?? '',
                 currentValue: currentValue.value,
                 overridden: Boolean(override),
                 source: currentValue.source,
                 missingSource: currentValue.missingSource,
-            });
+            };
+            if (override) {
+                annotateEditable(row, override, triggerStrings);
+            } else {
+                // Base value with no override yet → editable; editing adds a new mod.
+                row.varType = metaVarType(field.type);
+                row.editable = true;
+                row.editValue = formattedBase.value;
+            }
+            rows.push(row);
         }
     }
 
     for (const mod of entry.mods) {
-        if (!usedMods.has(mod)) rows.push(buildOverrideOnlyMod(mod, triggerStrings, gameData));
+        if (!usedMods.has(mod)) {
+            const row = buildOverrideOnlyMod(mod, triggerStrings, gameData);
+            annotateEditable(row, mod, triggerStrings);
+            rows.push(row);
+        }
     }
 
     return rows.sort((a, b) => {
@@ -547,11 +667,14 @@ function resolveBaseDisplayName(baseId: string, summaryData: ObjSummaryData): st
 }
 
 function resolveBaseFieldValue(baseId: string, field: MetaField, gameData: ObjEditorData, level?: number): string | undefined {
-    if (field.slkName.toLowerCase() === 'profile') {
-        return gameData.profile.get(baseId)?.[resolveProfileField(field, level)];
+    const raw = field.slkName.toLowerCase() === 'profile'
+        ? gameData.profile.get(baseId)?.[resolveProfileField(field, level)]
+        : getBaseSlkRow(baseId, field, gameData)?.[resolveSlkField(field, level)];
+    // Fields packed into one comma-list cell (e.g. Buttonpos "x,y") select their part via index.
+    if (raw !== undefined && field.index !== undefined && raw.indexOf(',') !== -1) {
+        return (raw.split(',')[field.index] ?? '').trim();
     }
-    const row = getBaseSlkRow(baseId, field, gameData);
-    return row?.[resolveSlkField(field, level)];
+    return raw;
 }
 
 function getBaseSlkRow(baseId: string, field: MetaField, gameData: ObjEditorData): Record<string, string> | undefined {
@@ -697,7 +820,21 @@ function makeMetaField(row: Record<string, string>, worldStrings: Map<string, st
         sort: row.sort || '',
         repeat: Number(row.repeat ?? 0) || 0,
         data: Number(row.data ?? 0) || 0,
+        index: row.index !== undefined && row.index !== '' ? Number(row.index) : undefined,
+        useSpecific: splitCodes(row.useSpecific),
+        notSpecific: splitCodes(row.notSpecific),
+        useUnit: row.useUnit === '1',
+        useHero: row.useHero === '1',
+        useItem: row.useItem === '1',
+        useBuilding: row.useBuilding === '1',
+        useCreep: row.useCreep === '1',
     };
+}
+
+function splitCodes(value: string | undefined): string[] | undefined {
+    if (!value) return undefined;
+    const codes = value.split(',').map((s) => s.trim()).filter(Boolean);
+    return codes.length ? codes : undefined;
 }
 
 async function loadWorldEditStrings(): Promise<Map<string, string>> {
@@ -824,7 +961,15 @@ function convertSlkName(slkName: string): string | undefined {
     return SLK_NAME_TO_PATH[slkName];
 }
 
-async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPreviewContext): Promise<string> {
+function buildObjLoadingHtml(fileName: string): string {
+    return buildPage({
+        csp: "default-src 'none'; style-src 'unsafe-inline';",
+        title: escapeHtml(fileName),
+        body: `<div class="wv-state"><div class="wv-spinner"></div><div class="wv-loading-text">Loading ${escapeHtml(fileName)}…</div></div>`,
+    });
+}
+
+async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPreviewContext, wtsWarning?: string): Promise<string> {
     const typeLabel = TYPE_LABELS[parsed.ext.slice(1)] ?? parsed.ext.slice(1).toUpperCase();
     const triggerStrings = loadTriggerStringsForUri(context.uri);
     const { objects, metadataSource } = await buildModel(parsed, triggerStrings);
@@ -840,6 +985,9 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
     const summary = `${objects.length} object${objects.length === 1 ? '' : 's'} - ${overrides} override${overrides === 1 ? '' : 's'}`;
     const errorBanner = parsed.error
         ? `<div class="error">Parse error: ${escapeHtml(parsed.error)}</div>`
+        : '';
+    const warningBanner = wtsWarning
+        ? `<div class="warning">${escapeHtml(wtsWarning)}</div>`
         : '';
 
     return buildPage({
@@ -871,13 +1019,13 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
   text-overflow: ellipsis;
 }
 .md-meta { color: var(--muted); font-size: 12px; margin-top: 1px; }
-.readonly-badge {
+.editable-badge {
   display: inline-block;
   margin-left: 8px;
   padding: 1px 5px;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--vscode-textLink-foreground, #4ec9b0) 55%, transparent);
   border-radius: 2px;
-  color: var(--muted);
+  color: var(--vscode-textLink-foreground, #4ec9b0);
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
@@ -888,15 +1036,213 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
   padding: 7px 16px;
   flex-shrink: 0;
 }
+.warning {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  border-bottom: 1px solid color-mix(in srgb, currentColor 50%, transparent);
+  padding: 7px 16px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.value-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: stretch;
+}
+.value-editor.single { grid-template-columns: minmax(0, 1fr); }
+.edit-raw {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--input-bg);
+  color: var(--input-fg);
+  border: 1px solid var(--input-border);
+  border-radius: 2px;
+  padding: 2px 6px;
+  font: inherit;
+  font-family: var(--mono);
+}
+/* Single-line inputs match the collapsed cell height exactly, so toggling edit never resizes the row. */
+input.edit-raw { height: var(--cell-h, 24px); }
+textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize: vertical; }
+.edit-raw:focus { outline: 1px solid var(--vscode-focusBorder, var(--vscode-textLink-foreground)); }
+.tt-preview {
+  min-width: 0;
+  border: 1px dashed var(--border);
+  border-radius: 2px;
+  padding: 4px 6px;
+  background: #000;
+  color: #fff;
+  font-family: var(--vscode-font-family, sans-serif);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+}
+.tt-preview-label {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+.tt-preview.tt-readonly {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: top;
+}
+.tt-collapsed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: var(--cell-h, 24px);
+  box-sizing: border-box;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: #000;
+  color: #fff;
+  cursor: text;
+  font-family: var(--vscode-font-family, sans-serif);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.tt-collapsed:hover { border-color: var(--vscode-focusBorder, var(--vscode-textLink-foreground)); }
+.tt-collapsed-body { flex: 1; min-width: 0; }
+.tt-empty { color: var(--muted); font-style: italic; }
+.tt-edit-hint {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity .1s;
+}
+.tt-collapsed:hover .tt-edit-hint { opacity: 0.9; }
+.tt-collapsed .tt-edit-hint { color: rgba(255, 255, 255, 0.6); } /* visible on the dark tooltip box */
+.cell-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--cell-h, 24px); /* same height as the single-line editor → no row resize on edit */
+  box-sizing: border-box;
+  padding: 1px 6px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: text;
+  transition: background .08s, border-color .08s;
+}
+.cell-edit:hover {
+  background: var(--input-bg);
+  border-color: color-mix(in srgb, var(--vscode-focusBorder, var(--vscode-textLink-foreground)) 60%, transparent);
+}
+.cell-edit:hover .tt-edit-hint { opacity: 0.7; }
+.cell-edit-val { flex: 1; min-width: 0; font-family: var(--mono); word-break: break-word; white-space: pre-wrap; }
+/* Number values are short — don't stretch the input across the whole column. */
+.value-editor.single input[type="number"] { max-width: 150px; }
+/* Scannable accent for customized (overridden) fields. */
+tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--vscode-textLink-foreground, #4ec9b0) 70%, transparent); }
+.cell-edit .tt-edit-hint { flex-shrink: 0; }
+.tt-edit { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.tt-bar { position: relative; display: inline-flex; align-items: center; gap: 4px; }
+.tt-color-sq {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: 3px;
+  cursor: pointer;
+  background:
+    linear-gradient(135deg, #ff0303 0%, #fe8a0e 20%, #fffc01 40%, #20c000 60%, #54a4ff 80%, #e55bb0 100%);
+}
+.tt-color-sq:hover { border-color: var(--fg); }
+.tt-btn-sm {
+  height: 20px;
+  min-width: 22px;
+  padding: 0 5px;
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: 3px;
+  background: var(--input-bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.tt-btn-sm:hover { background: var(--hover); }
+.tt-pop {
+  position: absolute;
+  top: 24px;
+  left: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px;
+  background: var(--vscode-editorWidget-background, var(--sidebar));
+  border: 1px solid var(--vscode-editorWidget-border, var(--border));
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.35);
+}
+.tt-pop[hidden] { display: none; }
+.tt-swatches { display: grid; grid-template-columns: repeat(6, 18px); gap: 4px; }
+.tt-sw {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--fg) 35%, transparent);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.tt-sw:hover { transform: scale(1.15); border-color: var(--fg); }
+.tt-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.tt-color { width: 22px; height: 18px; padding: 0; border: 0; background: none; cursor: pointer; }
+.tt-color::-webkit-color-swatch-wrapper { padding: 0; }
+.tt-color::-webkit-color-swatch { border: 1px solid var(--border); border-radius: 2px; }
+.readonly-trigstr { color: var(--muted); font-style: italic; }
+.field-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.field-search {
+  flex: 1;
+  min-width: 0;
+  max-width: 320px;
+  height: 24px;
+  background: var(--input-bg);
+  color: var(--input-fg);
+  border: 1px solid var(--input-border);
+  border-radius: 2px;
+  padding: 2px 7px;
+  font: inherit;
+}
+.field-search:focus { outline: 1px solid var(--vscode-focusBorder, var(--vscode-textLink-foreground)); }
+.field-match { color: var(--muted); font-size: 11px; white-space: nowrap; }
+tr.hidden { display: none; }
 .object-editor {
   flex: 1;
   height: 100%;
   min-height: 0;
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(230px, 30%) minmax(0, 1fr);
+  grid-template-columns: var(--list-w, 260px) 5px minmax(0, 1fr);
   overflow: hidden;
 }
+.splitter {
+  cursor: col-resize;
+  background: var(--border);
+  opacity: 0.5;
+  transition: opacity .12s, background .12s;
+}
+.splitter:hover,
+.splitter.dragging { opacity: 1; background: var(--vscode-textLink-foreground, var(--fg)); }
 .object-list {
   min-width: 0;
   min-height: 0;
@@ -936,7 +1282,7 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 6px 10px 4px;
+  padding: 4px 10px 3px;
   color: var(--muted);
   background: var(--sidebar);
   border: 0;
@@ -950,7 +1296,7 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 5px 10px 5px 22px;
+  padding: 3px 10px 3px 22px;
   color: var(--fg);
   background: transparent;
   border: 0;
@@ -979,16 +1325,17 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
 .object-row {
   width: 100%;
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto;
+  grid-template-columns: 26px minmax(0, 1fr);
   gap: 7px;
   align-items: center;
-  padding: 5px 10px 5px 38px;
+  padding: 2px 10px 2px 34px;
   color: var(--fg);
   background: transparent;
   border: 0;
   border-left: 2px solid transparent;
   text-align: left;
   font: inherit;
+  line-height: 1.25;
   cursor: pointer;
 }
 .object-row:hover { background: var(--hover); }
@@ -1006,10 +1353,10 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
 }
 .object-id {
   display: block;
-  margin-top: 1px;
+  margin-top: 0;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 10px;
 }
 .object-row.active .object-id,
 .object-row.active .mod-count {
@@ -1085,6 +1432,24 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
   color: var(--fg);
   overflow-wrap: anywhere;
 }
+.details-rawcode {
+  margin-left: 10px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 400;
+}
+.toggle-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.toggle-chip input { margin: 0; }
 .details-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1121,7 +1486,9 @@ table {
   width: 100%;
   min-width: 620px;
   font-size: 12px;
+  table-layout: fixed; /* stable column widths so expanding an editor never reflows the table */
 }
+thead th:first-child { width: 34%; }
 th {
   position: sticky;
   top: 0;
@@ -1215,27 +1582,31 @@ tr.overridden td {
   color: var(--muted);
 }
 @media (max-width: 720px) {
-  .object-editor { grid-template-columns: 1fr; grid-template-rows: minmax(160px, 34%) minmax(0, 1fr); }
+  .object-editor { grid-template-columns: 1fr; grid-template-rows: minmax(160px, 34%) 0 minmax(0, 1fr); }
   .object-list { border-right: 0; border-bottom: 1px solid var(--border); }
+  .splitter { display: none; }
 }
 `,
         body: `<div class="content">
 <div class="md-header">
   <div class="md-title">${escapeHtml(fileName)}</div>
-  <div class="md-meta">WC3 ${escapeHtml(typeLabel)} object data - v${parsed.version} - ${escapeHtml(summary)} - ${escapeHtml(metadataSource)}${parsed.extended ? ' - extended (level/dataPt)' : ''}<span class="readonly-badge">read-only</span></div>
+  <div class="md-meta">WC3 ${escapeHtml(typeLabel)} object data - v${parsed.version} - ${escapeHtml(summary)} - ${escapeHtml(metadataSource)}${parsed.extended ? ' - extended (level/dataPt)' : ''}<span class="editable-badge" title="Existing overrides can be edited. Ctrl+S to save.">editable</span></div>
 </div>
 ${errorBanner}
-<div class="object-editor">
+${warningBanner}
+<div class="object-editor" id="object-editor">
   <aside class="object-list">
     <div class="search-wrap"><input id="search" class="search-input" placeholder="Search objects or IDs" aria-label="Search objects"></div>
     <div id="tree" class="tree"></div>
   </aside>
+  <div class="splitter" id="splitter" title="Drag to resize"></div>
   <main id="details" class="details"></main>
 </div>
 <script>
 const objects = ${safeJson};
 let selectedKey = ${JSON.stringify(firstKey)};
 let query = '';
+let fieldQuery = '';
 let showTechnical = false;
 const vscodeApi = acquireVsCodeApi();
 const pendingIcons = new Set();
@@ -1266,6 +1637,177 @@ function sourcePill(mod) {
   const cls = mod.missingSource ? 'source-pill missing' : 'source-pill';
   const title = mod.missingSource ? mod.source + ' not found in war3map.wts' : 'Resolved from ' + mod.source;
   return ' <span class="' + cls + '" title="' + esc(title) + '">' + esc(mod.source) + '</span>';
+}
+
+// Render WC3 inline color codes (|cAARRGGBB ... |r, nestable; |n newline) to safe HTML.
+function renderWc3Colors(text) {
+  const s = String(text == null ? '' : text);
+  let html = '';
+  let depth = 0;
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === '|') {
+      const next = s[i + 1];
+      if (next === 'c' || next === 'C') {
+        const hex = s.substr(i + 2, 8);
+        if (/^[0-9a-fA-F]{8}$/.test(hex)) {
+          html += '<span style="color:#' + hex.substr(2) + '">';
+          depth++;
+          i += 10;
+          continue;
+        }
+      } else if (next === 'r' || next === 'R') {
+        if (depth > 0) { html += '</span>'; depth--; }
+        i += 2;
+        continue;
+      } else if (next === 'n') { html += '<br>'; i += 2; continue; }
+      else if (next === '|') { html += '|'; i += 2; continue; }
+    }
+    html += esc(ch);
+    i++;
+  }
+  while (depth > 0) { html += '</span>'; depth--; }
+  return html;
+}
+
+// NOTE: this whole script lives in a TS template literal — avoid backslash escapes here, they
+// are consumed by TS before reaching the browser (e.g. '\\n' became a raw newline → syntax error).
+function hasColorMarkup(v) {
+  var s = String(v == null ? '' : v).toLowerCase();
+  return s.indexOf('|c') !== -1 || s.indexOf('|n') !== -1 || s.indexOf('|r') !== -1 || s.indexOf(String.fromCharCode(10)) !== -1;
+}
+
+// Only genuine display-text fields get the color tools: tooltips/descriptions/tips, or any value
+// that already uses WC3 color codes / newlines. Short codes (hotkeys), names, comma rawcode lists
+// etc. get a plain input — no color bloat.
+function needsColorEditor(mod) {
+  if (!mod.editable || mod.varType !== 'string') return false;
+  const v = mod.editValue == null ? '' : String(mod.editValue);
+  if (hasColorMarkup(v)) return true;
+  const label = String(mod.label || '').toLowerCase();
+  return label.indexOf('tooltip') !== -1 || label.indexOf('description') !== -1 || label.indexOf('tip') !== -1;
+}
+
+// WC3 palette (RRGGBB) for the quick swatches inside the color popup.
+var PRESET_COLORS = [
+  ['ffcc00', 'Gold'], ['ffffff', 'White'], ['c3c3c3', 'Grey'], ['ff0303', 'Red'],
+  ['1ce6b9', 'Teal'], ['54a4ff', 'Blue'], ['20c000', 'Green'], ['fe8a0e', 'Orange'],
+  ['e55bb0', 'Pink'], ['959697', 'Dark Grey'], ['0042ff', 'Player Blue'], ['fffc01', 'Yellow'],
+];
+
+function swatchesHtml() {
+  return PRESET_COLORS.map(c =>
+    '<button type="button" class="tt-sw" data-color="' + c[0] + '" style="background:#' + c[0] + '" title="' + esc(c[1]) + ' (#' + c[0] + ')"></button>'
+  ).join('');
+}
+
+// Compact color bar: one small square that opens a popup (swatches + custom picker), plus |n / |r.
+function colorBarHtml(mi) {
+  return '<div class="tt-bar" data-mi="' + mi + '">' +
+    '<button type="button" class="tt-color-sq" title="Color selected text"></button>' +
+    '<button type="button" class="tt-btn-sm" data-act="newline" title="Line break (|n)">|n</button>' +
+    '<button type="button" class="tt-btn-sm" data-act="reset" title="End color (|r)">|r</button>' +
+    '<div class="tt-pop" hidden>' +
+      '<div class="tt-swatches">' + swatchesHtml() + '</div>' +
+      '<label class="tt-pick"><input type="color" class="tt-color" value="#ffcc00"><span>Custom…</span></label>' +
+    '</div>' +
+  '</div>';
+}
+
+function colorEditorHtml(mod, mi) {
+  const v = mod.editValue == null ? '' : String(mod.editValue);
+  return '<div class="value-editor">' +
+    '<div class="tt-edit">' + colorBarHtml(mi) +
+      '<textarea class="edit-raw" data-mi="' + mi + '" rows="3" spellcheck="false">' + esc(v) + '</textarea>' +
+    '</div>' +
+    '<div><div class="tt-preview-label">preview' + (mod.source ? ' · ' + esc(mod.source) : '') + '</div>' +
+      '<div class="tt-preview" data-preview-for="' + mi + '">' + renderWc3Colors(v) + '</div></div>' +
+    '</div>';
+}
+
+// Editor shown on click. Color/text fields get textarea + color bar + preview; everything else a plain input.
+function editorHtml(mod, mi) {
+  if (needsColorEditor(mod)) return colorEditorHtml(mod, mi);
+  const v = mod.editValue == null ? '' : String(mod.editValue);
+  const numType = mod.varType === 'int' || mod.varType === 'real' || mod.varType === 'unreal';
+  // Use a number input only when the value is actually numeric — otherwise a number input renders
+  // blank (e.g. a stray comma value). Fall back to text so it stays visible/editable.
+  if (numType && (v === '' || isFinite(Number(v)))) {
+    return '<div class="value-editor single"><input class="edit-raw" type="number" step="' + (mod.varType === 'int' ? '1' : 'any') + '" data-mi="' + mi + '" value="' + esc(v) + '"></div>';
+  }
+  return '<div class="value-editor single"><input class="edit-raw" type="text" data-mi="' + mi + '" spellcheck="false" value="' + esc(v) + '"></div>';
+}
+
+// Compact, click-to-edit view shown by default for every editable cell (keeps the 700-row table light).
+function collapsedView(mod, mi) {
+  const dv = mod.editValue == null ? (mod.currentValue == null ? '' : String(mod.currentValue)) : String(mod.editValue);
+  if (hasColorMarkup(dv)) {
+    return '<div class="tt-collapsed" data-mi="' + mi + '" title="Click to edit">' +
+      '<span class="tt-collapsed-body">' + renderWc3Colors(dv) + '</span><span class="tt-edit-hint">✎</span></div>';
+  }
+  const badge = mod.overridden ? '<span class="override-badge">modified</span>' : '';
+  const disp = dv === '' ? '<span class="tt-empty">(empty)</span>' : esc(dv);
+  return '<span class="cell-edit" data-mi="' + mi + '" title="Click to edit">' +
+    '<span class="cell-edit-val">' + disp + '</span>' + badge + (mod.source ? sourcePill(mod) : '') +
+    '<span class="tt-edit-hint">✎</span></span>';
+}
+
+function valueCell(mod, mi) {
+  if (mod.editable) return collapsedView(mod, mi);
+  // Read-only (non-editable, e.g. TRIGSTR with missing wts): still render WC3 color codes when present.
+  let extra = (mod.overridden ? '<span class="override-badge">modified</span>' : '') + sourcePill(mod);
+  if (mod.missingWts) extra += ' <span class="readonly-trigstr">(externalized – war3map.wts missing)</span>';
+  const ro = mod.currentValue == null ? '' : String(mod.currentValue);
+  if (hasColorMarkup(ro)) {
+    return '<div class="tt-preview tt-readonly">' + renderWc3Colors(ro) + '</div>' + extra;
+  }
+  return esc(ro) + extra;
+}
+
+function postEdit(mod) {
+  vscodeApi.postMessage({
+    type: 'editField',
+    key: selectedKey,
+    fieldId: mod.fieldId,
+    level: mod.level == null ? null : mod.level,
+    dataPt: mod.dataPt == null ? null : mod.dataPt,
+    varType: mod.varType,
+    value: mod.editValue == null ? '' : String(mod.editValue),
+  });
+}
+
+// Current selection range for a textarea (kept fresh even after blur, so toolbar/color-picker work).
+function taRange(ta) {
+  const ss = ta._ss != null ? ta._ss : (ta.selectionStart || 0);
+  const se = ta._se != null ? ta._se : (ta.selectionEnd || 0);
+  return ss <= se ? [ss, se] : [se, ss];
+}
+
+function applyToTextarea(ta, selStart, selEnd) {
+  ta.focus();
+  ta.setSelectionRange(selStart, selEnd);
+  ta._ss = selStart; ta._se = selEnd;
+  ta.dispatchEvent(new Event('input'));
+}
+
+// Wrap the current selection in |cffRRGGBB ... |r (hex = 6 chars, no '#').
+function wrapColor(ta, hex) {
+  const r = taRange(ta);
+  const val = ta.value;
+  const open = '|cff' + String(hex).replace('#', '').toLowerCase();
+  const selected = val.slice(r[0], r[1]) || 'text';
+  ta.value = val.slice(0, r[0]) + open + selected + '|r' + val.slice(r[1]);
+  const a = r[0] + open.length;
+  applyToTextarea(ta, a, a + selected.length);
+}
+
+function insertText(ta, text) {
+  const r = taRange(ta);
+  const val = ta.value;
+  ta.value = val.slice(0, r[0]) + text + val.slice(r[1]);
+  const c = r[0] + text.length;
+  applyToTextarea(ta, c, c);
 }
 
 function categoryLabel(category) {
@@ -1350,7 +1892,6 @@ function renderTree() {
           icon +
           '<span class="object-main"><span class="object-name">' + esc(obj.displayName) + source + '</span>' +
           '<span class="object-id">' + idLine(obj) + '</span></span>' +
-          '<span class="mod-count">' + obj.overridesCount + '</span>' +
           '</button>';
       }
     }
@@ -1419,6 +1960,43 @@ function setIconLoaded(el, uri) {
   el.innerHTML = '<img loading="lazy" src="' + esc(uri) + '" alt="">';
 }
 
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+// Decode an icon to a data URL using the browser — same pipeline as the BLP viewer (handles BGR
+// jpeg-content BLPs by swapping R/B after decode, plus 4-component jpegs the browser supports).
+async function renderIconDataUrl(data) {
+  try {
+    const w = data.width, h = data.height;
+    const full = document.createElement('canvas');
+    full.width = w; full.height = h;
+    const fctx = full.getContext('2d');
+    if (data.mode === 'rgba') {
+      const rgba = base64ToBytes(data.rgbaBase64);
+      fctx.putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength), w, h), 0, 0);
+    } else {
+      const bmp = await createImageBitmap(new Blob([base64ToBytes(data.jpegBase64)], { type: 'image/jpeg' }));
+      fctx.drawImage(bmp, 0, 0, w, h);
+      const id = fctx.getImageData(0, 0, w, h);
+      const px = id.data;
+      for (let i = 0; i < px.length; i += 4) { const r = px[i]; px[i] = px[i + 2]; px[i + 2] = r; }
+      fctx.putImageData(id, 0, 0);
+    }
+    const out = document.createElement('canvas');
+    out.width = 48; out.height = 48;
+    const octx = out.getContext('2d');
+    octx.imageSmoothingQuality = 'high';
+    octx.drawImage(full, 0, 0, 48, 48);
+    return out.toDataURL('image/png');
+  } catch (e) {
+    return null;
+  }
+}
+
 function setIconMissing(el) {
   el.classList.remove('loading');
   el.classList.add('missing');
@@ -1435,8 +2013,11 @@ window.addEventListener('message', event => {
   const msg = event.data || {};
   if (msg.type === 'objectIconLoaded') {
     pendingIcons.delete(msg.key);
-    loadedIcons.set(msg.key, msg.uri);
-    updateIconElements(msg.key, el => setIconLoaded(el, msg.uri));
+    renderIconDataUrl(msg).then(url => {
+      if (!url) { missingIcons.add(msg.key); updateIconElements(msg.key, setIconMissing); return; }
+      loadedIcons.set(msg.key, url);
+      updateIconElements(msg.key, el => setIconLoaded(el, url));
+    });
   } else if (msg.type === 'objectIconMissing') {
     pendingIcons.delete(msg.key);
     missingIcons.add(msg.key);
@@ -1449,7 +2030,39 @@ window.addEventListener('message', event => {
     pendingDetails.delete(msg.key);
     detailCache.set(msg.key, []);
     if (msg.key === selectedKey) renderDetails();
+  } else if (msg.type === 'invalidateDetails') {
+    detailCache.delete(msg.key);
+    pendingDetails.delete(msg.key);
+    if (msg.key === selectedKey) renderDetails();
+  } else if (msg.type === 'fieldUpdated') {
+    const mods = detailCache.get(msg.key);
+    if (!mods) return;
+    const norm = v => (v == null ? null : v);
+    const mod = mods.find(m => m.fieldId && m.fieldId.toLowerCase() === String(msg.fieldId).toLowerCase() &&
+      norm(m.level) === norm(msg.level) && norm(m.dataPt) === norm(msg.dataPt));
+    if (!mod) return;
+    mod.editValue = msg.editValue;
+    mod.currentValue = msg.currentValue;
+    if (msg.overridden != null) mod.overridden = msg.overridden;
+    if (msg.key === selectedKey) {
+      const mi = mods.indexOf(mod);
+      const anchor = details.querySelector('[data-mi="' + mi + '"]');
+      const tr = anchor && anchor.closest('tr');
+      if (tr) tr.classList.toggle('overridden', !!mod.overridden);
+      updateFieldCell(mods, mod);
+    }
   }
+});
+
+// Forward undo/redo to the host (so the custom-document edit stack drives them) — except while a
+// text field is focused, where the browser's native text undo should win.
+document.addEventListener('keydown', e => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const ae = document.activeElement;
+  if (ae && ae.classList && ae.classList.contains('edit-raw')) return;
+  const k = e.key.toLowerCase();
+  if (k === 'z' && !e.shiftKey) { e.preventDefault(); vscodeApi.postMessage({ type: 'undo' }); }
+  else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); vscodeApi.postMessage({ type: 'redo' }); }
 });
 
 function requestDetails(obj) {
@@ -1471,7 +2084,7 @@ function renderDetails() {
   const mods = detailCache.get(obj.key);
   if (!mods) requestDetails(obj);
   let lastCategory = '';
-  const rows = (mods || []).map(mod => {
+  const rows = (mods || []).map((mod, mi) => {
     const category = categoryLabel(mod.category);
     const groupRow = category !== lastCategory
       ? '<tr class="category-row"><td colspan="' + headers.length + '">' + esc(category) + '</td></tr>'
@@ -1482,23 +2095,23 @@ function renderDetails() {
         ${parsed.extended ? "'<td class=\"num\">' + esc(mod.level ?? '') + '</td>' + '<td class=\"num\">' + esc(mod.dataPt ?? '') + '</td>' +" : "'' +"}
         ''
       : '<td class="field">' + esc(mod.label || mod.fieldId) + '</td>';
-    return groupRow + '<tr class="' + (mod.overridden ? 'overridden' : '') + '">' +
+    const fsearch = esc(((mod.fieldId || '') + ' ' + (mod.label || '') + ' ' + (mod.currentValue || '') + ' ' + (mod.editValue || '')).toLowerCase());
+    return groupRow + '<tr class="' + (mod.overridden ? 'overridden' : '') + '" data-fsearch="' + fsearch + '">' +
       fieldCell +
-      '<td class="value current">' + esc(mod.currentValue) + (mod.overridden ? '<span class="override-badge">modified</span>' : '') + sourcePill(mod) + '</td>' +
+      '<td class="value current">' + valueCell(mod, mi) + '</td>' +
     '</tr>';
   }).join('');
 
+  const rawcode = obj.newId ? esc(obj.baseId) + ' → ' + esc(obj.newId) : esc(obj.baseId);
   details.innerHTML = '<div class="details-head">' +
-    '<div class="details-title">' + esc(obj.displayName) + (obj.displaySource ? sourcePill({ source: obj.displaySource }) : '') + '</div>' +
-    '<div class="details-meta">' +
-      '<span class="chip">' + esc(obj.group) + '</span>' +
-      '<span class="chip">base rawcode ' + esc(obj.baseId) + '</span>' +
-      (obj.newId ? '<span class="chip">mod rawcode ' + esc(obj.newId) + '</span>' : '') +
-      '<span class="chip">' + esc(raceLabel(obj.race)) + '</span>' +
-      '<span class="chip">' + obj.overridesCount + ' override' + (obj.overridesCount === 1 ? '' : 's') + '</span>' +
-      (mods ? '<span class="chip">' + mods.length + ' shown field' + (mods.length === 1 ? '' : 's') + '</span>' : '<span class="chip">loading fields</span>') +
-      '<label class="chip toggle-chip"><input id="technical-toggle" type="checkbox" ' + (showTechnical ? 'checked' : '') + '> technical</label>' +
-    '</div>' +
+    '<div class="details-title">' + esc(obj.displayName) +
+      '<span class="details-rawcode">' + rawcode + '</span>' +
+      (obj.displaySource ? sourcePill({ source: obj.displaySource }) : '') + '</div>' +
+    (mods ? '<div class="field-search-wrap">' +
+      '<input id="field-search" class="field-search" type="text" placeholder="Search fields…" spellcheck="false" value="' + esc(fieldQuery) + '">' +
+      '<span id="field-match" class="field-match"></span>' +
+      '<label class="toggle-chip"><input id="technical-toggle" type="checkbox" ' + (showTechnical ? 'checked' : '') + '> technical</label>' +
+    '</div>' : '') +
   '</div>' +
   (mods
     ? '<div class="table-wrap"><table><thead><tr>' + headers.map(h => '<th>' + esc(h) + '</th>').join('') + '</tr></thead>' +
@@ -1512,6 +2125,164 @@ function renderDetails() {
       renderDetails();
     });
   }
+
+  const fieldSearch = document.getElementById('field-search');
+  if (fieldSearch) {
+    fieldSearch.addEventListener('input', () => { fieldQuery = fieldSearch.value; filterFields(fieldQuery); });
+  }
+  filterFields(fieldQuery);
+
+  for (const c of details.querySelectorAll('.tt-collapsed, .cell-edit')) wireCollapsed(c);
+}
+
+function wireCollapsed(c) {
+  if (!c) return;
+  c.addEventListener('click', () => expandEditor(c));
+}
+
+function markModified(el, mod) {
+  if (!mod.overridden) {
+    mod.overridden = true;
+    const tr = el.closest('tr');
+    if (tr) tr.classList.add('overridden');
+  }
+}
+
+function wireEditRaw(el) {
+  const mi = Number(el.getAttribute('data-mi'));
+  const mods = detailCache.get(selectedKey) || [];
+  const mod = mods[mi];
+  if (!mod) return;
+  const startVal = mod.editValue == null ? '' : String(mod.editValue);
+  let timer;
+  let posted = false;
+  const commit = () => { markModified(el, mod); postEdit(mod); posted = true; };
+  el.addEventListener('input', () => {
+    mod.editValue = el.value;
+    mod.currentValue = el.value;
+    const preview = details.querySelector('.tt-preview[data-preview-for="' + mi + '"]');
+    if (preview) preview.innerHTML = renderWc3Colors(el.value);
+    clearTimeout(timer);
+    // Only create/update a mod once the value actually changes (clicking a field to view it shouldn't modify it).
+    if (el.value !== startVal || posted) timer = setTimeout(commit, 250);
+  });
+  el.addEventListener('blur', () => { clearTimeout(timer); if (el.value !== startVal || posted) commit(); });
+  // Track selection so the toolbar / color picker act on it even after the textarea blurs.
+  const saveSel = () => { el._ss = el.selectionStart; el._se = el.selectionEnd; };
+  ['keyup', 'mouseup', 'select', 'blur', 'click'].forEach(ev => el.addEventListener(ev, saveSel));
+}
+
+function wireColorBar(bar) {
+  const mi = bar.getAttribute('data-mi');
+  const ta = details.querySelector('.edit-raw[data-mi="' + mi + '"]');
+  if (!ta) return;
+  const pop = bar.querySelector('.tt-pop');
+  const sq = bar.querySelector('.tt-color-sq');
+  if (sq) {
+    sq.addEventListener('mousedown', e => e.preventDefault()); // keep textarea selection
+    sq.addEventListener('click', () => { if (pop) pop.hidden = !pop.hidden; });
+  }
+  if (pop) {
+    for (const sw of pop.querySelectorAll('.tt-sw')) {
+      sw.addEventListener('mousedown', e => e.preventDefault());
+      sw.addEventListener('click', () => { wrapColor(ta, sw.getAttribute('data-color')); pop.hidden = true; });
+    }
+    const colorInput = pop.querySelector('.tt-color');
+    if (colorInput) colorInput.addEventListener('change', () => { wrapColor(ta, colorInput.value); pop.hidden = true; });
+  }
+  for (const b of bar.querySelectorAll('.tt-btn-sm')) {
+    b.addEventListener('mousedown', e => e.preventDefault());
+    b.addEventListener('click', () => {
+      const act = b.getAttribute('data-act');
+      if (act === 'newline') insertText(ta, '|n');
+      else if (act === 'reset') insertText(ta, '|r');
+    });
+  }
+}
+
+// Swap a collapsed cell for its editor on demand. The editor collapses back when focus leaves it.
+function expandEditor(c) {
+  const mi = Number(c.getAttribute('data-mi'));
+  const cell = c.parentElement;
+  const mods = detailCache.get(selectedKey) || [];
+  const mod = mods[mi];
+  if (!cell || !mod) return;
+  cell.innerHTML = editorHtml(mod, mi);
+  const ta = cell.querySelector('.edit-raw');
+  if (ta) {
+    wireEditRaw(ta);
+    ta.focus();
+    if (ta.type !== 'number' && ta.setSelectionRange) ta.setSelectionRange(ta.value.length, ta.value.length);
+    // Keyboard: Esc reverts and closes; Enter commits+closes (Ctrl/Cmd+Enter in the textarea).
+    const original = mod.editValue == null ? '' : String(mod.editValue);
+    ta.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (ta.value !== original) { ta.value = original; ta.dispatchEvent(new Event('input')); }
+        ta.blur();
+      } else if (e.key === 'Enter' && (ta.tagName === 'INPUT' || e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        ta.blur();
+      }
+    });
+  }
+  const bar = cell.querySelector('.tt-bar');
+  if (bar) wireColorBar(bar);
+  // Collapse back to the compact view once focus truly leaves this editor (not when clicking its
+  // own color bar / popup / picker, which keep focus inside the cell).
+  cell.addEventListener('focusout', () => {
+    setTimeout(() => {
+      if (cell.isConnected && !cell.contains(document.activeElement)) collapseCell(cell, mi);
+    }, 120);
+  });
+}
+
+function collapseCell(cell, mi) {
+  const mods = detailCache.get(selectedKey) || [];
+  const mod = mods[mi];
+  if (!cell || !mod) return;
+  cell.innerHTML = collapsedView(mod, mi);
+  wireCollapsed(cell.querySelector('.tt-collapsed') || cell.querySelector('.cell-edit'));
+}
+
+// Update a single field's cell in place (used by undo/redo — avoids rebuilding the whole table).
+function updateFieldCell(mods, mod) {
+  const mi = mods.indexOf(mod);
+  if (mi < 0) return;
+  const el = details.querySelector('.edit-raw[data-mi="' + mi + '"]');
+  if (el) {
+    el.value = mod.editValue == null ? '' : String(mod.editValue);
+    const pv = details.querySelector('.tt-preview[data-preview-for="' + mi + '"]');
+    if (pv) pv.innerHTML = renderWc3Colors(el.value);
+    return;
+  }
+  const col = details.querySelector('.tt-collapsed[data-mi="' + mi + '"], .cell-edit[data-mi="' + mi + '"]');
+  if (col && col.parentElement) collapseCell(col.parentElement, mi);
+}
+
+// Filter the details table rows by field id / label / value without rebuilding (keeps focus while typing).
+function filterFields(q) {
+  const query = String(q || '').trim().toLowerCase();
+  const table = details.querySelector('table');
+  if (!table) return;
+  const rows = table.querySelectorAll('tbody tr');
+  let shown = 0;
+  rows.forEach(tr => {
+    if (tr.classList.contains('category-row')) return;
+    const hay = tr.getAttribute('data-fsearch') || '';
+    const vis = !query || hay.indexOf(query) !== -1;
+    tr.classList.toggle('hidden', !vis);
+    if (vis) shown++;
+  });
+  let cat = null, catHasVisible = false;
+  const flush = () => { if (cat) cat.classList.toggle('hidden', !catHasVisible); };
+  rows.forEach(tr => {
+    if (tr.classList.contains('category-row')) { flush(); cat = tr; catHasVisible = false; }
+    else if (!tr.classList.contains('hidden')) catHasVisible = true;
+  });
+  flush();
+  const fm = document.getElementById('field-match');
+  if (fm) fm.textContent = query ? (shown + ' match' + (shown === 1 ? '' : 'es')) : '';
 }
 
 function render() {
@@ -1528,53 +2299,88 @@ search.addEventListener('input', () => {
   render();
 });
 
+(function setupSplitter() {
+  const editor = document.getElementById('object-editor');
+  const splitter = document.getElementById('splitter');
+  if (!editor || !splitter) return;
+  const saved = vscodeApi.getState() || {};
+  if (saved.listW) editor.style.setProperty('--list-w', saved.listW + 'px');
+  let dragging = false;
+  splitter.addEventListener('mousedown', e => {
+    dragging = true;
+    splitter.classList.add('dragging');
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const rect = editor.getBoundingClientRect();
+    const w = Math.max(170, Math.min(rect.width - 260, e.clientX - rect.left));
+    editor.style.setProperty('--list-w', w + 'px');
+  });
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    splitter.classList.remove('dragging');
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
+    const cur = parseInt(editor.style.getPropertyValue('--list-w'), 10) || 260;
+    vscodeApi.setState(Object.assign({}, vscodeApi.getState() || {}, { listW: cur }));
+  });
+})();
+
+// Close any open color popup when clicking outside its bar.
+document.addEventListener('mousedown', e => {
+  for (const pop of details.querySelectorAll('.tt-pop')) {
+    if (pop.hidden) continue;
+    const bar = pop.closest('.tt-bar');
+    if (!bar || !bar.contains(e.target)) pop.hidden = true;
+  }
+});
+
 render();
 </script>
 </div>`,
     });
 }
 
-async function handleObjModMessage(message: unknown, webview: vscode.Webview, _parsed: ObjModFile, context: ParsedPreviewContext): Promise<void> {
-    if (!message || typeof message !== 'object') return;
-    const msg = message as { type?: string; key?: string; iconPath?: string };
-    if (msg.type === 'loadObjectDetails' && msg.key) {
-        await loadObjectDetails(msg.key, webview, _parsed, context);
-        return;
-    }
-    if (msg.type !== 'loadObjectIcon' || !msg.key || !msg.iconPath) return;
-
-    const roots = await getCandidateRoots(context.uri.fsPath);
+async function handleObjModIcon(msg: { key: string; iconPath: string }, webview: vscode.Webview, uri: vscode.Uri): Promise<void> {
+    const roots = await getCandidateRoots(uri.fsPath);
     const fsPath = await resolveAssetPath(msg.iconPath, roots) ?? await ensureGameTextureCached(msg.iconPath);
     if (!fsPath) {
         await webview.postMessage({ type: 'objectIconMissing', key: msg.key });
         return;
     }
-
-    const preview = await ensurePreview(fsPath, OBJ_ICON_DIR, 32, iconPreviewCache);
-    if (!preview) {
+    try {
+        // Send the decoded raster to the webview and let the browser render it — the same central
+        // pipeline the BLP viewer uses (it correctly handles BGR jpeg-content BLPs, 4-component, etc.).
+        const ext = fsPath.slice(fsPath.lastIndexOf('.')).toLowerCase();
+        const bytes = new Uint8Array(await vscode.workspace.fs.readFile(vscode.Uri.file(fsPath)));
+        const decoded = decodeRasterPreview(bytes, ext);
+        await webview.postMessage(decoded.mode === 'jpeg'
+            ? { type: 'objectIconLoaded', key: msg.key, mode: 'jpeg', jpegBase64: decoded.jpegBase64, width: decoded.width, height: decoded.height }
+            : { type: 'objectIconLoaded', key: msg.key, mode: 'rgba', rgbaBase64: decoded.rgbaBase64, width: decoded.width, height: decoded.height });
+    } catch {
         await webview.postMessage({ type: 'objectIconMissing', key: msg.key });
-        return;
     }
-
-    await webview.postMessage({
-        type: 'objectIconLoaded',
-        key: msg.key,
-        uri: webview.asWebviewUri(vscode.Uri.file(preview.previewPath)).toString(),
-    });
 }
 
-async function loadObjectDetails(key: string, webview: vscode.Webview, parsed: ObjModFile, context: ParsedPreviewContext): Promise<void> {
-    const entry = findEntryByKey(parsed, key);
+async function loadObjectDetails(key: string, webview: vscode.Webview, doc: ObjModDocument): Promise<void> {
+    const entry = findEntryByKey(doc.displayFile, key);
     if (!entry) {
         await webview.postMessage({ type: 'objectDetailsFailed', key });
         return;
     }
-
-    const triggerStrings = loadTriggerStringsForUri(context.uri);
-    const gameData = await loadObjEditorData(parsed.ext);
+    const wts = doc.wtsTable;
+    const gameData = await loadObjEditorData(doc.displayFile.ext);
     const mods = gameData
-        ? buildFieldRows(entry, gameData, triggerStrings)
-        : entry.mods.map((mod) => buildOverrideOnlyMod(mod, triggerStrings, gameData));
+        ? buildFieldRows(entry, gameData, wts, doc.displayFile.extended, doc.displayFile.ext)
+        : entry.mods.map((mod) => {
+            const row = buildOverrideOnlyMod(mod, wts, gameData);
+            annotateEditable(row, mod, wts);
+            return row;
+        });
     await webview.postMessage({ type: 'objectDetailsLoaded', key, mods });
 }
 
@@ -1587,19 +2393,369 @@ function findEntryByKey(parsed: ObjModFile, key: string): ObjModEntry | undefine
     return undefined;
 }
 
-export function registerObjModPreview(_context: vscode.ExtensionContext): vscode.Disposable {
-    return registerParsedPreviewer<ObjModFile>({
-        viewType: 'wurst.objModPreview',
-        parse:  (data, fileName, context) => parseObjModWithSibling(data, fileName, context),
-        render: (parsed, fileName, context) => buildHtml(parsed, fileName, context),
-        onMessage: handleObjModMessage,
-        webviewOptions: {
+interface EditFieldMessage {
+    type: 'editField';
+    key: string;
+    fieldId: string;
+    level: number | null;
+    dataPt: number | null;
+    varType: string;
+    value: string;
+}
+
+interface ModEditUndo {
+    apply(): void;
+    revert(): void;
+    mod: ObjModMod;
+}
+
+/**
+ * Apply an edit to the merged editable model + in-memory wts; return undo/redo closures.
+ * The merged mod object is a live reference into the underlying war3map.* / war3mapSkin.* file,
+ * so mutating it here changes the file that will be serialized on save.
+ */
+/** The underlying war3map.* / war3mapSkin.* entry that owns a merged display object (prefers main). */
+function findFileEntryForKey(doc: ObjModDocument, key: string): { entry: ObjModEntry; file: ObjModFile } | undefined {
+    const merged = findEntryByKey(doc.displayFile, key);
+    if (!merged) return undefined;
+    const group = key.split(':')[0];
+    const wanted = entryKey(merged);
+    const search = (file: ObjModFile | undefined): ObjModEntry | undefined => {
+        if (!file) return undefined;
+        const list = group === 'Custom' ? file.customObjs : file.origObjs;
+        return list.find((e) => entryKey(e) === wanted);
+    };
+    const mainEntry = search(doc.mainFile);
+    if (mainEntry) return { entry: mainEntry, file: doc.mainFile };
+    const skinEntry = search(doc.skinFile);
+    if (skinEntry && doc.skinFile) return { entry: skinEntry, file: doc.skinFile };
+    return undefined;
+}
+
+function applyFieldEdit(doc: ObjModDocument, p: EditFieldMessage): ModEditUndo | undefined {
+    const entry = findEntryByKey(doc.displayFile, p.key);
+    if (!entry) return undefined;
+
+    // Locate the existing mod, or prepare to create one (editing a base field with no override yet).
+    let mod = locateMod(entry, p.fieldId, p.level ?? undefined, p.dataPt ?? undefined);
+    let fileEntry: ObjModEntry | undefined;
+    const created = !mod;
+    if (!mod) {
+        const target = findFileEntryForKey(doc, p.key);
+        if (!target) return undefined;
+        fileEntry = target.entry;
+        const varType = (['int', 'real', 'unreal', 'string'].includes(p.varType) ? p.varType : 'string') as ObjModVarType;
+        mod = { fieldId: p.fieldId, varType, value: '', endToken: '\0\0\0\0' };
+        if (doc.displayFile.extended) { mod.level = p.level ?? 0; mod.dataPt = p.dataPt ?? 0; }
+    }
+
+    const prevValue = mod.value;
+    let nextValue: number | string;
+    let wtsId: number | undefined;
+    let wtsBefore: string | undefined;
+    let wtsAfter: string | undefined;
+
+    if (mod.varType === 'string') {
+        const existing = typeof mod.value === 'string' ? /^TRIGSTR_(\d+)$/i.exec(mod.value) : null;
+        const bytes = Buffer.byteLength(p.value, 'utf8');
+        if (existing) {
+            wtsId = Number(existing[1]);
+        } else if (bytes > INLINE_STRING_LIMIT_BYTES) {
+            wtsId = nextTriggerStringId(doc.wtsTable);
+            while (doc.wtsTable.has(wtsId) || doc.wtsEdits.has(wtsId)) wtsId++;
+        }
+        if (wtsId !== undefined) {
+            wtsBefore = doc.wtsTable.get(wtsId);
+            wtsAfter = p.value;
+            nextValue = `TRIGSTR_${wtsId}`;
+        } else {
+            nextValue = p.value;
+        }
+    } else if (mod.varType === 'real' || mod.varType === 'unreal') {
+        nextValue = Number(p.value) || 0;
+    } else {
+        nextValue = Math.trunc(Number(p.value) || 0);
+    }
+
+    const id = wtsId;
+    const newMod = mod;
+    const addMod = (arr: ObjModMod[]) => { if (arr.indexOf(newMod) < 0) arr.push(newMod); };
+    const removeMod = (arr: ObjModMod[]) => { const i = arr.indexOf(newMod); if (i >= 0) arr.splice(i, 1); };
+    const apply = () => {
+        if (created && fileEntry) { addMod(entry.mods); addMod(fileEntry.mods); }
+        newMod.value = nextValue;
+        if (id !== undefined) { doc.wtsTable.set(id, wtsAfter ?? ''); doc.wtsEdits.set(id, wtsAfter ?? ''); }
+    };
+    const revert = () => {
+        if (created && fileEntry) { removeMod(entry.mods); removeMod(fileEntry.mods); }
+        else { newMod.value = prevValue; }
+        if (id !== undefined) {
+            if (wtsBefore === undefined) { doc.wtsTable.delete(id); doc.wtsEdits.delete(id); }
+            else { doc.wtsTable.set(id, wtsBefore); doc.wtsEdits.set(id, wtsBefore); }
+        }
+    };
+    apply();
+    return { apply, revert, mod };
+}
+
+/** Display value (resolved string / numeric text) of a mod for in-place webview updates. */
+function modDisplayValue(mod: ObjModMod, wts: TriggerStringTable): string {
+    if (mod.varType === 'string') {
+        const resolved = resolveTriggerString(typeof mod.value === 'string' ? mod.value : String(mod.value), wts);
+        return resolved.value === undefined ? '' : String(resolved.value);
+    }
+    return String(mod.value);
+}
+
+function computeWtsWarning(model: ObjModFile, wtsExists: boolean): string | undefined {
+    if (wtsExists) return undefined;
+    const hasTrig = [...model.origObjs, ...model.customObjs].some((entry) =>
+        entry.mods.some((mod) => typeof mod.value === 'string' && /^TRIGSTR_\d+$/i.test(mod.value)));
+    return hasTrig
+        ? 'war3map.wts was not found next to this file — externalized (TRIGSTR_) strings cannot be resolved or edited. Other fields remain editable.'
+        : undefined;
+}
+
+interface EditableObjMod {
+    mainFile: ObjModFile;
+    mainUri: vscode.Uri;
+    skinFile?: ObjModFile;
+    skinUri?: vscode.Uri;
+    /** Merged editable model. Its mod objects are live references into mainFile/skinFile. */
+    displayFile: ObjModFile;
+}
+
+/**
+ * Parse the opened objmod plus its war3map/war3mapSkin sibling. The returned `displayFile` is the
+ * merge used for both display AND editing — its mods alias the per-file mod objects, so an edit to
+ * a merged mod mutates whichever sibling owns it. Both files are written back on save.
+ */
+async function loadEditableObjMod(uri: vscode.Uri): Promise<EditableObjMod> {
+    const ext = fileExtOf(uri);
+    const fileName = uri.path.slice(uri.path.lastIndexOf('/') + 1);
+    const data = Buffer.from(await vscode.workspace.fs.readFile(uri));
+    const openedParse = parseObjMod(data, ext);
+
+    const siblingName = getObjModSiblingFileName(fileName);
+    if (!siblingName) {
+        return { mainFile: openedParse, mainUri: uri, displayFile: openedParse };
+    }
+
+    const siblingUri = vscode.Uri.joinPath(uri, '..', siblingName);
+    let siblingParse: ObjModFile | undefined;
+    try {
+        const siblingData = Buffer.from(await vscode.workspace.fs.readFile(siblingUri));
+        siblingParse = parseObjMod(siblingData, ext);
+    } catch { siblingParse = undefined; }
+
+    const openedIsSkin = fileName.toLowerCase().startsWith('war3mapskin.');
+    const mainFile = openedIsSkin ? siblingParse : openedParse;
+    const mainUri = openedIsSkin ? siblingUri : uri;
+    const skinFile = openedIsSkin ? openedParse : siblingParse;
+    const skinUri = openedIsSkin ? uri : siblingUri;
+
+    if (mainFile && skinFile) {
+        return { mainFile, mainUri, skinFile, skinUri, displayFile: mergeObjModFiles(mainFile, skinFile) };
+    }
+    // Only one sibling present → edit just the opened file.
+    return { mainFile: openedParse, mainUri: uri, displayFile: openedParse };
+}
+
+class ObjModDocument implements vscode.CustomDocument {
+    wtsEdits = new Map<number, string>();
+    reload: (() => Promise<void>) | undefined;
+
+    constructor(
+        readonly uri: vscode.Uri,
+        public mainFile: ObjModFile,
+        public mainUri: vscode.Uri,
+        public skinFile: ObjModFile | undefined,
+        public skinUri: vscode.Uri | undefined,
+        public displayFile: ObjModFile,
+        public wtsTable: TriggerStringTable,
+        public wtsUri: vscode.Uri | undefined,
+        public wtsExists: boolean,
+        public wtsWarning: string | undefined,
+    ) {}
+
+    /** The parsed file backing the opened uri (main or skin), used for save-as / backup snapshots. */
+    get openedFile(): ObjModFile {
+        return this.skinUri && this.uri.toString() === this.skinUri.toString() && this.skinFile
+            ? this.skinFile
+            : this.mainFile;
+    }
+
+    dispose(): void {}
+}
+
+function fileExtOf(uri: vscode.Uri): string {
+    const name = uri.path;
+    return name.slice(name.lastIndexOf('.'));
+}
+
+class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument> {
+    private readonly _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<ObjModDocument>>();
+    readonly onDidChangeCustomDocument = this._onDidChange.event;
+
+    async openCustomDocument(uri: vscode.Uri): Promise<ObjModDocument> {
+        const e = await loadEditableObjMod(uri);
+        const wtsTable = loadTriggerStringsForUri(uri);
+        const { uri: wtsUri, exists } = findWtsUri(uri);
+        const wtsWarning = computeWtsWarning(e.displayFile, exists);
+        return new ObjModDocument(uri, e.mainFile, e.mainUri, e.skinFile, e.skinUri, e.displayFile, wtsTable, wtsUri, exists, wtsWarning);
+    }
+
+    async resolveCustomEditor(doc: ObjModDocument, panel: vscode.WebviewPanel): Promise<void> {
+        panel.webview.options = {
             enableScripts: true,
-            localResourceRoots: [
-                vscode.Uri.file(OBJ_ICON_DIR),
-                ...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri),
-            ],
+            localResourceRoots: (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri),
+        };
+        const fileName = doc.uri.path.slice(doc.uri.path.lastIndexOf('/') + 1);
+        const ctx: ParsedPreviewContext = { uri: doc.uri, webview: panel.webview };
+        // Show a spinner immediately — buildHtml awaits CASC game-data and can exceed 200ms.
+        panel.webview.html = buildObjLoadingHtml(fileName);
+        doc.reload = async () => { panel.webview.html = await buildHtml(doc.displayFile, fileName, ctx, doc.wtsWarning); };
+
+        panel.webview.onDidReceiveMessage((message) => { void this.handleMessage(message, panel.webview, doc); });
+        await doc.reload();
+    }
+
+    private async handleMessage(message: unknown, webview: vscode.Webview, doc: ObjModDocument): Promise<void> {
+        if (!message || typeof message !== 'object') return;
+        const msg = message as {
+            type?: string; key?: string; iconPath?: string;
+            fieldId?: string; varType?: string; level?: number | null; dataPt?: number | null; value?: string;
+        };
+        if (msg.type === 'loadObjectDetails' && msg.key) {
+            await loadObjectDetails(msg.key, webview, doc);
+            return;
+        }
+        if (msg.type === 'loadObjectIcon' && msg.key && msg.iconPath) {
+            await handleObjModIcon({ key: msg.key, iconPath: msg.iconPath }, webview, doc.uri);
+            return;
+        }
+        if (msg.type === 'undo') { void vscode.commands.executeCommand('undo'); return; }
+        if (msg.type === 'redo') { void vscode.commands.executeCommand('redo'); return; }
+        if (msg.type === 'editField' && msg.key && msg.fieldId && msg.varType) {
+            const edit = applyFieldEdit(doc, {
+                type: 'editField',
+                key: msg.key,
+                fieldId: msg.fieldId,
+                level: msg.level ?? null,
+                dataPt: msg.dataPt ?? null,
+                varType: msg.varType,
+                value: msg.value ?? '',
+            });
+            if (!edit) return;
+            const key = msg.key;
+            const fieldId = msg.fieldId;
+            const level = msg.level ?? null;
+            const dataPt = msg.dataPt ?? null;
+            // Targeted in-place update on undo/redo — avoids rebuilding the whole (700+ row) table.
+            const post = () => {
+                const display = modDisplayValue(edit.mod, doc.wtsTable);
+                const overridden = !!locateMod(findEntryByKey(doc.displayFile, key), fieldId, level ?? undefined, dataPt ?? undefined);
+                void webview.postMessage({ type: 'fieldUpdated', key, fieldId, level, dataPt, editValue: display, currentValue: display, overridden });
+            };
+            this._onDidChange.fire({
+                document: doc,
+                label: `Edit ${msg.fieldId}`,
+                undo: () => { edit.revert(); post(); },
+                redo: () => { edit.apply(); post(); },
+            });
+        }
+    }
+
+    async saveCustomDocument(doc: ObjModDocument): Promise<void> {
+        try {
+            await writeObjModIfChanged(doc.mainFile, doc.mainUri);
+            if (doc.skinFile && doc.skinUri) await writeObjModIfChanged(doc.skinFile, doc.skinUri);
+            await this.writeWts(doc, doc.wtsUri, doc.wtsExists);
+            if (doc.wtsUri) doc.wtsExists = true;
+        } catch (err) {
+            // Validation failed — surface it and rethrow so VS Code keeps the document dirty (nothing written).
+            void vscode.window.showErrorMessage(`Object data not saved: ${err instanceof Error ? err.message : String(err)}`);
+            throw err;
+        }
+    }
+
+    async saveCustomDocumentAs(doc: ObjModDocument, targetResource: vscode.Uri): Promise<void> {
+        await vscode.workspace.fs.writeFile(targetResource, serializeValidated(doc.openedFile, targetResource.path));
+        const { uri: wtsUri, exists } = findWtsUri(targetResource);
+        await this.writeWts(doc, wtsUri, exists);
+    }
+
+    private async writeWts(doc: ObjModDocument, wtsUri: vscode.Uri | undefined, wtsExists: boolean): Promise<void> {
+        if (!doc.wtsEdits.size || !wtsUri) return;
+        let original = '';
+        if (wtsExists) {
+            try { original = Buffer.from(await vscode.workspace.fs.readFile(wtsUri)).toString('utf8'); } catch { /* create fresh */ }
+        }
+        const text = applyWtsEdits(original, doc.wtsEdits);
+        await vscode.workspace.fs.writeFile(wtsUri, Buffer.from(text, 'utf8'));
+    }
+
+    async revertCustomDocument(doc: ObjModDocument): Promise<void> {
+        const e = await loadEditableObjMod(doc.uri);
+        doc.mainFile = e.mainFile;
+        doc.mainUri = e.mainUri;
+        doc.skinFile = e.skinFile;
+        doc.skinUri = e.skinUri;
+        doc.displayFile = e.displayFile;
+        doc.wtsTable = loadTriggerStringsForUri(doc.uri);
+        doc.wtsEdits.clear();
+        const { exists } = findWtsUri(doc.uri);
+        doc.wtsExists = exists;
+        doc.wtsWarning = computeWtsWarning(doc.displayFile, exists);
+        if (doc.reload) await doc.reload();
+    }
+
+    async backupCustomDocument(doc: ObjModDocument, context: vscode.CustomDocumentBackupContext): Promise<vscode.CustomDocumentBackup> {
+        await vscode.workspace.fs.writeFile(context.destination, serializeValidated(doc.openedFile, doc.uri.path));
+        return { id: context.destination.toString(), delete: () => vscode.workspace.fs.delete(context.destination).then(() => undefined, () => undefined) };
+    }
+}
+
+function countMods(file: ObjModFile): number {
+    return [...file.origObjs, ...file.customObjs].reduce((sum, entry) => sum + entry.mods.length, 0);
+}
+
+/**
+ * Safety gate: never write an objmod we can't read back. Serializes, re-parses, and verifies the
+ * round-trip preserves version, object counts and mod counts. Throws (aborting the save) otherwise,
+ * so a bad edit can never corrupt the file on disk.
+ */
+function serializeValidated(file: ObjModFile, name: string): Buffer {
+    const bytes = serializeObjMod(file);
+    const reparsed = parseObjMod(bytes, file.ext);
+    if (reparsed.error) {
+        throw new Error(`Refusing to save ${name}: serialized data did not re-parse (${reparsed.error}).`);
+    }
+    if (reparsed.origObjs.length !== file.origObjs.length ||
+        reparsed.customObjs.length !== file.customObjs.length ||
+        countMods(reparsed) !== countMods(file)) {
+        throw new Error(`Refusing to save ${name}: round-trip object/mod count mismatch.`);
+    }
+    return bytes;
+}
+
+/** Serialize (validated) and write an objmod file only when its bytes differ from disk. */
+async function writeObjModIfChanged(file: ObjModFile, uri: vscode.Uri): Promise<void> {
+    const bytes = serializeValidated(file, uri.path.slice(uri.path.lastIndexOf('/') + 1));
+    try {
+        const existing = Buffer.from(await vscode.workspace.fs.readFile(uri));
+        if (existing.equals(bytes)) return;
+    } catch { /* file missing → write it */ }
+    await vscode.workspace.fs.writeFile(uri, bytes);
+}
+
+export function registerObjModPreview(_context: vscode.ExtensionContext): vscode.Disposable {
+    return vscode.window.registerCustomEditorProvider(
+        'wurst.objModPreview',
+        new ObjModEditorProvider(),
+        {
+            supportsMultipleEditorsPerDocument: false,
+            webviewOptions: { retainContextWhenHidden: true },
         },
-        panelOptions: { retainContextWhenHidden: true },
-    });
+    );
 }

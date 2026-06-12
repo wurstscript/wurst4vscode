@@ -45,6 +45,47 @@ export function loadTriggerStringsForUri(uri: vscode.Uri): TriggerStringTable {
     }
 }
 
+/** Locate the war3map.wts beside a data file. Returns its uri (existing or the default target) and whether it exists. */
+export function findWtsUri(uri: vscode.Uri): { uri: vscode.Uri | undefined; exists: boolean } {
+    if (uri.scheme !== 'file' || !uri.fsPath) return { uri: undefined, exists: false };
+    const dir = path.dirname(uri.fsPath);
+    try {
+        const existing = fs.readdirSync(dir).find((entry) => entry.toLowerCase() === 'war3map.wts');
+        if (existing) return { uri: vscode.Uri.file(path.join(dir, existing)), exists: true };
+    } catch {
+        return { uri: undefined, exists: false };
+    }
+    return { uri: vscode.Uri.file(path.join(dir, 'war3map.wts')), exists: false };
+}
+
+/** Next free trigger-string id (max existing + 1, floored at 1). */
+export function nextTriggerStringId(table: TriggerStringTable): number {
+    let max = 0;
+    for (const id of table.keys()) if (id > max) max = id;
+    return max + 1;
+}
+
+/**
+ * Surgically upsert the given trigger strings into an existing war3map.wts text,
+ * preserving everything else (comments, untouched entries, ordering). Appends new
+ * blocks for ids not already present. Pass '' as originalText to create a new file.
+ */
+export function applyWtsEdits(originalText: string, edits: Map<number, string>): string {
+    let text = originalText;
+    for (const [id, value] of edits) {
+        const body = value.replace(/\r?\n/g, '\r\n');
+        const block = `STRING ${id}\r\n{\r\n${body}\r\n}`;
+        const re = new RegExp(`STRING\\s+${id}\\b[\\s\\S]*?\\{[\\s\\S]*?\\}`);
+        if (re.test(text)) {
+            text = text.replace(re, block);
+        } else {
+            if (text.length && !/\n\s*$/.test(text)) text += '\r\n';
+            text += `\r\n${block}\r\n`;
+        }
+    }
+    return text;
+}
+
 function parseWts(text: string): TriggerStringTable {
     const table: TriggerStringTable = new Map();
     const re = /STRING\s+(\d+)(?:\s|\/\/[^\r\n]*(?:\r?\n|$))*\{([\s\S]*?)\}/gi;

@@ -3,6 +3,7 @@
 // MPQ Viewer webview script — compiled separately and loaded via asWebviewUri.
 // Messages FROM extension: { type:'init', entries, archiveSize, archiveName }
 //                          { type:'error', message }
+//                          { type:'extractDone' }
 // Messages TO extension:   { type:'ready' }
 //                          { type:'openFile', name }
 //                          { type:'extractAll' }
@@ -20,6 +21,9 @@ const archiveNameEl = document.getElementById('archiveName')!;
 const archiveStatsEl = document.getElementById('archiveStats')!;
 const btnExtractAll  = document.getElementById('btnExtractAll')!;
 const btnExportFolder = document.getElementById('btnExportFolder')!;
+
+// True while an Extract All / Export to Map Folder operation is running.
+let busy = false;
 
 // ── utilities ─────────────────────────────────────────────────────────────────
 
@@ -242,6 +246,7 @@ function renderFile(node: TreeNode, indent: number, container: HTMLElement): voi
     openBtn.innerHTML = ICON_OPEN + '<span>Open</span>';
     openBtn.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (busy) return;
         vscode.postMessage({ type: 'openFile', name: node.fullPath });
     });
 
@@ -259,6 +264,7 @@ function renderFile(node: TreeNode, indent: number, container: HTMLElement): voi
 
     // Double-click opens
     row.addEventListener('dblclick', () => {
+        if (busy) return;
         vscode.postMessage({ type: 'openFile', name: node.fullPath });
     });
 
@@ -307,11 +313,33 @@ searchInput.addEventListener('input', () => applyFilter(searchInput.value));
 
 // ── toolbar buttons ───────────────────────────────────────────────────────────
 
+function setBusy(activeBtn: HTMLElement): void {
+    busy = true;
+    document.body.classList.add('extracting');
+    for (const b of [btnExtractAll, btnExportFolder]) {
+        b.setAttribute('disabled', '');
+        b.classList.toggle('busy', b === activeBtn);
+    }
+}
+
+function clearBusy(): void {
+    busy = false;
+    document.body.classList.remove('extracting');
+    for (const b of [btnExtractAll, btnExportFolder]) {
+        b.removeAttribute('disabled');
+        b.classList.remove('busy');
+    }
+}
+
 btnExtractAll.addEventListener('click', () => {
+    if (busy || btnExtractAll.hasAttribute('disabled')) return;
+    setBusy(btnExtractAll);
     vscode.postMessage({ type: 'extractAll' });
 });
 
 btnExportFolder.addEventListener('click', () => {
+    if (busy || btnExportFolder.hasAttribute('disabled')) return;
+    setBusy(btnExportFolder);
     vscode.postMessage({ type: 'exportToMapFolder' });
 });
 
@@ -320,6 +348,11 @@ btnExportFolder.addEventListener('click', () => {
 window.addEventListener('message', (e: MessageEvent) => {
     const msg = e.data as { type: string; message?: string; entries?: Entry[]; archiveSize?: number; archiveName?: string };
     if (!msg?.type) return;
+
+    if (msg.type === 'extractDone') {
+        clearBusy();
+        return;
+    }
 
     if (msg.type === 'error') {
         treeWrap.innerHTML = '<div class="state"><span>Failed to read archive</span><span class="err">' + esc(msg.message ?? '') + '</span></div>';

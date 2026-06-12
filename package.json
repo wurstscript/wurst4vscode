@@ -21,7 +21,11 @@
     "categories": [
         "Programming Languages"
     ],
-    "activationEvents": [],
+    "activationEvents": [
+        "workspaceContains:**/wurst.build",
+        "workspaceContains:**/*.wurst",
+        "workspaceContains:**/*.jurst"
+    ],
     "main": "./dist/extension",
     "browser": "./dist/web/extension.js",
     "contributes": {

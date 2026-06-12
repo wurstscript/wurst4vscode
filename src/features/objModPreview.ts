@@ -193,6 +193,22 @@ interface PreviewMod {
     varType?: string;        // 'int' | 'real' | 'unreal' | 'string'
     editValue?: string;      // raw editable text (string fields: resolved wts/inline text)
     missingWts?: boolean;    // TRIGSTR_ reference with no war3map.wts → not editable
+    displayValue?: string;   // field-aware readable value, e.g. "Human" for "human"
+    displayDetail?: string;  // raw value/context shown under displayValue
+    displayKind?: 'race' | 'enum' | 'asset' | 'rawcodes';
+    assetType?: 'icon' | 'model' | 'pathing';
+    assetPath?: string;
+    resolvedItems?: ValueOption[];
+    editorKind?: 'select' | 'datalist';
+    options?: ValueOption[];
+}
+
+interface ValueOption {
+    value: string;
+    label: string;
+    detail?: string;
+    iconPath?: string;
+    objectKey?: string;
 }
 
 interface ObjEditorData {
@@ -242,7 +258,121 @@ type ProfileTable = Map<string, Record<string, string>>;
 const objEditorDataCache = new Map<string, Promise<ObjEditorData | undefined>>();
 const objSummaryDataCache = new Map<string, Promise<ObjSummaryData | undefined>>();
 const objProfileCache = new Map<string, Promise<ProfileTable>>();
+const objCatalogCache = new Map<string, Promise<ObjValueCatalog>>();
 let worldEditStringsPromise: Promise<Map<string, string>> | undefined;
+
+const CATALOG_EXTS = ['.w3u', '.w3t', '.w3a', '.w3b', '.w3d', '.w3h', '.w3q'];
+const RACE_OPTIONS: ValueOption[] = [
+    { value: 'human', label: 'Human' },
+    { value: 'orc', label: 'Orc' },
+    { value: 'undead', label: 'Undead' },
+    { value: 'nightelf', label: 'Night Elf' },
+    { value: 'neutral', label: 'Neutral' },
+    { value: 'naga', label: 'Naga' },
+    { value: 'demon', label: 'Demon' },
+    { value: 'common', label: 'Common' },
+];
+
+const ENUM_OPTIONS: Record<string, ValueOption[]> = {
+    bool: [
+        { value: '0', label: 'False' },
+        { value: '1', label: 'True' },
+    ],
+    movetype: [
+        { value: '', label: 'None' },
+        { value: 'foot', label: 'Foot' },
+        { value: 'fly', label: 'Fly' },
+        { value: 'horse', label: 'Horse' },
+        { value: 'hover', label: 'Hover' },
+        { value: 'float', label: 'Float' },
+        { value: 'amph', label: 'Amphibious' },
+    ],
+    attacktype: [
+        { value: 'normal', label: 'Normal' },
+        { value: 'pierce', label: 'Pierce' },
+        { value: 'siege', label: 'Siege' },
+        { value: 'magic', label: 'Magic' },
+        { value: 'chaos', label: 'Chaos' },
+        { value: 'hero', label: 'Hero' },
+    ],
+    defensetype: [
+        { value: 'small', label: 'Small' },
+        { value: 'medium', label: 'Medium' },
+        { value: 'large', label: 'Large' },
+        { value: 'fort', label: 'Fortified' },
+        { value: 'normal', label: 'Normal' },
+        { value: 'hero', label: 'Hero' },
+        { value: 'divine', label: 'Divine' },
+        { value: 'none', label: 'Unarmored' },
+    ],
+    defensetypeint: [
+        { value: '0', label: 'Small' },
+        { value: '1', label: 'Medium' },
+        { value: '2', label: 'Large' },
+        { value: '3', label: 'Fortified' },
+        { value: '4', label: 'Normal' },
+        { value: '5', label: 'Hero' },
+        { value: '6', label: 'Divine' },
+        { value: '7', label: 'Unarmored' },
+    ],
+    armortype: [
+        { value: 'flesh', label: 'Flesh' },
+        { value: 'metal', label: 'Metal' },
+        { value: 'wood', label: 'Wood' },
+        { value: 'ethereal', label: 'Ethereal' },
+        { value: 'stone', label: 'Stone' },
+    ],
+    regentype: [
+        { value: 'none', label: 'None' },
+        { value: 'always', label: 'Always' },
+        { value: 'blight', label: 'Only on Blight' },
+        { value: 'day', label: 'Only During Day' },
+        { value: 'night', label: 'Only During Night' },
+    ],
+    teamcolor: [
+        { value: '-1', label: 'Default' },
+        { value: '0', label: 'Red' },
+        { value: '1', label: 'Blue' },
+        { value: '2', label: 'Teal' },
+        { value: '3', label: 'Purple' },
+        { value: '4', label: 'Yellow' },
+        { value: '5', label: 'Orange' },
+        { value: '6', label: 'Green' },
+        { value: '7', label: 'Pink' },
+        { value: '8', label: 'Gray' },
+        { value: '9', label: 'Light Blue' },
+        { value: '10', label: 'Dark Green' },
+        { value: '11', label: 'Brown' },
+        { value: '12', label: 'Maroon' },
+        { value: '13', label: 'Navy' },
+        { value: '14', label: 'Turquoise' },
+        { value: '15', label: 'Violet' },
+        { value: '16', label: 'Wheat' },
+        { value: '17', label: 'Peach' },
+        { value: '18', label: 'Mint' },
+        { value: '19', label: 'Lavender' },
+        { value: '20', label: 'Coal' },
+        { value: '21', label: 'Snow' },
+        { value: '22', label: 'Emerald' },
+        { value: '23', label: 'Peanut' },
+    ],
+    itemclass: [
+        { value: 'Permanent', label: 'Permanent' },
+        { value: 'Charged', label: 'Charged' },
+        { value: 'PowerUp', label: 'Power Up' },
+        { value: 'Artifact', label: 'Artifact' },
+        { value: 'Purchasable', label: 'Purchasable' },
+        { value: 'Campaign', label: 'Campaign' },
+        { value: 'Miscellaneous', label: 'Miscellaneous' },
+    ],
+};
+
+interface ObjValueCatalog {
+    objects: Map<string, ValueOption>;
+    icons: ValueOption[];
+    models: ValueOption[];
+    pathing: ValueOption[];
+}
 
 function getObjModSiblingFileName(fileName: string): string | undefined {
     const lower = fileName.toLowerCase();
@@ -406,7 +536,7 @@ function unitFieldApplies(f: MetaField, baseId: string, isHero: boolean): boolea
     return f.useUnit || f.useBuilding;
 }
 
-function buildFieldRows(entry: ObjModEntry, gameData: ObjEditorData, triggerStrings: TriggerStringTable, extended: boolean, ext: string): PreviewMod[] {
+function buildFieldRows(entry: ObjModEntry, gameData: ObjEditorData, triggerStrings: TriggerStringTable, extended: boolean, ext: string, catalog: ObjValueCatalog): PreviewMod[] {
     const overrideMods = new Map<string, ObjModMod[]>();
     for (const mod of entry.mods) {
         const key = modKey(mod);
@@ -456,6 +586,7 @@ function buildFieldRows(entry: ObjModEntry, gameData: ObjEditorData, triggerStri
                 row.editable = true;
                 row.editValue = formattedBase.value;
             }
+            enhancePreviewRow(row, field, catalog);
             rows.push(row);
         }
     }
@@ -464,6 +595,8 @@ function buildFieldRows(entry: ObjModEntry, gameData: ObjEditorData, triggerStri
         if (!usedMods.has(mod)) {
             const row = buildOverrideOnlyMod(mod, triggerStrings, gameData);
             annotateEditable(row, mod, triggerStrings);
+            const field = gameData.fieldsById.get(mod.fieldId.toLowerCase());
+            if (field) enhancePreviewRow(row, field, catalog);
             rows.push(row);
         }
     }
@@ -500,6 +633,141 @@ function buildOverrideOnlyMod(mod: ObjModMod, triggerStrings: TriggerStringTable
         source: value.source,
         missingSource: value.missingSource,
     };
+}
+
+function enhancePreviewRow(row: PreviewMod, field: MetaField, catalog: ObjValueCatalog): void {
+    const raw = row.currentValue == null ? '' : String(row.currentValue).trim();
+    if (isRaceField(field)) {
+        const race = normalizeRace(raw);
+        const option = RACE_OPTIONS.find((candidate) => candidate.value === race);
+        if (option) {
+            row.displayKind = 'race';
+            row.displayValue = option.label;
+            row.displayDetail = raw;
+        }
+        row.editorKind = 'select';
+        row.options = RACE_OPTIONS;
+        return;
+    }
+
+    const enumOptions = enumOptionsForField(field, raw);
+    if (enumOptions) {
+        const option = enumOptions.find((candidate) => candidate.value.toLowerCase() === raw.toLowerCase());
+        if (option) {
+            row.displayKind = 'enum';
+            row.displayValue = option.label;
+            row.displayDetail = raw;
+        }
+        row.editorKind = 'select';
+        row.options = enumOptions;
+        if (enumOptions.some((candidate) => candidate.value !== '' && !isFinite(Number(candidate.value)))) {
+            row.varType = 'string';
+        }
+        return;
+    }
+
+    const assetType = fieldAssetType(field);
+    if (assetType) {
+        const assetPath = normalizeAssetValue(raw, assetType);
+        if (assetPath) {
+            row.displayKind = 'asset';
+            row.assetType = assetType;
+            row.assetPath = assetPath;
+            row.displayValue = assetLabel(assetPath, assetType);
+            row.displayDetail = assetPath;
+        }
+        row.editorKind = 'datalist';
+        row.options = assetType === 'icon'
+            ? catalog.icons
+            : assetType === 'model'
+                ? catalog.models
+                : catalog.pathing;
+        return;
+    }
+
+    const items = resolveRawcodeList(raw, catalog);
+    if (items?.length) {
+        row.displayKind = 'rawcodes';
+        row.resolvedItems = items;
+        row.displayValue = items.map((item) => item.label).join(', ');
+        row.displayDetail = raw;
+    }
+}
+
+function enumOptionsForField(field: MetaField, raw: string): ValueOption[] | undefined {
+    if (raw.includes(',')) return undefined;
+    const type = field.type.toLowerCase();
+    const id = field.id.toLowerCase();
+    const source = field.sourceField.toLowerCase();
+    const label = field.label.toLowerCase();
+    if (ENUM_OPTIONS[type]) return normalizeEnumOptionsForRaw(ENUM_OPTIONS[type], raw);
+    if (type === 'int' && (id.endsWith('tcol') || source.includes('teamcolor') || label.includes('team color'))) {
+        return ENUM_OPTIONS.teamcolor;
+    }
+    if (source === 'movetp' || label === 'movement type' || label === 'movement - type') {
+        return ENUM_OPTIONS.movetype;
+    }
+    return undefined;
+}
+
+function normalizeEnumOptionsForRaw(options: ValueOption[], raw: string): ValueOption[] {
+    if (raw === '' || options.some((option) => option.value === raw)) return options;
+    if (!isFinite(Number(raw))) return options;
+    const allNumeric = options.every((option) => option.value === '' || isFinite(Number(option.value)));
+    if (allNumeric) return options;
+    return options.map((option, index) => ({ ...option, value: String(index) }));
+}
+
+function isRaceField(field: MetaField): boolean {
+    const id = field.id.toLowerCase();
+    const source = field.sourceField.toLowerCase();
+    const label = field.label.toLowerCase();
+    const type = field.type.toLowerCase();
+    return id === 'urac' || id === 'arac' || source === 'race' || type === 'race' || label === 'race';
+}
+
+function fieldAssetType(field: MetaField): 'icon' | 'model' | 'pathing' | undefined {
+    const id = field.id.toLowerCase();
+    const source = field.sourceField.toLowerCase();
+    const label = field.label.toLowerCase();
+    const type = field.type.toLowerCase();
+    const hay = `${id} ${source} ${label} ${type}`;
+    if (hay.includes('pathing map') || hay.includes('pathing texture') || source.includes('pathtex') || type.includes('pathing')) {
+        return 'pathing';
+    }
+    if (ICON_FIELDS.has(id) || type.includes('icon') || label.includes('icon') || label.includes('button')) {
+        return 'icon';
+    }
+    if (['umdl', 'amdl', 'ifil', 'bfil', 'dfil'].includes(id) || type.includes('model') || label.includes('model') ||
+        (field.category.toLowerCase() === 'art' && (source === 'file' || source === 'model'))) {
+        return 'model';
+    }
+    return undefined;
+}
+
+function normalizeAssetValue(value: string, assetType: 'icon' | 'model' | 'pathing'): string | undefined {
+    if (assetType === 'icon') return normalizeIconPath(value);
+    if (assetType === 'model') return normalizeModelPath(value);
+    const first = stripTxtQuotes(String(value).split(',')[0].trim());
+    if (!first || first === '-' || first.startsWith('WESTRING_')) return undefined;
+    if (!/\.(tga|blp|dds)$/i.test(first)) return undefined;
+    return first.replace(/\//g, '\\');
+}
+
+function assetLabel(assetPath: string, assetType: string): string {
+    const file = assetPath.split('\\').pop() || assetPath;
+    const clean = file.replace(/\.(blp|dds|tga|png|jpe?g|mdx|mdl)$/i, '');
+    if (assetType === 'icon') return clean.replace(/^(btn|disbtn|pasbtn|att|upg)/i, '');
+    return clean;
+}
+
+function resolveRawcodeList(value: string, catalog: ObjValueCatalog): ValueOption[] | undefined {
+    if (!value || value.includes('\\') || /\.(blp|dds|tga|mdx|mdl)$/i.test(value)) return undefined;
+    const parts = value.split(',').map((part) => stripTxtQuotes(part.trim())).filter(Boolean);
+    if (!parts.length || parts.length > 16) return undefined;
+    if (!parts.every((part) => /^[A-Za-z0-9_]{4}$/.test(part))) return undefined;
+    const resolved = parts.map((part) => catalog.objects.get(part.toLowerCase()) ?? { value: part, label: part });
+    return resolved.some((item, index) => item.label !== parts[index] || item.objectKey) ? resolved : undefined;
 }
 
 function resolveObjectNameOverride(
@@ -650,7 +918,7 @@ function getFieldLevels(baseId: string, field: MetaField, gameData: ObjEditorDat
     return Array.from({ length: levelCount }, (_, index) => index + 1);
 }
 
-function resolveBaseDisplayName(baseId: string, summaryData: ObjSummaryData): string | undefined {
+function resolveBaseDisplayName(baseId: string, summaryData: Pick<ObjSummaryData, 'worldStrings' | 'profile'>): string | undefined {
     const value = getAnyProfileValue(baseId, [
         'Name',
         'name',
@@ -682,7 +950,7 @@ function getBaseSlkRow(baseId: string, field: MetaField, gameData: ObjEditorData
     return gameData.slkTables.get(field.slkPath)?.rows.get(baseId);
 }
 
-function getAnyProfileValue(baseId: string, fields: string[], summaryData: ObjSummaryData): string | undefined {
+function getAnyProfileValue(baseId: string, fields: string[], summaryData: Pick<ObjSummaryData, 'profile'>): string | undefined {
     const row = summaryData.profile.get(baseId);
     if (!row) return undefined;
     for (const field of fields) {
@@ -784,6 +1052,131 @@ function loadObjProfileData(ext: string): Promise<ProfileTable> {
         objProfileCache.set(key, promise);
     }
     return promise;
+}
+
+function loadObjValueCatalog(): Promise<ObjValueCatalog> {
+    const key = 'all';
+    let promise = objCatalogCache.get(key);
+    if (!promise) {
+        promise = loadObjValueCatalogUncached();
+        objCatalogCache.set(key, promise);
+    }
+    return promise;
+}
+
+async function loadObjValueCatalogUncached(): Promise<ObjValueCatalog> {
+    const worldStrings = await loadWorldEditStrings();
+    const profiles = await Promise.all(CATALOG_EXTS.map((ext) => loadObjProfileData(ext)));
+    const objects = new Map<string, ValueOption>();
+    const iconMap = new Map<string, ValueOption>();
+    const modelMap = new Map<string, ValueOption>();
+    const pathingMap = new Map<string, ValueOption>();
+
+    for (const profile of profiles) {
+        for (const [id, row] of profile) {
+            const label = resolveProfileDisplayName(row, worldStrings) || id;
+            const objectOption = { value: id, label, detail: id };
+            if (!objects.has(id.toLowerCase())) objects.set(id.toLowerCase(), objectOption);
+
+            for (const [key, value] of Object.entries(row)) {
+                const icon = normalizeProfileIconPath(key, value);
+                if (icon) addAssetOption(iconMap, icon, label, id);
+                const model = normalizeProfileModelPath(key, value);
+                if (model) addAssetOption(modelMap, model, label, id);
+                const pathing = normalizeProfilePathingPath(key, value);
+                if (pathing) addAssetOption(pathingMap, pathing, label, id);
+            }
+        }
+    }
+
+    addPathingFallbacks(pathingMap);
+    return {
+        objects,
+        icons: sortOptions([...iconMap.values()]).slice(0, 700),
+        models: sortOptions([...modelMap.values()]).slice(0, 700),
+        pathing: sortOptions([...pathingMap.values()]).slice(0, 300),
+    };
+}
+
+function catalogWithDocumentObjects(
+    baseCatalog: ObjValueCatalog,
+    parsed: ObjModFile,
+    triggerStrings: TriggerStringTable,
+    summaryData: Pick<ObjSummaryData, 'worldStrings' | 'profile'>,
+): ObjValueCatalog {
+    const objects = new Map(baseCatalog.objects);
+    const addEntry = (entry: ObjModEntry, group: 'Original' | 'Custom', index: number) => {
+        const key = `${group}:${index}`;
+        const id = entry.newId || entry.baseId;
+        const nameOverride = resolveObjectNameOverride(entry, triggerStrings);
+        const baseName = resolveBaseDisplayName(entry.baseId, summaryData);
+        const label = nameOverride?.value ? String(nameOverride.value) : (baseName || id);
+        objects.set(id.toLowerCase(), {
+            value: id,
+            label,
+            detail: entry.newId ? `${entry.baseId} -> ${entry.newId}` : entry.baseId,
+            objectKey: key,
+        });
+    };
+    parsed.origObjs.forEach((entry, index) => addEntry(entry, 'Original', index));
+    parsed.customObjs.forEach((entry, index) => addEntry(entry, 'Custom', index));
+    return { ...baseCatalog, objects };
+}
+
+function resolveProfileDisplayName(row: Record<string, string>, worldStrings: Map<string, string>): string | undefined {
+    const value = [
+        'Name', 'name', 'EditorName', 'Editorname', 'Bufftip', 'BuffTip', 'Tip', 'tip', 'comment', 'comments',
+    ].map((key) => row[key]).find((candidate) => candidate !== undefined && candidate !== '');
+    return value ? resolveWorldEditString(value, worldStrings) : undefined;
+}
+
+function addAssetOption(target: Map<string, ValueOption>, assetPath: string, label: string, ownerId: string): void {
+    const normalized = assetPath.replace(/\//g, '\\');
+    const key = normalized.toLowerCase();
+    if (target.has(key)) return;
+    target.set(key, {
+        value: normalized,
+        label: `${assetLabel(normalized, 'asset')} - ${label}`,
+        detail: `${ownerId} - ${normalized}`,
+        iconPath: normalizeIconPath(normalized),
+    });
+}
+
+function normalizeProfileIconPath(key: string, value: string): string | undefined {
+    const lowerKey = key.toLowerCase();
+    if (!/(art|icon|button|research)/.test(lowerKey)) return undefined;
+    return normalizeIconPath(value);
+}
+
+function normalizeProfileModelPath(key: string, value: string): string | undefined {
+    const lowerKey = key.toLowerCase();
+    if (!/(file|model)/.test(lowerKey)) return undefined;
+    const first = stripTxtQuotes(String(value).split(',')[0].trim());
+    if (!first || first === '-' || first.startsWith('WESTRING_')) return undefined;
+    if (!/[\\/]/.test(first) && !/\.(mdx|mdl)$/i.test(first)) return undefined;
+    return normalizeModelPath(first);
+}
+
+function normalizeProfilePathingPath(key: string, value: string): string | undefined {
+    if (!key.toLowerCase().includes('path')) return undefined;
+    return normalizeAssetValue(value, 'pathing');
+}
+
+function addPathingFallbacks(target: Map<string, ValueOption>): void {
+    [
+        'PathTextures\\2x2Default.tga',
+        'PathTextures\\2x2SimpleSolid.tga',
+        'PathTextures\\4x4Default.tga',
+        'PathTextures\\4x4SimpleSolid.tga',
+        'PathTextures\\6x6Default.tga',
+        'PathTextures\\8x8Default.tga',
+        'PathTextures\\LargeBuilding.tga',
+        'PathTextures\\GatePath.tga',
+    ].forEach((assetPath) => addAssetOption(target, assetPath, 'Common pathing map', 'melee'));
+}
+
+function sortOptions(options: ValueOption[]): ValueOption[] {
+    return options.sort((a, b) => a.label.localeCompare(b.label) || a.value.localeCompare(b.value));
 }
 
 async function loadProfilePaths(profilePaths: string[]): Promise<ProfileTable> {
@@ -1137,6 +1530,67 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 }
 .cell-edit:hover .tt-edit-hint { opacity: 0.7; }
 .cell-edit-val { flex: 1; min-width: 0; font-family: var(--mono); word-break: break-word; white-space: pre-wrap; }
+.value-display {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 7px;
+  row-gap: 2px;
+  align-items: center;
+  min-width: 0;
+}
+.value-display.rawcodes { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.value-main {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font);
+}
+.value-raw {
+  grid-column: 2;
+  min-width: 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.resolved-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 180px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 1px 5px;
+  background: color-mix(in srgb, var(--input-bg) 78%, transparent);
+  font-family: var(--font);
+  white-space: nowrap;
+}
+.resolved-chip.linked { cursor: pointer; color: var(--vscode-textLink-foreground, var(--fg)); }
+.resolved-chip.linked:hover { border-color: currentColor; background: var(--hover); }
+.resolved-chip .raw { color: var(--muted); font-family: var(--mono); font-size: 10px; }
+.asset-mini {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--input-bg);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  overflow: hidden;
+}
+.asset-mini img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.picker-note {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 3px;
+}
 /* Number values are short — don't stretch the input across the whole column. */
 .value-editor.single input[type="number"] { max-width: 150px; }
 /* Scannable accent for customized (overridden) fields. */
@@ -1425,6 +1879,16 @@ tr.hidden { display: none; }
   padding: 12px 16px 10px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+}
+.details-title-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+.details-icon {
+  width: 32px;
+  height: 32px;
 }
 .details-title {
   font-size: 15px;
@@ -1726,10 +2190,92 @@ function colorEditorHtml(mod, mi) {
     '</div>';
 }
 
+function optionsHtml(options, selected) {
+  return (options || []).map(opt =>
+    '<option value="' + esc(opt.value) + '"' + (String(opt.value) === String(selected) ? ' selected' : '') + '>' +
+      esc(opt.label + (opt.detail ? ' (' + opt.detail + ')' : '')) +
+    '</option>'
+  ).join('');
+}
+
+function datalistOptionsHtml(options) {
+  return (options || []).map(opt =>
+    '<option value="' + esc(opt.value) + '" label="' + esc(opt.label) + '">' + esc(opt.detail || '') + '</option>'
+  ).join('');
+}
+
+function pickerEditorHtml(mod, mi, v) {
+  if (!mod.options || !mod.options.length) return '';
+  if (mod.editorKind === 'select') {
+    const hasValue = mod.options.some(opt => String(opt.value) === String(v));
+    return '<div class="value-editor single"><select class="edit-raw" data-mi="' + mi + '">' +
+      (hasValue ? '' : '<option value="' + esc(v) + '" selected>' + esc(v || '(empty)') + '</option>') +
+      optionsHtml(mod.options, v) +
+      '</select></div>';
+  }
+  const listId = 'pick-' + mi;
+  return '<div class="value-editor single">' +
+    '<input class="edit-raw" type="text" list="' + listId + '" data-mi="' + mi + '" spellcheck="false" value="' + esc(v) + '">' +
+    '<datalist id="' + listId + '">' + datalistOptionsHtml(mod.options) + '</datalist>' +
+    '<div class="picker-note">Start typing to choose from Warcraft III game data.</div>' +
+  '</div>';
+}
+
+function assetMiniHtml(mod, mi) {
+  if (!mod.assetPath) return '';
+  if (mod.assetType === 'icon') {
+    return '<span class="asset-mini object-icon loading" data-key="' + esc(selectedKey + ':field:' + mi) + '" data-icon="' + esc(mod.assetPath) + '" title="' + esc(mod.assetPath) + '"><span class="icon-spinner"></span></span>';
+  }
+  return '<span class="asset-mini" title="' + esc(mod.assetPath) + '">' + esc(mod.assetType === 'model' ? '3D' : 'PAT') + '</span>';
+}
+
+function resolvedItemsHtml(mod) {
+  const items = mod.resolvedItems || [];
+  return '<span class="value-display rawcodes">' + items.map(item =>
+    '<span class="resolved-chip' + (item.objectKey ? ' linked' : '') + '" title="' + esc(item.objectKey ? 'Open ' + item.label : (item.detail || item.value)) + '"' +
+      (item.objectKey ? ' data-jump="' + esc(item.objectKey) + '"' : '') + '>' +
+      '<span>' + esc(item.label) + '</span><span class="raw">' + esc(item.value) + '</span>' +
+    '</span>'
+  ).join('') + '</span>';
+}
+
+function assetName(value) {
+  const file = String(value || '').split('\\\\').pop().split('/').pop();
+  return file.replace(/\\.(blp|dds|tga|png|jpe?g|mdx|mdl)$/i, '').replace(/^(btn|disbtn|pasbtn|att|upg)/i, '') || value;
+}
+
+function refreshDecoratedValue(mod) {
+  const v = mod.editValue == null ? (mod.currentValue == null ? '' : String(mod.currentValue)) : String(mod.editValue);
+  const match = (mod.options || []).find(opt => String(opt.value) === v);
+  if (match) {
+    mod.displayValue = match.label;
+    mod.displayDetail = match.detail || v;
+  } else if (mod.displayKind === 'asset' && v) {
+    mod.assetPath = v;
+    mod.displayValue = assetName(v);
+    mod.displayDetail = v;
+  }
+}
+
+function decoratedValueHtml(mod, mi, raw) {
+  refreshDecoratedValue(mod);
+  if (mod.displayKind === 'rawcodes' && mod.resolvedItems && mod.resolvedItems.length) return resolvedItemsHtml(mod);
+  if (!mod.displayValue || String(mod.displayValue) === String(raw)) {
+    return raw === '' ? '<span class="tt-empty">(empty)</span>' : esc(raw);
+  }
+  return '<span class="value-display ' + esc(mod.displayKind || '') + '">' +
+    assetMiniHtml(mod, mi) +
+    '<span class="value-main" title="' + esc(mod.displayValue) + '">' + esc(mod.displayValue) + '</span>' +
+    '<span class="value-raw" title="' + esc(mod.displayDetail || raw) + '">' + esc(mod.displayDetail || raw) + '</span>' +
+  '</span>';
+}
+
 // Editor shown on click. Color/text fields get textarea + color bar + preview; everything else a plain input.
 function editorHtml(mod, mi) {
   if (needsColorEditor(mod)) return colorEditorHtml(mod, mi);
   const v = mod.editValue == null ? '' : String(mod.editValue);
+  const picker = pickerEditorHtml(mod, mi, v);
+  if (picker) return picker;
   const numType = mod.varType === 'int' || mod.varType === 'real' || mod.varType === 'unreal';
   // Use a number input only when the value is actually numeric — otherwise a number input renders
   // blank (e.g. a stray comma value). Fall back to text so it stays visible/editable.
@@ -1747,7 +2293,7 @@ function collapsedView(mod, mi) {
       '<span class="tt-collapsed-body">' + renderWc3Colors(dv) + '</span><span class="tt-edit-hint">✎</span></div>';
   }
   const badge = mod.overridden ? '<span class="override-badge">modified</span>' : '';
-  const disp = dv === '' ? '<span class="tt-empty">(empty)</span>' : esc(dv);
+  const disp = decoratedValueHtml(mod, mi, dv);
   return '<span class="cell-edit" data-mi="' + mi + '" title="Click to edit">' +
     '<span class="cell-edit-val">' + disp + '</span>' + badge + (mod.source ? sourcePill(mod) : '') +
     '<span class="tt-edit-hint">✎</span></span>';
@@ -1762,7 +2308,7 @@ function valueCell(mod, mi) {
   if (hasColorMarkup(ro)) {
     return '<div class="tt-preview tt-readonly">' + renderWc3Colors(ro) + '</div>' + extra;
   }
-  return esc(ro) + extra;
+  return decoratedValueHtml(mod, mi, ro) + extra;
 }
 
 function postEdit(mod) {
@@ -1852,6 +2398,15 @@ function idLine(obj) {
     : esc(obj.baseId);
 }
 
+function objectIconHtml(obj, extraClass) {
+  const cls = extraClass ? ' ' + extraClass : '';
+  if (obj.iconPath) {
+    return '<span class="object-icon loading' + cls + '" data-key="' + esc(obj.key) + '" data-icon="' + esc(obj.iconPath) + '" title="' + esc(obj.iconPath) + '"><span class="icon-spinner"></span></span>';
+  }
+  if (obj.modelPath) return '<span class="object-icon model' + cls + '" title="' + esc(obj.modelPath) + '"></span>';
+  return '<span class="object-icon missing' + cls + '" title="No icon field"></span>';
+}
+
 function matches(obj) {
   if (!query) return true;
   const haystack = [obj.displayName, obj.baseId, obj.newId, obj.displaySource, obj.group].filter(Boolean).join(' ').toLowerCase();
@@ -1883,13 +2438,8 @@ function renderTree() {
       for (const obj of raceObjects) {
         const active = obj.key === selectedKey ? ' active' : '';
         const source = obj.displaySource ? ' <span class="source-pill">' + esc(obj.displaySource) + '</span>' : '';
-        const icon = obj.iconPath
-          ? '<span class="object-icon loading" data-key="' + esc(obj.key) + '" data-icon="' + esc(obj.iconPath) + '" title="' + esc(obj.iconPath) + '"><span class="icon-spinner"></span></span>'
-          : obj.modelPath
-            ? '<span class="object-icon model" title="' + esc(obj.modelPath) + '"></span>'
-          : '<span class="object-icon missing" title="No icon field"></span>';
         html += '<button class="object-row' + active + '" data-key="' + esc(obj.key) + '">' +
-          icon +
+          objectIconHtml(obj, '') +
           '<span class="object-main"><span class="object-name">' + esc(obj.displayName) + source + '</span>' +
           '<span class="object-id">' + idLine(obj) + '</span></span>' +
           '</button>';
@@ -1932,10 +2482,10 @@ function observeIcons() {
         iconObserver.unobserve(entry.target);
         requestIcon(entry.target);
       }
-    }, { root: tree, rootMargin: '80px' });
+    }, { root: null, rootMargin: '120px' });
   }
 
-  for (const el of tree.querySelectorAll('.object-icon[data-icon]')) {
+  for (const el of document.querySelectorAll('.object-icon[data-icon]')) {
     const key = el.getAttribute('data-key') || '';
     if (loadedIcons.has(key)) {
       setIconLoaded(el, loadedIcons.get(key));
@@ -2004,7 +2554,7 @@ function setIconMissing(el) {
 }
 
 function updateIconElements(key, updater) {
-  for (const el of tree.querySelectorAll('.object-icon')) {
+  for (const el of document.querySelectorAll('.object-icon')) {
     if ((el.getAttribute('data-key') || '') === key) updater(el);
   }
 }
@@ -2095,7 +2645,7 @@ function renderDetails() {
         ${parsed.extended ? "'<td class=\"num\">' + esc(mod.level ?? '') + '</td>' + '<td class=\"num\">' + esc(mod.dataPt ?? '') + '</td>' +" : "'' +"}
         ''
       : '<td class="field">' + esc(mod.label || mod.fieldId) + '</td>';
-    const fsearch = esc(((mod.fieldId || '') + ' ' + (mod.label || '') + ' ' + (mod.currentValue || '') + ' ' + (mod.editValue || '')).toLowerCase());
+    const fsearch = esc(((mod.fieldId || '') + ' ' + (mod.label || '') + ' ' + (mod.currentValue || '') + ' ' + (mod.editValue || '') + ' ' + (mod.displayValue || '') + ' ' + (mod.displayDetail || '')).toLowerCase());
     return groupRow + '<tr class="' + (mod.overridden ? 'overridden' : '') + '" data-fsearch="' + fsearch + '">' +
       fieldCell +
       '<td class="value current">' + valueCell(mod, mi) + '</td>' +
@@ -2104,9 +2654,11 @@ function renderDetails() {
 
   const rawcode = obj.newId ? esc(obj.baseId) + ' → ' + esc(obj.newId) : esc(obj.baseId);
   details.innerHTML = '<div class="details-head">' +
-    '<div class="details-title">' + esc(obj.displayName) +
-      '<span class="details-rawcode">' + rawcode + '</span>' +
-      (obj.displaySource ? sourcePill({ source: obj.displaySource }) : '') + '</div>' +
+    '<div class="details-title-row">' + objectIconHtml(obj, 'details-icon') +
+      '<div class="details-title">' + esc(obj.displayName) +
+        '<span class="details-rawcode">' + rawcode + '</span>' +
+        (obj.displaySource ? sourcePill({ source: obj.displaySource }) : '') + '</div>' +
+    '</div>' +
     (mods ? '<div class="field-search-wrap">' +
       '<input id="field-search" class="field-search" type="text" placeholder="Search fields…" spellcheck="false" value="' + esc(fieldQuery) + '">' +
       '<span id="field-match" class="field-match"></span>' +
@@ -2133,11 +2685,25 @@ function renderDetails() {
   filterFields(fieldQuery);
 
   for (const c of details.querySelectorAll('.tt-collapsed, .cell-edit')) wireCollapsed(c);
+  wireObjectLinks();
+  observeIcons();
 }
 
 function wireCollapsed(c) {
   if (!c) return;
   c.addEventListener('click', () => expandEditor(c));
+}
+
+function wireObjectLinks() {
+  for (const link of details.querySelectorAll('.resolved-chip[data-jump]')) {
+    link.addEventListener('click', e => {
+      e.stopPropagation();
+      const key = link.getAttribute('data-jump') || '';
+      if (!key) return;
+      selectedKey = key;
+      render();
+    });
+  }
 }
 
 function markModified(el, mod) {
@@ -2157,18 +2723,24 @@ function wireEditRaw(el) {
   let timer;
   let posted = false;
   const commit = () => { markModified(el, mod); postEdit(mod); posted = true; };
-  el.addEventListener('input', () => {
+  const onEdit = () => {
     mod.editValue = el.value;
     mod.currentValue = el.value;
+    refreshDecoratedValue(mod);
     const preview = details.querySelector('.tt-preview[data-preview-for="' + mi + '"]');
     if (preview) preview.innerHTML = renderWc3Colors(el.value);
     clearTimeout(timer);
     // Only create/update a mod once the value actually changes (clicking a field to view it shouldn't modify it).
     if (el.value !== startVal || posted) timer = setTimeout(commit, 250);
-  });
+  };
+  el.addEventListener('input', onEdit);
+  el.addEventListener('change', onEdit);
   el.addEventListener('blur', () => { clearTimeout(timer); if (el.value !== startVal || posted) commit(); });
   // Track selection so the toolbar / color picker act on it even after the textarea blurs.
-  const saveSel = () => { el._ss = el.selectionStart; el._se = el.selectionEnd; };
+  const saveSel = () => {
+    if (typeof el.selectionStart !== 'number' || typeof el.selectionEnd !== 'number') return;
+    el._ss = el.selectionStart; el._se = el.selectionEnd;
+  };
   ['keyup', 'mouseup', 'select', 'blur', 'click'].forEach(ev => el.addEventListener(ev, saveSel));
 }
 
@@ -2212,7 +2784,7 @@ function expandEditor(c) {
   if (ta) {
     wireEditRaw(ta);
     ta.focus();
-    if (ta.type !== 'number' && ta.setSelectionRange) ta.setSelectionRange(ta.value.length, ta.value.length);
+    if (ta.tagName === 'INPUT' && ta.type !== 'number' && ta.setSelectionRange) ta.setSelectionRange(ta.value.length, ta.value.length);
     // Keyboard: Esc reverts and closes; Enter commits+closes (Ctrl/Cmd+Enter in the textarea).
     const original = mod.editValue == null ? '' : String(mod.editValue);
     ta.addEventListener('keydown', e => {
@@ -2243,6 +2815,8 @@ function collapseCell(cell, mi) {
   if (!cell || !mod) return;
   cell.innerHTML = collapsedView(mod, mi);
   wireCollapsed(cell.querySelector('.tt-collapsed') || cell.querySelector('.cell-edit'));
+  wireObjectLinks();
+  observeIcons();
 }
 
 // Update a single field's cell in place (used by undo/redo — avoids rebuilding the whole table).
@@ -2375,7 +2949,14 @@ async function loadObjectDetails(key: string, webview: vscode.Webview, doc: ObjM
     const wts = doc.wtsTable;
     const gameData = await loadObjEditorData(doc.displayFile.ext);
     const mods = gameData
-        ? buildFieldRows(entry, gameData, wts, doc.displayFile.extended, doc.displayFile.ext)
+        ? buildFieldRows(
+            entry,
+            gameData,
+            wts,
+            doc.displayFile.extended,
+            doc.displayFile.ext,
+            catalogWithDocumentObjects(await loadObjValueCatalog(), doc.displayFile, wts, gameData),
+        )
         : entry.mods.map((mod) => {
             const row = buildOverrideOnlyMod(mod, wts, gameData);
             annotateEditable(row, mod, wts);

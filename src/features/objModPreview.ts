@@ -51,8 +51,13 @@ function metaVarType(type: string): ObjModVarType {
     return 'string';
 }
 
+// Object-editor field IDs (one per object type) that hold the display name / button icon override.
 const NAME_FIELDS = new Set(['unam', 'inam', 'anam', 'bnam', 'dnam', 'fnam', 'gnam']);
 const ICON_FIELDS = new Set(['uico', 'iico', 'aart', 'fart', 'gico']);
+
+// Profile keys holding an object's display name, in priority order. Casing varies across WC3
+// profile/skin TXTs; buffs use Bufftip, some doodads use comment — try them all.
+const DISPLAY_NAME_FIELDS = ['Name', 'name', 'EditorName', 'Editorname', 'Bufftip', 'BuffTip', 'Tip', 'tip', 'comment', 'comments'];
 
 const FIELD_LABELS: Record<string, string> = {
     unam: 'Name',
@@ -745,12 +750,17 @@ function fieldAssetType(field: MetaField): 'icon' | 'model' | 'pathing' | undefi
     return undefined;
 }
 
+/** First comma-segment of a profile/objmod value, unquoted; undefined for blanks, '-', or WESTRING_ refs. */
+function firstAssetPath(value: string | undefined): string | undefined {
+    const first = stripTxtQuotes(String(value ?? '').split(',')[0].trim());
+    return (!first || first === '-' || first.startsWith('WESTRING_')) ? undefined : first;
+}
+
 function normalizeAssetValue(value: string, assetType: 'icon' | 'model' | 'pathing'): string | undefined {
     if (assetType === 'icon') return normalizeIconPath(value);
     if (assetType === 'model') return normalizeModelPath(value);
-    const first = stripTxtQuotes(String(value).split(',')[0].trim());
-    if (!first || first === '-' || first.startsWith('WESTRING_')) return undefined;
-    if (!/\.(tga|blp|dds)$/i.test(first)) return undefined;
+    const first = firstAssetPath(value);
+    if (!first || !/\.(tga|blp|dds)$/i.test(first)) return undefined;
     return first.replace(/\//g, '\\');
 }
 
@@ -856,20 +866,16 @@ function raceFromRawcode(rawcode: string): string {
 }
 
 function normalizeIconPath(value: string | undefined): string | undefined {
-    if (!value) return undefined;
-    const first = stripTxtQuotes(String(value).split(',')[0].trim());
-    if (!first || first === '-' || first.startsWith('WESTRING_')) return undefined;
-    if (!/\.(blp|dds|tga|png|jpe?g)$/i.test(first)) return undefined;
+    const first = firstAssetPath(value);
+    if (!first || !/\.(blp|dds|tga|png|jpe?g)$/i.test(first)) return undefined;
     return first.replace(/\//g, '\\');
 }
 
 function normalizeModelPath(value: string | undefined): string | undefined {
-    if (!value) return undefined;
-    const first = stripTxtQuotes(String(value).split(',')[0].trim());
-    if (!first || first === '-' || first.startsWith('WESTRING_')) return undefined;
+    const first = firstAssetPath(value);
+    if (!first) return undefined;
     const normalized = first.replace(/\//g, '\\');
-    if (/\.(mdx|mdl)$/i.test(normalized)) return normalized;
-    return `${normalized}.mdl`;
+    return /\.(mdx|mdl)$/i.test(normalized) ? normalized : `${normalized}.mdl`;
 }
 
 function formatValue(mod: ObjModMod, triggerStrings: TriggerStringTable): { value: string; source?: string; missingSource?: boolean } {
@@ -919,18 +925,7 @@ function getFieldLevels(baseId: string, field: MetaField, gameData: ObjEditorDat
 }
 
 function resolveBaseDisplayName(baseId: string, summaryData: Pick<ObjSummaryData, 'worldStrings' | 'profile'>): string | undefined {
-    const value = getAnyProfileValue(baseId, [
-        'Name',
-        'name',
-        'EditorName',
-        'Editorname',
-        'Bufftip',
-        'BuffTip',
-        'Tip',
-        'tip',
-        'comment',
-        'comments',
-    ], summaryData);
+    const value = getAnyProfileValue(baseId, DISPLAY_NAME_FIELDS, summaryData);
     return value ? resolveWorldEditString(value, summaryData.worldStrings) : undefined;
 }
 
@@ -1124,9 +1119,7 @@ function catalogWithDocumentObjects(
 }
 
 function resolveProfileDisplayName(row: Record<string, string>, worldStrings: Map<string, string>): string | undefined {
-    const value = [
-        'Name', 'name', 'EditorName', 'Editorname', 'Bufftip', 'BuffTip', 'Tip', 'tip', 'comment', 'comments',
-    ].map((key) => row[key]).find((candidate) => candidate !== undefined && candidate !== '');
+    const value = DISPLAY_NAME_FIELDS.map((key) => row[key]).find((candidate) => candidate !== undefined && candidate !== '');
     return value ? resolveWorldEditString(value, worldStrings) : undefined;
 }
 
@@ -1149,11 +1142,9 @@ function normalizeProfileIconPath(key: string, value: string): string | undefine
 }
 
 function normalizeProfileModelPath(key: string, value: string): string | undefined {
-    const lowerKey = key.toLowerCase();
-    if (!/(file|model)/.test(lowerKey)) return undefined;
-    const first = stripTxtQuotes(String(value).split(',')[0].trim());
-    if (!first || first === '-' || first.startsWith('WESTRING_')) return undefined;
-    if (!/[\\/]/.test(first) && !/\.(mdx|mdl)$/i.test(first)) return undefined;
+    if (!/(file|model)/.test(key.toLowerCase())) return undefined;
+    const first = firstAssetPath(value);
+    if (!first || (!/[\\/]/.test(first) && !/\.(mdx|mdl)$/i.test(first))) return undefined;
     return normalizeModelPath(first);
 }
 
@@ -1387,6 +1378,17 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
         csp: `default-src 'none'; img-src ${context.webview.cspSource} data:; style-src 'unsafe-inline'; script-src 'unsafe-inline';`,
         title: escapeHtml(fileName),
         extraCss: `
+:root {
+  /* Single accent used for the editable badge, override markers and selection — was repeated as
+     'var(--vscode-textLink-foreground, #4ec9b0)' in half a dozen places. */
+  --accent: var(--vscode-textLink-foreground, #4ec9b0);
+  /* WC3 tooltips render light-coloured text (white/gold) on a dark in-game backdrop, so the colour
+     preview is intentionally dark in every theme — using --input-bg would hide light text in light themes. */
+  --wc3-tip-bg: #000;
+  --wc3-tip-fg: #fff;
+  /* Sticky category rows sit directly under the sticky table header (th: 7+7px padding + 1px border). */
+  --table-header-h: 31px;
+}
 .content {
   flex: 1;
   height: 100%;
@@ -1416,12 +1418,17 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
   display: inline-block;
   margin-left: 8px;
   padding: 1px 5px;
-  border: 1px solid color-mix(in srgb, var(--vscode-textLink-foreground, #4ec9b0) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
   border-radius: 2px;
-  color: var(--vscode-textLink-foreground, #4ec9b0);
+  color: var(--accent);
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
+  transition: color .13s, border-color .13s;
+}
+.editable-badge.dirty {
+  border-color: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 60%, transparent);
+  color: var(--vscode-editorWarning-foreground, #cca700);
 }
 .error {
   color: var(--vscode-errorForeground, #f14c4c);
@@ -1463,8 +1470,8 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   border: 1px dashed var(--border);
   border-radius: 2px;
   padding: 4px 6px;
-  background: #000;
-  color: #fff;
+  background: var(--wc3-tip-bg);
+  color: var(--wc3-tip-fg);
   font-family: var(--vscode-font-family, sans-serif);
   white-space: pre-wrap;
   word-break: break-word;
@@ -1491,25 +1498,27 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   padding: 2px 6px;
   border: 1px solid transparent;
   border-radius: 3px;
-  background: #000;
-  color: #fff;
+  background: var(--wc3-tip-bg);
+  color: var(--wc3-tip-fg);
   cursor: text;
   font-family: var(--vscode-font-family, sans-serif);
   white-space: pre-wrap;
   word-break: break-word;
 }
-.tt-collapsed:hover { border-color: var(--vscode-focusBorder, var(--vscode-textLink-foreground)); }
+.tt-collapsed:hover,
+.tt-collapsed:focus-visible { border-color: var(--vscode-focusBorder, var(--vscode-textLink-foreground)); outline: none; }
 .tt-collapsed-body { flex: 1; min-width: 0; }
 .tt-empty { color: var(--muted); font-style: italic; }
 .tt-edit-hint {
   flex-shrink: 0;
   color: var(--muted);
   font-size: 11px;
-  opacity: 0;
+  opacity: 0.35; /* faintly visible at rest so cells read as editable; brightens on hover/focus */
   transition: opacity .1s;
 }
-.tt-collapsed:hover .tt-edit-hint { opacity: 0.9; }
-.tt-collapsed .tt-edit-hint { color: rgba(255, 255, 255, 0.6); } /* visible on the dark tooltip box */
+.tt-collapsed:hover .tt-edit-hint,
+.tt-collapsed:focus-visible .tt-edit-hint { opacity: 0.9; }
+.tt-collapsed .tt-edit-hint { color: color-mix(in srgb, var(--wc3-tip-fg) 60%, transparent); } /* on the dark tooltip box */
 .cell-edit {
   display: inline-flex;
   align-items: center;
@@ -1524,11 +1533,14 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   cursor: text;
   transition: background .08s, border-color .08s;
 }
-.cell-edit:hover {
+.cell-edit:hover,
+.cell-edit:focus-visible {
   background: var(--input-bg);
   border-color: color-mix(in srgb, var(--vscode-focusBorder, var(--vscode-textLink-foreground)) 60%, transparent);
+  outline: none;
 }
-.cell-edit:hover .tt-edit-hint { opacity: 0.7; }
+.cell-edit:hover .tt-edit-hint,
+.cell-edit:focus-visible .tt-edit-hint { opacity: 0.7; }
 .cell-edit-val { flex: 1; min-width: 0; font-family: var(--mono); word-break: break-word; white-space: pre-wrap; }
 .value-display {
   display: grid;
@@ -1594,7 +1606,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 /* Number values are short — don't stretch the input across the whole column. */
 .value-editor.single input[type="number"] { max-width: 150px; }
 /* Scannable accent for customized (overridden) fields. */
-tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--vscode-textLink-foreground, #4ec9b0) 70%, transparent); }
+tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 70%, transparent); }
 .cell-edit .tt-edit-hint { flex-shrink: 0; }
 .tt-edit { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .tt-bar { position: relative; display: inline-flex; align-items: center; gap: 4px; }
@@ -1609,6 +1621,11 @@ tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--vsco
     linear-gradient(135deg, #ff0303 0%, #fe8a0e 20%, #fffc01 40%, #20c000 60%, #54a4ff 80%, #e55bb0 100%);
 }
 .tt-color-sq:hover { border-color: var(--fg); }
+.tt-color-sq:focus-visible,
+.tt-sw:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: 1px;
+}
 .tt-btn-sm {
   height: 20px;
   min-width: 22px;
@@ -1707,12 +1724,17 @@ tr.hidden { display: none; }
   overflow: hidden;
 }
 .search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 8px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 .search-input {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   height: 26px;
   background: var(--input-bg);
   color: var(--input-fg);
@@ -1721,6 +1743,26 @@ tr.hidden { display: none; }
   padding: 3px 7px;
   font: inherit;
 }
+.search-input:focus { outline: 1px solid var(--vscode-focusBorder, var(--vscode-textLink-foreground)); }
+.search-match { flex-shrink: 0; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.search-clear {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: none;
+  place-items: center;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.search-clear.show { display: grid; }
+.search-clear:hover { background: var(--hover); color: var(--fg); }
+.search-clear:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); }
 .tree {
   flex: 1;
   min-height: 0;
@@ -1762,6 +1804,12 @@ tr.hidden { display: none; }
 .group-heading:hover,
 .race-heading:hover {
   background: var(--hover);
+}
+.group-heading:focus-visible,
+.race-heading:focus-visible,
+.object-row:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
 }
 .twisty {
   width: 10px;
@@ -1812,8 +1860,7 @@ tr.hidden { display: none; }
   font-family: var(--mono);
   font-size: 10px;
 }
-.object-row.active .object-id,
-.object-row.active .mod-count {
+.object-row.active .object-id {
   color: var(--active-fg);
   opacity: .75;
 }
@@ -1862,11 +1909,6 @@ tr.hidden { display: none; }
 .object-main {
   min-width: 0;
 }
-.mod-count {
-  color: var(--muted);
-  font-size: 11px;
-  align-self: center;
-}
 .details {
   min-width: 0;
   min-height: 0;
@@ -1914,31 +1956,6 @@ tr.hidden { display: none; }
   user-select: none;
 }
 .toggle-chip input { margin: 0; }
-.details-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 7px;
-}
-.chip {
-  border: 1px solid var(--border);
-  background: var(--input-bg);
-  border-radius: 2px;
-  padding: 2px 6px;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 11px;
-}
-.toggle-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  cursor: pointer;
-  user-select: none;
-}
-.toggle-chip input {
-  margin: 0;
-}
 .table-wrap {
   flex: 1;
   min-height: 0;
@@ -1988,25 +2005,25 @@ tr.overridden td.current {
   font-family: var(--mono);
 }
 tr.overridden td {
-  background: color-mix(in srgb, var(--vscode-textLink-foreground, #4ec9b0) 7%, transparent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 .override-badge {
   display: inline-block;
   margin-left: 6px;
   padding: 1px 5px;
-  border: 1px solid color-mix(in srgb, var(--vscode-textLink-foreground, #4ec9b0) 45%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
   border-radius: 2px;
-  color: var(--vscode-textLink-foreground, #4ec9b0);
+  color: var(--accent);
   font-size: 10px;
   font-family: var(--vscode-font-family, sans-serif);
   font-weight: 600;
 }
 .category-row td {
   position: sticky;
-  top: 31px;
+  top: var(--table-header-h);
   z-index: 1;
   padding: 7px 8px 5px;
-  background: var(--sidebar);
+  background: var(--vscode-editorGroupHeader-tabsBackground, var(--sidebar));
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
@@ -2023,7 +2040,8 @@ tr.overridden td {
   vertical-align: -2px;
   border: 1px solid var(--border);
   border-radius: 2px;
-  padding: 0 4px;
+  padding: 1px 5px;
+  background: color-mix(in srgb, var(--input-bg) 78%, transparent);
   color: var(--vscode-textLink-foreground, var(--muted));
   font-family: var(--mono);
   font-size: 10px;
@@ -2054,13 +2072,17 @@ tr.overridden td {
         body: `<div class="content">
 <div class="md-header">
   <div class="md-title">${escapeHtml(fileName)}</div>
-  <div class="md-meta">WC3 ${escapeHtml(typeLabel)} object data - v${parsed.version} - ${escapeHtml(summary)} - ${escapeHtml(metadataSource)}${parsed.extended ? ' - extended (level/dataPt)' : ''}<span class="editable-badge" title="Existing overrides can be edited. Ctrl+S to save.">editable</span></div>
+  <div class="md-meta">WC3 ${escapeHtml(typeLabel)} object data - v${parsed.version} - ${escapeHtml(summary)} - ${escapeHtml(metadataSource)}${parsed.extended ? ' - extended (level/dataPt)' : ''}<span id="editable-badge" class="editable-badge" title="Existing overrides can be edited. Ctrl+S to save.">editable</span></div>
 </div>
 ${errorBanner}
 ${warningBanner}
 <div class="object-editor" id="object-editor">
   <aside class="object-list">
-    <div class="search-wrap"><input id="search" class="search-input" placeholder="Search objects or IDs" aria-label="Search objects"></div>
+    <div class="search-wrap">
+      <input id="search" class="search-input" placeholder="Search objects or IDs" aria-label="Search objects">
+      <span id="search-match" class="search-match" role="status" aria-live="polite"></span>
+      <button id="search-clear" class="search-clear" type="button" title="Clear search" aria-label="Clear search">✕</button>
+    </div>
     <div id="tree" class="tree"></div>
   </aside>
   <div class="splitter" id="splitter" title="Drag to resize"></div>
@@ -2071,8 +2093,8 @@ const objects = ${safeJson};
 let selectedKey = ${JSON.stringify(firstKey)};
 let query = '';
 let fieldQuery = '';
-let showTechnical = false;
 const vscodeApi = acquireVsCodeApi();
+let showTechnical = !!((vscodeApi.getState() || {}).showTechnical);
 const pendingIcons = new Set();
 const loadedIcons = new Map();
 const missingIcons = new Set();
@@ -2174,7 +2196,7 @@ function colorBarHtml(mi) {
     '<button type="button" class="tt-btn-sm" data-act="reset" title="End color (|r)">|r</button>' +
     '<div class="tt-pop" hidden>' +
       '<div class="tt-swatches">' + swatchesHtml() + '</div>' +
-      '<label class="tt-pick"><input type="color" class="tt-color" value="#ffcc00"><span>Custom…</span></label>' +
+      '<label class="tt-pick"><input type="color" class="tt-color" value="#ffcc00" aria-label="Custom colour"><span>Custom…</span></label>' +
     '</div>' +
   '</div>';
 }
@@ -2215,7 +2237,7 @@ function pickerEditorHtml(mod, mi, v) {
   }
   const listId = 'pick-' + mi;
   return '<div class="value-editor single">' +
-    '<input class="edit-raw" type="text" list="' + listId + '" data-mi="' + mi + '" spellcheck="false" value="' + esc(v) + '">' +
+    '<input class="edit-raw" type="text" list="' + listId + '" data-mi="' + mi + '" spellcheck="false" aria-label="Choose from Warcraft III game data" value="' + esc(v) + '">' +
     '<datalist id="' + listId + '">' + datalistOptionsHtml(mod.options) + '</datalist>' +
     '<div class="picker-note">Start typing to choose from Warcraft III game data.</div>' +
   '</div>';
@@ -2289,12 +2311,12 @@ function editorHtml(mod, mi) {
 function collapsedView(mod, mi) {
   const dv = mod.editValue == null ? (mod.currentValue == null ? '' : String(mod.currentValue)) : String(mod.editValue);
   if (hasColorMarkup(dv)) {
-    return '<div class="tt-collapsed" data-mi="' + mi + '" title="Click to edit">' +
+    return '<div class="tt-collapsed" data-mi="' + mi + '" tabindex="0" role="button" title="Click or press Enter to edit">' +
       '<span class="tt-collapsed-body">' + renderWc3Colors(dv) + '</span><span class="tt-edit-hint">✎</span></div>';
   }
-  const badge = mod.overridden ? '<span class="override-badge">modified</span>' : '';
+  const badge = mod.overridden ? '<span class="override-badge" title="This field overrides the base value">modified</span>' : '';
   const disp = decoratedValueHtml(mod, mi, dv);
-  return '<span class="cell-edit" data-mi="' + mi + '" title="Click to edit">' +
+  return '<span class="cell-edit" data-mi="' + mi + '" tabindex="0" role="button" title="Click or press Enter to edit">' +
     '<span class="cell-edit-val">' + disp + '</span>' + badge + (mod.source ? sourcePill(mod) : '') +
     '<span class="tt-edit-hint">✎</span></span>';
 }
@@ -2421,7 +2443,7 @@ function renderTree() {
     const groupObjects = objects.filter(obj => obj.group === group && matches(obj));
     if (!groupObjects.length) continue;
     const groupClosed = allowCollapse && collapsedGroups.has(group);
-    html += '<button class="group-heading" data-group="' + esc(group) + '">' +
+    html += '<button class="group-heading" type="button" data-group="' + esc(group) + '" aria-expanded="' + (groupClosed ? 'false' : 'true') + '">' +
       '<span class="twisty">' + (groupClosed ? '>' : 'v') + '</span>' +
       '<span>' + group + ' Objects</span><span class="folder-count">' + groupObjects.length + '</span></button>';
     if (groupClosed) continue;
@@ -2431,50 +2453,87 @@ function renderTree() {
       const raceObjects = groupObjects.filter(obj => (obj.race || 'other') === race);
       const raceKey = group + ':' + race;
       const raceClosed = allowCollapse && collapsedRaces.has(raceKey);
-      html += '<button class="race-heading" data-race="' + esc(raceKey) + '">' +
+      html += '<button class="race-heading" type="button" data-race="' + esc(raceKey) + '" aria-expanded="' + (raceClosed ? 'false' : 'true') + '">' +
         '<span class="twisty">' + (raceClosed ? '>' : 'v') + '</span>' +
         '<span>' + esc(raceLabel(race)) + '</span><span class="folder-count">' + raceObjects.length + '</span></button>';
       if (raceClosed) continue;
       for (const obj of raceObjects) {
         const active = obj.key === selectedKey ? ' active' : '';
         const source = obj.displaySource ? ' <span class="source-pill">' + esc(obj.displaySource) + '</span>' : '';
-        html += '<button class="object-row' + active + '" data-key="' + esc(obj.key) + '">' +
+        const label = obj.displayName + ' — ' + (obj.newId ? obj.baseId + ' to ' + obj.newId : obj.baseId);
+        html += '<button class="object-row' + active + '" type="button" data-key="' + esc(obj.key) + '" aria-label="' + esc(label) + '">' +
           objectIconHtml(obj, '') +
-          '<span class="object-main"><span class="object-name">' + esc(obj.displayName) + source + '</span>' +
+          '<span class="object-main"><span class="object-name" title="' + esc(obj.displayName) + '">' + esc(obj.displayName) + source + '</span>' +
           '<span class="object-id">' + idLine(obj) + '</span></span>' +
           '</button>';
       }
     }
   }
-  tree.innerHTML = html || '<div class="empty-state">No matching objects</div>';
-  for (const heading of tree.querySelectorAll('.group-heading')) {
-    heading.addEventListener('click', () => {
-      const group = heading.getAttribute('data-group') || '';
-      if (!group) return;
-      if (collapsedGroups.has(group)) collapsedGroups.delete(group);
-      else collapsedGroups.add(group);
-      renderTree();
-    });
-  }
-  for (const heading of tree.querySelectorAll('.race-heading')) {
-    heading.addEventListener('click', () => {
-      const race = heading.getAttribute('data-race') || '';
-      if (!race) return;
-      if (collapsedRaces.has(race)) collapsedRaces.delete(race);
-      else collapsedRaces.add(race);
-      renderTree();
-    });
-  }
-  for (const row of tree.querySelectorAll('.object-row')) {
-    row.addEventListener('click', () => {
-      selectedKey = row.getAttribute('data-key') || selectedKey;
-      render();
-    });
-  }
-  observeIcons();
+  tree.innerHTML = html || (query
+    ? '<div class="empty-state">No objects match &ldquo;' + esc(query) + '&rdquo;.<br>Try a different term or clear the search.</div>'
+    : '<div class="empty-state">No objects</div>');
+  observeIcons(tree);
 }
 
-function observeIcons() {
+// Move the selection highlight in place — rebuilding the whole tree (hundreds of rows) just to shift
+// one '.active' class made object switching feel sluggish on large .w3a files.
+function setActiveRow(key) {
+  for (const el of tree.querySelectorAll('.object-row.active')) el.classList.remove('active');
+  // Keys are trusted 'Group:Index' strings (no quotes/backslashes) so a literal attribute match is safe.
+  const row = tree.querySelector('.object-row[data-key="' + key + '"]');
+  if (row) row.classList.add('active');
+  return row;
+}
+
+function selectObject(key) {
+  if (!key) return;
+  selectedKey = key;
+  setActiveRow(key);
+  renderDetails();
+}
+
+// Delegated tree handlers, wired once — survive innerHTML rebuilds, no per-row listener churn.
+function setupTree() {
+  tree.addEventListener('click', e => {
+    const groupHeading = e.target.closest('.group-heading');
+    if (groupHeading) {
+      const group = groupHeading.getAttribute('data-group') || '';
+      if (group) { if (collapsedGroups.has(group)) collapsedGroups.delete(group); else collapsedGroups.add(group); renderTree(); }
+      return;
+    }
+    const raceHeading = e.target.closest('.race-heading');
+    if (raceHeading) {
+      const race = raceHeading.getAttribute('data-race') || '';
+      if (race) { if (collapsedRaces.has(race)) collapsedRaces.delete(race); else collapsedRaces.add(race); renderTree(); }
+      return;
+    }
+    const row = e.target.closest('.object-row');
+    if (row) selectObject(row.getAttribute('data-key') || selectedKey);
+  });
+  // Arrow / Home / End move through the visible object rows (collapsed sections aren't in the DOM).
+  tree.addEventListener('keydown', e => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
+    const rows = Array.prototype.slice.call(tree.querySelectorAll('.object-row'));
+    if (!rows.length) return;
+    e.preventDefault();
+    const ae = document.activeElement;
+    const focused = ae && ae.classList && ae.classList.contains('object-row') ? ae : tree.querySelector('.object-row.active');
+    let idx = focused ? rows.indexOf(focused) : -1;
+    if (e.key === 'Home') idx = 0;
+    else if (e.key === 'End') idx = rows.length - 1;
+    else if (e.key === 'ArrowDown') idx = idx < 0 ? 0 : Math.min(rows.length - 1, idx + 1);
+    else idx = idx <= 0 ? 0 : idx - 1;
+    const target = rows[idx];
+    if (!target) return;
+    selectObject(target.getAttribute('data-key'));
+    target.focus();
+    target.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+// Scope the scan to the just-rendered subtree (tree / details / a single cell) instead of the whole
+// document — a .w3a file can have hundreds of icons and a full-document scan ran on every render.
+function observeIcons(root) {
   if (!iconObserver) {
     iconObserver = new IntersectionObserver(entries => {
       for (const entry of entries) {
@@ -2485,7 +2544,7 @@ function observeIcons() {
     }, { root: null, rootMargin: '120px' });
   }
 
-  for (const el of document.querySelectorAll('.object-icon[data-icon]')) {
+  for (const el of (root || document).querySelectorAll('.object-icon[data-icon]')) {
     const key = el.getAttribute('data-key') || '';
     if (loadedIcons.has(key)) {
       setIconLoaded(el, loadedIcons.get(key));
@@ -2507,7 +2566,7 @@ function requestIcon(el) {
 
 function setIconLoaded(el, uri) {
   el.classList.remove('loading', 'missing');
-  el.innerHTML = '<img loading="lazy" src="' + esc(uri) + '" alt="">';
+  el.innerHTML = '<img loading="lazy" src="' + esc(uri) + '" alt="' + esc(el.getAttribute('data-icon') || '') + '">';
 }
 
 function base64ToBytes(b64) {
@@ -2601,6 +2660,15 @@ window.addEventListener('message', event => {
       if (tr) tr.classList.toggle('overridden', !!mod.overridden);
       updateFieldCell(mods, mod);
     }
+  } else if (msg.type === 'dirtyStateChanged') {
+    const badge = document.getElementById('editable-badge');
+    if (badge) {
+      badge.classList.toggle('dirty', !!msg.isDirty);
+      badge.textContent = msg.isDirty ? '● unsaved' : 'editable';
+      badge.title = msg.isDirty
+        ? 'Unsaved changes — Ctrl+S to save.'
+        : 'Existing overrides can be edited. Ctrl+S to save.';
+    }
   }
 });
 
@@ -2660,8 +2728,8 @@ function renderDetails() {
         (obj.displaySource ? sourcePill({ source: obj.displaySource }) : '') + '</div>' +
     '</div>' +
     (mods ? '<div class="field-search-wrap">' +
-      '<input id="field-search" class="field-search" type="text" placeholder="Search fields…" spellcheck="false" value="' + esc(fieldQuery) + '">' +
-      '<span id="field-match" class="field-match"></span>' +
+      '<input id="field-search" class="field-search" type="text" placeholder="Search fields…" aria-label="Search fields" spellcheck="false" value="' + esc(fieldQuery) + '">' +
+      '<span id="field-match" class="field-match" role="status" aria-live="polite"></span>' +
       '<label class="toggle-chip"><input id="technical-toggle" type="checkbox" ' + (showTechnical ? 'checked' : '') + '> technical</label>' +
     '</div>' : '') +
   '</div>' +
@@ -2674,6 +2742,7 @@ function renderDetails() {
   if (technicalToggle) {
     technicalToggle.addEventListener('change', () => {
       showTechnical = technicalToggle.checked;
+      vscodeApi.setState(Object.assign({}, vscodeApi.getState() || {}, { showTechnical: showTechnical }));
       renderDetails();
     });
   }
@@ -2684,26 +2753,32 @@ function renderDetails() {
   }
   filterFields(fieldQuery);
 
-  for (const c of details.querySelectorAll('.tt-collapsed, .cell-edit')) wireCollapsed(c);
-  wireObjectLinks();
-  observeIcons();
+  observeIcons(details);
 }
 
-function wireCollapsed(c) {
-  if (!c) return;
-  c.addEventListener('click', () => expandEditor(c));
-}
-
-function wireObjectLinks() {
-  for (const link of details.querySelectorAll('.resolved-chip[data-jump]')) {
-    link.addEventListener('click', e => {
-      e.stopPropagation();
-      const key = link.getAttribute('data-jump') || '';
-      if (!key) return;
-      selectedKey = key;
-      render();
-    });
-  }
+// Delegated details handlers, wired once. The #details element persists across renders (only its
+// innerHTML changes), so a single listener covers every collapsed cell and object-jump chip — no
+// more re-wiring 1000+ listeners on each object switch / search / technical toggle.
+function setupDetails() {
+  details.addEventListener('click', e => {
+    const jump = e.target.closest('.resolved-chip[data-jump]');
+    if (jump) {
+      const key = jump.getAttribute('data-jump') || '';
+      if (key) { selectedKey = key; render(); }
+      return;
+    }
+    const collapsed = e.target.closest('.tt-collapsed, .cell-edit');
+    if (collapsed) expandEditor(collapsed);
+  });
+  // A focused collapsed cell expands on Enter/Space (matching its click affordance).
+  details.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const ae = document.activeElement;
+    if (ae && ae.classList && (ae.classList.contains('tt-collapsed') || ae.classList.contains('cell-edit'))) {
+      e.preventDefault();
+      expandEditor(ae);
+    }
+  });
 }
 
 function markModified(el, mod) {
@@ -2753,6 +2828,9 @@ function wireColorBar(bar) {
   if (sq) {
     sq.addEventListener('mousedown', e => e.preventDefault()); // keep textarea selection
     sq.addEventListener('click', () => { if (pop) pop.hidden = !pop.hidden; });
+    sq.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (pop) pop.hidden = !pop.hidden; }
+    });
   }
   if (pop) {
     for (const sw of pop.querySelectorAll('.tt-sw')) {
@@ -2791,32 +2869,43 @@ function expandEditor(c) {
       if (e.key === 'Escape') {
         e.preventDefault();
         if (ta.value !== original) { ta.value = original; ta.dispatchEvent(new Event('input')); }
+        cell._refocusOnCollapse = true; // closed via keyboard → return focus to the cell
         ta.blur();
       } else if (e.key === 'Enter' && (ta.tagName === 'INPUT' || e.ctrlKey || e.metaKey)) {
         e.preventDefault();
+        cell._refocusOnCollapse = true;
         ta.blur();
       }
     });
   }
   const bar = cell.querySelector('.tt-bar');
   if (bar) wireColorBar(bar);
-  // Collapse back to the compact view once focus truly leaves this editor (not when clicking its
-  // own color bar / popup / picker, which keep focus inside the cell).
-  cell.addEventListener('focusout', () => {
+  // Collapse back to the compact view once focus truly leaves this editor (not when clicking its own
+  // color bar / popup / picker, which keep focus inside the cell). The handler is stored so collapseCell
+  // can remove it — otherwise it would linger on the collapsed cell and stack on every re-expand.
+  if (cell._collapseHandler) cell.removeEventListener('focusout', cell._collapseHandler);
+  cell._collapseHandler = () => {
     setTimeout(() => {
       if (cell.isConnected && !cell.contains(document.activeElement)) collapseCell(cell, mi);
     }, 120);
-  });
+  };
+  cell.addEventListener('focusout', cell._collapseHandler);
 }
 
 function collapseCell(cell, mi) {
   const mods = detailCache.get(selectedKey) || [];
   const mod = mods[mi];
   if (!cell || !mod) return;
+  if (cell._collapseHandler) { cell.removeEventListener('focusout', cell._collapseHandler); cell._collapseHandler = null; }
   cell.innerHTML = collapsedView(mod, mi);
-  wireCollapsed(cell.querySelector('.tt-collapsed') || cell.querySelector('.cell-edit'));
-  wireObjectLinks();
-  observeIcons();
+  observeIcons(cell);
+  // When the editor was closed via keyboard (Esc/Enter), return focus to the collapsed cell so
+  // keyboard users keep their place; on click-away the user already moved focus, so don't yank it back.
+  if (cell._refocusOnCollapse) {
+    cell._refocusOnCollapse = false;
+    const el = cell.querySelector('.tt-collapsed, .cell-edit');
+    if (el) el.focus();
+  }
 }
 
 // Update a single field's cell in place (used by undo/redo — avoids rebuilding the whole table).
@@ -2831,7 +2920,10 @@ function updateFieldCell(mods, mod) {
     return;
   }
   const col = details.querySelector('.tt-collapsed[data-mi="' + mi + '"], .cell-edit[data-mi="' + mi + '"]');
-  if (col && col.parentElement) collapseCell(col.parentElement, mi);
+  if (col && col.parentElement) {
+    col.parentElement._refocusOnCollapse = false; // programmatic (undo/redo) collapse must not steal focus
+    collapseCell(col.parentElement, mi);
+  }
 }
 
 // Filter the details table rows by field id / label / value without rebuilding (keeps focus while typing).
@@ -2840,23 +2932,26 @@ function filterFields(q) {
   const table = details.querySelector('table');
   if (!table) return;
   const rows = table.querySelectorAll('tbody tr');
+  // Single pass: toggle field-row visibility and roll up each category's visible-child count at the
+  // same time (was two full passes over a 700-row table on every keystroke).
   let shown = 0;
-  rows.forEach(tr => {
-    if (tr.classList.contains('category-row')) return;
-    const hay = tr.getAttribute('data-fsearch') || '';
-    const vis = !query || hay.indexOf(query) !== -1;
-    tr.classList.toggle('hidden', !vis);
-    if (vis) shown++;
-  });
   let cat = null, catHasVisible = false;
   const flush = () => { if (cat) cat.classList.toggle('hidden', !catHasVisible); };
   rows.forEach(tr => {
-    if (tr.classList.contains('category-row')) { flush(); cat = tr; catHasVisible = false; }
-    else if (!tr.classList.contains('hidden')) catHasVisible = true;
+    if (tr.classList.contains('category-row')) { flush(); cat = tr; catHasVisible = false; return; }
+    const hay = tr.getAttribute('data-fsearch') || '';
+    const vis = !query || hay.indexOf(query) !== -1;
+    tr.classList.toggle('hidden', !vis);
+    if (vis) { shown++; catHasVisible = true; }
   });
   flush();
   const fm = document.getElementById('field-match');
   if (fm) fm.textContent = query ? (shown + ' match' + (shown === 1 ? '' : 'es')) : '';
+  // Bring the first match into view while actively filtering (not on clear / initial render).
+  if (query && shown > 0) {
+    const first = table.querySelector('tbody tr:not(.hidden):not(.category-row)');
+    if (first) first.scrollIntoView({ block: 'nearest' });
+  }
 }
 
 function render() {
@@ -2864,14 +2959,34 @@ function render() {
   renderDetails();
 }
 
-search.addEventListener('input', () => {
+let searchRaf = 0;
+function applySearch() {
+  searchRaf = 0;
   query = search.value.trim().toLowerCase();
+  const matched = query ? objects.filter(matches).length : 0;
+  const sm = document.getElementById('search-match');
+  if (sm) sm.textContent = query ? (matched + ' of ' + objects.length) : '';
+  const sc = document.getElementById('search-clear');
+  if (sc) sc.classList.toggle('show', !!search.value);
   const selected = objects.find(obj => obj.key === selectedKey);
   if (selected && !matches(selected)) {
     selectedKey = (objects.find(matches) || objects[0] || {}).key || '';
   }
   render();
+}
+// Coalesce rapid keystrokes into one render per frame — typing stays smooth on large lists.
+search.addEventListener('input', () => {
+  if (searchRaf) cancelAnimationFrame(searchRaf);
+  searchRaf = requestAnimationFrame(applySearch);
 });
+const searchClear = document.getElementById('search-clear');
+if (searchClear) {
+  searchClear.addEventListener('click', () => {
+    search.value = '';
+    applySearch();
+    search.focus();
+  });
+}
 
 (function setupSplitter() {
   const editor = document.getElementById('object-editor');
@@ -2913,6 +3028,8 @@ document.addEventListener('mousedown', e => {
   }
 });
 
+setupTree();
+setupDetails();
 render();
 </script>
 </div>`,
@@ -2948,14 +3065,17 @@ async function loadObjectDetails(key: string, webview: vscode.Webview, doc: ObjM
     }
     const wts = doc.wtsTable;
     const gameData = await loadObjEditorData(doc.displayFile.ext);
-    const mods = gameData
+    if (gameData && !doc.objectCatalog) {
+        doc.objectCatalog = catalogWithDocumentObjects(await loadObjValueCatalog(), doc.displayFile, wts, gameData);
+    }
+    const mods = gameData && doc.objectCatalog
         ? buildFieldRows(
             entry,
             gameData,
             wts,
             doc.displayFile.extended,
             doc.displayFile.ext,
-            catalogWithDocumentObjects(await loadObjValueCatalog(), doc.displayFile, wts, gameData),
+            doc.objectCatalog,
         )
         : entry.mods.map((mod) => {
             const row = buildOverrideOnlyMod(mod, wts, gameData);
@@ -3013,6 +3133,18 @@ function findFileEntryForKey(doc: ObjModDocument, key: string): { entry: ObjModE
     return undefined;
 }
 
+/**
+ * Parse a numeric field edit without destroying data: empty clears to 0, a valid number is used
+ * (truncated for ints), and unparseable input keeps the previous numeric value rather than silently
+ * collapsing to 0 — `Number('1.2.3') || 0` would have lost the original value.
+ */
+function parseNumericEdit(raw: string, prev: number | string, truncate: boolean): number {
+    if (raw.trim() === '') return 0;
+    const n = Number(raw);
+    if (!isFinite(n)) return typeof prev === 'number' ? prev : 0;
+    return truncate ? Math.trunc(n) : n;
+}
+
 function applyFieldEdit(doc: ObjModDocument, p: EditFieldMessage): ModEditUndo | undefined {
     const entry = findEntryByKey(doc.displayFile, p.key);
     if (!entry) return undefined;
@@ -3053,19 +3185,22 @@ function applyFieldEdit(doc: ObjModDocument, p: EditFieldMessage): ModEditUndo |
             nextValue = p.value;
         }
     } else if (mod.varType === 'real' || mod.varType === 'unreal') {
-        nextValue = Number(p.value) || 0;
+        nextValue = parseNumericEdit(p.value, prevValue, false);
     } else {
-        nextValue = Math.trunc(Number(p.value) || 0);
+        nextValue = parseNumericEdit(p.value, prevValue, true);
     }
 
     const id = wtsId;
     const newMod = mod;
+    // A name override changes the labels the value catalog hands out for rawcode cross-references.
+    const affectsCatalog = NAME_FIELDS.has(p.fieldId.toLowerCase());
     const addMod = (arr: ObjModMod[]) => { if (arr.indexOf(newMod) < 0) arr.push(newMod); };
     const removeMod = (arr: ObjModMod[]) => { const i = arr.indexOf(newMod); if (i >= 0) arr.splice(i, 1); };
     const apply = () => {
         if (created && fileEntry) { addMod(entry.mods); addMod(fileEntry.mods); }
         newMod.value = nextValue;
         if (id !== undefined) { doc.wtsTable.set(id, wtsAfter ?? ''); doc.wtsEdits.set(id, wtsAfter ?? ''); }
+        if (affectsCatalog) doc.objectCatalog = undefined;
     };
     const revert = () => {
         if (created && fileEntry) { removeMod(entry.mods); removeMod(fileEntry.mods); }
@@ -3074,6 +3209,7 @@ function applyFieldEdit(doc: ObjModDocument, p: EditFieldMessage): ModEditUndo |
             if (wtsBefore === undefined) { doc.wtsTable.delete(id); doc.wtsEdits.delete(id); }
             else { doc.wtsTable.set(id, wtsBefore); doc.wtsEdits.set(id, wtsBefore); }
         }
+        if (affectsCatalog) doc.objectCatalog = undefined;
     };
     apply();
     return { apply, revert, mod };
@@ -3145,6 +3281,15 @@ async function loadEditableObjMod(uri: vscode.Uri): Promise<EditableObjMod> {
 class ObjModDocument implements vscode.CustomDocument {
     wtsEdits = new Map<number, string>();
     reload: (() => Promise<void>) | undefined;
+    /** Merged value catalog (base game data + this document's objects). Built once per open, reused for
+        every object's field rows; invalidated when a name override changes so cross-refs stay current. */
+    objectCatalog: ObjValueCatalog | undefined;
+    /** The live webview, so save/edit can push dirty-state updates to the header badge. */
+    panelWebview: vscode.Webview | undefined;
+    /** Linear edit-stack position vs. the last-saved position — drives the header dirty badge so it
+        tracks VS Code's own dirty state (undoing back to the saved point shows clean again). */
+    editDepth = 0;
+    savedDepth = 0;
 
     constructor(
         readonly uri: vscode.Uri,
@@ -3193,6 +3338,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         };
         const fileName = doc.uri.path.slice(doc.uri.path.lastIndexOf('/') + 1);
         const ctx: ParsedPreviewContext = { uri: doc.uri, webview: panel.webview };
+        doc.panelWebview = panel.webview;
         // Show a spinner immediately — buildHtml awaits CASC game-data and can exceed 200ms.
         panel.webview.html = buildObjLoadingHtml(fileName);
         doc.reload = async () => { panel.webview.html = await buildHtml(doc.displayFile, fileName, ctx, doc.wtsWarning); };
@@ -3241,10 +3387,16 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             this._onDidChange.fire({
                 document: doc,
                 label: `Edit ${msg.fieldId}`,
-                undo: () => { edit.revert(); post(); },
-                redo: () => { edit.apply(); post(); },
+                undo: () => { edit.revert(); doc.editDepth--; post(); this.postDirtyState(doc); },
+                redo: () => { edit.apply(); doc.editDepth++; post(); this.postDirtyState(doc); },
             });
+            doc.editDepth++;
+            this.postDirtyState(doc);
         }
+    }
+
+    private postDirtyState(doc: ObjModDocument): void {
+        void doc.panelWebview?.postMessage({ type: 'dirtyStateChanged', isDirty: doc.editDepth !== doc.savedDepth });
     }
 
     async saveCustomDocument(doc: ObjModDocument): Promise<void> {
@@ -3253,6 +3405,8 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             if (doc.skinFile && doc.skinUri) await writeObjModIfChanged(doc.skinFile, doc.skinUri);
             await this.writeWts(doc, doc.wtsUri, doc.wtsExists);
             if (doc.wtsUri) doc.wtsExists = true;
+            doc.savedDepth = doc.editDepth;
+            this.postDirtyState(doc);
         } catch (err) {
             // Validation failed — surface it and rethrow so VS Code keeps the document dirty (nothing written).
             void vscode.window.showErrorMessage(`Object data not saved: ${err instanceof Error ? err.message : String(err)}`);
@@ -3283,6 +3437,9 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         doc.skinFile = e.skinFile;
         doc.skinUri = e.skinUri;
         doc.displayFile = e.displayFile;
+        doc.objectCatalog = undefined;
+        doc.editDepth = 0;
+        doc.savedDepth = 0;
         doc.wtsTable = loadTriggerStringsForUri(doc.uri);
         doc.wtsEdits.clear();
         const { exists } = findWtsUri(doc.uri);

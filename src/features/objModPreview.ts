@@ -604,22 +604,6 @@ function enhancePreviewRow(row: PreviewMod, field: MetaField, catalog: ObjValueC
         return;
     }
 
-    const enumOptions = enumOptionsForField(field, raw);
-    if (enumOptions) {
-        const option = enumOptions.find((candidate) => candidate.value.toLowerCase() === raw.toLowerCase());
-        if (option) {
-            row.displayKind = 'enum';
-            row.displayValue = option.label;
-            row.displayDetail = raw;
-        }
-        row.editorKind = 'select';
-        row.options = enumOptions;
-        if (enumOptions.some((candidate) => candidate.value !== '' && !isFinite(Number(candidate.value)))) {
-            row.varType = 'string';
-        }
-        return;
-    }
-
     const assetType = fieldAssetType(field);
     if (assetType) {
         const assetPath = normalizeAssetValue(raw, assetType);
@@ -636,6 +620,22 @@ function enhancePreviewRow(row: PreviewMod, field: MetaField, catalog: ObjValueC
             : assetType === 'model'
                 ? catalog.models
                 : catalog.pathing;
+        return;
+    }
+
+    const enumOptions = enumOptionsForField(field, raw);
+    if (enumOptions) {
+        const option = enumOptions.find((candidate) => candidate.value.toLowerCase() === raw.toLowerCase());
+        if (option) {
+            row.displayKind = 'enum';
+            row.displayValue = option.label;
+            row.displayDetail = raw;
+        }
+        row.editorKind = 'select';
+        row.options = enumOptions;
+        if (enumOptions.some((candidate) => candidate.value !== '' && !isFinite(Number(candidate.value)))) {
+            row.varType = 'string';
+        }
         return;
     }
 
@@ -1091,7 +1091,8 @@ function dedupeByHashOrBasename(options: ValueOption[]): ValueOption[] {
     const out: ValueOption[] = [];
     for (const opt of options) {
         const base = (opt.value.split(/[\\/]/).pop() ?? opt.value).replace(/\.[^.]+$/, '').toLowerCase();
-        const key = opt.hash ? `hash:${opt.hash}` : `base:${base}`;
+        const source = opt.source === 'import' ? 'import' : 'wc3';
+        const key = opt.hash ? `${source}:hash:${opt.hash}` : `${source}:base:${base}`;
         if (seen.has(key)) continue;
         seen.add(key);
         out.push(opt);
@@ -2615,13 +2616,15 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             return;
         }
         if (msg.type === 'requestAssetCatalog') {
-            const cat = await loadObjValueCatalog();
-            const imp = await gatherImportedAssets(doc.uri.fsPath);
+            const [cat, imp] = await Promise.all([
+                loadObjValueCatalog(),
+                gatherImportedAssets(doc.uri.fsPath),
+            ]);
             void webview.postMessage({
                 type: 'assetCatalog',
-                models: dedupeByHashOrBasename([...imp.model, ...cat.models]),
+                models: dedupeByHashOrBasename([...cat.models, ...imp.model]),
                 // Icons repeat across SD/HD and .blp/.dds/.tga variants — collapse same-named ones.
-                icons: dedupeByHashOrBasename([...imp.icon, ...cat.icons]),
+                icons: dedupeByHashOrBasename([...cat.icons, ...imp.icon]),
                 pathing: cat.pathing,
             });
             return;

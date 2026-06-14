@@ -968,12 +968,12 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       }
       if (msg.type === 'texture') {
         if (w3v) {
-          if (msg.rgbaBase64 && msg.width && msg.height) {
+          if (msg.ddsBase64) {
+            w3v.onTextureDds(msg.path, base64ToArrayBuffer(msg.ddsBase64));
+          } else if (msg.rgbaBase64 && msg.width && msg.height) {
             const rgba = base64ToBytes(msg.rgbaBase64);
             const imageData = new ImageData(new Uint8ClampedArray(rgba.buffer), msg.width, msg.height);
             w3v.onTextureImageData(msg.path, imageData);
-          } else if (msg.ddsBase64) {
-            w3v.onTextureDds(msg.path, base64ToArrayBuffer(msg.ddsBase64));
           } else {
             const buf = msg.blpBase64 ? base64ToArrayBuffer(msg.blpBase64) : null;
             w3v.onTexture(msg.path, buf);

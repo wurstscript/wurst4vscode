@@ -37,10 +37,16 @@ export function createIconLoader(vscodeApi: VscodeApi): IconLoader {
     el.innerHTML = '';
   }
 
-  function updateElements(key: string, updater: (el: Element) => void): void {
-    for (const el of Array.from(document.querySelectorAll('.object-icon'))) {
-      if ((el.getAttribute('data-key') || '') === key) updater(el);
+  function elementsForKey(key: string): Element[] {
+    const css = (window as unknown as { CSS?: { escape?: (value: string) => string } }).CSS;
+    if (css?.escape) {
+      return Array.from(document.querySelectorAll('.object-icon[data-key="' + css.escape(key) + '"]'));
     }
+    return Array.from(document.querySelectorAll('.object-icon')).filter(el => (el.getAttribute('data-key') || '') === key);
+  }
+
+  function updateElements(key: string, updater: (el: Element) => void): void {
+    for (const el of elementsForKey(key)) updater(el);
   }
 
   function request(el: Element): void {

@@ -34,7 +34,7 @@ async function readCachedThumb(cacheKey: string): Promise<{ uri: string; cachePa
 }
 
 function statThumbKey(resolvedPath: string, stat: fs.Stats): string {
-    return `v3s-${fastByteHash(Buffer.from(`${resolvedPath.toLowerCase()}\0${stat.size}\0${Math.round(stat.mtimeMs)}`, 'utf8'))}`;
+    return `v4s-${fastByteHash(Buffer.from(`${resolvedPath.toLowerCase()}\0${stat.size}\0${Math.round(stat.mtimeMs)}`, 'utf8'))}`;
 }
 
 function thumbLog(message: string): void {
@@ -160,7 +160,7 @@ function isModelFile(filePath: string): boolean {
 
 /** Persist a webview-rendered webp thumbnail and echo it back as a data URL. */
 export async function cacheModelThumbnail(key: string, cacheKey: string, webpBase64: string, webview: vscode.Webview, aliasKey?: string): Promise<void> {
-    const validKey = (value: string | undefined) => !value || /^v(?:2|3s)-[a-f0-9]+-[a-f0-9]{8}-[a-f0-9]{8}$/i.test(value);
+    const validKey = (value: string | undefined) => !value || /^v(?:2|3s|4s)-[a-f0-9-]+$/i.test(value);
     if (!validKey(cacheKey) || !validKey(aliasKey) || !/^[A-Za-z0-9+/=]+$/.test(webpBase64) || webpBase64.length > 1_000_000) {
         thumbLog(`${key} cache-write rejected key=${cacheKey || '(empty)'} base64Chars=${webpBase64?.length ?? 0}`);
         await webview.postMessage({ type: 'modelThumbMissing', key });
@@ -226,11 +226,16 @@ export async function postTexturesToWebview(texPaths: string[], documentUri: vsc
                 rememberTexturePayload(cacheKey, payload);
                 await post({ type: 'mdxTexture', path: texPath, ...payload });
                 if (thumbKey) thumbLog(`${thumbKey} texture path="${texPath}" resolved="${resolved}" resolve=${tResolved - t0}ms read=${tRead - tResolved}ms post=${Date.now() - tRead}ms total=${Date.now() - t0}ms bytes=${bytes.length}`);
-            } else if (ext === 'dds' && getCompressedDdsFormat(bytes)) {
-                const payload: TexturePayload = { ddsBase64: bytes.toString('base64') };
-                rememberTexturePayload(cacheKey, payload);
-                await post({ type: 'mdxTexture', path: texPath, ...payload });
-                if (thumbKey) thumbLog(`${thumbKey} texture-dds path="${texPath}" resolved="${resolved}" resolve=${tResolved - t0}ms read=${tRead - tResolved}ms post=${Date.now() - tRead}ms total=${Date.now() - t0}ms bytes=${bytes.length}`);
+            } else if (ext === 'dds') {
+                if (getCompressedDdsFormat(bytes)) {
+                    const payload: TexturePayload = { ddsBase64: bytes.toString('base64') };
+                    rememberTexturePayload(cacheKey, payload);
+                    await post({ type: 'mdxTexture', path: texPath, ...payload });
+                    if (thumbKey) thumbLog(`${thumbKey} texture-dds path="${texPath}" resolved="${resolved}" resolve=${tResolved - t0}ms read=${tRead - tResolved}ms post=${Date.now() - tRead}ms total=${Date.now() - t0}ms bytes=${bytes.length}`);
+                } else {
+                    if (thumbKey) thumbLog(`${thumbKey} texture-dds-unsupported path="${texPath}" resolved="${resolved}" resolve=${tResolved - t0}ms read=${tRead - tResolved}ms total=${Date.now() - t0}ms bytes=${bytes.length}`);
+                    await post({ type: 'mdxTexture', path: texPath });
+                }
             } else {
                 const dec = decodeToRgba(new Uint8Array(bytes), `.${ext}`);
                 const tDecode = Date.now();

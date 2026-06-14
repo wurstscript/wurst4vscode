@@ -154,7 +154,20 @@ async function getFreshPreviewPath(basePath: string, sourceMtime: number): Promi
     return undefined;
 }
 
+const candidateRootsCache = new Map<string, Promise<string[]>>();
+
 export async function getCandidateRoots(documentFsPath: string): Promise<string[]> {
+    const workspaceKey = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath).join('|');
+    const cacheKey = `${documentFsPath}|${workspaceKey}`;
+    let promise = candidateRootsCache.get(cacheKey);
+    if (!promise) {
+        promise = getCandidateRootsUncached(documentFsPath);
+        candidateRootsCache.set(cacheKey, promise);
+    }
+    return [...await promise];
+}
+
+async function getCandidateRootsUncached(documentFsPath: string): Promise<string[]> {
     const seen = new Set<string>();
     const roots: string[] = [];
     const add = (candidate: string) => {
@@ -201,74 +214,13 @@ export interface ImportedAsset { value: string; label: string; iconPath?: string
 
 const IMPORT_SKIP_DIRS = new Set(['node_modules', '.git', '.svn', 'dist', 'out', 'build', '_build', 'target', '.wurst', 'wurst', '.idea', '.vscode']);
 
-function rotl32(value: number, bits: number): number {
-    return ((value << bits) | (value >>> (32 - bits))) >>> 0;
-}
-
-function readU32LE(bytes: Uint8Array, offset: number): number {
-    return (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0;
-}
-
-function xxh32(bytes: Uint8Array, seed = 0): string {
-    const p1 = 0x9e3779b1, p2 = 0x85ebca77, p3 = 0xc2b2ae3d, p4 = 0x27d4eb2f, p5 = 0x165667b1;
-    let offset = 0;
-    let h: number;
-    const round = (acc: number, lane: number) => Math.imul(rotl32((acc + Math.imul(lane, p2)) >>> 0, 13), p1) >>> 0;
-    if (bytes.length >= 16) {
-        let v1 = (seed + p1 + p2) >>> 0;
-        let v2 = (seed + p2) >>> 0;
-        let v3 = seed >>> 0;
-        let v4 = (seed - p1) >>> 0;
-        const limit = bytes.length - 16;
-        while (offset <= limit) {
-            v1 = round(v1, readU32LE(bytes, offset)); offset += 4;
-            v2 = round(v2, readU32LE(bytes, offset)); offset += 4;
-            v3 = round(v3, readU32LE(bytes, offset)); offset += 4;
-            v4 = round(v4, readU32LE(bytes, offset)); offset += 4;
-        }
-        h = (rotl32(v1, 1) + rotl32(v2, 7) + rotl32(v3, 12) + rotl32(v4, 18)) >>> 0;
-    } else {
-        h = (seed + p5) >>> 0;
-    }
-    h = (h + bytes.length) >>> 0;
-    while (offset + 4 <= bytes.length) {
-        h = Math.imul(rotl32((h + Math.imul(readU32LE(bytes, offset), p3)) >>> 0, 17), p4) >>> 0;
-        offset += 4;
-    }
-    while (offset < bytes.length) {
-        h = Math.imul(rotl32((h + Math.imul(bytes[offset], p5)) >>> 0, 11), p1) >>> 0;
-        offset++;
-    }
-    h ^= h >>> 15;
-    h = Math.imul(h, p2) >>> 0;
-    h ^= h >>> 13;
-    h = Math.imul(h, p3) >>> 0;
-    h ^= h >>> 16;
-    return h.toString(16).padStart(8, '0');
-}
-
 async function hashImportedAsset(fullPath: string): Promise<string | undefined> {
-    let handle: fs.promises.FileHandle | undefined;
     try {
         const stat = await fs.promises.stat(fullPath);
         if (!stat.isFile()) return undefined;
-        handle = await fs.promises.open(fullPath, 'r');
-        const chunkSize = Math.min(65536, Math.max(0, stat.size));
-        if (chunkSize === 0) return '0:00000000';
-        const positions = stat.size <= chunkSize * 2
-            ? [0]
-            : [0, Math.max(0, Math.floor(stat.size / 2) - Math.floor(chunkSize / 2)), Math.max(0, stat.size - chunkSize)];
-        const chunks: Buffer[] = [];
-        for (const pos of positions) {
-            const buf = Buffer.alloc(chunkSize);
-            const read = await handle.read(buf, 0, chunkSize, pos);
-            chunks.push(buf.subarray(0, read.bytesRead));
-        }
-        return `${stat.size}:${xxh32(Buffer.concat(chunks))}`;
+        return `${stat.size}:${Math.floor(stat.mtimeMs)}`;
     } catch {
         return undefined;
-    } finally {
-        try { await handle?.close(); } catch {}
     }
 }
 
@@ -401,21 +353,21 @@ export function assetPathVariants(assetPath: string, kind: AssetKind = 'any'): s
 }
 
 /**
- * Resolve an asset to a concrete file, trying every extension variant against the local
- * roots (map folder, imports/, workspace, game cache) first, then the CASC game files.
- * Pass `kind` to constrain a model/texture lookup to its own extension class.
+ * Resolve an asset to a concrete file using WC3-style precedence: game data first, then
+ * project-local roots (map folder/imports/workspace). Pass `kind` to constrain a model/texture
+ * lookup to its own extension class.
  */
 export async function resolveAssetPathWithCasc(assetPath: string, roots: readonly string[], kind: AssetKind = 'any'): Promise<string | undefined> {
     const variants = assetPathVariants(assetPath, kind);
-    for (const variant of variants) {
-        const resolved = await resolveAssetPath(variant, roots);
-        if (resolved) return resolved;
-    }
     for (const variant of variants) {
         const cached = TEXTURE_EXTS.includes(assetExt(variant))
             ? await ensureGameTextureCached(variant)
             : await ensureGameAssetCached(variant);
         if (cached) return cached;
+    }
+    for (const variant of variants) {
+        const resolved = await resolveAssetPath(variant, roots);
+        if (resolved) return resolved;
     }
     return undefined;
 }

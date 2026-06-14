@@ -620,8 +620,8 @@ const War3Viewer = {
         }
     },
 
-    onTextureDds(texPath: string, buffer: ArrayBuffer) {
-        if (!renderer || !gl) return;
+    onTextureDds(texPath: string, buffer: ArrayBuffer): boolean {
+        if (!renderer || !gl) return false;
         try {
             const info = parseDdsInfo(buffer);
             const s3tc = gl.getExtension('WEBGL_compressed_texture_s3tc') ||
@@ -629,7 +629,7 @@ const War3Viewer = {
                 gl.getExtension('WEBKIT_WEBGL_compressed_texture_s3tc');
             if (!s3tc) {
                 callbacks?.onDebug('DDS compressed textures unsupported: ' + texPath);
-                return;
+                return false;
             }
             let format: number;
             if (info.format === 'dxt1') {
@@ -641,8 +641,10 @@ const War3Viewer = {
             }
             renderer.setTextureCompressedImage(texPath, format as CompressedTextureFormat, buffer, info as RendererDdsInfo);
             callbacks?.onDebug('texture (dds) ok: ' + texPath);
+            return true;
         } catch (e) {
             callbacks?.onDebug('texture dds error (' + texPath + '): ' + String(e));
+            return false;
         }
     },
 
@@ -650,6 +652,23 @@ const War3Viewer = {
         if (!renderer) return;
         renderer.setTextureImageData(texPath, [imageData]);
         callbacks?.onDebug('texture (rgba) ok: ' + texPath);
+    },
+
+    readPixelsImageData(): ImageData | null {
+        if (!gl || !canvas) return null;
+        const w = canvas.width;
+        const h = canvas.height;
+        if (w <= 0 || h <= 0) return null;
+        const pixels = new Uint8ClampedArray(w * h * 4);
+        gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+        const flipped = new Uint8ClampedArray(pixels.length);
+        const row = w * 4;
+        for (let y = 0; y < h; y++) {
+            const src = (h - 1 - y) * row;
+            const dst = y * row;
+            flipped.set(pixels.subarray(src, src + row), dst);
+        }
+        return new ImageData(flipped, w, h);
     },
 
     setSequence(index: number) {

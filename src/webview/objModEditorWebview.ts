@@ -31,6 +31,8 @@ let modelThumbCancelGeneration = 0;
 const MODEL_THUMB_REQUEST_TIMEOUT_MS = 30000;
 const MODEL_THUMB_RENDER_TIMEOUT_MS = 9000;
 const MODEL_THUMB_MAX_QUEUE = 80;
+const MODEL_THUMB_ZERO_ALPHA_RETRIES = 1;
+const MODEL_THUMB_DARK_RETRIES = 2;
 
 const tree = document.getElementById('tree');
 const details = document.getElementById('details');
@@ -145,8 +147,7 @@ function assetMiniHtml(mod, mi) {
   if (mod.assetType === 'model') {
     const modelKey = selectedKey + ':model-field:' + mi + ':' + assetPath;
     return '<button type="button" class="asset-mini asset-open" data-model-preview="' + esc(assetPath) + '" title="' + esc('Preview model: ' + assetPath) + '">' +
-      '<span class="asset-mini model-thumb pending" data-key="' + esc(modelKey) + '" data-model="' + esc(assetPath) + '"></span>' +
-      '<span>3D</span></button>';
+      '<span class="asset-mini model-thumb pending" data-key="' + esc(modelKey) + '" data-model="' + esc(assetPath) + '"></span></button>';
   }
   // Pathing texture: open the image preview.
   return '<button type="button" class="asset-mini asset-open" data-open-asset="' + esc(assetPath) + '" title="' + esc('Open texture: ' + assetPath) + '">▶ PAT</button>';
@@ -167,10 +168,56 @@ function assetName(value) {
   return file.replace(/\\.(blp|dds|tga|png|jpe?g|mdx|mdl)$/i, '').replace(/^(btn|disbtn|pasbtn|att|upg)/i, '') || value;
 }
 
+function firstAssetPath(value) {
+  const first = String(value || '').split(',')[0].trim()
+    .replace(/^"(.*)"$/, '$1')
+    .replace(/^'(.*)'$/, '$1');
+  if (!first || first === '-' || /^WESTRING_/i.test(first)) return '';
+  return first.replace(/\//g, '\\');
+}
+
+function inferAssetType(mod, value) {
+  if (mod.assetType) return mod.assetType;
+  const v = firstAssetPath(value);
+  const hay = String((mod.fieldId || '') + ' ' + (mod.label || '') + ' ' + (mod.type || '') + ' ' + (mod.category || '')).toLowerCase();
+  const ext = (v.match(/\.([a-z0-9]+)$/i) || [])[1]?.toLowerCase() || '';
+  const textureExt = ext === 'blp' || ext === 'dds' || ext === 'tga' || ext === 'png' || ext === 'jpg' || ext === 'jpeg';
+
+  if (ext === 'mdx' || ext === 'mdl') return 'model';
+  if (textureExt) {
+    if (hay.includes('pathing')) return 'pathing';
+    if (hay.includes('icon') || hay.includes('button') || hay.includes('game interface') || hay.includes('art')) return 'icon';
+    return '';
+  }
+  if (hay.includes('pathing map') || hay.includes('pathing texture')) return 'pathing';
+  if (hay.includes('icon') || hay.includes('button') || hay.includes('game interface')) return 'icon';
+  if (hay.includes('model') || hay.includes('model file') || ['umdl', 'amdl', 'ifil', 'bfil', 'dfil'].includes(String(mod.fieldId || '').toLowerCase())) return 'model';
+  return '';
+}
+
+function normalizeAssetPathForType(value, type) {
+  const first = firstAssetPath(value);
+  if (!first) return '';
+  if (type === 'model') return /\.(mdx|mdl)$/i.test(first) ? first : first + '.mdl';
+  if (type === 'icon') return /\.(blp|dds|tga|png|jpe?g)$/i.test(first) ? first : '';
+  if (type === 'pathing') return /\.(blp|dds|tga)$/i.test(first) ? first : '';
+  return '';
+}
+
 function refreshDecoratedValue(mod) {
   const v = mod.editValue == null ? (mod.currentValue == null ? '' : String(mod.currentValue)) : String(mod.editValue);
+  const inferredAssetType = inferAssetType(mod, v);
+  if (inferredAssetType) {
+    const assetPath = normalizeAssetPathForType(v, inferredAssetType);
+    if (assetPath) {
+      mod.displayKind = 'asset';
+      mod.assetType = inferredAssetType;
+      mod.assetPath = assetPath;
+      if (!mod.editorKind || mod.editorKind === 'select') mod.editorKind = 'datalist';
+    }
+  }
   if (mod.displayKind === 'asset') {
-    mod.assetPath = v || '';
+    mod.assetPath = normalizeAssetPathForType(v, mod.assetType) || v || '';
     if (!v) {
       mod.displayValue = '';
       mod.displayDetail = '';
@@ -182,7 +229,6 @@ function refreshDecoratedValue(mod) {
     mod.displayValue = match.label;
     mod.displayDetail = match.detail || v;
   } else if (mod.displayKind === 'asset' && v) {
-    mod.assetPath = v;
     mod.displayValue = assetName(v);
     mod.displayDetail = v;
   }
@@ -209,6 +255,7 @@ function decoratedValueHtml(mod, mi, raw) {
 
 // Editor shown on click. Color/text fields get textarea + color bar + preview; everything else a plain input.
 function editorHtml(mod, mi) {
+  refreshDecoratedValue(mod);
   if (needsColorEditor(mod)) return colorEditorHtml(mod, mi);
   const v = mod.editValue == null ? '' : String(mod.editValue);
   const picker = pickerEditorHtml(mod, mi, v);
@@ -393,6 +440,51 @@ function renderTree() {
 
 // Move the selection highlight in place — rebuilding the whole tree (hundreds of rows) just to shift
 // one '.active' class made object switching feel sluggish on large .w3a files.
+function objectRowReplacementHtml(obj) {
+  const active = obj.key === selectedKey ? ' active' : '';
+  const source = obj.displaySource ? ' <span class="source-pill">' + esc(obj.displaySource) + '</span>' : '';
+  const label = obj.displayName + ' - ' + (obj.newId ? obj.baseId + ' to ' + obj.newId : obj.baseId);
+  return '<button class="object-row' + active + '" type="button" data-key="' + esc(obj.key) + '" aria-label="' + esc(label) + '">' +
+    objectIconHtml(obj, '') +
+    '<span class="object-main"><span class="object-name" title="' + esc(obj.displayName) + '">' + esc(obj.displayName) + source + '</span>' +
+    '<span class="object-id">' + idLine(obj) + '</span></span>' +
+    '</button>';
+}
+
+function updateObjectRow(obj) {
+  const row = tree.querySelector('.object-row[data-key="' + obj.key + '"]');
+  if (!row) return;
+  const wrap = document.createElement('div');
+  wrap.innerHTML = objectRowReplacementHtml(obj);
+  const next = wrap.firstElementChild;
+  if (!next) return;
+  row.replaceWith(next);
+  iconLoader.observe(next);
+}
+
+function updateDetailsHeader(obj) {
+  if (obj.key !== selectedKey) return;
+  const head = details.querySelector('.details-head');
+  if (!head) return;
+  const iconSlot = head.querySelector('.details-title-row > .object-icon');
+  if (iconSlot) {
+    const wrap = document.createElement('div');
+    wrap.innerHTML = objectIconHtml(obj, 'details-icon');
+    const next = wrap.firstElementChild;
+    if (next) {
+      iconSlot.replaceWith(next);
+      iconLoader.observe(next);
+    }
+  }
+  const title = head.querySelector('.details-title');
+  if (title) {
+    const rawcode = obj.newId ? esc(obj.baseId) + ' -> ' + esc(obj.newId) : esc(obj.baseId);
+    title.innerHTML = esc(obj.displayName) +
+      '<span class="details-rawcode">' + rawcode + '</span>' +
+      (obj.displaySource ? sourcePill({ source: obj.displaySource }) : '');
+  }
+}
+
 function setActiveRow(key) {
   for (const el of tree.querySelectorAll('.object-row.active')) el.classList.remove('active');
   // Keys are trusted 'Group:Index' strings (no quotes/backslashes) so a literal attribute match is safe.
@@ -506,8 +598,7 @@ function isModelThumbActuallyVisible(el) {
 }
 
 function hasVisibleModelThumbElement(key) {
-  for (const el of document.querySelectorAll('.model-thumb[data-key]')) {
-    if ((el.getAttribute('data-key') || '') !== key) continue;
+  for (const el of modelThumbElementsForKey(key)) {
     if (isModelThumbActuallyVisible(el)) return true;
   }
   return false;
@@ -548,9 +639,14 @@ function setModelThumbMissing(el) {
 }
 
 function updateModelThumbElements(key, updater) {
-  for (const el of document.querySelectorAll('.model-thumb')) {
-    if ((el.getAttribute('data-key') || '') === key) updater(el);
+  for (const el of modelThumbElementsForKey(key)) updater(el);
+}
+
+function modelThumbElementsForKey(key) {
+  if (window.CSS && window.CSS.escape) {
+    return Array.prototype.slice.call(document.querySelectorAll('.model-thumb[data-key="' + window.CSS.escape(key) + '"]'));
   }
+  return Array.prototype.slice.call(document.querySelectorAll('.model-thumb[data-key]')).filter(el => (el.getAttribute('data-key') || '') === key);
 }
 
 function modelThumbProfile(phase, detail) {
@@ -601,6 +697,7 @@ function modelThumbEnsureInit() {
   if (!canvas || !viewport) return false;
   const gizmo = document.createElement('canvas');
   gizmo.width = 1; gizmo.height = 1;
+  window.__WAR3_MODEL_DEBUG = true;
   v.init({
     canvas3d: canvas,
     gizmo: gizmo,
@@ -617,7 +714,7 @@ function modelThumbEnsureInit() {
     callbacks: {
       onModelLoaded(info) { modelThumbOnLoaded((info && info.sequences) || [], (info && info.texturePaths) || []); },
       onFrameUpdate() {},
-      onDebug() {},
+      onDebug(msg) { modelThumbProfile('viewer-debug', String(msg || '')); },
       onError() { finishModelThumb(false); },
     },
   });
@@ -653,8 +750,9 @@ function modelThumbOnLoaded(seqs, texturePaths) {
     } catch (e) {}
   }
   modelThumbJob.pendingTextures = new Set(texturePaths || []);
+  modelThumbJob.textureWaitRetries = 0;
   // Fallback only: normally texture replies reschedule this much sooner.
-  scheduleModelThumbCapture(texturePaths && texturePaths.length ? 450 : 0, 1);
+  scheduleModelThumbCapture(texturePaths && texturePaths.length ? 800 : 0, 1);
 }
 
 function scheduleModelThumbCapture(timeoutMs, frames) {
@@ -689,11 +787,42 @@ function captureModelThumb() {
     cancelCurrentModelThumb('not-visible-capture-start');
     return;
   }
+  if (modelThumbJob.pendingTextures && modelThumbJob.pendingTextures.size > 0) {
+    modelThumbJob.textureWaitRetries = (modelThumbJob.textureWaitRetries || 0) + 1;
+    modelThumbProfile('capture-wait-textures', 'retry=' + modelThumbJob.textureWaitRetries + ' remaining=' + modelThumbJob.pendingTextures.size);
+    if (modelThumbJob.textureWaitRetries <= 10) {
+      scheduleModelThumbCapture(180, 2);
+    } else {
+      finishModelThumb(false);
+    }
+    return;
+  }
   modelThumbProfile('capture-start');
   const canvas = document.getElementById('model-thumb-canvas');
   if (!canvas) { finishModelThumb(false); return; }
   try {
     const out = cropModelThumbCanvas(canvas);
+    const quality = modelThumbQuality(out);
+    if (quality.alphaPixels < 24) {
+      modelThumbJob.blackRetries = (modelThumbJob.blackRetries || 0) + 1;
+      modelThumbProfile('capture-empty', 'retry=' + modelThumbJob.blackRetries + ' alpha=' + quality.alphaPixels);
+      if (modelThumbJob.blackRetries <= MODEL_THUMB_ZERO_ALPHA_RETRIES) {
+        scheduleModelThumbCapture(50, 1);
+      } else {
+        finishModelThumb(false);
+      }
+      return;
+    }
+    if (quality.tooDark) {
+      modelThumbJob.blackRetries = (modelThumbJob.blackRetries || 0) + 1;
+      modelThumbProfile('capture-too-dark', 'retry=' + modelThumbJob.blackRetries + ' alpha=' + quality.alphaPixels + ' avg=' + Math.round(quality.avgLuma) + ' max=' + quality.maxLuma);
+      if (modelThumbJob.blackRetries <= MODEL_THUMB_DARK_RETRIES) {
+        scheduleModelThumbCapture(80, 1);
+      } else {
+        finishModelThumb(false);
+      }
+      return;
+    }
     const dataUrl = out.toDataURL('image/webp', 0.58);
     const marker = 'data:image/webp;base64,';
     if (!dataUrl || dataUrl.indexOf(marker) !== 0) { finishModelThumb(false); return; }
@@ -712,18 +841,45 @@ function captureModelThumb() {
   }
 }
 
+function modelThumbQuality(canvas) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return { tooDark: true, alphaPixels: 0, avgLuma: 0, maxLuma: 0 };
+  const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const px = id.data;
+  let alphaPixels = 0;
+  let lumaSum = 0;
+  let maxLuma = 0;
+  for (let i = 0; i < px.length; i += 4) {
+    const a = px[i + 3];
+    if (a <= 12) continue;
+    const luma = px[i] * 0.2126 + px[i + 1] * 0.7152 + px[i + 2] * 0.0722;
+    alphaPixels++;
+    lumaSum += luma;
+    if (luma > maxLuma) maxLuma = luma;
+  }
+  const avgLuma = alphaPixels ? lumaSum / alphaPixels : 0;
+  return {
+    tooDark: alphaPixels < 24 || (avgLuma < 10 && maxLuma < 34),
+    alphaPixels,
+    avgLuma,
+    maxLuma,
+  };
+}
+
 function cropModelThumbCanvas(canvas) {
-  const w = canvas.width, h = canvas.height;
+  const id = readModelThumbFrame(canvas);
+  const w = id.width, h = id.height;
+  const px = id.data;
+  normalizeAdditivePixels(px);
   const src = document.createElement('canvas');
   src.width = w; src.height = h;
   const sctx = src.getContext('2d');
-  sctx.drawImage(canvas, 0, 0);
-  const id = sctx.getImageData(0, 0, w, h);
-  const px = id.data;
+  sctx.putImageData(id, 0, 0);
   let minX = w, minY = h, maxX = -1, maxY = -1;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      if (px[(y * w + x) * 4 + 3] <= 8) continue;
+      const off = (y * w + x) * 4;
+      if (!isModelThumbPixelVisible(px[off], px[off + 1], px[off + 2], px[off + 3])) continue;
       if (x < minX) minX = x;
       if (y < minY) minY = y;
       if (x > maxX) maxX = x;
@@ -747,6 +903,33 @@ function cropModelThumbCanvas(canvas) {
   octx.clearRect(0, 0, 96, 96);
   octx.drawImage(src, minX, minY, cw, ch, Math.round((96 - dw) / 2), Math.round((96 - dh) / 2), dw, dh);
   return out;
+}
+
+function readModelThumbFrame(canvas) {
+  const v = mpvViewer();
+  if (v && typeof v.readPixelsImageData === 'function') {
+    const frame = v.readPixelsImageData();
+    if (frame) return frame;
+  }
+  const src = document.createElement('canvas');
+  src.width = canvas.width;
+  src.height = canvas.height;
+  const sctx = src.getContext('2d');
+  sctx.drawImage(canvas, 0, 0);
+  return sctx.getImageData(0, 0, src.width, src.height);
+}
+
+function isModelThumbPixelVisible(r, g, b, a) {
+  return a > 8 || (r + g + b) > 24;
+}
+
+function normalizeAdditivePixels(px) {
+  for (let i = 0; i < px.length; i += 4) {
+    const a = px[i + 3];
+    if (a > 8) continue;
+    const rgbAlpha = Math.max(px[i], px[i + 1], px[i + 2]);
+    if (rgbAlpha > 8) px[i + 3] = rgbAlpha;
+  }
 }
 
 function finishModelThumb(rendered) {
@@ -933,8 +1116,8 @@ window.addEventListener('message', event => {
     if (oldIcon !== (objects[index].iconPath || '')) {
       iconLoader.clearPrefix(objects[index].key + ':icon:');
     }
-    renderTree();
-    if (objects[index].key === selectedKey) renderDetails();
+    updateObjectRow(objects[index]);
+    updateDetailsHeader(objects[index]);
   } else if (msg.type === 'dirtyStateChanged') {
     const badge = document.getElementById('editable-badge');
     if (badge) {
@@ -1122,26 +1305,24 @@ function updateAbTabs() {
   if (!tabs) return;
   for (const b of tabs.querySelectorAll('.ab-tab')) b.classList.toggle('active', b.getAttribute('data-tab') === abActiveTab.get());
 }
-function abCurrentOptions() {
-  const opts = (abCatalog && abCatalog[abActiveTab.get()]) || [];
-  const filter = abSourceFilter.get();
-  if (filter === 'import') return opts.filter(o => o.source === 'import');
-  if (filter === 'wc3') return opts.filter(o => o.source !== 'import');
-  return opts;
-}
 function renderAssetGrid() {
   const grid = document.getElementById('ab-grid');
   if (!grid) return;
   const activeTab = abActiveTab.get();
-  if (activeTab === 'model') cancelAssetBrowserModelThumbs();
-  const opts = abCurrentOptions();
+  const opts = (abCatalog && abCatalog[activeTab]) || [];
+  const sourceFilter = abSourceFilter.get();
   const query = abSearchQuery.get().trim();
-  const all = query
-    ? opts.filter(o => fuzzyMatch(query, o.label + ' ' + o.value + ' ' + (o.detail || '')))
-    : opts;
-  const matches = all.slice(0, 600);
+  const matches = [];
+  let matchedCount = 0;
+  for (const o of opts) {
+    if (sourceFilter === 'import' && o.source !== 'import') continue;
+    if (sourceFilter === 'wc3' && o.source === 'import') continue;
+    if (query && !fuzzyMatch(query, o.label + ' ' + o.value + ' ' + (o.detail || ''))) continue;
+    matchedCount++;
+    if (matches.length < 600) matches.push(o);
+  }
   const count = document.getElementById('ab-count');
-  if (count) count.textContent = matches.length + (all.length > 600 ? '+' : '') + ' / ' + opts.length;
+  if (count) count.textContent = matches.length + (matchedCount > 600 ? '+' : '') + ' / ' + opts.length;
   if (!matches.length) { grid.innerHTML = '<div class="ab-empty">No matching assets</div>'; return; }
   grid.innerHTML = matches.map(o => {
     const icon = activeTab === 'model'
@@ -1182,9 +1363,16 @@ function pickAsset(value) {
   const close = document.getElementById('ab-close');
   const grid = document.getElementById('ab-grid');
   const tabs = document.getElementById('ab-tabs');
+  let abSearchRaf = 0;
   if (close) close.addEventListener('click', closeAssetBrowser);
   if (ov) ov.addEventListener('mousedown', e => { if (e.target === ov) closeAssetBrowser(); });
-  if (search) search.addEventListener('input', () => abSearchQuery.set(search.value));
+  if (search) search.addEventListener('input', () => {
+    if (abSearchRaf) cancelAnimationFrame(abSearchRaf);
+    abSearchRaf = requestAnimationFrame(() => {
+      abSearchRaf = 0;
+      abSearchQuery.set(search.value);
+    });
+  });
   const source = document.getElementById('ab-source');
   if (source) source.addEventListener('change', () => abSourceFilter.set(source.value || 'all'));
   if (tabs) tabs.addEventListener('click', e => {
@@ -1283,7 +1471,15 @@ function renderDetails() {
 
   const fieldSearch = document.getElementById('field-search');
   if (fieldSearch) {
-    fieldSearch.addEventListener('input', () => { fieldQuery = fieldSearch.value; filterFields(fieldQuery); });
+    let fieldFilterRaf = 0;
+    fieldSearch.addEventListener('input', () => {
+      fieldQuery = fieldSearch.value;
+      if (fieldFilterRaf) cancelAnimationFrame(fieldFilterRaf);
+      fieldFilterRaf = requestAnimationFrame(() => {
+        fieldFilterRaf = 0;
+        filterFields(fieldQuery);
+      });
+    });
   }
   filterFields(fieldQuery);
 
@@ -1479,6 +1675,7 @@ function updateFieldCell(mods, mod) {
 }
 
 // Filter the details table rows by field id / label / value without rebuilding (keeps focus while typing).
+let lastFieldFilterFirst = null;
 function filterFields(q) {
   const query = String(q || '').trim().toLowerCase();
   const table = details.querySelector('table');
@@ -1502,7 +1699,10 @@ function filterFields(q) {
   // Bring the first match into view while actively filtering (not on clear / initial render).
   if (query && shown > 0) {
     const first = table.querySelector('tbody tr:not(.hidden):not(.category-row)');
-    if (first) first.scrollIntoView({ block: 'nearest' });
+    if (first && first !== lastFieldFilterFirst) first.scrollIntoView({ block: 'nearest' });
+    lastFieldFilterFirst = first;
+  } else {
+    lastFieldFilterFirst = null;
   }
 }
 

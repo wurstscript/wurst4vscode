@@ -554,7 +554,7 @@ export async function requestPreviewIcon(
     documentUri: vscode.Uri,
 ): Promise<void> {
     const roots = await getCandidateRoots(documentUri.fsPath);
-    const fsPath = await resolveAssetPathWithCasc(iconPath, roots);
+    const fsPath = await resolveAssetPathWithCasc(iconPath, roots, 'texture');
     if (!fsPath) {
         await webview.postMessage({ type: 'objectIconMissing', key });
         return;

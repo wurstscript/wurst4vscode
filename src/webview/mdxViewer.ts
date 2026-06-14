@@ -32,6 +32,18 @@ export interface War3ViewerInitOptions {
     callbacks: War3ViewerCallbacks;
 }
 
+type DdsFormatName = 'dxt1' | 'dxt3' | 'dxt5';
+
+interface DdsInfo {
+    shape: { width: number; height: number };
+    images: Array<{ offset: number; length: number; shape: { width: number; height: number } }>;
+    format: DdsFormatName;
+    flags: number;
+}
+
+type CompressedTextureFormat = Parameters<ModelRenderer['setTextureCompressedImage']>[1];
+type RendererDdsInfo = Parameters<ModelRenderer['setTextureCompressedImage']>[3];
+
 // ─── module state ────────────────────────────────────────────────────────────
 
 let renderer: ModelRenderer | null = null;
@@ -47,6 +59,53 @@ let war3ModelConsoleHooked = false;
 let originalConsoleLog: typeof console.log | null = null;
 let lastRenderError: string | null = null;
 const retiredRenderers = new Set<ModelRenderer>();
+
+function parseDdsInfo(buffer: ArrayBuffer): DdsInfo {
+    const view = new DataView(buffer);
+    if (view.byteLength < 128 || view.getUint32(0, true) !== 0x20534444) {
+        throw new Error('invalid DDS');
+    }
+    const height = view.getUint32(12, true);
+    const width = view.getUint32(16, true);
+    const mipMapCount = Math.max(1, view.getUint32(28, true) || 1);
+    const flags = view.getUint32(8, true);
+    const fourCc = String.fromCharCode(
+        view.getUint8(84),
+        view.getUint8(85),
+        view.getUint8(86),
+        view.getUint8(87),
+    ).toUpperCase();
+    let format: DdsFormatName;
+    let blockBytes: number;
+    if (fourCc === 'DXT1') {
+        format = 'dxt1';
+        blockBytes = 8;
+    } else if (fourCc === 'DXT3') {
+        format = 'dxt3';
+        blockBytes = 16;
+    } else if (fourCc === 'DXT5') {
+        format = 'dxt5';
+        blockBytes = 16;
+    } else {
+        throw new Error('unsupported DDS compression ' + fourCc);
+    }
+
+    const images: DdsInfo['images'] = [];
+    let offset = 128;
+    for (let i = 0; i < mipMapCount && offset < view.byteLength; i++) {
+        const mipWidth = Math.max(1, width >> i);
+        const mipHeight = Math.max(1, height >> i);
+        const length = Math.max(1, Math.ceil(mipWidth / 4)) * Math.max(1, Math.ceil(mipHeight / 4)) * blockBytes;
+        images.push({
+            offset,
+            length: Math.min(length, view.byteLength - offset),
+            shape: { width: mipWidth, height: mipHeight },
+        });
+        offset += length;
+    }
+
+    return { shape: { width, height }, images, format, flags };
+}
 
 function isWar3ModelDebugEnabled(): boolean {
     const runtime = window as Window & typeof globalThis & {
@@ -558,6 +617,32 @@ const War3Viewer = {
             callbacks?.onDebug('texture ok: ' + texPath);
         } catch (e) {
             callbacks?.onDebug('texture decode error (' + texPath + '): ' + String(e));
+        }
+    },
+
+    onTextureDds(texPath: string, buffer: ArrayBuffer) {
+        if (!renderer || !gl) return;
+        try {
+            const info = parseDdsInfo(buffer);
+            const s3tc = gl.getExtension('WEBGL_compressed_texture_s3tc') ||
+                gl.getExtension('MOZ_WEBGL_compressed_texture_s3tc') ||
+                gl.getExtension('WEBKIT_WEBGL_compressed_texture_s3tc');
+            if (!s3tc) {
+                callbacks?.onDebug('DDS compressed textures unsupported: ' + texPath);
+                return;
+            }
+            let format: number;
+            if (info.format === 'dxt1') {
+                format = s3tc.COMPRESSED_RGB_S3TC_DXT1_EXT;
+            } else if (info.format === 'dxt3') {
+                format = s3tc.COMPRESSED_RGBA_S3TC_DXT3_EXT;
+            } else {
+                format = s3tc.COMPRESSED_RGBA_S3TC_DXT5_EXT;
+            }
+            renderer.setTextureCompressedImage(texPath, format as CompressedTextureFormat, buffer, info as RendererDdsInfo);
+            callbacks?.onDebug('texture (dds) ok: ' + texPath);
+        } catch (e) {
+            callbacks?.onDebug('texture dds error (' + texPath + '): ' + String(e));
         }
     },
 

@@ -84,6 +84,7 @@ const viewerConfig = {
 	entry: {
 		mdxViewer: './src/webview/mdxViewer.ts',
 		mpqViewerWebview: './src/webview/mpqViewerWebview.ts',
+		objModEditorWebview: './src/webview/objModEditorWebview.ts',
 	},
 	output: {
 		filename: '[name].js',

@@ -8,30 +8,78 @@ import { CascStorage, closeAllSegments } from 'casc-ts';
 
 const WURST_HOME = path.join(os.homedir(), '.wurst');
 
-function getDefaultWarcraftPaths(): string[] {
-    if (process.platform === 'win32') {
-        return [
-            'C:\\Program Files (x86)\\Warcraft III',
-            'C:\\Program Files\\Warcraft III',
-            'D:\\Program Files (x86)\\Warcraft III',
-            'D:\\Program Files\\Warcraft III',
-        ];
+let defaultWarcraftPathsCache: string[] | null = null;
+
+function normalizeWindowsDriveRoot(value: string | undefined): string | null {
+    if (!value) return null;
+    const match = /^([a-zA-Z]):/.exec(value);
+    return match ? `${match[1].toUpperCase()}:\\` : null;
+}
+
+function getWindowsDriveRoots(): string[] {
+    const seen = new Set<string>();
+    const roots: string[] = [];
+    const add = (driveRoot: string | null) => {
+        if (!driveRoot || seen.has(driveRoot)) return;
+        seen.add(driveRoot);
+        try {
+            if (fs.existsSync(driveRoot)) roots.push(driveRoot);
+        } catch {}
+    };
+
+    add(normalizeWindowsDriveRoot(process.env.SystemDrive));
+    add(normalizeWindowsDriveRoot(os.homedir()));
+    add(normalizeWindowsDriveRoot(process.cwd()));
+
+    for (let code = 67; code <= 90; code++) {
+        add(`${String.fromCharCode(code)}:\\`);
     }
-    if (process.platform === 'darwin') {
-        return [
+
+    return roots;
+}
+
+function getWindowsWarcraftPaths(): string[] {
+    const relativeCandidates = [
+        path.join('Program Files (x86)', 'Warcraft III'),
+        path.join('Program Files', 'Warcraft III'),
+        path.join('Games', 'Warcraft III'),
+        'Warcraft III',
+    ];
+    const paths: string[] = [];
+    for (const driveRoot of getWindowsDriveRoots()) {
+        for (const rel of relativeCandidates) {
+            paths.push(path.join(driveRoot, rel));
+        }
+    }
+    return paths;
+}
+
+function getDefaultWarcraftPaths(): string[] {
+    if (defaultWarcraftPathsCache) {
+        return defaultWarcraftPathsCache;
+    }
+
+    let candidates: string[];
+    if (process.platform === 'win32') {
+        candidates = getWindowsWarcraftPaths();
+    } else if (process.platform === 'darwin') {
+        candidates = [
             '/Applications/Warcraft III',
             '/Application/Warcraft III',
         ];
-    }
-    if (process.platform === 'linux') {
+    } else if (process.platform === 'linux') {
         const winePrefix = process.env.WINEPREFIX || path.join(os.homedir(), '.wine');
-        return [
+        candidates = [
             path.join(winePrefix, 'drive_c', 'Program Files (x86)', 'Warcraft III'),
             path.join(winePrefix, 'drive_c', 'Program Files', 'Warcraft III'),
             path.join(os.homedir(), 'Games', 'Warcraft III'),
         ];
+    } else {
+        candidates = [];
     }
-    return [];
+
+    defaultWarcraftPathsCache = candidates;
+    return candidates;
 }
 
 /** Walk up from `startPath` until we find a WC3 CASC root (has Data/ AND .build.info or .build.db). */
@@ -98,7 +146,7 @@ function getCascDataRoot(log: (msg: string) => void): string | null {
         const dataRoot = findCascDataRoot(p);
         if (dataRoot) { log(`CASC using default path: ${dataRoot}`); return dataRoot; }
     }
-    log(`CASC skip: no WC3 install found (checked wurst.wc3path and default paths)`);
+    log(`CASC skip: no WC3 install found (checked wurst.wc3path and ${getDefaultWarcraftPaths().length} default paths)`);
     return null;
 }
 

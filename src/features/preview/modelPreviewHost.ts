@@ -41,6 +41,38 @@ function thumbLog(message: string): void {
     console.log(`[wurst-model-thumb] ${message}`);
 }
 
+type TexturePayload =
+    | { blpBase64: string }
+    | { ddsBase64: string }
+    | { rgbaBase64: string; width: number; height: number };
+
+const texturePayloadCache = new Map<string, TexturePayload>();
+const MAX_TEXTURE_PAYLOAD_CACHE = 512;
+
+function texturePayloadKey(resolvedPath: string, stat: fs.Stats): string {
+    return `${resolvedPath.toLowerCase()}\0${stat.size}\0${Math.round(stat.mtimeMs)}`;
+}
+
+function rememberTexturePayload(key: string, payload: TexturePayload): void {
+    if (texturePayloadCache.has(key)) {
+        texturePayloadCache.delete(key);
+    }
+    texturePayloadCache.set(key, payload);
+    while (texturePayloadCache.size > MAX_TEXTURE_PAYLOAD_CACHE) {
+        const firstKey = texturePayloadCache.keys().next().value;
+        if (!firstKey) break;
+        texturePayloadCache.delete(firstKey);
+    }
+}
+
+function getCompressedDdsFormat(bytes: Buffer): string | undefined {
+    if (bytes.length < 128 || bytes.readUInt32LE(0) !== 0x20534444) return undefined;
+    const pfFlags = bytes.readUInt32LE(80);
+    if ((pfFlags & 0x4) === 0) return undefined;
+    const fourCc = bytes.toString('ascii', 84, 88).toUpperCase();
+    return fourCc === 'DXT1' || fourCc === 'DXT3' || fourCc === 'DXT5' ? fourCc : undefined;
+}
+
 /** Resolve a model path and push its bytes to the webview for `War3Viewer.loadModel`. */
 export async function postModelToWebview(modelPath: string, documentUri: vscode.Uri, webview: vscode.Webview): Promise<void> {
     const roots = await getCandidateRoots(documentUri.fsPath);
@@ -52,6 +84,10 @@ export async function postModelToWebview(modelPath: string, documentUri: vscode.
         return;
     }
     console.log(`[wurst-model-preview] resolved ${modelPath} -> ${resolved}`);
+    if (!isModelFile(resolved)) {
+        await webview.postMessage({ type: 'mdxModelMissing', path: modelPath });
+        return;
+    }
     try {
         const bytes = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(resolved)));
         const format = extOf(resolved) === 'mdl' ? 'mdl' : 'mdx';
@@ -78,6 +114,11 @@ export async function requestModelThumbnail(modelPath: string, key: string, docu
         await webview.postMessage({ type: 'modelThumbMissing', key, path: modelPath });
         return;
     }
+    if (!isModelFile(resolved)) {
+        thumbLog(`${key} rejected non-model model="${modelPath}" resolved="${resolved}"`);
+        await webview.postMessage({ type: 'modelThumbMissing', key, path: modelPath });
+        return;
+    }
 
     try {
         const tStatStart = Date.now();
@@ -91,31 +132,18 @@ export async function requestModelThumbnail(modelPath: string, key: string, docu
             return;
         }
 
-        const tReadStart = Date.now();
-        const bytes = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(resolved)));
-        const tRead = Date.now();
-        const cacheKey = `v2-${fastByteHash(bytes)}`;
-        const tHash = Date.now();
-        const cached = await readCachedThumb(cacheKey);
-        const tCache = Date.now();
-        if (cached) {
-            try { await writeThumbAlias(aliasKey, cached.buf); } catch {}
-            thumbLog(`${key} cache-hit-content key=${cacheKey} aliasKey=${aliasKey} path="${cached.cachePath}" bytes=${cached.bytes} roots=${tRoots - t0}ms resolve=${tResolved - tRoots}ms stat/cacheRead=${tStatCache - tStatStart}ms read=${tRead - tReadStart}ms hash=${tHash - tRead}ms cacheRead=${tCache - tHash}ms total=${tCache - t0}ms`);
-            await webview.postMessage({ type: 'modelThumbLoaded', key, uri: cached.uri, cacheKey });
-            return;
-        }
-
+        const cacheKey = aliasKey;
         const format = extOf(resolved) === 'mdl' ? 'mdl' : 'mdx';
         const fileName = resolved.slice(Math.max(resolved.lastIndexOf('/'), resolved.lastIndexOf('\\')) + 1);
         const tPrep = Date.now();
-        thumbLog(`${key} cache-miss key=${cacheKey} model="${modelPath}" resolved="${resolved}" roots=${tRoots - t0}ms resolve=${tResolved - tRoots}ms read=${tRead - tReadStart}ms hash=${tHash - tRead}ms cacheRead=${tCache - tHash}ms prep=${tPrep - tCache}ms bytes=${bytes.length}`);
+        thumbLog(`${key} cache-miss key=${cacheKey} model="${modelPath}" resolved="${resolved}" roots=${tRoots - t0}ms resolve=${tResolved - tRoots}ms stat/cacheRead=${tStatCache - tStatStart}ms prep=${tPrep - tStatCache}ms bytes=${stat.size}`);
         await webview.postMessage({
             type: 'modelThumbRender',
             key,
             path: modelPath,
             cacheKey,
             aliasKey,
-            mdxBase64: bytes.toString('base64'),
+            modelUri: webview.asWebviewUri(vscode.Uri.file(resolved)).toString(),
             format,
             fileName,
         });
@@ -125,9 +153,9 @@ export async function requestModelThumbnail(modelPath: string, key: string, docu
     }
 }
 
-async function writeThumbAlias(cacheKey: string, bytes: Buffer): Promise<void> {
-    await fs.promises.mkdir(getModelThumbCacheDir(), { recursive: true });
-    await fs.promises.writeFile(path.join(getModelThumbCacheDir(), `${cacheKey}.webp`), bytes);
+function isModelFile(filePath: string): boolean {
+    const ext = extOf(filePath);
+    return ext === 'mdx' || ext === 'mdl';
 }
 
 /** Persist a webview-rendered webp thumbnail and echo it back as a data URL. */
@@ -151,7 +179,7 @@ export async function cacheModelThumbnail(key: string, cacheKey: string, webpBas
         await fs.promises.mkdir(getModelThumbCacheDir(), { recursive: true });
         const tMkdir = Date.now();
         await fs.promises.writeFile(cachePath, bytes);
-        if (aliasKey) {
+        if (aliasKey && aliasKey !== cacheKey) {
             try { await fs.promises.writeFile(path.join(getModelThumbCacheDir(), `${aliasKey}.webp`), bytes); } catch {}
         }
         const tWrite = Date.now();
@@ -168,7 +196,8 @@ export async function postTexturesToWebview(texPaths: string[], documentUri: vsc
     const totalStart = Date.now();
     const roots = await getCandidateRoots(documentUri.fsPath);
     const post = (message: Record<string, unknown>) => webview.postMessage(thumbKey ? { ...message, thumbKey } : message);
-    await Promise.all(texPaths.map(async (texPath) => {
+    const uniqueTexPaths = [...new Set(texPaths)];
+    await Promise.all(uniqueTexPaths.map(async (texPath) => {
         const t0 = Date.now();
         try {
             const resolved = await resolveAssetPathWithCasc(texPath, roots, 'texture');
@@ -178,19 +207,40 @@ export async function postTexturesToWebview(texPaths: string[], documentUri: vsc
                 await post({ type: 'mdxTexture', path: texPath });
                 return;
             }
+            const stat = await fs.promises.stat(resolved);
+            const cacheKey = texturePayloadKey(resolved, stat);
+            const cachedPayload = texturePayloadCache.get(cacheKey);
+            if (cachedPayload) {
+                texturePayloadCache.delete(cacheKey);
+                texturePayloadCache.set(cacheKey, cachedPayload);
+                await post({ type: 'mdxTexture', path: texPath, ...cachedPayload });
+                if (thumbKey) thumbLog(`${thumbKey} texture-cache path="${texPath}" resolved="${resolved}" resolve=${tResolved - t0}ms post=${Date.now() - tResolved}ms total=${Date.now() - t0}ms`);
+                return;
+            }
             const bytes = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(resolved)));
             const tRead = Date.now();
-            if (extOf(resolved) === 'blp') {
+            const ext = extOf(resolved);
+            if (ext === 'blp') {
                 // Send the raw BLP; war3-model's decoder handles team-color / jpeg-content BLPs.
-                await post({ type: 'mdxTexture', path: texPath, blpBase64: bytes.toString('base64') });
+                const payload: TexturePayload = { blpBase64: bytes.toString('base64') };
+                rememberTexturePayload(cacheKey, payload);
+                await post({ type: 'mdxTexture', path: texPath, ...payload });
                 if (thumbKey) thumbLog(`${thumbKey} texture path="${texPath}" resolved="${resolved}" resolve=${tResolved - t0}ms read=${tRead - tResolved}ms post=${Date.now() - tRead}ms total=${Date.now() - t0}ms bytes=${bytes.length}`);
+            } else if (ext === 'dds' && getCompressedDdsFormat(bytes)) {
+                const payload: TexturePayload = { ddsBase64: bytes.toString('base64') };
+                rememberTexturePayload(cacheKey, payload);
+                await post({ type: 'mdxTexture', path: texPath, ...payload });
+                if (thumbKey) thumbLog(`${thumbKey} texture-dds path="${texPath}" resolved="${resolved}" resolve=${tResolved - t0}ms read=${tRead - tResolved}ms post=${Date.now() - tRead}ms total=${Date.now() - t0}ms bytes=${bytes.length}`);
             } else {
-                const dec = decodeToRgba(new Uint8Array(bytes), `.${extOf(resolved)}`);
+                const dec = decodeToRgba(new Uint8Array(bytes), `.${ext}`);
                 const tDecode = Date.now();
-                await post({
-                    type: 'mdxTexture', path: texPath,
-                    rgbaBase64: Buffer.from(dec.rgba).toString('base64'), width: dec.width, height: dec.height,
-                });
+                const payload: TexturePayload = {
+                    rgbaBase64: Buffer.from(dec.rgba).toString('base64'),
+                    width: dec.width,
+                    height: dec.height,
+                };
+                rememberTexturePayload(cacheKey, payload);
+                await post({ type: 'mdxTexture', path: texPath, ...payload });
                 if (thumbKey) thumbLog(`${thumbKey} texture path="${texPath}" resolved="${resolved}" resolve=${tResolved - t0}ms read=${tRead - tResolved}ms decode=${tDecode - tRead}ms post=${Date.now() - tDecode}ms total=${Date.now() - t0}ms bytes=${bytes.length} size=${dec.width}x${dec.height}`);
             }
         } catch {
@@ -198,5 +248,5 @@ export async function postTexturesToWebview(texPaths: string[], documentUri: vsc
             await post({ type: 'mdxTexture', path: texPath });
         }
     }));
-    if (thumbKey) thumbLog(`${thumbKey} textures total count=${texPaths.length} total=${Date.now() - totalStart}ms`);
+    if (thumbKey) thumbLog(`${thumbKey} textures total count=${texPaths.length} unique=${uniqueTexPaths.length} total=${Date.now() - totalStart}ms`);
 }

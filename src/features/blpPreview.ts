@@ -311,6 +311,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
     :root {
       --cb-a: color-mix(in srgb, var(--vscode-editorWidget-background) 65%, transparent);
       --cb-b: color-mix(in srgb, var(--vscode-editorWidget-border) 55%, transparent);
+      --model-bg: color-mix(in srgb, var(--bg) 72%, var(--fg) 28%);
     }
     .wv-header { padding: 6px 12px; }
     .meta {
@@ -456,7 +457,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
     }
     canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; }
     .stage-canvas { position: static; width: auto; height: auto; }
-    .viewport.model-mode { background: color-mix(in srgb, var(--vscode-editor-background) 85%, #000); }
+    .viewport.model-mode { background: var(--model-bg); }
     .viewport.model-mode > .stage { width: 100%; height: 100%; }
     .viewport.model-mode #canvas3d { width: 100%; height: 100%; }
     .warnings {
@@ -971,6 +972,8 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
             const rgba = base64ToBytes(msg.rgbaBase64);
             const imageData = new ImageData(new Uint8ClampedArray(rgba.buffer), msg.width, msg.height);
             w3v.onTextureImageData(msg.path, imageData);
+          } else if (msg.ddsBase64) {
+            w3v.onTextureDds(msg.path, base64ToArrayBuffer(msg.ddsBase64));
           } else {
             const buf = msg.blpBase64 ? base64ToArrayBuffer(msg.blpBase64) : null;
             w3v.onTexture(msg.path, buf);

@@ -254,7 +254,8 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
                                 const cacheDir = getGameAssetCacheDir();
                                 const normalized = texPath.replace(/\//g, '\\').toLowerCase();
                                 const rel = texExt === 'dds' ? normalized.replace(/\.blp$/, '.dds') : normalized;
-                                resolvedFsPath = path.join(cacheDir, ...rel.split('\\'));
+                                // ':' (CASC namespaces like "_hd.w3mod:") is illegal in Windows paths — mirror getCachedAssetPath.
+                                resolvedFsPath = path.join(cacheDir, ...rel.replace(/:/g, '$').split('\\'));
                             }
                         }
 

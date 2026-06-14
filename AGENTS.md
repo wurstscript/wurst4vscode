@@ -82,6 +82,17 @@ Do not duplicate decoders across features.
 - `TRIGSTR_###` values are map-local string references; resolve them through `war3map.wts` via `src/features/preview/triggerStrings.ts`, but still show the source reference where useful.
 - For icons/thumbnails in webviews, reuse `imageAssetSupport.ensurePreview`, `getCandidateRoots`, and CASC texture extraction (`ensureGameTextureCached`) instead of adding another decoder/cache path.
 
+### Shared reference-resolution + icon infra (use across all viewers, do not duplicate)
+- **src/features/preview/wc3Data.ts** — generic CASC game-data loaders/parsers: `readGameData`, `parseSlk`, `parseProfile`, `loadProfilePaths`, `loadWorldEditStrings`, `resolveWorldEditString`, plus the per-kind profile/skin path lists. Add new game-data loading here, not in a viewer.
+- **src/features/preview/objectCatalog.ts** — `getObjectCatalog()` → `Map<rawcode, { name, iconPath, modelPath }>` built from profiles/skins + world strings. Use it to turn raw 4-char object ids into named, icon-decorated references in any viewer (doo, trigger, map data).
+- **Lazy inline icons:** host side `imageAssetSupport.requestPreviewIcon(iconPath, key, webview, uri)` + client side `ICON_LAZYLOAD_SCRIPT` / `ICON_INLINE_CSS` / `PREVIEW_ICON_CSP` from `webviewShared.ts`. Markup contract: `<span class="object-icon" data-key data-icon></span>`. Wire `onMessage` → `requestPreviewIcon`. Validate any new inline `<script>` string with `vm.Script`.
+- **Extension-agnostic asset resolution:** WC3 looks up assets by name, ignoring the requested extension. Use `imageAssetSupport.resolveAssetPathWithCasc(assetPath, roots)` (built on `assetPathVariants`) which probes `.mdx`/`.mdl` for models and `.blp`/`.dds`/`.tga` for textures across local roots (map folder, `imports/`, workspace, game cache) then CASC. Don't resolve a single fixed extension.
+- **Inline model preview:** to embed a 3D model render in a webview (not a separate window), load `dist/webview/mdxViewer.js` via `webview.asWebviewUri` (requires `extensionUri` on the provider, `dist/webview` in `localResourceRoots`, and `script-src 'unsafe-inline' ${webview.cspSource}` — do NOT add a nonce, it would disable `'unsafe-inline'` for inline scripts). Host side: `preview/modelPreviewHost.ts` `postModelToWebview` / `postTexturesToWebview`; the viewer posts `requestTextures` back. The objmod editor's `#mpv-box` is the reference implementation.
+
+### Editable binary formats
+- **.w3i is an editable custom editor** (`wurst.w3iEditor`, in `mapDataPreview.ts`) backed by `casc-ts` `parseW3i`/`serializeW3i`, which use a **parse-prefix + opaque-tail** model: only leading string/scalar fields are editable; players/forces/lists are preserved verbatim in `file.tail` (and parsed best-effort for display only). Every save passes a round-trip safety gate (`serializeValidatedW3i`). TRIGSTR-backed strings edit `war3map.wts`; inline strings edit the w3i bytes. The other map-data formats remain read-only under `wurst.mapDataPreview` (the old read-only `renderW3i`/`parseW3i` in that file are retained but no longer routed to).
+- When adding a new editable binary format, mirror this: a casc-ts parser+serializer with a byte-exact round-trip test, a `CustomEditorProvider` with dirty tracking, and a serialize→re-parse→compare safety gate before any write.
+
 ## Validation checklist
 - Compile TypeScript (`npx tsc -p . --noEmit`) after command or API wiring changes.
 - Ensure command appears in Command Palette via `contributes.commands`.

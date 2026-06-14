@@ -5,9 +5,13 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import * as vscode from 'vscode';
-import { BinReader } from 'casc-ts/formats';
+import { BinReader, parseW3i as parseW3iFile, serializeW3i, W3iFile, W3iPlayer, W3iForce } from 'casc-ts/formats';
 import { ParsedPreviewContext, registerParsedPreviewer } from './preview/framework';
-import { loadTriggerStringsForUri, resolveTriggerString, ResolvedText, TriggerStringTable } from './preview/triggerStrings';
+import {
+    loadTriggerStringsForUri, resolveTriggerString, ResolvedText, TriggerStringTable,
+    findWtsUri, applyWtsEdits,
+} from './preview/triggerStrings';
+import { getCandidateRoots, resolveAssetPathWithCasc } from './imageAssetSupport';
 import { buildPage } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
 
@@ -886,11 +890,14 @@ ${errorBanner(parsed.error)}
 
 type SelectOption = { value: string; label: string };
 
-function renderHeader(fileName: string, meta: string): string {
+function renderHeader(fileName: string, meta: string, editable = false): string {
+    const badge = editable
+        ? `<span class="dirty-badge" id="dirtyBadge" hidden>● unsaved</span>`
+        : `<span class="readonly-badge">read-only</span>`;
     return `<div class="md-header">
   <div>
     <div class="md-title">${escapeHtml(fileName)}</div>
-    <div class="md-meta">${escapeHtml(meta)}<span class="readonly-badge">read-only</span></div>
+    <div class="md-meta">${escapeHtml(meta)}${badge}</div>
   </div>
 </div>`;
 }
@@ -1070,11 +1077,435 @@ function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Editable .w3i map-info editor
+//
+// Backed by the casc-ts parse-prefix + opaque-tail w3i model: only the leading
+// string/scalar fields are editable; everything else (players, forces, lists) is
+// preserved verbatim in `file.tail`. TRIGSTR-backed strings edit war3map.wts;
+// inline strings edit the w3i bytes. Saves pass a round-trip safety gate.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Editable string fields that may be TRIGSTR-backed (edit wts) or inline (edit w3i bytes).
+const W3I_STRING_FIELDS = new Set<keyof W3iFile>([
+    'name', 'author', 'description', 'recommendedPlayers',
+    'loadingModel', 'loadingTitle', 'loadingSubtitle', 'loadingText',
+    'prologueTitle', 'prologueSubtitle', 'prologueText', 'prologuePath',
+]);
+
+const W3I_PLAYER_RACE = ['Selectable', 'Human', 'Orc', 'Undead', 'Night Elf'];
+const W3I_PLAYER_TYPE = ['', 'User', 'Computer', 'Neutral', 'Rescuable'];
+
+function w3iLabel(arr: string[], index: number): string {
+    return arr[index] || `#${index}`;
+}
+
+class W3iDocument implements vscode.CustomDocument {
+    editDepth = 0;
+    savedDepth = 0;
+    panelWebview?: vscode.Webview;
+    reload?: () => Promise<void>;
+
+    constructor(
+        readonly uri: vscode.Uri,
+        public file: W3iFile,
+        public wtsTable: TriggerStringTable,
+        public wtsUri: vscode.Uri | undefined,
+        public wtsExists: boolean,
+        public readonly wtsEdits: Map<number, string>,
+    ) {}
+
+    dispose(): void {}
+}
+
+/** Resolve a string field for display, overlaying any pending wts edits. */
+function resolveW3iString(raw: string | undefined, doc: W3iDocument): ResolvedText {
+    const trimmed = (raw ?? '').trim();
+    const match = /^TRIGSTR_(\d+)$/i.exec(trimmed);
+    if (!match) return { value: raw };
+    const id = Number(match[1]);
+    if (doc.wtsEdits.has(id)) return { value: doc.wtsEdits.get(id), source: trimmed };
+    const resolved = resolveTriggerString(trimmed, doc.wtsTable);
+    // For editing, show an empty box (not the raw TRIGSTR ref) when the string can't be resolved yet.
+    return resolved.missing ? { value: '', source: trimmed, missing: true } : resolved;
+}
+
+function editInput(field: keyof W3iFile, label: string, resolved: ResolvedText, opts: { wide?: boolean; textarea?: boolean; mono?: boolean } = {}): string {
+    const fieldClass = opts.wide || opts.textarea ? 'field wide' : 'field';
+    const controlClass = ['field-control', opts.mono ? 'mono' : ''].filter(Boolean).join(' ');
+    const value = escapeHtml(controlValue(resolved.value));
+    const control = opts.textarea
+        ? `<textarea class="${controlClass}" data-field="${field}" placeholder="-">${value}</textarea>`
+        : `<input class="${controlClass}" data-field="${field}" value="${value}" placeholder="-">`;
+    return `<label class="${fieldClass}">
+  ${renderFieldLabel(label, resolved)}
+  ${control}
+</label>`;
+}
+
+function editSelectControl(field: keyof W3iFile, label: string, value: string | number | undefined, options: SelectOption[]): string {
+    const selected = controlValue(value);
+    const opts = options.some((o) => o.value === selected)
+        ? options
+        : [{ value: selected, label: selected || '-' }, ...options];
+    const rendered = opts.map((o) => `<option value="${escapeHtml(o.value)}"${o.value === selected ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('');
+    return `<label class="field">
+  <span class="field-label">${escapeHtml(label)}</span>
+  <select class="field-control" data-select="${field}">${rendered}</select>
+</label>`;
+}
+
+function editFlagCheckbox(bit: number, label: string, checked: boolean): string {
+    return `<label class="check-row">
+  <input type="checkbox" data-flag="${bit}"${checked ? ' checked' : ''}>
+  <span>${escapeHtml(label)}</span>
+</label>`;
+}
+
+function renderW3iPlayers(players: W3iPlayer[] | undefined): string {
+    if (!players || !players.length) return '';
+    const rows = players.map((p) => `<tr>
+  <td class="num">${p.num + 1}</td>
+  <td>${escapeHtml(p.name || '-')}</td>
+  <td>${escapeHtml(w3iLabel(W3I_PLAYER_TYPE, p.type))}</td>
+  <td>${escapeHtml(w3iLabel(W3I_PLAYER_RACE, p.race))}</td>
+  <td>${p.fixedStart ? 'fixed' : '-'}</td>
+</tr>`).join('');
+    return `<section class="section">
+  <h2>Players <span class="count">(${players.length})</span></h2>
+  <div class="table-wrap"><table><thead><tr><th>#</th><th>Name</th><th>Controller</th><th>Race</th><th>Start</th></tr></thead><tbody>${rows}</tbody></table></div>
+</section>`;
+}
+
+function renderW3iForces(forces: W3iForce[] | undefined): string {
+    if (!forces || !forces.length) return '';
+    const players = (mask: number): string => {
+        const list: number[] = [];
+        for (let i = 0; i < 28; i++) if (mask & (1 << i)) list.push(i + 1);
+        return list.length ? list.join(', ') : '-';
+    };
+    const rows = forces.map((f, i) => `<tr>
+  <td class="num">${i + 1}</td>
+  <td>${escapeHtml(f.name || '-')}</td>
+  <td class="mono">${players(f.playerMask)}</td>
+</tr>`).join('');
+    return `<section class="section">
+  <h2>Forces <span class="count">(${forces.length})</span></h2>
+  <div class="table-wrap"><table><thead><tr><th>#</th><th>Name</th><th>Players</th></tr></thead><tbody>${rows}</tbody></table></div>
+</section>`;
+}
+
+const W3I_EDITOR_CSS = `
+.field-control:not(:disabled):hover { border-color: var(--vscode-inputOption-activeBorder, var(--vscode-focusBorder, #007fd4)); }
+.field-control:focus { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px; }
+.dirty-badge {
+  display: inline-block;
+  margin-left: 8px;
+  color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
+  font-size: 11px;
+  font-weight: 600;
+}
+.open-asset {
+  margin-top: 4px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--vscode-textLink-foreground);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 1px 7px;
+  cursor: pointer;
+}
+.open-asset:hover { background: var(--hover); }
+.hint { color: var(--muted); font-size: 11px; margin: 2px 0 0; }
+`;
+
+function renderW3iEditor(doc: W3iDocument, fileName: string): string {
+    const f = doc.file;
+    const s = (id: keyof W3iFile) => resolveW3iString(f[id] as string | undefined, doc);
+    const loadingModelRaw = (f.loadingModel ?? '').trim();
+    const openModelBtn = loadingModelRaw && !/^TRIGSTR_/i.test(loadingModelRaw)
+        ? `<button type="button" class="open-asset" data-open-asset="${escapeHtml(loadingModelRaw)}">▶ Open model</button>`
+        : '';
+
+    const body = `
+${renderHeader(fileName, `WC3 map information — v${f.version}`, true)}
+<div class="dialog">
+${errorBanner(f.error)}
+<section class="section">
+  <h2>General</h2>
+  <div class="form-grid">
+    ${editInput('name', 'Map name', s('name'))}
+    ${editInput('author', 'Author', s('author'))}
+    ${editInput('recommendedPlayers', 'Recommended players', s('recommendedPlayers'))}
+    ${editSelectControl('tileset', 'Tileset', f.tileset, tilesetOptions())}
+    ${renderInput('Dimensions', `${f.width} × ${f.height}`, 'mono')}
+    ${editInput('gameDataSet' as keyof W3iFile, 'Game data set', { value: f.gameDataSet }, { mono: true })}
+  </div>
+</section>
+<section class="section">
+  <h2>Description</h2>
+  ${editInput('description', 'Description', s('description'), { textarea: true })}
+</section>
+<section class="section">
+  <h2>Options</h2>
+  <div class="checkbox-grid">
+    ${W3I_FLAG_DEFS.map(([bit, label]) => editFlagCheckbox(bit, label, (f.flags & bit) !== 0)).join('')}
+  </div>
+</section>
+<section class="section">
+  <h2>Loading Screen</h2>
+  <div class="form-grid">
+    ${editSelectControl('loadingBackground', 'Background', f.loadingBackground, loadingBackgroundOptions())}
+    ${editInput('loadingTitle', 'Title', s('loadingTitle'))}
+    ${editInput('loadingSubtitle', 'Subtitle', s('loadingSubtitle'))}
+    <label class="field wide">
+      ${renderFieldLabel('Custom model', resolveW3iString(f.loadingModel, doc))}
+      <input class="field-control mono" data-field="loadingModel" value="${escapeHtml(controlValue(resolveW3iString(f.loadingModel, doc).value))}" placeholder="-">
+      ${openModelBtn}
+    </label>
+    ${editInput('loadingText', 'Text', s('loadingText'), { textarea: true })}
+  </div>
+</section>
+<section class="section">
+  <h2>Prologue</h2>
+  <div class="form-grid">
+    ${editInput('prologueTitle', 'Title', s('prologueTitle'))}
+    ${editInput('prologueSubtitle', 'Subtitle', s('prologueSubtitle'))}
+    ${editInput('prologueText', 'Text', s('prologueText'), { textarea: true })}
+  </div>
+</section>
+${renderW3iPlayers(f.players)}
+${renderW3iForces(f.forces)}
+<section class="section">
+  <h2>Technical</h2>
+  <div class="form-grid compact">
+    ${renderInput('Format version', f.version, 'mono')}
+    ${renderInput('Editor version', f.editorVersion, 'mono')}
+    ${renderInput('Game version', f.gameVersion, 'mono')}
+    ${renderInput('Saves', f.saves, 'mono')}
+    ${renderInput('Flags', `0x${(f.flags >>> 0).toString(16).padStart(8, '0')}`, 'mono')}
+  </div>
+  <p class="hint">Strings shown with a <code>TRIGSTR_</code> pill are stored in war3map.wts and edited there on save.</p>
+</div>
+</div>
+<script>
+(function () {
+  const api = acquireVsCodeApi();
+  document.addEventListener('change', function (e) {
+    const t = e.target;
+    if (t.matches('[data-field]')) api.postMessage({ type: 'edit', field: t.getAttribute('data-field'), value: t.value });
+    else if (t.matches('[data-select]')) api.postMessage({ type: 'edit', field: t.getAttribute('data-select'), value: t.value });
+    else if (t.matches('[data-flag]')) api.postMessage({ type: 'flag', bit: Number(t.getAttribute('data-flag')), on: t.checked });
+  });
+  document.addEventListener('click', function (e) {
+    const o = e.target.closest('[data-open-asset]');
+    if (o) api.postMessage({ type: 'openAsset', path: o.getAttribute('data-open-asset') });
+  });
+  window.addEventListener('message', function (event) {
+    const msg = event.data || {};
+    if (msg.type === 'dirtyStateChanged') {
+      const badge = document.getElementById('dirtyBadge');
+      if (badge) badge.hidden = !msg.isDirty;
+    }
+  });
+})();
+</script>`;
+
+    return page(fileName, body, W3I_EDITOR_CSS, true);
+}
+
+interface W3iEdit { apply: () => void; revert: () => void; }
+
+class W3iEditorProvider implements vscode.CustomEditorProvider<W3iDocument> {
+    private readonly _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<W3iDocument>>();
+    readonly onDidChangeCustomDocument = this._onDidChange.event;
+
+    async openCustomDocument(uri: vscode.Uri): Promise<W3iDocument> {
+        const file = parseW3iFile(Buffer.from(await vscode.workspace.fs.readFile(uri)));
+        const wtsTable = loadTriggerStringsForUri(uri);
+        const { uri: wtsUri, exists } = findWtsUri(uri);
+        return new W3iDocument(uri, file, wtsTable, wtsUri, exists, new Map());
+    }
+
+    async resolveCustomEditor(doc: W3iDocument, panel: vscode.WebviewPanel): Promise<void> {
+        panel.webview.options = { enableScripts: true };
+        doc.panelWebview = panel.webview;
+        const fileName = doc.uri.path.slice(doc.uri.path.lastIndexOf('/') + 1);
+        doc.reload = async () => { panel.webview.html = renderW3iEditor(doc, fileName); };
+        panel.webview.onDidReceiveMessage((message) => this.handleMessage(message, doc));
+        await doc.reload();
+    }
+
+    private handleMessage(message: unknown, doc: W3iDocument): void {
+        if (!message || typeof message !== 'object') return;
+        const msg = message as { type?: string; field?: string; value?: string; bit?: number; on?: boolean; path?: string };
+
+        if (msg.type === 'openAsset' && msg.path) {
+            void openW3iAsset(msg.path, doc.uri);
+            return;
+        }
+        if (msg.type === 'flag' && typeof msg.bit === 'number') {
+            const prev = doc.file.flags;
+            const next = msg.on ? (prev | msg.bit) : (prev & ~msg.bit);
+            if (next === prev) return;
+            this.pushEdit(doc, `Toggle flag`, { apply: () => { doc.file.flags = next; }, revert: () => { doc.file.flags = prev; } }, true);
+            return;
+        }
+        if (msg.type === 'edit' && msg.field) {
+            const edit = this.makeFieldEdit(doc, msg.field as keyof W3iFile, msg.value ?? '');
+            if (edit) this.pushEdit(doc, `Edit ${msg.field}`, edit, false);
+            return;
+        }
+    }
+
+    /** Build an edit for a field. String fields may route to war3map.wts; selects/scalars edit the w3i struct. */
+    private makeFieldEdit(doc: W3iDocument, field: keyof W3iFile, value: string): W3iEdit | undefined {
+        if (W3I_STRING_FIELDS.has(field)) {
+            const raw = ((doc.file[field] as string | undefined) ?? '').trim();
+            const match = /^TRIGSTR_(\d+)$/i.exec(raw);
+            if (match) {
+                const id = Number(match[1]);
+                const had = doc.wtsEdits.has(id);
+                const prev = doc.wtsEdits.get(id);
+                if (!had && resolveTriggerString(raw, doc.wtsTable).value === value) return undefined;
+                return {
+                    apply: () => { doc.wtsEdits.set(id, value); },
+                    revert: () => { if (had) doc.wtsEdits.set(id, prev as string); else doc.wtsEdits.delete(id); },
+                };
+            }
+            const prevVal = doc.file[field] as string | undefined;
+            if ((prevVal ?? '') === value) return undefined;
+            return {
+                apply: () => { (doc.file as unknown as Record<string, unknown>)[field] = value; },
+                revert: () => { (doc.file as unknown as Record<string, unknown>)[field] = prevVal; },
+            };
+        }
+        // Scalar fields: tileset (char), loadingBackground / gameDataSet (int).
+        const prevVal = doc.file[field];
+        if (field === 'tileset') {
+            const next = (value || ' ').charAt(0);
+            if (next === prevVal) return undefined;
+            return { apply: () => { doc.file.tileset = next; }, revert: () => { doc.file.tileset = prevVal as string; } };
+        }
+        const num = Number(value);
+        if (!Number.isFinite(num) || num === prevVal) return undefined;
+        return {
+            apply: () => { (doc.file as unknown as Record<string, unknown>)[field] = num; },
+            revert: () => { (doc.file as unknown as Record<string, unknown>)[field] = prevVal; },
+        };
+    }
+
+    private pushEdit(doc: W3iDocument, label: string, edit: W3iEdit, reloadOnApply: boolean): void {
+        edit.apply();
+        doc.editDepth++;
+        this.postDirtyState(doc);
+        if (reloadOnApply) void doc.reload?.();
+        this._onDidChange.fire({
+            document: doc,
+            label,
+            undo: () => { edit.revert(); doc.editDepth--; this.postDirtyState(doc); void doc.reload?.(); },
+            redo: () => { edit.apply(); doc.editDepth++; this.postDirtyState(doc); void doc.reload?.(); },
+        });
+    }
+
+    private postDirtyState(doc: W3iDocument): void {
+        void doc.panelWebview?.postMessage({ type: 'dirtyStateChanged', isDirty: doc.editDepth !== doc.savedDepth });
+    }
+
+    async saveCustomDocument(doc: W3iDocument): Promise<void> {
+        try {
+            await this.writeW3i(doc, doc.uri);
+            await this.writeWts(doc, doc.wtsUri, doc.wtsExists);
+            if (doc.wtsUri) doc.wtsExists = true;
+            doc.savedDepth = doc.editDepth;
+            this.postDirtyState(doc);
+        } catch (err) {
+            void vscode.window.showErrorMessage(`Map info not saved: ${err instanceof Error ? err.message : String(err)}`);
+            throw err;
+        }
+    }
+
+    async saveCustomDocumentAs(doc: W3iDocument, target: vscode.Uri): Promise<void> {
+        await vscode.workspace.fs.writeFile(target, serializeValidatedW3i(doc.file, target.path));
+        const { uri: wtsUri, exists } = findWtsUri(target);
+        await this.writeWts(doc, wtsUri, exists);
+    }
+
+    private async writeW3i(doc: W3iDocument, uri: vscode.Uri): Promise<void> {
+        const bytes = serializeValidatedW3i(doc.file, uri.path);
+        try {
+            const existing = Buffer.from(await vscode.workspace.fs.readFile(uri));
+            if (existing.equals(bytes)) return;
+        } catch { /* missing → write */ }
+        await vscode.workspace.fs.writeFile(uri, bytes);
+    }
+
+    private async writeWts(doc: W3iDocument, wtsUri: vscode.Uri | undefined, wtsExists: boolean): Promise<void> {
+        if (!doc.wtsEdits.size || !wtsUri) return;
+        let original = '';
+        if (wtsExists) {
+            try { original = Buffer.from(await vscode.workspace.fs.readFile(wtsUri)).toString('utf8'); } catch { /* create fresh */ }
+        }
+        await vscode.workspace.fs.writeFile(wtsUri, Buffer.from(applyWtsEdits(original, doc.wtsEdits), 'utf8'));
+    }
+
+    async revertCustomDocument(doc: W3iDocument): Promise<void> {
+        doc.file = parseW3iFile(Buffer.from(await vscode.workspace.fs.readFile(doc.uri)));
+        doc.wtsTable = loadTriggerStringsForUri(doc.uri);
+        doc.wtsEdits.clear();
+        const { exists } = findWtsUri(doc.uri);
+        doc.wtsExists = exists;
+        doc.editDepth = 0;
+        doc.savedDepth = 0;
+        this.postDirtyState(doc);
+        if (doc.reload) await doc.reload();
+    }
+
+    async backupCustomDocument(doc: W3iDocument, context: vscode.CustomDocumentBackupContext): Promise<vscode.CustomDocumentBackup> {
+        await vscode.workspace.fs.writeFile(context.destination, serializeValidatedW3i(doc.file, doc.uri.path));
+        return { id: context.destination.toString(), delete: () => vscode.workspace.fs.delete(context.destination).then(() => undefined, () => undefined) };
+    }
+}
+
+/** Safety gate: never write a w3i we can't read back with the same prefix + preserved tail. */
+function serializeValidatedW3i(file: W3iFile, name: string): Buffer {
+    const bytes = serializeW3i(file);
+    const reparsed = parseW3iFile(bytes);
+    if (reparsed.error) throw new Error(`Refusing to save ${name}: serialized data did not re-parse (${reparsed.error}).`);
+    if (!reparsed.tail.equals(file.tail) || reparsed.name !== file.name ||
+        reparsed.width !== file.width || reparsed.height !== file.height || reparsed.version !== file.version) {
+        throw new Error(`Refusing to save ${name}: round-trip verification failed.`);
+    }
+    return bytes;
+}
+
+async function openW3iAsset(assetPath: string, uri: vscode.Uri): Promise<void> {
+    const resolved = await resolveAssetPathWithCasc(assetPath, await getCandidateRoots(uri.fsPath));
+    if (!resolved) {
+        void vscode.window.showWarningMessage(`Could not resolve asset: ${assetPath}`);
+        return;
+    }
+    const target = vscode.Uri.file(resolved);
+    const ext = resolved.slice(resolved.lastIndexOf('.')).toLowerCase();
+    if (['.mdx', '.mdl', '.blp', '.dds', '.tga'].includes(ext)) {
+        await vscode.commands.executeCommand('vscode.openWith', target, 'wurst.blpPreview');
+    } else {
+        await vscode.commands.executeCommand('vscode.open', target);
+    }
+}
+
 export function registerMapDataPreview(_context: vscode.ExtensionContext): vscode.Disposable {
-    return registerParsedPreviewer<MapDataFile>({
+    const readonly = registerParsedPreviewer<MapDataFile>({
         viewType: 'wurst.mapDataPreview',
         parse: parseMapData,
         render: renderMapData,
         webviewOptions: { enableScripts: true },
     });
+    const w3iEditor = vscode.window.registerCustomEditorProvider(
+        'wurst.w3iEditor',
+        new W3iEditorProvider(),
+        { supportsMultipleEditorsPerDocument: false, webviewOptions: { retainContextWhenHidden: true } },
+    );
+    return vscode.Disposable.from(readonly, w3iEditor);
 }

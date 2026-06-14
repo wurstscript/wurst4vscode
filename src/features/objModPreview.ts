@@ -5,15 +5,21 @@
 import * as vscode from 'vscode';
 import { parseObjMod, serializeObjMod, ObjModFile, ObjModEntry, ObjModMod, ObjModVarType } from 'casc-ts/formats';
 import { ParsedPreviewContext } from './preview/framework';
-import { findGameAsset } from './preview/cascStorage';
-import { ensureGameTextureCached, decodeRasterPreview } from './blpPreview';
-import { getCandidateRoots, resolveAssetPath } from './imageAssetSupport';
+import { requestPreviewIcon, getCandidateRoots, resolveAssetPathWithCasc, gatherImportedAssets } from './imageAssetSupport';
+import { postModelToWebview, postTexturesToWebview, requestModelThumbnail, cacheModelThumbnail } from './preview/modelPreviewHost';
 import {
     loadTriggerStringsForUri, resolveTriggerString, TriggerStringTable,
     findWtsUri, nextTriggerStringId, applyWtsEdits,
 } from './preview/triggerStrings';
-import { buildPage } from './webviewShared';
+import { buildPage, FUZZY_SEARCH_SCRIPT } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
+import {
+    SlkTable, ProfileTable,
+    readGameData, parseSlk, loadProfilePaths, stripTxtQuotes,
+    loadWorldEditStrings, resolveWorldEditString,
+    UNIT_PROFILE_PATHS, ABILITY_PROFILE_PATHS, UPGRADE_PROFILE_PATHS,
+    ITEM_PROFILE_PATHS, DESTRUCTABLE_PROFILE_PATHS, DOODAD_PROFILE_PATHS,
+} from './preview/wc3Data';
 export { ObjModFile, ObjModEntry, ObjModMod, ObjModVarType } from 'casc-ts/formats';
 
 const TYPE_LABELS: Record<string, string> = {
@@ -99,62 +105,6 @@ const SLK_NAME_TO_PATH: Record<string, string> = {
     UpgradeData: 'Units\\UpgradeData.slk',
 };
 
-const UNIT_PROFILE_PATHS = [
-    'Units\\UnitSkin.txt',
-    'Units\\CampaignUnitFunc.txt',
-    'Units\\CampaignUnitStrings.txt',
-    'Units\\HumanUnitFunc.txt',
-    'Units\\HumanUnitStrings.txt',
-    'Units\\OrcUnitFunc.txt',
-    'Units\\OrcUnitStrings.txt',
-    'Units\\NightElfUnitFunc.txt',
-    'Units\\NightElfUnitStrings.txt',
-    'Units\\UndeadUnitFunc.txt',
-    'Units\\UndeadUnitStrings.txt',
-    'Units\\NeutralUnitFunc.txt',
-    'Units\\NeutralUnitStrings.txt',
-];
-
-const ABILITY_PROFILE_PATHS = [
-    'Units\\AbilitySkin.txt',
-    'Units\\CampaignAbilityFunc.txt',
-    'Units\\CampaignAbilityStrings.txt',
-    'Units\\CommonAbilityFunc.txt',
-    'Units\\CommonAbilityStrings.txt',
-    'Units\\HumanAbilityFunc.txt',
-    'Units\\HumanAbilityStrings.txt',
-    'Units\\OrcAbilityFunc.txt',
-    'Units\\OrcAbilityStrings.txt',
-    'Units\\NightElfAbilityFunc.txt',
-    'Units\\NightElfAbilityStrings.txt',
-    'Units\\UndeadAbilityFunc.txt',
-    'Units\\UndeadAbilityStrings.txt',
-    'Units\\NeutralAbilityFunc.txt',
-    'Units\\NeutralAbilityStrings.txt',
-    'Units\\ItemAbilityFunc.txt',
-    'Units\\ItemAbilityStrings.txt',
-];
-
-const UPGRADE_PROFILE_PATHS = [
-    'Units\\UpgradeSkin.txt',
-    'Units\\CampaignUpgradeFunc.txt',
-    'Units\\CampaignUpgradeStrings.txt',
-    'Units\\HumanUpgradeFunc.txt',
-    'Units\\HumanUpgradeStrings.txt',
-    'Units\\OrcUpgradeFunc.txt',
-    'Units\\OrcUpgradeStrings.txt',
-    'Units\\NightElfUpgradeFunc.txt',
-    'Units\\NightElfUpgradeStrings.txt',
-    'Units\\UndeadUpgradeFunc.txt',
-    'Units\\UndeadUpgradeStrings.txt',
-    'Units\\NeutralUpgradeFunc.txt',
-    'Units\\NeutralUpgradeStrings.txt',
-];
-
-const ITEM_PROFILE_PATHS = ['Units\\ItemSkin.txt', 'Units\\ItemFunc.txt', 'Units\\ItemStrings.txt'];
-const DESTRUCTABLE_PROFILE_PATHS = ['Units\\DestructableSkin.txt'];
-const DOODAD_PROFILE_PATHS = ['Doodads\\DoodadSkins.txt'];
-
 const OBJ_EDITOR_CONFIG: Record<string, { metaPath: string; profilePaths: string[] }> = {
     '.w3u': { metaPath: 'Units\\UnitMetaData.slk', profilePaths: UNIT_PROFILE_PATHS },
     '.w3t': { metaPath: 'Units\\UnitMetaData.slk', profilePaths: ITEM_PROFILE_PATHS },
@@ -214,6 +164,8 @@ interface ValueOption {
     detail?: string;
     iconPath?: string;
     objectKey?: string;
+    source?: 'import';
+    hash?: string;
 }
 
 interface ObjEditorData {
@@ -254,17 +206,10 @@ interface MetaField {
     useCreep: boolean;
 }
 
-interface SlkTable {
-    rows: Map<string, Record<string, string>>;
-}
-
-type ProfileTable = Map<string, Record<string, string>>;
-
 const objEditorDataCache = new Map<string, Promise<ObjEditorData | undefined>>();
 const objSummaryDataCache = new Map<string, Promise<ObjSummaryData | undefined>>();
 const objProfileCache = new Map<string, Promise<ProfileTable>>();
 const objCatalogCache = new Map<string, Promise<ObjValueCatalog>>();
-let worldEditStringsPromise: Promise<Map<string, string>> | undefined;
 
 const CATALOG_EXTS = ['.w3u', '.w3t', '.w3a', '.w3b', '.w3d', '.w3h', '.w3q'];
 const RACE_OPTIONS: ValueOption[] = [
@@ -488,7 +433,9 @@ function annotateEditable(row: PreviewMod, mod: ObjModMod | undefined, wts: Trig
         row.editValue = resolved.value === undefined ? '' : String(resolved.value);
     } else {
         row.editable = true;
-        row.editValue = String(mod.value);
+        row.editValue = (mod.varType === 'real' || mod.varType === 'unreal') && typeof mod.value === 'number'
+            ? formatReal(mod.value)
+            : String(mod.value);
     }
 }
 
@@ -878,10 +825,21 @@ function normalizeModelPath(value: string | undefined): string | undefined {
     return /\.(mdx|mdl)$/i.test(normalized) ? normalized : `${normalized}.mdl`;
 }
 
+/**
+ * Render a real (float) without its float32→float64 round-trip noise. WC3 reals are stored as
+ * 32-bit floats; read into JS doubles they show spurious tails like 0.30000001192092896.
+ * Rounding to 7 significant digits recovers the intended value (e.g. "0.3", "1.8") losslessly
+ * for float32, and the parseFloat trims trailing zeros.
+ */
+function formatReal(value: number): string {
+    if (!Number.isFinite(value)) return String(value);
+    return String(parseFloat(value.toPrecision(7)));
+}
+
 function formatValue(mod: ObjModMod, triggerStrings: TriggerStringTable): { value: string; source?: string; missingSource?: boolean } {
     if (typeof mod.value === 'number') {
         if (mod.varType === 'real' || mod.varType === 'unreal') {
-            return { value: mod.value.toPrecision(6).replace(/\.?0+$/, '') };
+            return { value: formatReal(mod.value) };
         }
         return { value: String(mod.value) };
     }
@@ -1073,11 +1031,18 @@ async function loadObjValueCatalogUncached(): Promise<ObjValueCatalog> {
             const objectOption = { value: id, label, detail: id };
             if (!objects.has(id.toLowerCase())) objects.set(id.toLowerCase(), objectOption);
 
+            // The owning object's button art — used as the visual proxy for its model in the picker.
+            let ownerIcon: string | undefined;
+            for (const [key, value] of Object.entries(row)) {
+                const ic = normalizeProfileIconPath(key, value);
+                if (ic) { ownerIcon = ic; break; }
+            }
+
             for (const [key, value] of Object.entries(row)) {
                 const icon = normalizeProfileIconPath(key, value);
                 if (icon) addAssetOption(iconMap, icon, label, id);
                 const model = normalizeProfileModelPath(key, value);
-                if (model) addAssetOption(modelMap, model, label, id);
+                if (model) addAssetOption(modelMap, model, label, id, ownerIcon);
                 const pathing = normalizeProfilePathingPath(key, value);
                 if (pathing) addAssetOption(pathingMap, pathing, label, id);
             }
@@ -1123,7 +1088,22 @@ function resolveProfileDisplayName(row: Record<string, string>, worldStrings: Ma
     return value ? resolveWorldEditString(value, worldStrings) : undefined;
 }
 
-function addAssetOption(target: Map<string, ValueOption>, assetPath: string, label: string, ownerId: string): void {
+/** Collapse options whose file basename (sans extension/folder) is identical — e.g. SD/HD/.blp/.dds
+ *  variants of the same icon. Keeps the first occurrence (imports are prepended, so they win). */
+function dedupeByHashOrBasename(options: ValueOption[]): ValueOption[] {
+    const seen = new Set<string>();
+    const out: ValueOption[] = [];
+    for (const opt of options) {
+        const base = (opt.value.split(/[\\/]/).pop() ?? opt.value).replace(/\.[^.]+$/, '').toLowerCase();
+        const key = opt.hash ? `hash:${opt.hash}` : `base:${base}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(opt);
+    }
+    return out;
+}
+
+function addAssetOption(target: Map<string, ValueOption>, assetPath: string, label: string, ownerId: string, ownerIcon?: string): void {
     const normalized = assetPath.replace(/\//g, '\\');
     const key = normalized.toLowerCase();
     if (target.has(key)) return;
@@ -1131,7 +1111,8 @@ function addAssetOption(target: Map<string, ValueOption>, assetPath: string, lab
         value: normalized,
         label: `${assetLabel(normalized, 'asset')} - ${label}`,
         detail: `${ownerId} - ${normalized}`,
-        iconPath: normalizeIconPath(normalized),
+        // Image assets are their own thumbnail; models/pathing fall back to the owning object's icon.
+        iconPath: normalizeIconPath(normalized) ?? ownerIcon,
     });
 }
 
@@ -1145,6 +1126,8 @@ function normalizeProfileModelPath(key: string, value: string): string | undefin
     if (!/(file|model)/.test(key.toLowerCase())) return undefined;
     const first = firstAssetPath(value);
     if (!first || (!/[\\/]/.test(first) && !/\.(mdx|mdl)$/i.test(first))) return undefined;
+    // A texture/sound/image in a file-keyed field is not a model — don't fabricate "x.blp.mdl".
+    if (/\.(blp|dds|tga|png|jpe?g|wav|mp3|ogg|flac|txt|slk|fdf|toc)$/i.test(first)) return undefined;
     return normalizeModelPath(first);
 }
 
@@ -1168,15 +1151,6 @@ function addPathingFallbacks(target: Map<string, ValueOption>): void {
 
 function sortOptions(options: ValueOption[]): ValueOption[] {
     return options.sort((a, b) => a.label.localeCompare(b.label) || a.value.localeCompare(b.value));
-}
-
-async function loadProfilePaths(profilePaths: string[]): Promise<ProfileTable> {
-    const profile = new Map<string, Record<string, string>>();
-    await Promise.all(profilePaths.map(async (profilePath) => {
-        const buf = await readGameData(profilePath);
-        if (buf) mergeProfile(profile, parseProfile(buf.toString('utf8')));
-    }));
-    return profile;
 }
 
 function isMetaRowRelevant(row: Record<string, string>, ext: string): boolean {
@@ -1221,126 +1195,6 @@ function splitCodes(value: string | undefined): string[] | undefined {
     return codes.length ? codes : undefined;
 }
 
-async function loadWorldEditStrings(): Promise<Map<string, string>> {
-    if (worldEditStringsPromise) return worldEditStringsPromise;
-    worldEditStringsPromise = loadWorldEditStringsUncached();
-    return worldEditStringsPromise;
-}
-
-async function loadWorldEditStringsUncached(): Promise<Map<string, string>> {
-    const strings = new Map<string, string>();
-    await Promise.all(['UI\\WorldEditStrings.txt', 'UI\\WorldEditGameStrings.txt'].map(async (assetPath) => {
-        const buf = await readGameData(assetPath);
-        if (buf) {
-            for (const [key, value] of parseKeyValues(buf.toString('utf8'))) strings.set(key, value);
-        }
-    }));
-    return strings;
-}
-
-function resolveWorldEditString(value: string, strings: Map<string, string>): string | undefined {
-    if (!value.startsWith('WESTRING_')) return value;
-    const seen = new Set<string>();
-    let current = value;
-    while (current.startsWith('WESTRING_') && !seen.has(current)) {
-        seen.add(current);
-        const next = strings.get(current);
-        if (!next) break;
-        current = next;
-    }
-    return current;
-}
-
-async function readGameData(assetPath: string): Promise<Buffer | null> {
-    return findGameAsset(assetPath, (msg) => console.log(`[wurst-obj-editor] ${msg}`));
-}
-
-function parseSlk(text: string): SlkTable {
-    const headers = new Map<number, string>();
-    const rowsByY = new Map<number, Record<string, string>>();
-    let currentY = 0;
-    for (const line of text.split(/\r?\n/)) {
-        if (!line.startsWith('C;')) continue;
-        const x = Number(/(?:^|;)X(-?\d+)/.exec(line)?.[1]);
-        const yMatch = /(?:^|;)Y(-?\d+)/.exec(line);
-        if (yMatch) currentY = Number(yMatch[1]);
-        if (!Number.isFinite(x) || currentY <= 0) continue;
-        const rawValue = /(?:^|;)K([\s\S]*)$/.exec(line)?.[1];
-        if (rawValue === undefined) continue;
-        const value = parseSlkValue(rawValue);
-        if (currentY === 1) {
-            headers.set(x, value);
-        } else {
-            const header = headers.get(x) ?? String(x);
-            const row = rowsByY.get(currentY) ?? {};
-            row[header] = value;
-            rowsByY.set(currentY, row);
-        }
-    }
-
-    const rows = new Map<string, Record<string, string>>();
-    for (const row of rowsByY.values()) {
-        const id = row.ID || row.unitID || row.itemID || row.alias || row.doodID || row.destID || row.upgradeID || row.buffID;
-        if (id) rows.set(id, row);
-    }
-    return { rows };
-}
-
-function parseSlkValue(rawValue: string): string {
-    const trimmed = rawValue.trim();
-    if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
-        return trimmed.slice(1, -1).replace(/""/g, '"');
-    }
-    return trimmed;
-}
-
-function parseProfile(text: string): ProfileTable {
-    const profile = new Map<string, Record<string, string>>();
-    let current: Record<string, string> | undefined;
-    for (const rawLine of text.split(/\r?\n/)) {
-        const line = rawLine.replace(/^\uFEFF/, '').trim();
-        if (!line || line.startsWith('//')) continue;
-        const section = /^\[([^\]]+)\]$/.exec(line)?.[1];
-        if (section) {
-            current = profile.get(section) ?? {};
-            profile.set(section, current);
-            continue;
-        }
-        const eq = line.indexOf('=');
-        if (!current || eq <= 0) continue;
-        const key = line.slice(0, eq).trim();
-        const value = stripTxtQuotes(line.slice(eq + 1).trim());
-        current[key] = value;
-    }
-    return profile;
-}
-
-function parseKeyValues(text: string): Array<[string, string]> {
-    const entries: Array<[string, string]> = [];
-    for (const rawLine of text.split(/\r?\n/)) {
-        const line = rawLine.trim();
-        if (!line || line.startsWith('//') || line.startsWith('[')) continue;
-        const eq = line.indexOf('=');
-        if (eq <= 0) continue;
-        entries.push([line.slice(0, eq).trim(), stripTxtQuotes(line.slice(eq + 1).trim())]);
-    }
-    return entries;
-}
-
-function mergeProfile(target: ProfileTable, source: ProfileTable): void {
-    for (const [section, fields] of source) {
-        const merged = { ...(target.get(section) ?? {}) };
-        for (const [key, value] of Object.entries(fields)) {
-            if (value !== '') merged[key] = value;
-        }
-        target.set(section, merged);
-    }
-}
-
-function stripTxtQuotes(value: string): string {
-    return value.startsWith('"') && value.endsWith('"') ? value.slice(1, -1) : value;
-}
-
 function convertSlkName(slkName: string): string | undefined {
     return SLK_NAME_TO_PATH[slkName];
 }
@@ -1353,7 +1207,7 @@ function buildObjLoadingHtml(fileName: string): string {
     });
 }
 
-async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPreviewContext, wtsWarning?: string): Promise<string> {
+async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPreviewContext, wtsWarning?: string, mdxViewerUri?: string): Promise<string> {
     const typeLabel = TYPE_LABELS[parsed.ext.slice(1)] ?? parsed.ext.slice(1).toUpperCase();
     const triggerStrings = loadTriggerStringsForUri(context.uri);
     const { objects, metadataSource } = await buildModel(parsed, triggerStrings);
@@ -1375,7 +1229,7 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
         : '';
 
     return buildPage({
-        csp: `default-src 'none'; img-src ${context.webview.cspSource} data:; style-src 'unsafe-inline'; script-src 'unsafe-inline';`,
+        csp: `default-src 'none'; img-src ${context.webview.cspSource} data:; style-src 'unsafe-inline'; script-src 'unsafe-inline' ${context.webview.cspSource};`,
         title: escapeHtml(fileName),
         extraCss: `
 :root {
@@ -1598,6 +1452,247 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   overflow: hidden;
 }
 .asset-mini img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.asset-mini.model-thumb {
+  display: inline-block;
+  padding: 0;
+  vertical-align: middle;
+}
+.asset-open {
+  width: auto;
+  min-width: 22px;
+  padding: 0 5px;
+  height: 22px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.asset-open:hover {
+  background: var(--btn-hover, var(--hover));
+  color: var(--fg);
+  border-color: var(--vscode-textLink-foreground, var(--border));
+}
+.mpv-box {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  width: 220px;
+  z-index: 50;
+  background: var(--sidebar, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  overflow: hidden;
+}
+.mpv-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--vscode-editorGroupHeader-tabsBackground, var(--sidebar));
+  cursor: grab;
+  user-select: none;
+}
+.mpv-head.dragging { cursor: grabbing; }
+.mpv-ctl {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 2px;
+}
+.mpv-ctl:hover { background: var(--btn-hover, var(--hover)); color: var(--fg); }
+.mpv-help, #mpv-help { cursor: help; }
+.mpv-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mpv-close {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 2px;
+}
+.mpv-close:hover { background: var(--btn-hover, var(--hover)); color: var(--fg); }
+.mpv-anim {
+  flex: 0 1 auto;
+  max-width: 110px;
+  height: 18px;
+  font-size: 10px;
+  color: var(--input-fg);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: 2px;
+  padding: 0 2px;
+}
+.mpv-viewport { position: relative; width: 220px; height: 220px; background: color-mix(in srgb, var(--fg) 6%, transparent); cursor: grab; }
+.mpv-viewport:active { cursor: grabbing; }
+.mpv-canvas { display: block; width: 100%; height: 100%; }
+.mpv-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.mpv-status.hidden { display: none; }
+.picker-row { display: flex; gap: 4px; align-items: center; }
+.picker-row .edit-raw { flex: 1; min-width: 0; }
+.browse-btn {
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 11px;
+  color: var(--btn-fg, var(--fg));
+  background: var(--btn-bg, var(--input-bg));
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.browse-btn:hover { background: var(--btn-hover, var(--hover)); }
+.ab-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.5);
+}
+.ab-overlay[hidden] { display: none; }
+.ab-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(820px, 92vw);
+  height: min(620px, 88vh);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  overflow: hidden;
+}
+.ab-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar, var(--bg));
+}
+.ab-tabs { display: flex; gap: 2px; flex: 0 0 auto; }
+.ab-tab {
+  font: inherit;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.ab-tab:hover { background: var(--hover); color: var(--fg); }
+.ab-tab.active { background: var(--btn-bg, var(--active)); color: var(--active-fg, var(--fg)); border-color: var(--vscode-focusBorder, var(--border)); }
+.ab-search {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 3px 8px;
+  color: var(--input-fg);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: 3px;
+  font: inherit;
+}
+.ab-source {
+  flex: 0 0 auto;
+  height: 28px;
+  color: var(--input-fg);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: 3px;
+  font: inherit;
+  font-size: 11px;
+}
+.ab-count { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.ab-close {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 2px;
+}
+.ab-close:hover { background: var(--btn-hover, var(--hover)); color: var(--fg); }
+.ab-grid {
+  flex: 1;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 6px;
+  padding: 8px;
+  align-content: start;
+}
+.ab-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 3px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: center;
+}
+.ab-card:hover { border-color: var(--vscode-focusBorder, #007fd4); background: var(--hover); }
+.ab-card .object-icon { width: 48px; height: 48px; }
+.model-thumb img { object-fit: contain; }
+.model-thumb.pending {
+  position: relative;
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+.model-thumb.pending::after {
+  content: "";
+  position: absolute;
+  left: calc(50% - 8px);
+  top: calc(50% - 8px);
+  width: 16px;
+  height: 16px;
+  border: 2px solid color-mix(in srgb, var(--fg) 22%, transparent);
+  border-top-color: var(--fg);
+  border-radius: 50%;
+  animation: wv-spin 0.8s linear infinite;
+}
+.thumb-render-canvas {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  width: 96px;
+  height: 96px;
+  pointer-events: none;
+  opacity: 0;
+}
+.ab-card-label { font-size: 10px; line-height: 1.15; opacity: .75; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ab-empty { color: var(--muted); font-style: italic; padding: 24px; grid-column: 1 / -1; text-align: center; }
 .picker-note {
   color: var(--muted);
   font-size: 11px;
@@ -2088,6 +2183,45 @@ ${warningBanner}
   <div class="splitter" id="splitter" title="Drag to resize"></div>
   <main id="details" class="details"></main>
 </div>
+<div id="mpv-box" class="mpv-box" hidden>
+  <div class="mpv-head" id="mpv-head">
+    <span id="mpv-name" class="mpv-name">Model</span>
+    <select id="mpv-anim" class="mpv-anim" title="Animation" hidden></select>
+    <button id="mpv-play" class="mpv-ctl" type="button" title="Pause" aria-label="Play/pause">⏸</button>
+    <button id="mpv-restart" class="mpv-ctl" type="button" title="Restart animation" aria-label="Restart">⟲</button>
+    <button id="mpv-help" class="mpv-ctl" type="button" tabindex="-1" aria-label="Controls help" title="Drag header to move · drag model to orbit · scroll to zoom · dropdown switches animation · ⟲ replays from start">?</button>
+    <button id="mpv-close" class="mpv-close" type="button" title="Close preview" aria-label="Close preview">✕</button>
+  </div>
+  <div id="mpv-viewport" class="mpv-viewport">
+    <canvas id="mpv-canvas" class="mpv-canvas"></canvas>
+    <canvas id="mpv-gizmo" width="1" height="1" hidden></canvas>
+    <div id="mpv-status" class="mpv-status"></div>
+  </div>
+</div>
+<canvas id="model-thumb-canvas" class="thumb-render-canvas" width="96" height="96" aria-hidden="true"></canvas>
+<div id="model-thumb-viewport" class="thumb-render-canvas" aria-hidden="true"></div>
+<div id="ab-overlay" class="ab-overlay" hidden>
+  <div class="ab-modal" role="dialog" aria-label="Asset browser">
+    <div class="ab-head">
+      <div class="ab-tabs" id="ab-tabs">
+        <button class="ab-tab" type="button" data-tab="model">Models</button>
+        <button class="ab-tab" type="button" data-tab="icon">Icons</button>
+        <button class="ab-tab" type="button" data-tab="pathing">Pathing</button>
+      </div>
+      <input id="ab-search" class="ab-search" placeholder="Search game assets…" aria-label="Search assets">
+      <select id="ab-source" class="ab-source" title="Filter by source" aria-label="Filter by source">
+        <option value="all">All</option>
+        <option value="wc3">WC3</option>
+        <option value="import">Imports</option>
+      </select>
+      <span id="ab-count" class="ab-count"></span>
+      <button id="ab-close" class="ab-close" type="button" title="Close (Esc)" aria-label="Close">✕</button>
+    </div>
+    <div id="ab-grid" class="ab-grid"></div>
+  </div>
+</div>
+${mdxViewerUri ? `<script src="${mdxViewerUri}"></script>` : ''}
+${FUZZY_SEARCH_SCRIPT}
 <script>
 const objects = ${safeJson};
 let selectedKey = ${JSON.stringify(firstKey)};
@@ -2103,6 +2237,15 @@ const pendingDetails = new Set();
 const collapsedGroups = new Set();
 const collapsedRaces = new Set();
 let iconObserver;
+let modelThumbObserver;
+const pendingModelThumbs = new Set();
+const loadedModelThumbs = new Map();
+const missingModelThumbs = new Set();
+const modelThumbQueue = [];
+let modelThumbJob = null;
+let modelThumbInited = false;
+let modelThumbTextureTimer = 0;
+let modelThumbCancelGeneration = 0;
 
 const tree = document.getElementById('tree');
 const details = document.getElementById('details');
@@ -2236,10 +2379,16 @@ function pickerEditorHtml(mod, mi, v) {
       '</select></div>';
   }
   const listId = 'pick-' + mi;
+  const browse = mod.assetType
+    ? '<button type="button" class="browse-btn" data-browse="' + mi + '" title="Browse game assets visually">Browse…</button>'
+    : '';
   return '<div class="value-editor single">' +
-    '<input class="edit-raw" type="text" list="' + listId + '" data-mi="' + mi + '" spellcheck="false" aria-label="Choose from Warcraft III game data" value="' + esc(v) + '">' +
+    '<div class="picker-row">' +
+      '<input class="edit-raw" type="text" list="' + listId + '" data-mi="' + mi + '" spellcheck="false" aria-label="Choose from Warcraft III game data" value="' + esc(v) + '">' +
+      browse +
+    '</div>' +
     '<datalist id="' + listId + '">' + datalistOptionsHtml(mod.options) + '</datalist>' +
-    '<div class="picker-note">Start typing to choose from Warcraft III game data.</div>' +
+    '<div class="picker-note">Start typing' + (mod.assetType ? ', or click Browse for a visual picker.' : ' to choose from Warcraft III game data.') + '</div>' +
   '</div>';
 }
 
@@ -2248,7 +2397,14 @@ function assetMiniHtml(mod, mi) {
   if (mod.assetType === 'icon') {
     return '<span class="asset-mini object-icon loading" data-key="' + esc(selectedKey + ':field:' + mi) + '" data-icon="' + esc(mod.assetPath) + '" title="' + esc(mod.assetPath) + '"><span class="icon-spinner"></span></span>';
   }
-  return '<span class="asset-mini" title="' + esc(mod.assetPath) + '">' + esc(mod.assetType === 'model' ? '3D' : 'PAT') + '</span>';
+  // Model: clickable badge that renders an inline 3D preview square (no separate window).
+  if (mod.assetType === 'model') {
+    return '<button type="button" class="asset-mini asset-open" data-model-preview="' + esc(mod.assetPath) + '" title="' + esc('Preview model: ' + mod.assetPath) + '">' +
+      '<span class="asset-mini model-thumb pending" data-key="' + esc(selectedKey + ':model-field:' + mi) + '" data-model="' + esc(mod.assetPath) + '"></span>' +
+      '<span>3D</span></button>';
+  }
+  // Pathing texture: open the image preview.
+  return '<button type="button" class="asset-mini asset-open" data-open-asset="' + esc(mod.assetPath) + '" title="' + esc('Open texture: ' + mod.assetPath) + '">▶ PAT</button>';
 }
 
 function resolvedItemsHtml(mod) {
@@ -2299,12 +2455,11 @@ function editorHtml(mod, mi) {
   const picker = pickerEditorHtml(mod, mi, v);
   if (picker) return picker;
   const numType = mod.varType === 'int' || mod.varType === 'real' || mod.varType === 'unreal';
-  // Use a number input only when the value is actually numeric — otherwise a number input renders
-  // blank (e.g. a stray comma value). Fall back to text so it stays visible/editable.
-  if (numType && (v === '' || isFinite(Number(v)))) {
-    return '<div class="value-editor single"><input class="edit-raw" type="number" step="' + (mod.varType === 'int' ? '1' : 'any') + '" data-mi="' + mi + '" value="' + esc(v) + '"></div>';
-  }
-  return '<div class="value-editor single"><input class="edit-raw" type="text" data-mi="' + mi + '" spellcheck="false" value="' + esc(v) + '"></div>';
+  // NOTE: use a plain text input (not type="number") so the '.' decimal is locale-independent —
+  // these are raw float/int game values, not locale-formatted numbers (German shows 1,5 for a
+  // number input, which corrupts the value). inputmode hints a numeric keypad on touch.
+  const mode = numType ? ' inputmode="' + (mod.varType === 'int' ? 'numeric' : 'decimal') + '"' : '';
+  return '<div class="value-editor single"><input class="edit-raw" type="text"' + mode + ' data-mi="' + mi + '" spellcheck="false" value="' + esc(v) + '"></div>';
 }
 
 // Compact, click-to-edit view shown by default for every editable cell (keeps the 700-row table light).
@@ -2431,8 +2586,8 @@ function objectIconHtml(obj, extraClass) {
 
 function matches(obj) {
   if (!query) return true;
-  const haystack = [obj.displayName, obj.baseId, obj.newId, obj.displaySource, obj.group].filter(Boolean).join(' ').toLowerCase();
-  return haystack.includes(query);
+  const haystack = [obj.displayName, obj.baseId, obj.newId, obj.displaySource, obj.group].filter(Boolean).join(' ');
+  return fuzzyMatch(query, haystack);
 }
 
 function renderTree() {
@@ -2490,6 +2645,7 @@ function selectObject(key) {
   selectedKey = key;
   setActiveRow(key);
   renderDetails();
+  hideModelPreview(); // the open preview belongs to the previous object — don't leave it stale
 }
 
 // Delegated tree handlers, wired once — survive innerHTML rebuilds, no per-row listener churn.
@@ -2618,6 +2774,348 @@ function updateIconElements(key, updater) {
   }
 }
 
+function observeModelThumbs(root) {
+  if (!modelThumbObserver) {
+    modelThumbObserver = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        if (!isModelThumbActuallyVisible(entry.target)) continue;
+        modelThumbObserver.unobserve(entry.target);
+        requestModelThumb(entry.target);
+      }
+    }, { root: null, rootMargin: '0px' });
+  }
+  for (const el of (root || document).querySelectorAll('.model-thumb[data-model]')) {
+    const key = el.getAttribute('data-key') || '';
+    if (loadedModelThumbs.has(key)) {
+      setModelThumbLoaded(el, loadedModelThumbs.get(key));
+    } else if (missingModelThumbs.has(key)) {
+      setModelThumbMissing(el);
+    } else if (isModelThumbActuallyVisible(el)) {
+      requestModelThumb(el);
+    } else {
+      modelThumbObserver.observe(el);
+    }
+  }
+}
+
+function isAssetBrowserModelKey(key) {
+  return String(key || '').indexOf('ab-model:') === 0;
+}
+
+function isAssetBrowserOpen() {
+  const ov = document.getElementById('ab-overlay');
+  return !!ov && !ov.hidden;
+}
+
+function rectsIntersect(a, b) {
+  return a.right > b.left && a.left < b.right && a.bottom > b.top && a.top < b.bottom;
+}
+
+function isModelThumbActuallyVisible(el) {
+  if (!el || !el.isConnected) return false;
+  const key = el.getAttribute('data-key') || '';
+  const rect = el.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  if (isAssetBrowserModelKey(key)) {
+    if (!isAssetBrowserOpen() || abActiveTab !== 'model') return false;
+    const grid = document.getElementById('ab-grid');
+    if (!grid || !grid.contains(el)) return false;
+    return rectsIntersect(rect, grid.getBoundingClientRect());
+  }
+  return rectsIntersect(rect, { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight });
+}
+
+function hasVisibleModelThumbElement(key) {
+  for (const el of document.querySelectorAll('.model-thumb[data-key]')) {
+    if ((el.getAttribute('data-key') || '') !== key) continue;
+    if (isModelThumbActuallyVisible(el)) return true;
+  }
+  return false;
+}
+
+function requestModelThumb(el) {
+  const key = el.getAttribute('data-key') || '';
+  const modelPath = el.getAttribute('data-model') || '';
+  if (!isModelThumbActuallyVisible(el)) return;
+  if (isAssetBrowserModelKey(key) && !isAssetBrowserOpen()) return;
+  if (!key || !modelPath || pendingModelThumbs.has(key) || loadedModelThumbs.has(key) || missingModelThumbs.has(key)) return;
+  pendingModelThumbs.add(key);
+  el.classList.add('pending');
+  vscodeApi.postMessage({ type: 'loadModelThumb', key, path: modelPath });
+}
+
+function setModelThumbLoaded(el, uri) {
+  el.classList.remove('pending', 'missing');
+  el.innerHTML = '<img loading="lazy" src="' + esc(uri) + '" alt="' + esc(el.getAttribute('data-model') || '') + '">';
+}
+
+function setModelThumbMissing(el) {
+  el.classList.remove('pending');
+  el.classList.add('missing');
+}
+
+function updateModelThumbElements(key, updater) {
+  for (const el of document.querySelectorAll('.model-thumb')) {
+    if ((el.getAttribute('data-key') || '') === key) updater(el);
+  }
+}
+
+function modelThumbProfile(phase, detail) {
+  if (!modelThumbJob) return;
+  const now = performance.now();
+  const previous = modelThumbJob.lastMarkAt || modelThumbJob.startedAt || now;
+  modelThumbJob.lastMarkAt = now;
+  vscodeApi.postMessage({
+    type: 'modelThumbProfile',
+    key: modelThumbJob.key,
+    phase: phase,
+    elapsedMs: Math.round(now - modelThumbJob.startedAt),
+    deltaMs: Math.round(now - previous),
+    detail: detail || '',
+  });
+}
+
+function modelThumbEnsureInit() {
+  const v = mpvViewer();
+  if (!v) return false;
+  if (modelThumbInited) return true;
+  const canvas = document.getElementById('model-thumb-canvas');
+  const viewport = document.getElementById('model-thumb-viewport');
+  if (!canvas || !viewport) return false;
+  const gizmo = document.createElement('canvas');
+  gizmo.width = 1; gizmo.height = 1;
+  v.init({
+    canvas3d: canvas,
+    gizmo: gizmo,
+    viewport: viewport,
+    vscodeApi: {
+      postMessage(msg) {
+        if (msg && msg.type === 'requestTextures') {
+          vscodeApi.postMessage(Object.assign({}, msg, { thumbKey: modelThumbJob ? modelThumbJob.key : '' }));
+        } else {
+          vscodeApi.postMessage(msg);
+        }
+      },
+    },
+    callbacks: {
+      onModelLoaded(info) { modelThumbOnLoaded((info && info.sequences) || [], (info && info.texturePaths) || []); },
+      onFrameUpdate() {},
+      onDebug() {},
+      onError() { finishModelThumb(false); },
+    },
+  });
+  modelThumbInited = true;
+  mpvInited = false;
+  return true;
+}
+
+function pickStandSequence(seqs) {
+  let pick = 0, best = Infinity;
+  seqs.forEach((s, i) => {
+    const n = (s.name || '').toLowerCase();
+    if (n.indexOf('stand') >= 0 && n.length < best) { best = n.length; pick = i; }
+  });
+  return pick;
+}
+
+function modelThumbOnLoaded(seqs, texturePaths) {
+  if (!modelThumbJob) return;
+  modelThumbProfile('model-loaded', 'textures=' + ((texturePaths && texturePaths.length) || 0));
+  const v = mpvViewer();
+  if (v && seqs.length) {
+    const pick = pickStandSequence(seqs);
+    const seq = seqs[pick];
+    try {
+      v.setSequence(pick);
+      v.setFrame(seq ? Math.round(seq.start + Math.max(0, seq.end - seq.start) * 0.2) : 0);
+      v.resetCamera();
+      v.zoomOut();
+      v.zoomOut();
+      v.setAutoplay(false);
+    } catch (e) {}
+  }
+  modelThumbJob.pendingTextures = new Set(texturePaths || []);
+  // Fallback only: normally texture replies reschedule this much sooner.
+  scheduleModelThumbCapture(texturePaths && texturePaths.length ? 450 : 0, 1);
+}
+
+function scheduleModelThumbCapture(timeoutMs, frames) {
+  if (!modelThumbJob) return;
+  if (isAssetBrowserModelKey(modelThumbJob.key) && !hasVisibleModelThumbElement(modelThumbJob.key)) {
+    cancelCurrentModelThumb('not-visible-before-capture');
+    return;
+  }
+  modelThumbProfile('schedule-capture', 'delay=' + timeoutMs + 'ms pendingTextures=' + (modelThumbJob.pendingTextures ? modelThumbJob.pendingTextures.size : 0));
+  clearTimeout(modelThumbTextureTimer);
+  const waitFrames = Math.max(0, frames == null ? 1 : frames);
+  const arm = () => {
+    let remaining = waitFrames;
+    const tick = () => {
+      if (!modelThumbJob) return;
+      if (isAssetBrowserModelKey(modelThumbJob.key) && !hasVisibleModelThumbElement(modelThumbJob.key)) {
+        cancelCurrentModelThumb('not-visible-capture');
+        return;
+      }
+      if (remaining-- > 0) requestAnimationFrame(tick);
+      else captureModelThumb();
+    };
+    requestAnimationFrame(tick);
+  };
+  if (timeoutMs > 0) modelThumbTextureTimer = setTimeout(arm, timeoutMs);
+  else arm();
+}
+
+function captureModelThumb() {
+  if (!modelThumbJob) return;
+  if (isAssetBrowserModelKey(modelThumbJob.key) && !hasVisibleModelThumbElement(modelThumbJob.key)) {
+    cancelCurrentModelThumb('not-visible-capture-start');
+    return;
+  }
+  modelThumbProfile('capture-start');
+  const canvas = document.getElementById('model-thumb-canvas');
+  if (!canvas) { finishModelThumb(false); return; }
+  try {
+    const out = cropModelThumbCanvas(canvas);
+    const dataUrl = out.toDataURL('image/webp', 0.58);
+    const marker = 'data:image/webp;base64,';
+    if (!dataUrl || dataUrl.indexOf(marker) !== 0) { finishModelThumb(false); return; }
+    vscodeApi.postMessage({
+      type: 'modelThumbRendered',
+      key: modelThumbJob.key,
+      cacheKey: modelThumbJob.cacheKey,
+      aliasKey: modelThumbJob.aliasKey,
+      webpBase64: dataUrl.slice(marker.length),
+    });
+    modelThumbProfile('capture-posted', 'bytes=' + Math.round((dataUrl.length - marker.length) * 0.75));
+    finishModelThumb(true);
+  } catch (e) {
+    modelThumbProfile('capture-error', String(e && e.message ? e.message : e));
+    finishModelThumb(false);
+  }
+}
+
+function cropModelThumbCanvas(canvas) {
+  const w = canvas.width, h = canvas.height;
+  const src = document.createElement('canvas');
+  src.width = w; src.height = h;
+  const sctx = src.getContext('2d');
+  sctx.drawImage(canvas, 0, 0);
+  const id = sctx.getImageData(0, 0, w, h);
+  const px = id.data;
+  let minX = w, minY = h, maxX = -1, maxY = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (px[(y * w + x) * 4 + 3] <= 8) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < minX || maxY < minY) return src;
+  const bw = maxX - minX + 1, bh = maxY - minY + 1;
+  const pad = Math.ceil(Math.max(bw, bh) * 0.16);
+  minX = Math.max(0, minX - pad); minY = Math.max(0, minY - pad);
+  maxX = Math.min(w - 1, maxX + pad); maxY = Math.min(h - 1, maxY + pad);
+  const cw = maxX - minX + 1, ch = maxY - minY + 1;
+  const out = document.createElement('canvas');
+  out.width = 96; out.height = 96;
+  const octx = out.getContext('2d');
+  octx.imageSmoothingEnabled = true;
+  octx.imageSmoothingQuality = 'high';
+  const scale = Math.min(96 / cw, 96 / ch);
+  const dw = Math.max(1, Math.round(cw * scale));
+  const dh = Math.max(1, Math.round(ch * scale));
+  octx.clearRect(0, 0, 96, 96);
+  octx.drawImage(src, minX, minY, cw, ch, Math.round((96 - dw) / 2), Math.round((96 - dh) / 2), dw, dh);
+  return out;
+}
+
+function finishModelThumb(rendered) {
+  if (!modelThumbJob) return;
+  const key = modelThumbJob.key;
+  clearTimeout(modelThumbTextureTimer);
+  if (!rendered) {
+    pendingModelThumbs.delete(key);
+    missingModelThumbs.add(key);
+    updateModelThumbElements(key, setModelThumbMissing);
+  }
+  modelThumbJob = null;
+  setTimeout(processModelThumbQueue, 40);
+}
+
+function cancelCurrentModelThumb(reason) {
+  if (!modelThumbJob) return;
+  const key = modelThumbJob.key;
+  modelThumbProfile(reason || 'cancelled');
+  clearTimeout(modelThumbTextureTimer);
+  pendingModelThumbs.delete(key);
+  modelThumbJob = null;
+  setTimeout(processModelThumbQueue, 0);
+}
+
+function cancelAssetBrowserModelThumbs() {
+  modelThumbCancelGeneration++;
+  modelThumbQueue.splice(0, modelThumbQueue.length, ...modelThumbQueue.filter(job => !isAssetBrowserModelKey(job.key)));
+  for (const key of Array.from(pendingModelThumbs)) {
+    if (isAssetBrowserModelKey(key)) pendingModelThumbs.delete(key);
+  }
+  if (modelThumbJob && isAssetBrowserModelKey(modelThumbJob.key)) {
+    cancelCurrentModelThumb('cancelled');
+  }
+  setTimeout(processModelThumbQueue, 0);
+}
+
+function processModelThumbQueue() {
+  if (modelThumbJob || !modelThumbQueue.length) return;
+  const box = document.getElementById('mpv-box');
+  if (box && !box.hidden) return;
+  const job = modelThumbQueue.shift();
+  if (isAssetBrowserModelKey(job && job.key) && !isAssetBrowserOpen()) {
+    pendingModelThumbs.delete(job.key);
+    setTimeout(processModelThumbQueue, 0);
+    return;
+  }
+  if (isAssetBrowserModelKey(job && job.key) && !hasVisibleModelThumbElement(job.key)) {
+    pendingModelThumbs.delete(job.key);
+    setTimeout(processModelThumbQueue, 0);
+    return;
+  }
+  if (!job || loadedModelThumbs.has(job.key) || missingModelThumbs.has(job.key)) {
+    setTimeout(processModelThumbQueue, 0);
+    return;
+  }
+  if (!modelThumbEnsureInit()) {
+    pendingModelThumbs.delete(job.key);
+    missingModelThumbs.add(job.key);
+    updateModelThumbElements(job.key, setModelThumbMissing);
+    setTimeout(processModelThumbQueue, 40);
+    return;
+  }
+  modelThumbJob = job;
+  modelThumbJob.startedAt = performance.now();
+  modelThumbJob.lastMarkAt = modelThumbJob.startedAt;
+  modelThumbJob.generation = modelThumbCancelGeneration;
+  modelThumbProfile('load-start', String(job.fileName || ''));
+  try {
+    mpvViewer().loadModel(mpvB64ToArrayBuffer(job.mdxBase64), job.fileName || '', job.format || 'mdx');
+  } catch (e) {
+    finishModelThumb(false);
+  }
+}
+
+function applyMdxTexture(msg) {
+  const v = mpvViewer();
+  if (!v) return;
+  if (msg.rgbaBase64 && msg.width && msg.height) {
+    const rgba = base64ToBytes(msg.rgbaBase64);
+    v.onTextureImageData(msg.path, new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength), msg.width, msg.height));
+  } else {
+    v.onTexture(msg.path, msg.blpBase64 ? mpvB64ToArrayBuffer(msg.blpBase64) : null);
+  }
+}
+
 window.addEventListener('message', event => {
   const msg = event.data || {};
   if (msg.type === 'objectIconLoaded') {
@@ -2631,6 +3129,27 @@ window.addEventListener('message', event => {
     pendingIcons.delete(msg.key);
     missingIcons.add(msg.key);
     updateIconElements(msg.key, setIconMissing);
+  } else if (msg.type === 'modelThumbLoaded') {
+    pendingModelThumbs.delete(msg.key);
+    loadedModelThumbs.set(msg.key, msg.uri);
+    updateModelThumbElements(msg.key, el => setModelThumbLoaded(el, msg.uri));
+  } else if (msg.type === 'modelThumbMissing') {
+    pendingModelThumbs.delete(msg.key);
+    missingModelThumbs.add(msg.key);
+    updateModelThumbElements(msg.key, setModelThumbMissing);
+  } else if (msg.type === 'modelThumbRender') {
+    if (isAssetBrowserModelKey(msg.key) && (!isAssetBrowserOpen() || !hasVisibleModelThumbElement(msg.key))) {
+      pendingModelThumbs.delete(msg.key);
+      return;
+    }
+    if (!msg.key || !msg.cacheKey || !msg.mdxBase64) {
+      pendingModelThumbs.delete(msg.key);
+      missingModelThumbs.add(msg.key);
+      updateModelThumbElements(msg.key, setModelThumbMissing);
+    } else if (!loadedModelThumbs.has(msg.key) && !missingModelThumbs.has(msg.key)) {
+      modelThumbQueue.push(msg);
+      processModelThumbQueue();
+    }
   } else if (msg.type === 'objectDetailsLoaded') {
     pendingDetails.delete(msg.key);
     detailCache.set(msg.key, msg.mods || []);
@@ -2669,8 +3188,262 @@ window.addEventListener('message', event => {
         ? 'Unsaved changes — Ctrl+S to save.'
         : 'Existing overrides can be edited. Ctrl+S to save.';
     }
+  } else if (msg.type === 'mdxModel') {
+    mpvStatus('');
+    if (mpvViewer()) { mpvViewer().loadModel(mpvB64ToArrayBuffer(msg.mdxBase64), msg.fileName || '', msg.format || 'mdx'); mpvSetPlaying(true); }
+  } else if (msg.type === 'assetCatalog') {
+    abCatalog = { model: msg.models || [], icon: msg.icons || [], pathing: msg.pathing || [] };
+    const ov = document.getElementById('ab-overlay');
+    if (ov && !ov.hidden) { const s = document.getElementById('ab-search'); renderAssetGrid(s ? s.value : ''); }
+  } else if (msg.type === 'mdxModelMissing') {
+    mpvStatus('Not found in map or game files:\\n' + (msg.path || '') + '\\n(tried .mdx/.mdl — see "Log (Extension Host)" for CASC details)');
+  } else if (msg.type === 'mdxTexture') {
+    if (modelThumbJob) {
+      if (msg.thumbKey && msg.thumbKey !== modelThumbJob.key) return;
+      if (!msg.thumbKey && modelThumbJob.pendingTextures && modelThumbJob.pendingTextures.has(msg.path)) return;
+      if (modelThumbJob.pendingTextures && !modelThumbJob.pendingTextures.has(msg.path)) return;
+      applyMdxTexture(msg);
+      if (modelThumbJob.pendingTextures) modelThumbJob.pendingTextures.delete(msg.path);
+      modelThumbProfile('texture-received', 'remaining=' + (modelThumbJob.pendingTextures ? modelThumbJob.pendingTextures.size : 0) + ' path=' + (msg.path || ''));
+      if (!modelThumbJob.pendingTextures || modelThumbJob.pendingTextures.size === 0) scheduleModelThumbCapture(0, 1);
+      return;
+    }
+    if (msg.thumbKey) return;
+    applyMdxTexture(msg);
   }
 });
+
+// ── Inline model preview (control-less docked square) ────────────────────────
+let mpvInited = false;
+function mpvViewer() { return window.War3Viewer || null; }
+function mpvB64ToArrayBuffer(b64) {
+  const bytes = base64ToBytes(b64);
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+function mpvStatus(text) {
+  const el = document.getElementById('mpv-status');
+  if (!el) return;
+  el.textContent = text || '';
+  el.classList.toggle('hidden', !text);
+}
+function mpvEnsureInit() {
+  if (mpvInited) return mpvInited;
+  const v = mpvViewer();
+  if (!v) return false;
+  modelThumbInited = false;
+  v.init({
+    canvas3d: document.getElementById('mpv-canvas'),
+    gizmo: document.getElementById('mpv-gizmo'),
+    viewport: document.getElementById('mpv-viewport'),
+    vscodeApi: vscodeApi,
+    callbacks: {
+      onModelLoaded(info) { mpvStatus(''); mpvFillAnims((info && info.sequences) || []); },
+      onFrameUpdate() {},
+      onDebug() {},
+      onError(message) { mpvStatus('Preview error:\\n' + message); },
+    },
+  });
+  mpvInited = true;
+  return true;
+}
+// Populate the slim animation selector and default to a "Stand" sequence (movement anims drift).
+function mpvFillAnims(seqs) {
+  const sel = document.getElementById('mpv-anim');
+  if (!sel) return;
+  if (!seqs.length) { sel.hidden = true; sel.innerHTML = ''; return; }
+  sel.innerHTML = seqs.map((s, i) => '<option value="' + i + '">' + esc(s.name || ('Sequence ' + i)) + '</option>').join('');
+  // Prefer the shortest name containing "stand" (base Stand over Stand Ready / Stand Victory).
+  let pick = 0, best = Infinity;
+  seqs.forEach((s, i) => {
+    const n = (s.name || '').toLowerCase();
+    if (n.indexOf('stand') >= 0 && n.length < best) { best = n.length; pick = i; }
+  });
+  sel.value = String(pick);
+  sel.hidden = false;
+  const v = mpvViewer();
+  if (v) v.setSequence(pick);
+}
+function showModelPreview(path) {
+  if (!path) return;
+  if (modelThumbJob) finishModelThumb(false);
+  const box = document.getElementById('mpv-box');
+  const name = document.getElementById('mpv-name');
+  if (box) box.hidden = false;
+  if (name) { name.textContent = path.split(/[\\\\/]/).pop() || path; name.title = path; }
+  if (!mpvViewer()) { mpvStatus('Model viewer unavailable.'); return; }
+  mpvEnsureInit();
+  mpvStatus('Loading…');
+  vscodeApi.postMessage({ type: 'loadModel', path: path });
+}
+let mpvPlaying = true;
+function hideModelPreview() {
+  const box = document.getElementById('mpv-box');
+  if (box) box.hidden = true;
+  if (mpvViewer() && mpvInited) { try { mpvViewer().setAutoplay(false); } catch (e) {} }
+  setTimeout(processModelThumbQueue, 40);
+}
+function mpvSetPlaying(on) {
+  mpvPlaying = on;
+  const v = mpvViewer();
+  if (v && mpvInited) { try { v.setAutoplay(on); } catch (e) {} }
+  const btn = document.getElementById('mpv-play');
+  if (btn) { btn.textContent = on ? '⏸' : '▶'; btn.title = on ? 'Pause' : 'Play'; }
+}
+function mpvRestart() {
+  const v = mpvViewer();
+  if (!v || !mpvInited) return;
+  const anim = document.getElementById('mpv-anim');
+  try { v.setSequence(Number(anim && anim.value) || 0); v.setAutoplay(true); } catch (e) {}
+  mpvSetPlaying(true);
+}
+(function () {
+  const box = document.getElementById('mpv-box');
+  const head = document.getElementById('mpv-head');
+  const close = document.getElementById('mpv-close');
+  const play = document.getElementById('mpv-play');
+  const restart = document.getElementById('mpv-restart');
+  const anim = document.getElementById('mpv-anim');
+  if (close) close.addEventListener('click', hideModelPreview);
+  if (play) play.addEventListener('click', () => mpvSetPlaying(!mpvPlaying));
+  if (restart) restart.addEventListener('click', mpvRestart);
+  if (anim) anim.addEventListener('change', () => { mpvRestart(); });
+  // Drag the box by its header. Switches from the bottom-right dock to free positioning.
+  if (head && box) {
+    let dragging = false, ox = 0, oy = 0;
+    head.addEventListener('pointerdown', e => {
+      if (e.target.closest('button, select')) return; // don't start a drag from a control
+      dragging = true;
+      const r = box.getBoundingClientRect();
+      ox = e.clientX - r.left; oy = e.clientY - r.top;
+      box.style.right = 'auto'; box.style.bottom = 'auto';
+      box.style.left = r.left + 'px'; box.style.top = r.top + 'px';
+      head.classList.add('dragging');
+      head.setPointerCapture(e.pointerId);
+    });
+    head.addEventListener('pointermove', e => {
+      if (!dragging) return;
+      const w = box.offsetWidth, h = box.offsetHeight;
+      const nx = Math.max(0, Math.min(window.innerWidth - w, e.clientX - ox));
+      const ny = Math.max(0, Math.min(window.innerHeight - h, e.clientY - oy));
+      box.style.left = nx + 'px'; box.style.top = ny + 'px';
+    });
+    const end = e => { if (dragging) { dragging = false; head.classList.remove('dragging'); try { head.releasePointerCapture(e.pointerId); } catch (x) {} } };
+    head.addEventListener('pointerup', end);
+    head.addEventListener('pointercancel', end);
+  }
+})();
+
+// ── Asset browser (rich visual picker over WC3 game data, by category) ────────
+let abMi = -1;
+let abActiveTab = 'model';
+let abCatalog = null; // { model: [], icon: [], pathing: [] } — fetched once from the host
+function openAssetBrowser(mi) {
+  const mods = detailCache.get(selectedKey) || [];
+  const mod = mods[mi];
+  if (!mod) return;
+  abMi = mi;
+  // A model field defaults to Models; only icon/pathing fields default elsewhere — never offer the
+  // wrong asset class by default.
+  abActiveTab = (mod.assetType === 'icon' || mod.assetType === 'pathing') ? mod.assetType : 'model';
+  const search = document.getElementById('ab-search');
+  if (search) search.value = '';
+  const ov = document.getElementById('ab-overlay');
+  if (ov) ov.hidden = false;
+  updateAbTabs();
+  if (abCatalog) {
+    renderAssetGrid('');
+  } else {
+    const grid = document.getElementById('ab-grid');
+    if (grid) grid.innerHTML = '<div class="ab-empty">Loading game assets…</div>';
+    vscodeApi.postMessage({ type: 'requestAssetCatalog' });
+  }
+  if (search) search.focus();
+}
+function updateAbTabs() {
+  const tabs = document.getElementById('ab-tabs');
+  if (!tabs) return;
+  for (const b of tabs.querySelectorAll('.ab-tab')) b.classList.toggle('active', b.getAttribute('data-tab') === abActiveTab);
+}
+function abCurrentOptions() {
+  const opts = (abCatalog && abCatalog[abActiveTab]) || [];
+  const src = document.getElementById('ab-source');
+  const filter = src ? src.value : 'all';
+  if (filter === 'import') return opts.filter(o => o.source === 'import');
+  if (filter === 'wc3') return opts.filter(o => o.source !== 'import');
+  return opts;
+}
+function renderAssetGrid(q) {
+  const grid = document.getElementById('ab-grid');
+  if (!grid) return;
+  if (abActiveTab === 'model') cancelAssetBrowserModelThumbs();
+  const opts = abCurrentOptions();
+  const query = (q || '').trim();
+  const all = query
+    ? opts.filter(o => fuzzyMatch(query, o.label + ' ' + o.value + ' ' + (o.detail || '')))
+    : opts;
+  const matches = all.slice(0, 600);
+  const count = document.getElementById('ab-count');
+  if (count) count.textContent = matches.length + (all.length > 600 ? '+' : '') + ' / ' + opts.length;
+  if (!matches.length) { grid.innerHTML = '<div class="ab-empty">No matching assets</div>'; return; }
+  grid.innerHTML = matches.map(o => {
+    const icon = abActiveTab === 'model'
+      ? '<span class="object-icon model-thumb pending" data-key="ab-model:' + esc(o.value) + '" data-model="' + esc(o.value) + '"' +
+          (o.iconPath ? ' data-icon="' + esc(o.iconPath) + '"' : '') + '></span>'
+      : (o.iconPath
+        ? '<span class="object-icon" data-key="ab:' + esc(o.value) + '" data-icon="' + esc(o.iconPath) + '"></span>'
+        : '<span class="object-icon missing"></span>');
+    return '<div class="ab-card" data-value="' + esc(o.value) + '" title="' + esc(o.label + ' — ' + o.value) + '">' +
+      icon + '<span class="ab-card-label">' + esc(o.label) + '</span></div>';
+  }).join('');
+  observeIcons(grid);
+  observeModelThumbs(grid);
+}
+function closeAssetBrowser() {
+  const ov = document.getElementById('ab-overlay');
+  if (ov) ov.hidden = true;
+  cancelAssetBrowserModelThumbs();
+  abMi = -1; // keep abCatalog cached for next time
+}
+function pickAsset(value) {
+  const mods = detailCache.get(selectedKey) || [];
+  const mi = abMi;
+  const mod = mods[mi];
+  closeAssetBrowser();
+  if (!mod) return;
+  mod.editValue = value;
+  const anchor = details.querySelector('[data-mi="' + mi + '"]');
+  if (anchor) markModified(anchor, mod);
+  postEdit(mod);
+  // Re-render the whole cell so the decorated value + model/icon badge (data-model-preview) reflect
+  // the new pick. updateFieldCell only patches an open input's value, leaving the badge/preview stale.
+  const cell = anchor ? anchor.closest('td') : null;
+  if (cell) { cell._refocusOnCollapse = false; collapseCell(cell, mi); }
+}
+(function () {
+  const ov = document.getElementById('ab-overlay');
+  const search = document.getElementById('ab-search');
+  const close = document.getElementById('ab-close');
+  const grid = document.getElementById('ab-grid');
+  const tabs = document.getElementById('ab-tabs');
+  if (close) close.addEventListener('click', closeAssetBrowser);
+  if (ov) ov.addEventListener('mousedown', e => { if (e.target === ov) closeAssetBrowser(); });
+  if (search) search.addEventListener('input', () => renderAssetGrid(search.value));
+  const source = document.getElementById('ab-source');
+  if (source) source.addEventListener('change', () => renderAssetGrid(search ? search.value : ''));
+  if (tabs) tabs.addEventListener('click', e => {
+    const tab = e.target.closest('.ab-tab[data-tab]');
+    if (!tab) return;
+    if (abActiveTab === 'model' && tab.getAttribute('data-tab') !== 'model') cancelAssetBrowserModelThumbs();
+    abActiveTab = tab.getAttribute('data-tab');
+    updateAbTabs();
+    renderAssetGrid(search ? search.value : '');
+  });
+  if (grid) grid.addEventListener('click', e => {
+    const card = e.target.closest('.ab-card[data-value]');
+    if (card) pickAsset(card.getAttribute('data-value'));
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && ov && !ov.hidden) closeAssetBrowser(); });
+})();
 
 // Forward undo/redo to the host (so the custom-document edit stack drives them) — except while a
 // text field is focused, where the browser's native text undo should win.
@@ -2754,6 +3527,7 @@ function renderDetails() {
   filterFields(fieldQuery);
 
   observeIcons(details);
+  observeModelThumbs(details);
 }
 
 // Delegated details handlers, wired once. The #details element persists across renders (only its
@@ -2765,6 +3539,24 @@ function setupDetails() {
     if (jump) {
       const key = jump.getAttribute('data-jump') || '';
       if (key) { selectedKey = key; render(); }
+      return;
+    }
+    const browse = e.target.closest('[data-browse]');
+    if (browse) {
+      e.stopPropagation();
+      openAssetBrowser(Number(browse.getAttribute('data-browse')));
+      return;
+    }
+    const modelPreview = e.target.closest('[data-model-preview]');
+    if (modelPreview) {
+      e.stopPropagation();
+      showModelPreview(modelPreview.getAttribute('data-model-preview') || '');
+      return;
+    }
+    const openAsset = e.target.closest('[data-open-asset]');
+    if (openAsset) {
+      e.stopPropagation();
+      vscodeApi.postMessage({ type: 'openAsset', path: openAsset.getAttribute('data-open-asset') || '' });
       return;
     }
     const collapsed = e.target.closest('.tt-collapsed, .cell-edit');
@@ -2899,6 +3691,7 @@ function collapseCell(cell, mi) {
   if (cell._collapseHandler) { cell.removeEventListener('focusout', cell._collapseHandler); cell._collapseHandler = null; }
   cell.innerHTML = collapsedView(mod, mi);
   observeIcons(cell);
+  observeModelThumbs(cell);
   // When the editor was closed via keyboard (Esc/Enter), return focus to the collapsed cell so
   // keyboard users keep their place; on click-away the user already moved focus, so don't yank it back.
   if (cell._refocusOnCollapse) {
@@ -2940,7 +3733,7 @@ function filterFields(q) {
   rows.forEach(tr => {
     if (tr.classList.contains('category-row')) { flush(); cat = tr; catHasVisible = false; return; }
     const hay = tr.getAttribute('data-fsearch') || '';
-    const vis = !query || hay.indexOf(query) !== -1;
+    const vis = !query || fuzzyMatch(query, hay);
     tr.classList.toggle('hidden', !vis);
     if (vis) { shown++; catHasVisible = true; }
   });
@@ -3036,24 +3829,20 @@ render();
     });
 }
 
-async function handleObjModIcon(msg: { key: string; iconPath: string }, webview: vscode.Webview, uri: vscode.Uri): Promise<void> {
+/** Resolve a model/texture path referenced by a field and open it in the appropriate preview. */
+async function openObjModAsset(assetPath: string, uri: vscode.Uri): Promise<void> {
     const roots = await getCandidateRoots(uri.fsPath);
-    const fsPath = await resolveAssetPath(msg.iconPath, roots) ?? await ensureGameTextureCached(msg.iconPath);
-    if (!fsPath) {
-        await webview.postMessage({ type: 'objectIconMissing', key: msg.key });
+    const resolved = await resolveAssetPathWithCasc(assetPath, roots);
+    if (!resolved) {
+        vscode.window.showWarningMessage(`Could not resolve asset: ${assetPath}`);
         return;
     }
-    try {
-        // Send the decoded raster to the webview and let the browser render it — the same central
-        // pipeline the BLP viewer uses (it correctly handles BGR jpeg-content BLPs, 4-component, etc.).
-        const ext = fsPath.slice(fsPath.lastIndexOf('.')).toLowerCase();
-        const bytes = new Uint8Array(await vscode.workspace.fs.readFile(vscode.Uri.file(fsPath)));
-        const decoded = decodeRasterPreview(bytes, ext);
-        await webview.postMessage(decoded.mode === 'jpeg'
-            ? { type: 'objectIconLoaded', key: msg.key, mode: 'jpeg', jpegBase64: decoded.jpegBase64, width: decoded.width, height: decoded.height }
-            : { type: 'objectIconLoaded', key: msg.key, mode: 'rgba', rgbaBase64: decoded.rgbaBase64, width: decoded.width, height: decoded.height });
-    } catch {
-        await webview.postMessage({ type: 'objectIconMissing', key: msg.key });
+    const target = vscode.Uri.file(resolved);
+    const ext = resolved.slice(resolved.lastIndexOf('.')).toLowerCase();
+    if (['.mdx', '.mdl', '.blp', '.dds', '.tga'].includes(ext)) {
+        await vscode.commands.executeCommand('vscode.openWith', target, 'wurst.blpPreview');
+    } else {
+        await vscode.commands.executeCommand('vscode.open', target);
     }
 }
 
@@ -3221,6 +4010,9 @@ function modDisplayValue(mod: ObjModMod, wts: TriggerStringTable): string {
         const resolved = resolveTriggerString(typeof mod.value === 'string' ? mod.value : String(mod.value), wts);
         return resolved.value === undefined ? '' : String(resolved.value);
     }
+    if ((mod.varType === 'real' || mod.varType === 'unreal') && typeof mod.value === 'number') {
+        return formatReal(mod.value);
+    }
     return String(mod.value);
 }
 
@@ -3323,6 +4115,8 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
     private readonly _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<ObjModDocument>>();
     readonly onDidChangeCustomDocument = this._onDidChange.event;
 
+    constructor(private readonly extensionUri: vscode.Uri) {}
+
     async openCustomDocument(uri: vscode.Uri): Promise<ObjModDocument> {
         const e = await loadEditableObjMod(uri);
         const wtsTable = loadTriggerStringsForUri(uri);
@@ -3334,14 +4128,20 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
     async resolveCustomEditor(doc: ObjModDocument, panel: vscode.WebviewPanel): Promise<void> {
         panel.webview.options = {
             enableScripts: true,
-            localResourceRoots: (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri),
+            localResourceRoots: [
+                ...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri),
+                vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview'),
+            ],
         };
         const fileName = doc.uri.path.slice(doc.uri.path.lastIndexOf('/') + 1);
         const ctx: ParsedPreviewContext = { uri: doc.uri, webview: panel.webview };
         doc.panelWebview = panel.webview;
+        const mdxViewerUri = panel.webview.asWebviewUri(
+            vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', 'mdxViewer.js'),
+        ).toString();
         // Show a spinner immediately — buildHtml awaits CASC game-data and can exceed 200ms.
         panel.webview.html = buildObjLoadingHtml(fileName);
-        doc.reload = async () => { panel.webview.html = await buildHtml(doc.displayFile, fileName, ctx, doc.wtsWarning); };
+        doc.reload = async () => { panel.webview.html = await buildHtml(doc.displayFile, fileName, ctx, doc.wtsWarning, mdxViewerUri); };
 
         panel.webview.onDidReceiveMessage((message) => { void this.handleMessage(message, panel.webview, doc); });
         await doc.reload();
@@ -3350,7 +4150,8 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
     private async handleMessage(message: unknown, webview: vscode.Webview, doc: ObjModDocument): Promise<void> {
         if (!message || typeof message !== 'object') return;
         const msg = message as {
-            type?: string; key?: string; iconPath?: string;
+            type?: string; key?: string; iconPath?: string; path?: string;
+            cacheKey?: string; aliasKey?: string; webpBase64?: string; thumbKey?: string; phase?: string; elapsedMs?: number; deltaMs?: number; detail?: string;
             fieldId?: string; varType?: string; level?: number | null; dataPt?: number | null; value?: string;
         };
         if (msg.type === 'loadObjectDetails' && msg.key) {
@@ -3358,7 +4159,44 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             return;
         }
         if (msg.type === 'loadObjectIcon' && msg.key && msg.iconPath) {
-            await handleObjModIcon({ key: msg.key, iconPath: msg.iconPath }, webview, doc.uri);
+            await requestPreviewIcon(msg.iconPath, msg.key, webview, doc.uri);
+            return;
+        }
+        if (msg.type === 'loadModelThumb' && msg.key && msg.path) {
+            await requestModelThumbnail(msg.path, msg.key, doc.uri, webview);
+            return;
+        }
+        if (msg.type === 'modelThumbRendered' && msg.key && msg.cacheKey && msg.webpBase64) {
+            await cacheModelThumbnail(msg.key, msg.cacheKey, msg.webpBase64, webview, msg.aliasKey);
+            return;
+        }
+        if (msg.type === 'openAsset' && msg.path) {
+            await openObjModAsset(msg.path, doc.uri);
+            return;
+        }
+        if (msg.type === 'loadModel' && msg.path) {
+            await postModelToWebview(msg.path, doc.uri, webview);
+            return;
+        }
+        if (msg.type === 'requestTextures' && Array.isArray((msg as { paths?: unknown }).paths)) {
+            const paths = (msg as { paths: unknown[] }).paths.filter((p): p is string => typeof p === 'string');
+            await postTexturesToWebview(paths, doc.uri, webview, msg.thumbKey);
+            return;
+        }
+        if (msg.type === 'modelThumbProfile' && msg.key && msg.phase) {
+            console.log(`[wurst-model-thumb] ${msg.key} webview ${msg.phase} +${msg.deltaMs ?? '?'}ms elapsed=${msg.elapsedMs ?? '?'}ms${msg.detail ? ` ${msg.detail}` : ''}`);
+            return;
+        }
+        if (msg.type === 'requestAssetCatalog') {
+            const cat = await loadObjValueCatalog();
+            const imp = await gatherImportedAssets(doc.uri.fsPath);
+            void webview.postMessage({
+                type: 'assetCatalog',
+                models: dedupeByHashOrBasename([...imp.model, ...cat.models]),
+                // Icons repeat across SD/HD and .blp/.dds/.tga variants — collapse same-named ones.
+                icons: dedupeByHashOrBasename([...imp.icon, ...cat.icons]),
+                pathing: cat.pathing,
+            });
             return;
         }
         if (msg.type === 'undo') { void vscode.commands.executeCommand('undo'); return; }
@@ -3487,10 +4325,10 @@ async function writeObjModIfChanged(file: ObjModFile, uri: vscode.Uri): Promise<
     await vscode.workspace.fs.writeFile(uri, bytes);
 }
 
-export function registerObjModPreview(_context: vscode.ExtensionContext): vscode.Disposable {
+export function registerObjModPreview(context: vscode.ExtensionContext): vscode.Disposable {
     return vscode.window.registerCustomEditorProvider(
         'wurst.objModPreview',
-        new ObjModEditorProvider(),
+        new ObjModEditorProvider(context.extensionUri),
         {
             supportsMultipleEditorsPerDocument: false,
             webviewOptions: { retainContextWhenHidden: true },

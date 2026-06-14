@@ -11,6 +11,8 @@ const {
     parseWct,
     parseWtg,
     parseWpm,
+    parseW3i,
+    serializeW3i,
 } = require('casc-ts/formats');
 
 const root = path.resolve(__dirname, '..');
@@ -134,6 +136,29 @@ function testTriggers() {
     }
 }
 
+function testW3i() {
+    // Parse-prefix + opaque-tail must round-trip byte-exact across w3i versions, and
+    // editing a prefix string must preserve the opaque tail (players/forces/lists).
+    for (const [label, data] of [
+        ['casc-ts war3map.w3i', readExternal(cascTestdata, 'war3map.w3i')],
+        ['wc3libs W3I/war3map.w3i', readExternal(wc3libsResources, 'wc3data/W3I/war3map.w3i')],
+        ['wc3libs W3I/war3map_default.w3i', readExternal(wc3libsResources, 'wc3data/W3I/war3map_default.w3i')],
+        ['wc3libs W3I/war3map_latest_lua.w3i', readExternal(wc3libsResources, 'wc3data/W3I/war3map_latest_lua.w3i')],
+    ]) {
+        const parsed = parseW3i(data);
+        assertNoError(parsed, label);
+        assert.ok(parsed.version >= 1, `${label}: expected version`);
+        assert.ok(serializeW3i(parsed).equals(data), `${label}: serialize ∘ parse not byte-exact`);
+
+        const edited = parseW3i(data);
+        edited.name = 'Smoke Test Name';
+        const reparsed = parseW3i(serializeW3i(edited));
+        assertNoError(reparsed, `${label} (edited)`);
+        assert.equal(reparsed.name, 'Smoke Test Name', `${label}: edited name not persisted`);
+        assert.ok(reparsed.tail.equals(parsed.tail), `${label}: opaque tail changed after edit`);
+    }
+}
+
 function main() {
     assert.ok(fs.existsSync(cascTestdata), `Missing casc-ts testdata at ${cascTestdata}`);
     assert.ok(fs.existsSync(wc3libsResources), `Missing wc3libs resources at ${wc3libsResources}`);
@@ -143,6 +168,7 @@ function main() {
     testDoo();
     testObjectMods();
     testTriggers();
+    testW3i();
 
     console.log('WC3 preview smoke fixtures passed');
 }

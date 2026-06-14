@@ -12,6 +12,8 @@
  *   viewer-specific styles.
  */
 
+import { fuzzyMatch } from './preview/fuzzy';
+
 // ---------------------------------------------------------------------------
 // Base CSS — VS Code token mapping + shared structural components
 // ---------------------------------------------------------------------------
@@ -146,6 +148,135 @@ body {
 }
 .wv-state .err { color: var(--vscode-errorForeground, #f14c4c); font-size: 12px; max-width: 360px; }
 `;
+
+// ---------------------------------------------------------------------------
+// Inline object-icon thumbnails (shared by doo / map-data / objmod webviews)
+// ---------------------------------------------------------------------------
+
+/**
+ * CSS for inline `.object-icon` thumbnails. Pair with ICON_LAZYLOAD_SCRIPT.
+ * Markup contract: `<span class="object-icon" data-key="…" data-icon="…"></span>`.
+ * Size via the `--obj-icon-size` custom property (default 18px).
+ */
+export const ICON_INLINE_CSS = `
+.object-icon {
+  display: inline-block;
+  width: var(--obj-icon-size, 18px);
+  height: var(--obj-icon-size, 18px);
+  vertical-align: middle;
+  flex-shrink: 0;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  overflow: hidden;
+}
+.object-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.object-icon.missing { background: transparent; }
+`;
+
+/**
+ * Self-contained client script that lazily resolves `.object-icon[data-icon]`
+ * thumbnails through the host `requestPreviewIcon` helper.
+ *
+ * It acquires the VS Code API itself, so include it only on pages that have no
+ * other script needing `acquireVsCodeApi`. Exposes `window.observeIcons(root)`
+ * for dynamically added content and observes the whole document on load.
+ *
+ * Requires CSP: `script-src 'unsafe-inline'; img-src data:;` (see PREVIEW_CSP).
+ * Uses string concatenation (no template literals) so it nests safely.
+ */
+export const ICON_LAZYLOAD_SCRIPT = `
+<script>
+(function () {
+  var vscodeApi = acquireVsCodeApi();
+  var pending = new Set(), loaded = new Map(), missing = new Set();
+  var observer;
+  function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function observeIcons(root) {
+    if (!observer) {
+      observer = new IntersectionObserver(function (entries) {
+        for (var i = 0; i < entries.length; i++) {
+          if (!entries[i].isIntersecting) continue;
+          observer.unobserve(entries[i].target);
+          requestIcon(entries[i].target);
+        }
+      }, { root: null, rootMargin: '160px' });
+    }
+    var els = (root || document).querySelectorAll('.object-icon[data-icon]');
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i], key = el.getAttribute('data-key') || '';
+      if (loaded.has(key)) setLoaded(el, loaded.get(key));
+      else if (missing.has(key)) setMissing(el);
+      else observer.observe(el);
+    }
+  }
+  function requestIcon(el) {
+    var key = el.getAttribute('data-key') || '', iconPath = el.getAttribute('data-icon') || '';
+    if (!key || !iconPath || pending.has(key) || loaded.has(key) || missing.has(key)) return;
+    pending.add(key);
+    vscodeApi.postMessage({ type: 'loadObjectIcon', key: key, iconPath: iconPath });
+  }
+  function setLoaded(el, uri) { el.classList.remove('missing'); el.innerHTML = '<img loading="lazy" src="' + esc(uri) + '" alt="">'; }
+  function setMissing(el) { el.classList.add('missing'); el.innerHTML = ''; }
+  function eachEl(key, fn) {
+    var els = document.querySelectorAll('.object-icon');
+    for (var i = 0; i < els.length; i++) if ((els[i].getAttribute('data-key') || '') === key) fn(els[i]);
+  }
+  function b64ToBytes(b64) { var bin = atob(b64), out = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
+  function renderDataUrl(data) {
+    try {
+      var w = data.width, h = data.height;
+      var full = document.createElement('canvas'); full.width = w; full.height = h;
+      var fctx = full.getContext('2d');
+      if (data.mode === 'rgba') {
+        var rgba = b64ToBytes(data.rgbaBase64);
+        fctx.putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength), w, h), 0, 0);
+        return Promise.resolve(downscale(full));
+      }
+      return createImageBitmap(new Blob([b64ToBytes(data.jpegBase64)], { type: 'image/jpeg' })).then(function (bmp) {
+        fctx.drawImage(bmp, 0, 0, w, h);
+        var id = fctx.getImageData(0, 0, w, h), px = id.data;
+        for (var i = 0; i < px.length; i += 4) { var r = px[i]; px[i] = px[i + 2]; px[i + 2] = r; }
+        fctx.putImageData(id, 0, 0);
+        return downscale(full);
+      });
+    } catch (e) { return Promise.resolve(null); }
+  }
+  function downscale(full) {
+    var out = document.createElement('canvas'); out.width = 48; out.height = 48;
+    var octx = out.getContext('2d'); octx.imageSmoothingQuality = 'high';
+    octx.drawImage(full, 0, 0, 48, 48);
+    return out.toDataURL('image/png');
+  }
+  window.addEventListener('message', function (event) {
+    var msg = event.data || {};
+    if (msg.type === 'objectIconLoaded') {
+      pending.delete(msg.key);
+      renderDataUrl(msg).then(function (url) {
+        if (!url) { missing.add(msg.key); eachEl(msg.key, setMissing); return; }
+        loaded.set(msg.key, url);
+        eachEl(msg.key, function (el) { setLoaded(el, url); });
+      });
+    } else if (msg.type === 'objectIconMissing') {
+      pending.delete(msg.key); missing.add(msg.key); eachEl(msg.key, setMissing);
+    }
+  });
+  window.observeIcons = observeIcons;
+  observeIcons(document);
+})();
+</script>`;
+
+/** CSP for parsed-data webviews that use inline scripts + decoded data-URL icons. */
+export const PREVIEW_ICON_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;";
+
+/**
+ * Shared typo-tolerant search for every webview search box. Exposes `window.fuzzyMatch(query, text)`
+ * — the SAME pure function unit-tested in `scripts/test-fuzzy.js`, shipped to the webview verbatim
+ * via `.toString()` (single source of truth; see `preview/fuzzy.ts`).
+ */
+export const FUZZY_SEARCH_SCRIPT = `
+<script>
+window.fuzzyMatch = ${fuzzyMatch.toString()};
+</script>`;
 
 // ---------------------------------------------------------------------------
 // HTML page builder

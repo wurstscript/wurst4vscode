@@ -55,6 +55,10 @@ export function getCascCacheDir(): string {
 
 export const getGameAssetCacheDir = getCascCacheDir;
 
+export function getModelThumbCacheDir(): string {
+    return path.join(WURST_HOME, 'model_thumbs');
+}
+
 function getCacheDir(): string {
     return getCascCacheDir();
 }
@@ -66,7 +70,9 @@ export function normalizeCascAssetPath(assetPath: string): string {
 export const normalizeGameAssetPath = normalizeCascAssetPath;
 
 function getCachedAssetPath(cacheDir: string, normalizedAssetPath: string): string {
-    return path.join(cacheDir, ...normalizedAssetPath.split('\\'));
+    // CASC namespace paths contain ':' (e.g. "_hd.w3mod:replaceabletextures\..."), which is illegal
+    // in Windows directory names → mkdir ENOENT. Map ':' to a safe char for the on-disk cache only.
+    return path.join(cacheDir, ...normalizedAssetPath.replace(/:/g, '$').split('\\'));
 }
 
 function getDisabledButtonFallbackPath(assetPath: string): string | null {
@@ -205,6 +211,25 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
             return { buf, ext };
         }
     }
+
+    // Last resort: texture path drifted — find by basename (try both .dds and .blp endings).
+    const storage = await getCascStorageInstance(wc3Root, log);
+    if (storage) {
+        const base = normalized.split('\\').pop() ?? '';
+        const baseNoExt = base.replace(/\.(blp|dds|tga)$/i, '');
+        for (const ext of ['dds', 'blp'] as const) {
+            const found = await storage.findPathByBasenameAsync(`${baseNoExt}.${ext}`);
+            if (!found) continue;
+            const buf = await cascReadDirect(wc3Root, found, log);
+            if (!buf) continue;
+            const rel = ext === 'dds' ? ddsPath : normalized;
+            const cachePath = getCachedAssetPath(cacheDir, rel);
+            log(`CASC basename-resolved texture: ${baseNoExt}.${ext} → ${found} (${buf.length} bytes)`);
+            await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
+            await fs.promises.writeFile(cachePath, buf);
+            return { buf, ext };
+        }
+    }
     return null;
 }
 
@@ -255,6 +280,23 @@ export async function findCascAsset(assetPath: string, log: (msg: string) => voi
             await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
             await fs.promises.writeFile(cachePath, buf);
             return buf;
+        }
+    }
+
+    // Last resort: the referenced path drifted from where the file actually lives in CASC
+    // (common with skin-file model/texture paths). Find it by basename instead.
+    const basename = normalized.split('\\').pop() ?? '';
+    if (basename) {
+        const storage = await getCascStorageInstance(wc3Root, log);
+        const found = storage ? await storage.findPathByBasenameAsync(basename) : null;
+        if (found) {
+            const buf = await cascReadDirect(wc3Root, found, log);
+            if (buf) {
+                log(`CASC basename-resolved: ${basename} → ${found} (${buf.length} bytes)`);
+                await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
+                await fs.promises.writeFile(cachePath, buf);
+                return buf;
+            }
         }
     }
 

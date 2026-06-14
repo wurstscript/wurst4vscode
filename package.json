@@ -565,12 +565,6 @@
                         "filenamePattern": "*.W3C"
                     },
                     {
-                        "filenamePattern": "*.w3i"
-                    },
-                    {
-                        "filenamePattern": "*.W3I"
-                    },
-                    {
                         "filenamePattern": "*.w3r"
                     },
                     {
@@ -605,6 +599,19 @@
                     },
                     {
                         "filenamePattern": "*.IMP"
+                    }
+                ],
+                "priority": "default"
+            },
+            {
+                "viewType": "wurst.w3iEditor",
+                "displayName": "WC3 Map Info (editable)",
+                "selector": [
+                    {
+                        "filenamePattern": "*.w3i"
+                    },
+                    {
+                        "filenamePattern": "*.W3I"
                     }
                 ],
                 "priority": "default"
@@ -826,6 +833,7 @@
         "compile-web": "webpack",
         "watch-web": "webpack --watch",
         "test:wc3-previews": "node ./scripts/wc3-preview-smoke.js",
+        "test:fuzzy": "node ./scripts/test-fuzzy.js",
         "package-web": "webpack --mode production --devtool hidden-source-map",
         "publish": "vsce publish --no-dependencies"
     },

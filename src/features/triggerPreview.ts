@@ -8,12 +8,25 @@ import {
     WctFile, WctTrig, WtgFile,
 } from 'casc-ts/formats';
 import { registerParsedPreviewer } from './preview/framework';
+import { getObjectCatalog, ObjectRef } from './preview/objectCatalog';
 export { WctFile, WctTrig, WtgFile, WtgCategory, WtgVar, WtgTrig } from 'casc-ts/formats';
 
 // ── HTML helpers ──────────────────────────────────────────────────────────────
 
 function escHtml(s: string): string {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/**
+ * Annotate FourCC rawcode literals (e.g. `'hfoo'`) in already-HTML-escaped JASS with the
+ * resolved object name as a hover tooltip — turning opaque codes into readable references.
+ * Single-quoted alphanumerics aren't escaped by escHtml, so matching the escaped text is safe.
+ */
+function annotateJassRawcodes(escapedCode: string, catalog: Map<string, ObjectRef>): string {
+    return escapedCode.replace(/'([A-Za-z0-9]{4})'/g, (whole, code: string) => {
+        const name = catalog.get(code.toLowerCase())?.name;
+        return name ? `<span class="rawref" title="${escHtml(name)}">${whole}</span>` : whole;
+    });
 }
 
 const COMMON_CSS = `
@@ -48,11 +61,12 @@ const COMMON_CSS = `
   .pill.on  { background: color-mix(in srgb, #4ec9b0 20%, transparent); color: #4ec9b0; }
   .pill.off { background: color-mix(in srgb, #888 20%, transparent);    color: #888; }
   .pill.custom { background: color-mix(in srgb, #ce9178 20%, transparent); color: #ce9178; }
+  .rawref { border-bottom: 1px dotted var(--accent); cursor: help; }
 `;
 
 // ── WCT HTML rendering ────────────────────────────────────────────────────────
 
-function buildWctHtml(parsed: WctFile, fileName: string): string {
+function buildWctHtml(parsed: WctFile, fileName: string, catalog: Map<string, ObjectRef>): string {
     const versionLabel = parsed.version === -2147483644 ? '0x80000004 (Reforged)' :
                          parsed.version === 1            ? '1 (TFT)'              :
                          parsed.version === 0            ? '0 (RoC)'              :
@@ -78,7 +92,7 @@ ${noteHtml}
         return `<section>
 <h2>${escHtml(label)} <span class="count">(${lineCount} line${lineCount !== 1 ? 's' : ''})</span></h2>
 ${noteHtml}
-<pre>${escHtml(code)}</pre>
+<pre>${annotateJassRawcodes(escHtml(code), catalog)}</pre>
 </section>`;
     };
 
@@ -254,7 +268,7 @@ export function registerTriggerPreview(_context: vscode.ExtensionContext): vscod
         registerParsedPreviewer<WctFile>({
             viewType: 'wurst.wctPreview',
             parse:  (data) => parseWct(data),
-            render: (parsed, fileName) => buildWctHtml(parsed, fileName),
+            render: async (parsed, fileName) => buildWctHtml(parsed, fileName, await getObjectCatalog()),
         }),
         registerParsedPreviewer<WtgFile>({
             viewType: 'wurst.wtgPreview',

@@ -34,11 +34,20 @@ async function readCachedThumb(cacheKey: string): Promise<{ uri: string; cachePa
 }
 
 function statThumbKey(resolvedPath: string, stat: fs.Stats): string {
-    return `v4s-${fastByteHash(Buffer.from(`${resolvedPath.toLowerCase()}\0${stat.size}\0${Math.round(stat.mtimeMs)}`, 'utf8'))}`;
+    return `v5s-${fastByteHash(Buffer.from(`${resolvedPath.toLowerCase()}\0${stat.size}\0${Math.round(stat.mtimeMs)}`, 'utf8'))}`;
 }
 
 function thumbLog(message: string): void {
     console.log(`[wurst-model-thumb] ${message}`);
+}
+
+function modelThumbCacheDisabled(): boolean {
+    return process.env.WURST_MODEL_THUMB_DISABLE_CACHE === '1';
+}
+
+function maxModelThumbBytes(): number {
+    const configured = Number(process.env.WURST_MODEL_THUMB_MAX_MODEL_BYTES || 0);
+    return Number.isFinite(configured) && configured > 0 ? configured : Number.POSITIVE_INFINITY;
 }
 
 type TexturePayload =
@@ -47,7 +56,12 @@ type TexturePayload =
     | { rgbaBase64: string; width: number; height: number };
 
 const texturePayloadCache = new Map<string, TexturePayload>();
+const textureMissingCache = new Set<string>();
+const badModelThumbCache = new Set<string>();
 const MAX_TEXTURE_PAYLOAD_CACHE = 512;
+const MAX_TEXTURE_MISSING_CACHE = 2048;
+const MAX_BAD_MODEL_THUMB_CACHE = 2048;
+const TEXTURE_RESOLVE_CONCURRENCY = 6;
 
 function texturePayloadKey(resolvedPath: string, stat: fs.Stats): string {
     return `${resolvedPath.toLowerCase()}\0${stat.size}\0${Math.round(stat.mtimeMs)}`;
@@ -63,6 +77,59 @@ function rememberTexturePayload(key: string, payload: TexturePayload): void {
         if (!firstKey) break;
         texturePayloadCache.delete(firstKey);
     }
+}
+
+function rememberMissingTexture(key: string): void {
+    if (textureMissingCache.has(key)) {
+        textureMissingCache.delete(key);
+    }
+    textureMissingCache.add(key);
+    while (textureMissingCache.size > MAX_TEXTURE_MISSING_CACHE) {
+        const firstKey = textureMissingCache.values().next().value;
+        if (!firstKey) break;
+        textureMissingCache.delete(firstKey);
+    }
+}
+
+function rememberBadModelThumb(key: string | undefined): void {
+    if (!key) return;
+    if (badModelThumbCache.has(key)) {
+        badModelThumbCache.delete(key);
+    }
+    badModelThumbCache.add(key);
+    while (badModelThumbCache.size > MAX_BAD_MODEL_THUMB_CACHE) {
+        const firstKey = badModelThumbCache.values().next().value;
+        if (!firstKey) break;
+        badModelThumbCache.delete(firstKey);
+    }
+}
+
+export function markModelThumbnailBad(key: string, cacheKey?: string, aliasKey?: string, reason?: string): void {
+    rememberBadModelThumb(cacheKey);
+    rememberBadModelThumb(aliasKey);
+    thumbLog(`${key} bad-cache${reason ? ` reason=${reason}` : ''}${cacheKey ? ` key=${cacheKey}` : ''}${aliasKey && aliasKey !== cacheKey ? ` aliasKey=${aliasKey}` : ''}`);
+}
+
+function textureMissingKey(texPath: string, roots: readonly string[]): string {
+    const normalizedPath = texPath.replace(/[\\/]+/g, '\\').toLowerCase();
+    const normalizedRoots = roots.map((root) => root.replace(/[\\/]+/g, '\\').toLowerCase()).join('|');
+    return `${normalizedPath}\0${normalizedRoots}`;
+}
+
+function assetLabel(assetPath: string): string {
+    const slash = Math.max(assetPath.lastIndexOf('/'), assetPath.lastIndexOf('\\'));
+    return slash >= 0 ? assetPath.slice(slash + 1) : assetPath;
+}
+
+async function forEachLimited<T>(items: readonly T[], concurrency: number, worker: (item: T) => Promise<void>): Promise<void> {
+    let next = 0;
+    const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+        while (next < items.length) {
+            const item = items[next++];
+            await worker(item);
+        }
+    });
+    await Promise.all(workers);
 }
 
 function getCompressedDdsFormat(bytes: Buffer): string | undefined {
@@ -111,12 +178,12 @@ export async function requestModelThumbnail(modelPath: string, key: string, docu
     const tResolved = Date.now();
     if (!resolved) {
         thumbLog(`${key} miss model="${modelPath}" roots=${tRoots - t0}ms resolve=${tResolved - tRoots}ms`);
-        await webview.postMessage({ type: 'modelThumbMissing', key, path: modelPath });
+        await webview.postMessage({ type: 'modelThumbMissing', key, path: modelPath, reason: 'not-found' });
         return;
     }
     if (!isModelFile(resolved)) {
         thumbLog(`${key} rejected non-model model="${modelPath}" resolved="${resolved}"`);
-        await webview.postMessage({ type: 'modelThumbMissing', key, path: modelPath });
+        await webview.postMessage({ type: 'modelThumbMissing', key, path: modelPath, reason: 'not-model' });
         return;
     }
 
@@ -124,7 +191,18 @@ export async function requestModelThumbnail(modelPath: string, key: string, docu
         const tStatStart = Date.now();
         const stat = await fs.promises.stat(resolved);
         const aliasKey = statThumbKey(resolved, stat);
-        const statCached = await readCachedThumb(aliasKey);
+        const maxBytes = maxModelThumbBytes();
+        if (Number.isFinite(maxBytes) && stat.size > maxBytes) {
+            thumbLog(`${key} skip-large model="${modelPath}" resolved="${resolved}" bytes=${stat.size} max=${maxBytes} roots=${tRoots - t0}ms resolve=${tResolved - tRoots}ms total=${Date.now() - t0}ms`);
+            await webview.postMessage({ type: 'modelThumbMissing', key, path: modelPath, reason: 'too-large', bytes: stat.size, maxBytes });
+            return;
+        }
+        if (!modelThumbCacheDisabled() && badModelThumbCache.has(aliasKey)) {
+            thumbLog(`${key} bad-cache-hit aliasKey=${aliasKey} roots=${tRoots - t0}ms resolve=${tResolved - tRoots}ms total=${Date.now() - t0}ms`);
+            await webview.postMessage({ type: 'modelThumbMissing', key, path: modelPath, reason: 'bad-cache' });
+            return;
+        }
+        const statCached = modelThumbCacheDisabled() ? undefined : await readCachedThumb(aliasKey);
         const tStatCache = Date.now();
         if (statCached) {
             thumbLog(`${key} cache-hit-stat aliasKey=${aliasKey} path="${statCached.cachePath}" bytes=${statCached.bytes} roots=${tRoots - t0}ms resolve=${tResolved - tRoots}ms stat/cacheRead=${tStatCache - tStatStart}ms total=${tStatCache - t0}ms`);
@@ -149,7 +227,7 @@ export async function requestModelThumbnail(modelPath: string, key: string, docu
         });
     } catch {
         thumbLog(`${key} error model="${modelPath}" total=${Date.now() - t0}ms`);
-        await webview.postMessage({ type: 'modelThumbMissing', key, path: modelPath });
+        await webview.postMessage({ type: 'modelThumbMissing', key, path: modelPath, reason: 'error' });
     }
 }
 
@@ -160,7 +238,7 @@ function isModelFile(filePath: string): boolean {
 
 /** Persist a webview-rendered webp thumbnail and echo it back as a data URL. */
 export async function cacheModelThumbnail(key: string, cacheKey: string, webpBase64: string, webview: vscode.Webview, aliasKey?: string): Promise<void> {
-    const validKey = (value: string | undefined) => !value || /^v(?:2|3s|4s)-[a-f0-9-]+$/i.test(value);
+    const validKey = (value: string | undefined) => !value || /^v(?:2|3s|4s|5s)-[a-f0-9-]+$/i.test(value);
     if (!validKey(cacheKey) || !validKey(aliasKey) || !/^[A-Za-z0-9+/=]+$/.test(webpBase64) || webpBase64.length > 1_000_000) {
         thumbLog(`${key} cache-write rejected key=${cacheKey || '(empty)'} base64Chars=${webpBase64?.length ?? 0}`);
         await webview.postMessage({ type: 'modelThumbMissing', key });
@@ -172,6 +250,11 @@ export async function cacheModelThumbnail(key: string, cacheKey: string, webpBas
         if (bytes.length < 12 || bytes.slice(0, 4).toString('ascii') !== 'RIFF' || bytes.slice(8, 12).toString('ascii') !== 'WEBP') {
             thumbLog(`${key} cache-write rejected-non-webp key=${cacheKey} bytes=${bytes.length}`);
             await webview.postMessage({ type: 'modelThumbMissing', key });
+            return;
+        }
+        if (modelThumbCacheDisabled()) {
+            thumbLog(`${key} cache-write-disabled key=${cacheKey}${aliasKey ? ` aliasKey=${aliasKey}` : ''} bytes=${bytes.length} decode=${Date.now() - t0}ms total=${Date.now() - t0}ms`);
+            await webview.postMessage({ type: 'modelThumbLoaded', key, uri: `data:image/webp;base64,${bytes.toString('base64')}`, cacheKey });
             return;
         }
         const cachePath = path.join(getModelThumbCacheDir(), `${cacheKey}.webp`);
@@ -197,61 +280,99 @@ export async function postTexturesToWebview(texPaths: string[], documentUri: vsc
     const roots = await getCandidateRoots(documentUri.fsPath);
     const post = (message: Record<string, unknown>) => webview.postMessage(thumbKey ? { ...message, thumbKey } : message);
     const uniqueTexPaths = [...new Set(texPaths)];
-    await Promise.all(uniqueTexPaths.map(async (texPath) => {
+    const stats = {
+        payloadCache: 0,
+        sent: 0,
+        missing: 0,
+        missingCache: 0,
+        unsupported: 0,
+        decodedDds: 0,
+        errors: 0,
+        slow: [] as string[],
+    };
+    await forEachLimited(uniqueTexPaths, TEXTURE_RESOLVE_CONCURRENCY, async (texPath) => {
         const t0 = Date.now();
+        const missKey = textureMissingKey(texPath, roots);
         try {
-            const resolved = await resolveAssetPathWithCasc(texPath, roots, 'texture');
-            const tResolved = Date.now();
-            if (!resolved) {
-                if (thumbKey) thumbLog(`${thumbKey} texture-miss path="${texPath}" resolve=${tResolved - t0}ms`);
-                await post({ type: 'mdxTexture', path: texPath });
+            if (textureMissingCache.has(missKey)) {
+                stats.missingCache++;
+                await post({ type: 'mdxTexture', path: texPath, missing: true });
                 return;
             }
+            const resolved = await resolveAssetPathWithCasc(texPath, roots, 'texture');
+            if (!resolved) {
+                rememberMissingTexture(missKey);
+                stats.missing++;
+                await post({ type: 'mdxTexture', path: texPath, missing: true });
+                return;
+            }
+            textureMissingCache.delete(missKey);
             const stat = await fs.promises.stat(resolved);
             const cacheKey = texturePayloadKey(resolved, stat);
             const cachedPayload = texturePayloadCache.get(cacheKey);
             if (cachedPayload) {
                 texturePayloadCache.delete(cacheKey);
                 texturePayloadCache.set(cacheKey, cachedPayload);
+                stats.payloadCache++;
+                stats.sent++;
                 await post({ type: 'mdxTexture', path: texPath, ...cachedPayload });
-                if (thumbKey) thumbLog(`${thumbKey} texture-cache path="${texPath}" resolved="${resolved}" resolve=${tResolved - t0}ms post=${Date.now() - tResolved}ms total=${Date.now() - t0}ms`);
                 return;
             }
             const bytes = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(resolved)));
-            const tRead = Date.now();
             const ext = extOf(resolved);
             if (ext === 'blp') {
                 // Send the raw BLP; war3-model's decoder handles team-color / jpeg-content BLPs.
                 const payload: TexturePayload = { blpBase64: bytes.toString('base64') };
                 rememberTexturePayload(cacheKey, payload);
+                stats.sent++;
                 await post({ type: 'mdxTexture', path: texPath, ...payload });
-                if (thumbKey) thumbLog(`${thumbKey} texture path="${texPath}" resolved="${resolved}" resolve=${tResolved - t0}ms read=${tRead - tResolved}ms post=${Date.now() - tRead}ms total=${Date.now() - t0}ms bytes=${bytes.length}`);
             } else if (ext === 'dds') {
                 if (getCompressedDdsFormat(bytes)) {
                     const payload: TexturePayload = { ddsBase64: bytes.toString('base64') };
                     rememberTexturePayload(cacheKey, payload);
+                    stats.sent++;
                     await post({ type: 'mdxTexture', path: texPath, ...payload });
-                    if (thumbKey) thumbLog(`${thumbKey} texture-dds path="${texPath}" resolved="${resolved}" resolve=${tResolved - t0}ms read=${tRead - tResolved}ms post=${Date.now() - tRead}ms total=${Date.now() - t0}ms bytes=${bytes.length}`);
                 } else {
-                    if (thumbKey) thumbLog(`${thumbKey} texture-dds-unsupported path="${texPath}" resolved="${resolved}" resolve=${tResolved - t0}ms read=${tRead - tResolved}ms total=${Date.now() - t0}ms bytes=${bytes.length}`);
-                    await post({ type: 'mdxTexture', path: texPath });
+                    try {
+                        const dec = decodeToRgba(new Uint8Array(bytes), '.dds');
+                        const payload: TexturePayload = {
+                            rgbaBase64: Buffer.from(dec.rgba).toString('base64'),
+                            width: dec.width,
+                            height: dec.height,
+                        };
+                        rememberTexturePayload(cacheKey, payload);
+                        stats.decodedDds++;
+                        stats.sent++;
+                        await post({ type: 'mdxTexture', path: texPath, ...payload });
+                    } catch {
+                        stats.unsupported++;
+                        await post({ type: 'mdxTexture', path: texPath, unsupported: true });
+                    }
                 }
             } else {
                 const dec = decodeToRgba(new Uint8Array(bytes), `.${ext}`);
-                const tDecode = Date.now();
                 const payload: TexturePayload = {
                     rgbaBase64: Buffer.from(dec.rgba).toString('base64'),
                     width: dec.width,
                     height: dec.height,
                 };
                 rememberTexturePayload(cacheKey, payload);
+                stats.sent++;
                 await post({ type: 'mdxTexture', path: texPath, ...payload });
-                if (thumbKey) thumbLog(`${thumbKey} texture path="${texPath}" resolved="${resolved}" resolve=${tResolved - t0}ms read=${tRead - tResolved}ms decode=${tDecode - tRead}ms post=${Date.now() - tDecode}ms total=${Date.now() - t0}ms bytes=${bytes.length} size=${dec.width}x${dec.height}`);
             }
         } catch {
-            if (thumbKey) thumbLog(`${thumbKey} texture-error path="${texPath}" total=${Date.now() - t0}ms`);
-            await post({ type: 'mdxTexture', path: texPath });
+            rememberMissingTexture(missKey);
+            stats.errors++;
+            await post({ type: 'mdxTexture', path: texPath, error: true });
+        } finally {
+            const elapsed = Date.now() - t0;
+            if (elapsed >= 120 && stats.slow.length < 4) {
+                stats.slow.push(`${assetLabel(texPath)}:${elapsed}ms`);
+            }
         }
-    }));
-    if (thumbKey) thumbLog(`${thumbKey} textures total count=${texPaths.length} unique=${uniqueTexPaths.length} total=${Date.now() - totalStart}ms`);
+    });
+    if (thumbKey) {
+        const slow = stats.slow.length ? ` slow=${stats.slow.join(',')}` : '';
+        thumbLog(`${thumbKey} textures unique=${uniqueTexPaths.length}/${texPaths.length} sent=${stats.sent} cache=${stats.payloadCache} ddsRgba=${stats.decodedDds} miss=${stats.missing} missCache=${stats.missingCache} unsupported=${stats.unsupported} errors=${stats.errors} total=${Date.now() - totalStart}ms${slow}`);
+    }
 }

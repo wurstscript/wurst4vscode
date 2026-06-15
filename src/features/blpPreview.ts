@@ -231,7 +231,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
                 await Promise.all(texPaths.map(async (texPath) => {
                     try {
                         let texBuf: Buffer | null = null;
-                        let texExt: 'blp' | 'dds' | null = null;
+                        let texExt: 'blp' | 'dds' | 'tga' | null = null;
                         let resolvedFsPath: string | null = null;
 
                         // 1. Local file lookup (also tries .dds for .blp references)
@@ -239,7 +239,8 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
                             const found = findLocalTexture(texPath, mdxFsPath);
                             if (found) {
                                 texBuf = found.buf;
-                                texExt = found.foundPath.toLowerCase().endsWith('.dds') ? 'dds' : 'blp';
+                                const localExt = path.extname(found.foundPath).toLowerCase();
+                                texExt = localExt === '.dds' ? 'dds' : localExt === '.tga' ? 'tga' : 'blp';
                                 resolvedFsPath = found.foundPath;
                             }
                         }
@@ -253,7 +254,8 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
                                 // Reconstruct the cache path so the webview can offer an "open" link
                                 const cacheDir = getGameAssetCacheDir();
                                 const normalized = texPath.replace(/\//g, '\\').toLowerCase();
-                                const rel = texExt === 'dds' ? normalized.replace(/\.blp$/, '.dds') : normalized;
+                                const base = normalized.replace(/\.[^\\.]+$/, '');
+                                const rel = `${base}.${texExt}`;
                                 // ':' (CASC namespaces like "_hd.w3mod:") is illegal in Windows paths — mirror getCachedAssetPath.
                                 resolvedFsPath = path.join(cacheDir, ...rel.replace(/:/g, '$').split('\\'));
                             }
@@ -265,8 +267,8 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
                             return;
                         }
 
-                        if (texExt === 'dds') {
-                            const decoded = decodeDds(new Uint8Array(texBuf));
+                        if (texExt === 'dds' || texExt === 'tga') {
+                            const decoded = texExt === 'dds' ? decodeDds(new Uint8Array(texBuf)) : decodeTga(new Uint8Array(texBuf));
                             if (decoded.mode === 'rgba') {
                                 await webviewPanel.webview.postMessage({
                                     type: 'texture', path: texPath, resolvedFsPath,

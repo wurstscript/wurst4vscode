@@ -176,15 +176,26 @@ async function getCandidateRootsUncached(documentFsPath: string): Promise<string
             roots.push(candidate);
         }
     };
+    const addAssetSubdirs = (base: string) => {
+        for (const sub of ['imports', 'war3mapImported', 'war3map', 'assets', 'UI']) {
+            add(path.join(base, sub));
+        }
+    };
+    const addMapFolderRoot = (candidate: string) => {
+        add(candidate);
+        addAssetSubdirs(candidate);
+    };
 
-    add(path.dirname(documentFsPath));
+    const documentDir = path.dirname(documentFsPath);
+    add(documentDir);
+    if (/\.(w3x|w3m)$/i.test(documentDir)) {
+        addAssetSubdirs(documentDir);
+    }
 
     await Promise.all((vscode.workspace.workspaceFolders ?? []).map(async (folder) => {
         const root = folder.uri.fsPath;
         add(root);
-        for (const sub of ['imports', 'war3mapImported', 'war3map', 'assets', 'UI']) {
-            add(path.join(root, sub));
-        }
+        addAssetSubdirs(root);
         try {
             const entries = await fs.promises.readdir(root);
             await Promise.all(entries.map(async (entry) => {
@@ -195,7 +206,7 @@ async function getCandidateRootsUncached(documentFsPath: string): Promise<string
                 const full = path.join(root, entry);
                 try {
                     if ((await fs.promises.stat(full)).isDirectory()) {
-                        add(full);
+                        addMapFolderRoot(full);
                     }
                 } catch {
                     return;
@@ -272,7 +283,104 @@ export async function gatherImportedAssets(documentFsPath: string): Promise<{ mo
     return { model: model.sort(byLabel), icon: icon.sort(byLabel) };
 }
 
-export async function resolveAssetPath(assetPath: string, roots: readonly string[]): Promise<string | undefined> {
+// WC3 resolves assets by name, ignoring the requested extension: models use
+// .mdx/.mdl, textures use .blp/.dds/.tga. Reforged material paths often name
+// source .tif files even though CASC/local assets are shipped as .dds.
+const MODEL_EXTS = ['mdx', 'mdl'];
+const TEXTURE_EXTS = ['blp', 'dds', 'tga'];
+const TEXTURE_SOURCE_EXTS = [...TEXTURE_EXTS, 'tif'];
+
+function assetExt(assetPath: string): string {
+    const slash = Math.max(assetPath.lastIndexOf('/'), assetPath.lastIndexOf('\\'));
+    const dot = assetPath.lastIndexOf('.');
+    return dot > slash ? assetPath.slice(dot + 1).toLowerCase() : '';
+}
+
+export type AssetKind = 'model' | 'texture' | 'any';
+
+function stripKnownAssetExt(assetPath: string, kind: AssetKind): string {
+    const ext = assetExt(assetPath);
+    const strip = kind === 'model' ? ext !== ''
+        : kind === 'texture' ? ext !== ''
+        : MODEL_EXTS.includes(ext) || TEXTURE_SOURCE_EXTS.includes(ext);
+    return strip ? assetPath.slice(0, assetPath.length - ext.length - 1) : assetPath;
+}
+
+function lookupExtsForKind(kind: AssetKind, ext: string): string[] {
+    if (kind === 'model') return MODEL_EXTS;
+    if (kind === 'texture') return TEXTURE_EXTS;
+    if (MODEL_EXTS.includes(ext)) return MODEL_EXTS;
+    if (TEXTURE_SOURCE_EXTS.includes(ext)) return TEXTURE_EXTS;
+    if (ext === '') return [...MODEL_EXTS, ...TEXTURE_EXTS];
+    return [];
+}
+
+async function findCaseInsensitiveChild(dir: string, name: string): Promise<string | undefined> {
+    try {
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+        const lower = name.toLowerCase();
+        const found = entries.find((entry) => entry.name.toLowerCase() === lower);
+        return found ? path.join(dir, found.name) : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+async function resolveDirectoryCaseInsensitive(root: string, relDir: string): Promise<string | undefined> {
+    if (!relDir || relDir === '.') return root;
+    const exact = path.join(root, relDir);
+    try {
+        if ((await fs.promises.stat(exact)).isDirectory()) return exact;
+    } catch {}
+
+    let current = root;
+    for (const part of relDir.split(/[\\/]+/).filter(Boolean)) {
+        const next = await findCaseInsensitiveChild(current, part);
+        if (!next) return undefined;
+        try {
+            if (!(await fs.promises.stat(next)).isDirectory()) return undefined;
+        } catch {
+            return undefined;
+        }
+        current = next;
+    }
+    return current;
+}
+
+async function resolveAssetPathByClass(assetPath: string, roots: readonly string[], kind: AssetKind): Promise<string | undefined> {
+    const ext = assetExt(assetPath);
+    const allowedExts = lookupExtsForKind(kind, ext);
+    if (!allowedExts.length) return undefined;
+
+    const normalized = stripKnownAssetExt(assetPath.replace(/\\\\/g, '\\').replace(/[/\\]/g, path.sep), kind);
+    const relDir = path.dirname(normalized);
+    const requestedStem = path.basename(normalized).toLowerCase();
+    const allowed = new Set(allowedExts);
+
+    for (const root of roots) {
+        const dir = await resolveDirectoryCaseInsensitive(root, relDir);
+        if (!dir) continue;
+        let entries: import('fs').Dirent[];
+        try {
+            entries = await fs.promises.readdir(dir, { withFileTypes: true });
+        } catch {
+            continue;
+        }
+        for (const entry of entries) {
+            if (!entry.isFile()) continue;
+            const entryExt = path.extname(entry.name).slice(1).toLowerCase();
+            if (!allowed.has(entryExt)) continue;
+            const entryStem = entry.name.slice(0, entry.name.length - entryExt.length - 1).toLowerCase();
+            if (entryStem === requestedStem) {
+                return path.join(dir, entry.name);
+            }
+        }
+    }
+
+    return undefined;
+}
+
+export async function resolveAssetPath(assetPath: string, roots: readonly string[], kind: AssetKind = 'any'): Promise<string | undefined> {
     const normalized = assetPath.replace(/\\\\/g, '\\').replace(/[/\\]/g, path.sep);
     const lower = normalized.toLowerCase();
     const lowerDds = lower.replace(/\.blp$/, '.dds');
@@ -306,21 +414,8 @@ export async function resolveAssetPath(assetPath: string, roots: readonly string
         }
     }
 
-    return undefined;
+    return resolveAssetPathByClass(assetPath, roots, kind);
 }
-
-// WC3 resolves assets by name, ignoring the requested extension — it probes a set of
-// known endings. Models: .mdx/.mdl interchangeable; textures: .blp/.dds/.tga.
-const MODEL_EXTS = ['mdx', 'mdl'];
-const TEXTURE_EXTS = ['blp', 'dds', 'tga'];
-
-function assetExt(assetPath: string): string {
-    const slash = Math.max(assetPath.lastIndexOf('/'), assetPath.lastIndexOf('\\'));
-    const dot = assetPath.lastIndexOf('.');
-    return dot > slash ? assetPath.slice(dot + 1).toLowerCase() : '';
-}
-
-export type AssetKind = 'model' | 'texture' | 'any';
 
 /**
  * Candidate paths to try for an asset, accounting for WC3's extension-agnostic lookup.
@@ -333,23 +428,23 @@ export type AssetKind = 'model' | 'texture' | 'any';
  */
 export function assetPathVariants(assetPath: string, kind: AssetKind = 'any'): string[] {
     const ext = assetExt(assetPath);
-    let exts: string[];
-    if (kind === 'model') exts = MODEL_EXTS;
-    else if (kind === 'texture') exts = TEXTURE_EXTS;
-    else if (MODEL_EXTS.includes(ext)) exts = MODEL_EXTS;
-    else if (TEXTURE_EXTS.includes(ext)) exts = TEXTURE_EXTS;
-    else if (ext === '') exts = [...MODEL_EXTS, ...TEXTURE_EXTS];
-    else return [assetPath];
+    const exts = lookupExtsForKind(kind, ext);
+    if (!exts.length) return [assetPath];
 
-    const known = MODEL_EXTS.includes(ext) || TEXTURE_EXTS.includes(ext);
-    const base = known ? assetPath.slice(0, assetPath.length - ext.length - 1) : assetPath;
+    const base = stripKnownAssetExt(assetPath, kind);
     const variants: string[] = [];
-    if (known) variants.push(assetPath);
+    if (MODEL_EXTS.includes(ext) || TEXTURE_EXTS.includes(ext)) variants.push(assetPath);
     for (const e of exts) {
         const v = `${base}.${e}`;
         if (!variants.includes(v)) variants.push(v);
     }
     return variants;
+}
+
+async function resolveCachedGameAsset(variant: string): Promise<string | undefined> {
+    const normalized = variant.replace(/\\\\/g, '\\').replace(/[/\\]/g, path.sep).toLowerCase();
+    const candidate = path.join(getGameAssetCacheDir(), normalized);
+    return await pathExists(candidate) ? candidate : undefined;
 }
 
 /**
@@ -359,6 +454,10 @@ export function assetPathVariants(assetPath: string, kind: AssetKind = 'any'): s
  */
 export async function resolveAssetPathWithCasc(assetPath: string, roots: readonly string[], kind: AssetKind = 'any'): Promise<string | undefined> {
     const variants = assetPathVariants(assetPath, kind);
+    for (const variant of variants) {
+        const cached = await resolveCachedGameAsset(variant);
+        if (cached) return cached;
+    }
     for (const variant of variants) {
         const cached = TEXTURE_EXTS.includes(assetExt(variant))
             ? await ensureGameTextureCached(variant)

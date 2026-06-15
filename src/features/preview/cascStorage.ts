@@ -9,6 +9,11 @@ import { CascStorage, closeAllSegments } from 'casc-ts';
 const WURST_HOME = path.join(os.homedir(), '.wurst');
 
 let defaultWarcraftPathsCache: string[] | null = null;
+let cascDataRootCache: string | null | undefined;
+let loggedCascRootMessage = '';
+const cascTextureMissCache = new Set<string>();
+const cascAssetMissCache = new Set<string>();
+const MAX_CASC_MISS_CACHE = 4096;
 
 function normalizeWindowsDriveRoot(value: string | undefined): string | null {
     if (!value) return null;
@@ -123,6 +128,26 @@ function getCachedAssetPath(cacheDir: string, normalizedAssetPath: string): stri
     return path.join(cacheDir, ...normalizedAssetPath.replace(/:/g, '$').split('\\'));
 }
 
+function rememberMiss(cache: Set<string>, key: string): void {
+    if (cache.has(key)) {
+        cache.delete(key);
+    }
+    cache.add(key);
+    while (cache.size > MAX_CASC_MISS_CACHE) {
+        const firstKey = cache.values().next().value;
+        if (!firstKey) break;
+        cache.delete(firstKey);
+    }
+}
+
+function logCascRootOnce(message: string, log: (msg: string) => void): void {
+    if (message === loggedCascRootMessage) {
+        return;
+    }
+    loggedCascRootMessage = message;
+    log(message);
+}
+
 function getDisabledButtonFallbackPath(assetPath: string): string | null {
     const normalized = normalizeCascAssetPath(assetPath);
     const prefix = 'replaceabletextures\\commandbuttonsdisabled\\disbtn';
@@ -132,21 +157,34 @@ function getDisabledButtonFallbackPath(assetPath: string): string | null {
     return 'replaceabletextures\\commandbuttons\\disbtn' + normalized.slice(prefix.length);
 }
 
+function textureBasePath(assetPath: string): string {
+    return normalizeCascAssetPath(assetPath).replace(/\.[^\\.]+$/, '');
+}
+
 function getCascDataRoot(log: (msg: string) => void): string | null {
+    if (cascDataRootCache !== undefined) {
+        return cascDataRootCache;
+    }
     const wc3path = vscode.workspace.getConfiguration('wurst').get<string>('wc3path', '');
     if (wc3path) {
         const dataRoot = findCascDataRoot(wc3path);
         if (dataRoot) {
-            if (dataRoot !== wc3path) log(`CASC resolved data root: ${dataRoot} (from ${wc3path})`);
+            if (dataRoot !== wc3path) logCascRootOnce(`CASC root: ${dataRoot} (from ${wc3path})`, log);
+            cascDataRootCache = dataRoot;
             return dataRoot;
         }
         log(`CASC wurst.wc3path "${wc3path}" has no WC3 CASC root — falling back to default paths`);
     }
     for (const p of getDefaultWarcraftPaths()) {
         const dataRoot = findCascDataRoot(p);
-        if (dataRoot) { log(`CASC using default path: ${dataRoot}`); return dataRoot; }
+        if (dataRoot) {
+            logCascRootOnce(`CASC root: ${dataRoot}`, log);
+            cascDataRootCache = dataRoot;
+            return dataRoot;
+        }
     }
-    log(`CASC skip: no WC3 install found (checked wurst.wc3path and ${getDefaultWarcraftPaths().length} default paths)`);
+    logCascRootOnce(`CASC skip: no WC3 install found (${getDefaultWarcraftPaths().length} default paths checked)`, log);
+    cascDataRootCache = null;
     return null;
 }
 
@@ -192,6 +230,10 @@ export function resetCascStorage(): void {
     cascStorageInstance = null;
     cascStorageRoot = null;
     cascStorageOpening = null;
+    cascDataRootCache = undefined;
+    loggedCascRootMessage = '';
+    cascTextureMissCache.clear();
+    cascAssetMissCache.clear();
 }
 
 /** Read one file directly from the in-process CascStorage. No child process, no disk cache write. */
@@ -199,57 +241,65 @@ async function cascReadDirect(wc3Root: string, cascPath: string, log: (msg: stri
     const storage = await getCascStorageInstance(wc3Root, log);
     if (!storage) return null;
     try {
-        const t = Date.now();
         const buf = await storage.readFileAsync(cascPath);
-        if (!buf || buf.length === 0) { log(`CASC empty: ${cascPath}`); return null; }
-        log(`CASC read: ${cascPath} (${buf.length} bytes, ${Date.now() - t}ms)`);
+        if (!buf || buf.length === 0) return null;
         return buf;
-    } catch (e) {
-        log(`CASC miss: ${cascPath} — ${String(e)}`);
+    } catch {
         return null;
     }
 }
 
 /** Look up a texture. Checks disk cache first; if missing, extracts in-process and caches to disk. */
-export async function findCascTexture(texPath: string, log: (msg: string) => void): Promise<{ buf: Buffer; ext: 'dds' | 'blp' } | null> {
+export async function findCascTexture(texPath: string, log: (msg: string) => void): Promise<{ buf: Buffer; ext: 'dds' | 'blp' | 'tga' } | null> {
     const cacheDir = getCacheDir();
     // CASC paths are lowercase with backslash separators
-    const normalized = normalizeCascAssetPath(texPath);
-    const ddsPath = normalized.replace(/\.blp$/, '.dds');
+    const basePath = textureBasePath(texPath);
+    const ddsPath = `${basePath}.dds`;
+    const blpPath = `${basePath}.blp`;
+    const tgaPath = `${basePath}.tga`;
     const fallbackNormalized = getDisabledButtonFallbackPath(texPath);
-    const fallbackDdsPath = fallbackNormalized?.replace(/\.blp$/, '.dds') ?? null;
+    const fallbackBasePath = fallbackNormalized ? textureBasePath(fallbackNormalized) : null;
+    const fallbackDdsPath = fallbackBasePath ? `${fallbackBasePath}.dds` : null;
+    const fallbackBlpPath = fallbackBasePath ? `${fallbackBasePath}.blp` : null;
+    const fallbackTgaPath = fallbackBasePath ? `${fallbackBasePath}.tga` : null;
+    const missKey = `${basePath}\0${fallbackBasePath ?? ''}`;
 
     // Check disk cache
-    const cacheCandidates: Array<[string, 'dds' | 'blp']> = [[ddsPath, 'dds'], [normalized, 'blp']];
+    const cacheCandidates: Array<[string, 'dds' | 'blp' | 'tga']> = [[ddsPath, 'dds'], [blpPath, 'blp'], [tgaPath, 'tga']];
     if (fallbackDdsPath) cacheCandidates.push([fallbackDdsPath, 'dds']);
-    if (fallbackNormalized) cacheCandidates.push([fallbackNormalized, 'blp']);
+    if (fallbackBlpPath) cacheCandidates.push([fallbackBlpPath, 'blp']);
+    if (fallbackTgaPath) cacheCandidates.push([fallbackTgaPath, 'tga']);
     for (const [rel, ext] of cacheCandidates) {
         const cachePath = getCachedAssetPath(cacheDir, rel);
         try {
             const buf = await fs.promises.readFile(cachePath);
-            log(`CASC cache hit: ${rel}`);
             return { buf, ext };
         } catch {}
+    }
+
+    if (cascTextureMissCache.has(missKey)) {
+        return null;
     }
 
     const wc3Root = getCascDataRoot(log);
     if (!wc3Root) return null;
 
-    const candidates: Array<[string, 'dds' | 'blp']> = [
+    const candidates: Array<[string, 'dds' | 'blp' | 'tga']> = [
         [`war3.w3mod:${ddsPath}`, 'dds'],
         [`war3.w3mod:_hd.w3mod:${ddsPath}`, 'dds'],
-        [`war3.w3mod:${normalized}`, 'blp'],
+        [`war3.w3mod:${blpPath}`, 'blp'],
+        [`war3.w3mod:${tgaPath}`, 'tga'],
+        [`war3.w3mod:_hd.w3mod:${tgaPath}`, 'tga'],
     ];
     if (fallbackDdsPath) {
         candidates.push([`war3.w3mod:${fallbackDdsPath}`, 'dds']);
         candidates.push([`war3.w3mod:_hd.w3mod:${fallbackDdsPath}`, 'dds']);
     }
-    if (fallbackNormalized) {
-        candidates.push([`war3.w3mod:${fallbackNormalized}`, 'blp']);
-    }
+    if (fallbackBlpPath) candidates.push([`war3.w3mod:${fallbackBlpPath}`, 'blp']);
+    if (fallbackTgaPath) candidates.push([`war3.w3mod:${fallbackTgaPath}`, 'tga']);
 
     for (const [cascPath, ext] of candidates) {
-        const rel = ext === 'dds' ? ddsPath : normalized;
+        const rel = ext === 'dds' ? ddsPath : ext === 'tga' ? tgaPath : blpPath;
         const cachePath = getCachedAssetPath(cacheDir, rel);
         const buf = await cascReadDirect(wc3Root, cascPath, log);
         if (buf) {
@@ -263,14 +313,13 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
     // Last resort: texture path drifted — find by basename (try both .dds and .blp endings).
     const storage = await getCascStorageInstance(wc3Root, log);
     if (storage) {
-        const base = normalized.split('\\').pop() ?? '';
-        const baseNoExt = base.replace(/\.(blp|dds|tga)$/i, '');
-        for (const ext of ['dds', 'blp'] as const) {
+        const baseNoExt = basePath.split('\\').pop() ?? '';
+        for (const ext of ['dds', 'blp', 'tga'] as const) {
             const found = await storage.findPathByBasenameAsync(`${baseNoExt}.${ext}`);
             if (!found) continue;
             const buf = await cascReadDirect(wc3Root, found, log);
             if (!buf) continue;
-            const rel = ext === 'dds' ? ddsPath : normalized;
+            const rel = ext === 'dds' ? ddsPath : ext === 'tga' ? tgaPath : blpPath;
             const cachePath = getCachedAssetPath(cacheDir, rel);
             log(`CASC basename-resolved texture: ${baseNoExt}.${ext} → ${found} (${buf.length} bytes)`);
             await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
@@ -278,6 +327,7 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
             return { buf, ext };
         }
     }
+    rememberMiss(cascTextureMissCache, missKey);
     return null;
 }
 
@@ -289,9 +339,12 @@ export async function findCascAsset(assetPath: string, log: (msg: string) => voi
     const cachePath = getCachedAssetPath(cacheDir, normalized);
     try {
         const cached = await fs.promises.readFile(cachePath);
-        log(`CASC cache hit: ${normalized}`);
         return cached;
     } catch {}
+
+    if (cascAssetMissCache.has(normalized)) {
+        return null;
+    }
 
     const wc3Root = getCascDataRoot(log);
     if (!wc3Root) return null;
@@ -348,10 +401,17 @@ export async function findCascAsset(assetPath: string, log: (msg: string) => voi
         }
     }
 
+    rememberMiss(cascAssetMissCache, normalized);
     return null;
 }
 
 export const findGameAsset = findCascAsset;
+
+function defaultCascLog(message: string): void {
+    if (process.env.WURST_CASC_DEBUG === '1') {
+        console.log(`[wurst-casc] ${message}`);
+    }
+}
 
 /** Try to read a texture file from the local filesystem relative to the MDX file.
  *  Returns the buffer and the actual path found (may differ in extension). */
@@ -383,26 +443,22 @@ export function findLocalTexture(texPath: string, mdxFsPath: string): { buf: Buf
  * Ensures a texture asset is present in the CASC disk cache, extracting from
  * the WC3 game files if needed.
  *
- * Returns the absolute path to the cached file (DDS or BLP), or undefined if
+ * Returns the absolute path to the cached file (DDS/BLP/TGA), or undefined if
  * the path cannot be resolved (no wc3path configured, file not in CASC, etc.).
  */
 export async function ensureCascCached(assetPath: string): Promise<string | undefined> {
-    const log = (msg: string) => console.log(`[wurst-casc] ${msg}`);
-    const result = await findCascTexture(assetPath, log);
+    const result = await findCascTexture(assetPath, defaultCascLog);
     if (!result) return undefined;
     const cacheDir = getCacheDir();
-    const normalized = normalizeCascAssetPath(assetPath);
-    const rel = result.ext === 'dds' ? normalized.replace(/\.blp$/, '.dds') : normalized;
+    const rel = `${textureBasePath(assetPath)}.${result.ext}`;
     return getCachedAssetPath(cacheDir, rel);
 }
 
 export const ensureGameTextureCached = ensureCascCached;
 
 export async function ensureCascAssetCached(assetPath: string): Promise<string | undefined> {
-    const log = (msg: string) => console.log(`[wurst-casc] ${msg}`);
-    log(`ensureCascAssetCached: ${assetPath}`);
-    const result = await findCascAsset(assetPath, log);
-    if (!result) { log(`ensureCascAssetCached: failed for ${assetPath}`); return undefined; }
+    const result = await findCascAsset(assetPath, defaultCascLog);
+    if (!result) return undefined;
     return getCachedAssetPath(getCacheDir(), normalizeCascAssetPath(assetPath));
 }
 

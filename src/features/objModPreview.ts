@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import { parseObjMod, serializeObjMod, ObjModFile, ObjModEntry, ObjModMod, ObjModVarType } from 'casc-ts/formats';
 import { ParsedPreviewContext } from './preview/framework';
 import { requestPreviewIcon, getCandidateRoots, resolveAssetPathWithCasc, gatherImportedAssets } from './imageAssetSupport';
-import { postModelToWebview, postTexturesToWebview, requestModelThumbnail, cacheModelThumbnail } from './preview/modelPreviewHost';
+import { postModelToWebview, postTexturesToWebview, requestModelThumbnail, cacheModelThumbnail, markModelThumbnailBad } from './preview/modelPreviewHost';
 import {
     loadTriggerStringsForUri, resolveTriggerString, TriggerStringTable,
     findWtsUri, nextTriggerStringId, applyWtsEdits,
@@ -2598,6 +2598,11 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             await cacheModelThumbnail(msg.key, msg.cacheKey, msg.webpBase64, webview, msg.aliasKey);
             return;
         }
+        if (msg.type === 'modelThumbFailed' && msg.key) {
+            const failed = msg as typeof msg & { reason?: string };
+            markModelThumbnailBad(msg.key, msg.cacheKey, msg.aliasKey, failed.reason);
+            return;
+        }
         if (msg.type === 'openAsset' && msg.path) {
             await openObjModAsset(msg.path, doc.uri);
             return;
@@ -2608,7 +2613,9 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         }
         if (msg.type === 'requestTextures' && Array.isArray((msg as { paths?: unknown }).paths)) {
             const paths = (msg as { paths: unknown[] }).paths.filter((p): p is string => typeof p === 'string');
-            await postTexturesToWebview(paths, doc.uri, webview, msg.thumbKey);
+            void postTexturesToWebview(paths, doc.uri, webview, msg.thumbKey).catch((err) => {
+                console.error(`[wurst-model-thumb] texture request failed: ${err instanceof Error ? err.message : String(err)}`);
+            });
             return;
         }
         if (msg.type === 'modelThumbProfile' && msg.key && msg.phase) {

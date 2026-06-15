@@ -21,18 +21,27 @@ let modelThumbObserver;
 const pendingModelThumbs = new Set();
 const loadedModelThumbs = new Map();
 const missingModelThumbs = new Set();
+const missingModelThumbReasons = new Map();
 const modelThumbRequestTimers = new Map();
+const modelThumbRequestQueue = [];
+const modelThumbHostInflight = new Set();
 const modelThumbQueue = [];
 let modelThumbJob = null;
+let modelThumbAwaitingDecisionKey = '';
+let modelThumbSeq = 0;
 let modelThumbInited = false;
 let modelThumbTextureTimer = 0;
 let modelThumbWatchdogTimer = 0;
+let modelThumbIdleTimer = 0;
 let modelThumbCancelGeneration = 0;
+const modelThumbEvents = [];
 const MODEL_THUMB_REQUEST_TIMEOUT_MS = 30000;
 const MODEL_THUMB_RENDER_TIMEOUT_MS = 9000;
-const MODEL_THUMB_MAX_QUEUE = 80;
-const MODEL_THUMB_ZERO_ALPHA_RETRIES = 1;
-const MODEL_THUMB_DARK_RETRIES = 2;
+const MODEL_THUMB_HOST_CONCURRENCY = 1;
+const MODEL_THUMB_MAX_QUEUE = 120;
+const MODEL_THUMB_ZERO_ALPHA_RETRIES = 0;
+const MODEL_THUMB_DARK_RETRIES = 0;
+const MODEL_THUMB_TEXTURE_WAIT_RETRIES = 1;
 
 const tree = document.getElementById('tree');
 const details = document.getElementById('details');
@@ -147,7 +156,7 @@ function assetMiniHtml(mod, mi) {
   if (mod.assetType === 'model') {
     const modelKey = selectedKey + ':model-field:' + mi + ':' + assetPath;
     return '<button type="button" class="asset-mini asset-open" data-model-preview="' + esc(assetPath) + '" title="' + esc('Preview model: ' + assetPath) + '">' +
-      '<span class="asset-mini model-thumb pending" data-key="' + esc(modelKey) + '" data-model="' + esc(assetPath) + '"></span></button>';
+      '<span class="asset-mini model-thumb" data-key="' + esc(modelKey) + '" data-model="' + esc(assetPath) + '"></span></button>';
   }
   // Pathing texture: open the image preview.
   return '<button type="button" class="asset-mini asset-open" data-open-asset="' + esc(assetPath) + '" title="' + esc('Open texture: ' + assetPath) + '">▶ PAT</button>';
@@ -561,7 +570,7 @@ function observeModelThumbs(root) {
     if (loadedModelThumbs.has(key)) {
       setModelThumbLoaded(el, loadedModelThumbs.get(key));
     } else if (missingModelThumbs.has(key)) {
-      setModelThumbMissing(el);
+      setModelThumbMissing(el, missingModelThumbReasons.get(key));
     } else if (isModelThumbActuallyVisible(el)) {
       requestModelThumb(el);
     } else {
@@ -604,6 +613,60 @@ function hasVisibleModelThumbElement(key) {
   return false;
 }
 
+function reobserveModelThumbKey(key) {
+  for (const el of modelThumbElementsForKey(key)) {
+    if (!loadedModelThumbs.has(key) && !missingModelThumbs.has(key) && modelThumbObserver && el.isConnected) {
+      modelThumbObserver.observe(el);
+    }
+  }
+}
+
+function cancelPendingModelThumb(key) {
+  pendingModelThumbs.delete(key);
+  cancelQueuedModelThumbRequest(key);
+  updateModelThumbElements(key, setModelThumbQueuedOrCancelled);
+  reobserveModelThumbKey(key);
+}
+
+function shouldPruneQueuedModelThumb(key) {
+  return !!key && !loadedModelThumbs.has(key) && !missingModelThumbs.has(key) && !hasVisibleModelThumbElement(key);
+}
+
+function pruneInvisibleQueuedModelThumbs() {
+  const keys = new Set();
+  for (const req of modelThumbRequestQueue) {
+    if (req && shouldPruneQueuedModelThumb(req.key)) keys.add(req.key);
+  }
+  for (const job of modelThumbQueue) {
+    if (job && shouldPruneQueuedModelThumb(job.key)) keys.add(job.key);
+  }
+  for (const key of keys) {
+    for (let i = modelThumbQueue.length - 1; i >= 0; i--) {
+      if (modelThumbQueue[i] && modelThumbQueue[i].key === key) modelThumbQueue.splice(i, 1);
+    }
+    cancelPendingModelThumb(key);
+  }
+}
+
+function recordModelThumbEvent(type, key, extra) {
+  modelThumbEvents.push(Object.assign({ type, key: key || '', at: Math.round(performance.now()) }, extra || {}));
+  if (modelThumbEvents.length > 1000) modelThumbEvents.splice(0, modelThumbEvents.length - 1000);
+}
+
+function scheduleModelThumbQueues(delay) {
+  if (modelThumbIdleTimer) clearTimeout(modelThumbIdleTimer);
+  modelThumbIdleTimer = setTimeout(() => {
+    modelThumbIdleTimer = 0;
+    processModelThumbRequestQueue();
+    processModelThumbQueue();
+  }, Math.max(0, delay || 0));
+}
+
+function noteModelThumbUserActivity() {
+  pruneInvisibleQueuedModelThumbs();
+  scheduleModelThumbQueues(0);
+}
+
 function requestModelThumb(el) {
   const key = el.getAttribute('data-key') || '';
   const modelPath = el.getAttribute('data-model') || '';
@@ -612,14 +675,70 @@ function requestModelThumb(el) {
   if (!key || !modelPath || pendingModelThumbs.has(key) || loadedModelThumbs.has(key) || missingModelThumbs.has(key)) return;
   pendingModelThumbs.add(key);
   el.classList.add('pending');
+  modelThumbRequestQueue.push({ key, path: modelPath, seq: modelThumbSeq++ });
+  recordModelThumbEvent('queued', key);
+  scheduleModelThumbQueues(0);
+}
+
+function sortModelThumbQueueByDom(queue) {
+  const order = new Map();
+  Array.prototype.slice.call(document.querySelectorAll('.model-thumb[data-key]')).forEach((el, index) => {
+    const key = el.getAttribute('data-key') || '';
+    if (key && !order.has(key)) order.set(key, index);
+  });
+  queue.sort((a, b) => {
+    const ai = order.has(a.key) ? order.get(a.key) : Number.MAX_SAFE_INTEGER;
+    const bi = order.has(b.key) ? order.get(b.key) : Number.MAX_SAFE_INTEGER;
+    return ai - bi || (a.seq || 0) - (b.seq || 0);
+  });
+}
+
+function processModelThumbRequestQueue() {
+  pruneInvisibleQueuedModelThumbs();
+  if (modelThumbAwaitingDecisionKey || modelThumbJob || modelThumbQueue.length) return;
+  sortModelThumbQueueByDom(modelThumbRequestQueue);
+  while (modelThumbHostInflight.size < MODEL_THUMB_HOST_CONCURRENCY && modelThumbRequestQueue.length) {
+    if (modelThumbRequestQueue.length > MODEL_THUMB_MAX_QUEUE) {
+      const dropped = modelThumbRequestQueue.splice(0, modelThumbRequestQueue.length - MODEL_THUMB_MAX_QUEUE);
+      for (const oldReq of dropped) {
+        if (!oldReq || !oldReq.key) continue;
+        cancelPendingModelThumb(oldReq.key);
+      }
+    }
+    const req = modelThumbRequestQueue.shift();
+    if (!req || !req.key || loadedModelThumbs.has(req.key) || missingModelThumbs.has(req.key) || !pendingModelThumbs.has(req.key)) continue;
+    if (!hasVisibleModelThumbElement(req.key)) {
+      cancelPendingModelThumb(req.key);
+      continue;
+    }
+    modelThumbHostInflight.add(req.key);
+    updateModelThumbElements(req.key, el => el.classList.add('pending'));
+    recordModelThumbEvent('host-start', req.key);
+    clearModelThumbRequestTimer(req.key);
+    modelThumbRequestTimers.set(req.key, setTimeout(() => {
+      modelThumbHostInflight.delete(req.key);
+      if (!pendingModelThumbs.has(req.key) || loadedModelThumbs.has(req.key) || missingModelThumbs.has(req.key)) return;
+      markModelThumbMissing(req.key, { reason: 'host-timeout' });
+      scheduleModelThumbQueues(0);
+    }, MODEL_THUMB_REQUEST_TIMEOUT_MS));
+    vscodeApi.postMessage({ type: 'loadModelThumb', key: req.key, path: req.path });
+  }
+}
+
+function completeModelThumbHostRequest(key) {
+  modelThumbHostInflight.delete(key);
   clearModelThumbRequestTimer(key);
-  modelThumbRequestTimers.set(key, setTimeout(() => {
-    if (!pendingModelThumbs.has(key) || loadedModelThumbs.has(key) || missingModelThumbs.has(key)) return;
-    pendingModelThumbs.delete(key);
-    missingModelThumbs.add(key);
-    updateModelThumbElements(key, setModelThumbMissing);
-  }, MODEL_THUMB_REQUEST_TIMEOUT_MS));
-  vscodeApi.postMessage({ type: 'loadModelThumb', key, path: modelPath });
+  scheduleModelThumbQueues(0);
+}
+
+function cancelQueuedModelThumbRequest(key) {
+  for (let i = modelThumbRequestQueue.length - 1; i >= 0; i--) {
+    if (modelThumbRequestQueue[i] && modelThumbRequestQueue[i].key === key) {
+      modelThumbRequestQueue.splice(i, 1);
+    }
+  }
+  modelThumbHostInflight.delete(key);
+  clearModelThumbRequestTimer(key);
 }
 
 function clearModelThumbRequestTimer(key) {
@@ -633,9 +752,36 @@ function setModelThumbLoaded(el, uri) {
   el.innerHTML = '<img loading="lazy" src="' + esc(uri) + '" alt="' + esc(el.getAttribute('data-model') || '') + '">';
 }
 
-function setModelThumbMissing(el) {
+function setModelThumbQueuedOrCancelled(el) {
+  el.classList.remove('pending');
+}
+
+function describeModelThumbMissing(reason) {
+  if (!reason) return 'Thumbnail unavailable';
+  if (reason.reason === 'too-large') {
+    const kb = reason.bytes ? Math.round(reason.bytes / 1024) : 0;
+    const maxKb = reason.maxBytes ? Math.round(reason.maxBytes / 1024) : 0;
+    return 'Skipped large thumbnail' + (kb && maxKb ? ' (' + kb + ' KB > ' + maxKb + ' KB)' : '');
+  }
+  if (reason.reason === 'not-found') return 'Model not found in map or game files';
+  if (reason.reason === 'not-model') return 'Resolved asset is not a model';
+  if (reason.reason === 'bad-cache') return 'Thumbnail generation previously failed';
+  if (reason.reason === 'timeout') return 'Thumbnail timed out';
+  if (reason.reason === 'error') return 'Thumbnail failed';
+  return 'Thumbnail unavailable: ' + reason.reason;
+}
+
+function setModelThumbMissing(el, reason) {
   el.classList.remove('pending');
   el.classList.add('missing');
+  el.title = describeModelThumbMissing(reason);
+}
+
+function markModelThumbMissing(key, reason) {
+  pendingModelThumbs.delete(key);
+  missingModelThumbs.add(key);
+  missingModelThumbReasons.set(key, reason || { reason: 'missing' });
+  updateModelThumbElements(key, el => setModelThumbMissing(el, missingModelThumbReasons.get(key)));
 }
 
 function updateModelThumbElements(key, updater) {
@@ -643,9 +789,6 @@ function updateModelThumbElements(key, updater) {
 }
 
 function modelThumbElementsForKey(key) {
-  if (window.CSS && window.CSS.escape) {
-    return Array.prototype.slice.call(document.querySelectorAll('.model-thumb[data-key="' + window.CSS.escape(key) + '"]'));
-  }
   return Array.prototype.slice.call(document.querySelectorAll('.model-thumb[data-key]')).filter(el => (el.getAttribute('data-key') || '') === key);
 }
 
@@ -662,6 +805,7 @@ function modelThumbProfile(phase, detail) {
     deltaMs: Math.round(now - previous),
     detail: detail || '',
   });
+  recordModelThumbEvent('profile:' + phase, modelThumbJob.key, { elapsedMs: Math.round(now - modelThumbJob.startedAt), detail: detail || '' });
 }
 
 function clearModelThumbWatchdog() {
@@ -705,7 +849,11 @@ function modelThumbEnsureInit() {
     vscodeApi: {
       postMessage(msg) {
         if (msg && msg.type === 'requestTextures') {
-          vscodeApi.postMessage(Object.assign({}, msg, { thumbKey: modelThumbJob ? modelThumbJob.key : '' }));
+          if (!modelThumbJob) return;
+          const paths = modelThumbTexturePaths(msg.paths || []);
+          modelThumbJob.requestedTextures = new Set(paths);
+          modelThumbJob.pendingTextures = new Set(paths.filter(path => !modelThumbJob.receivedTextures || !modelThumbJob.receivedTextures.has(path)));
+          vscodeApi.postMessage(Object.assign({}, msg, { paths, thumbKey: modelThumbJob ? modelThumbJob.key : '' }));
         } else {
           vscodeApi.postMessage(msg);
         }
@@ -714,13 +862,29 @@ function modelThumbEnsureInit() {
     callbacks: {
       onModelLoaded(info) { modelThumbOnLoaded((info && info.sequences) || [], (info && info.texturePaths) || []); },
       onFrameUpdate() {},
-      onDebug(msg) { modelThumbProfile('viewer-debug', String(msg || '')); },
+      onDebug(msg) {
+        const text = String(msg || '');
+        if (/Uploading compressed texture|^texture(?: \(dds\)| \(rgba\))? ok:|^texture not found:|Missing HD |Rendering SD |SD material layer setup|Missing SD /i.test(text)) return;
+        modelThumbProfile('viewer-debug', text);
+      },
       onError() { finishModelThumb(false); },
     },
   });
   modelThumbInited = true;
   mpvInited = false;
   return true;
+}
+
+function modelThumbTexturePaths(texturePaths) {
+  return (texturePaths || []).filter(path => {
+    const lower = String(path || '').replace(/\\/g, '/').toLowerCase();
+    const name = lower.split('/').pop() || lower;
+    if (/(?:^|[_-])(?:normal|orm)(?:\.|_|-)/.test(name)) return false;
+    if (/(?:^|[_-])emissive(?:\.|_|-)/.test(name)) return false;
+    if (name === 'environmentmap.blp' || name === 'environmentmap.dds' || name === 'environmentmap.tga') return false;
+    if (/(?:^|[_-])corpse(?:[_-]|\.|$)/.test(name) || /(?:[_-])corpse(?:[_-])/.test(name)) return false;
+    return true;
+  });
 }
 
 function pickStandSequence(seqs) {
@@ -735,7 +899,8 @@ function pickStandSequence(seqs) {
 function modelThumbOnLoaded(seqs, texturePaths) {
   if (!modelThumbJob) return;
   clearModelThumbWatchdog();
-  modelThumbProfile('model-loaded', 'textures=' + ((texturePaths && texturePaths.length) || 0));
+  const thumbTextures = modelThumbTexturePaths(texturePaths || []);
+  modelThumbProfile('model-loaded', 'textures=' + thumbTextures.length + '/' + ((texturePaths && texturePaths.length) || 0));
   const v = mpvViewer();
   if (v && seqs.length) {
     const pick = pickStandSequence(seqs);
@@ -749,10 +914,12 @@ function modelThumbOnLoaded(seqs, texturePaths) {
       v.setAutoplay(false);
     } catch (e) {}
   }
-  modelThumbJob.pendingTextures = new Set(texturePaths || []);
+  const requested = modelThumbJob.requestedTextures ? Array.from(modelThumbJob.requestedTextures) : thumbTextures;
+  modelThumbJob.pendingTextures = new Set(requested.filter(path => !modelThumbJob.receivedTextures || !modelThumbJob.receivedTextures.has(path)));
+  modelThumbJob.textureFailures = modelThumbJob.textureFailures || 0;
   modelThumbJob.textureWaitRetries = 0;
   // Fallback only: normally texture replies reschedule this much sooner.
-  scheduleModelThumbCapture(texturePaths && texturePaths.length ? 800 : 0, 1);
+  scheduleModelThumbCapture(modelThumbJob.pendingTextures.size ? 60 : 0, 1);
 }
 
 function scheduleModelThumbCapture(timeoutMs, frames) {
@@ -790,17 +957,24 @@ function captureModelThumb() {
   if (modelThumbJob.pendingTextures && modelThumbJob.pendingTextures.size > 0) {
     modelThumbJob.textureWaitRetries = (modelThumbJob.textureWaitRetries || 0) + 1;
     modelThumbProfile('capture-wait-textures', 'retry=' + modelThumbJob.textureWaitRetries + ' remaining=' + modelThumbJob.pendingTextures.size);
-    if (modelThumbJob.textureWaitRetries <= 10) {
-      scheduleModelThumbCapture(180, 2);
+    if (modelThumbJob.textureWaitRetries <= MODEL_THUMB_TEXTURE_WAIT_RETRIES) {
+      scheduleModelThumbCapture(60, 1);
     } else {
-      finishModelThumb(false);
+      finishModelThumb(false, 'texture-wait-timeout');
     }
+    return;
+  }
+  if (modelThumbJob.textureFailures > 0) {
+    modelThumbProfile('capture-skip-texture-failures', 'count=' + modelThumbJob.textureFailures);
+    finishModelThumb(false, 'texture-failed');
     return;
   }
   modelThumbProfile('capture-start');
   const canvas = document.getElementById('model-thumb-canvas');
-  if (!canvas) { finishModelThumb(false); return; }
+  if (!canvas) { finishModelThumb(false, 'no-canvas'); return; }
   try {
+    const v = mpvViewer();
+    if (v && typeof v.renderStillFrame === 'function') v.renderStillFrame();
     const out = cropModelThumbCanvas(canvas);
     const quality = modelThumbQuality(out);
     if (quality.alphaPixels < 24) {
@@ -809,7 +983,7 @@ function captureModelThumb() {
       if (modelThumbJob.blackRetries <= MODEL_THUMB_ZERO_ALPHA_RETRIES) {
         scheduleModelThumbCapture(50, 1);
       } else {
-        finishModelThumb(false);
+        finishModelThumb(false, 'empty');
       }
       return;
     }
@@ -819,13 +993,13 @@ function captureModelThumb() {
       if (modelThumbJob.blackRetries <= MODEL_THUMB_DARK_RETRIES) {
         scheduleModelThumbCapture(80, 1);
       } else {
-        finishModelThumb(false);
+        finishModelThumb(false, 'too-dark');
       }
       return;
     }
     const dataUrl = out.toDataURL('image/webp', 0.58);
     const marker = 'data:image/webp;base64,';
-    if (!dataUrl || dataUrl.indexOf(marker) !== 0) { finishModelThumb(false); return; }
+    if (!dataUrl || dataUrl.indexOf(marker) !== 0) { finishModelThumb(false, 'encode-failed'); return; }
     vscodeApi.postMessage({
       type: 'modelThumbRendered',
       key: modelThumbJob.key,
@@ -834,10 +1008,10 @@ function captureModelThumb() {
       webpBase64: dataUrl.slice(marker.length),
     });
     modelThumbProfile('capture-posted', 'bytes=' + Math.round((dataUrl.length - marker.length) * 0.75));
-    finishModelThumb(true);
+    finishModelThumb(true, '', dataUrl);
   } catch (e) {
     modelThumbProfile('capture-error', String(e && e.message ? e.message : e));
-    finishModelThumb(false);
+    finishModelThumb(false, 'capture-error');
   }
 }
 
@@ -932,19 +1106,28 @@ function normalizeAdditivePixels(px) {
   }
 }
 
-function finishModelThumb(rendered) {
+function finishModelThumb(rendered, reason, localUri) {
   if (!modelThumbJob) return;
   const key = modelThumbJob.key;
+  const cacheKey = modelThumbJob.cacheKey;
+  const aliasKey = modelThumbJob.aliasKey;
   clearTimeout(modelThumbTextureTimer);
   clearModelThumbWatchdog();
   if (!rendered) {
+    vscodeApi.postMessage({ type: 'modelThumbFailed', key, cacheKey, aliasKey, reason: reason || 'failed' });
+    cancelQueuedModelThumbRequest(key);
+    markModelThumbMissing(key, { reason: reason || 'failed' });
+    recordModelThumbEvent('failed', key, { reason: reason || 'failed' });
+  } else if (localUri) {
     pendingModelThumbs.delete(key);
-    clearModelThumbRequestTimer(key);
-    missingModelThumbs.add(key);
-    updateModelThumbElements(key, setModelThumbMissing);
+    loadedModelThumbs.set(key, localUri);
+    updateModelThumbElements(key, el => setModelThumbLoaded(el, localUri));
+    recordModelThumbEvent('loaded', key);
+  } else {
+    modelThumbAwaitingDecisionKey = key;
   }
   modelThumbJob = null;
-  setTimeout(processModelThumbQueue, 40);
+  if (!rendered || localUri) scheduleModelThumbQueues(0);
 }
 
 function cancelCurrentModelThumb(reason) {
@@ -954,77 +1137,76 @@ function cancelCurrentModelThumb(reason) {
   clearTimeout(modelThumbTextureTimer);
   clearModelThumbWatchdog();
   pendingModelThumbs.delete(key);
-  clearModelThumbRequestTimer(key);
+  cancelQueuedModelThumbRequest(key);
+  if (modelThumbAwaitingDecisionKey === key) modelThumbAwaitingDecisionKey = '';
+  updateModelThumbElements(key, setModelThumbQueuedOrCancelled);
+  recordModelThumbEvent('cancelled', key, { reason: reason || 'cancelled' });
+  reobserveModelThumbKey(key);
   modelThumbJob = null;
-  setTimeout(processModelThumbQueue, 0);
+  scheduleModelThumbQueues(0);
 }
 
 function cancelAssetBrowserModelThumbs() {
   modelThumbCancelGeneration++;
+  modelThumbRequestQueue.splice(0, modelThumbRequestQueue.length, ...modelThumbRequestQueue.filter(req => !isAssetBrowserModelKey(req.key)));
   modelThumbQueue.splice(0, modelThumbQueue.length, ...modelThumbQueue.filter(job => !isAssetBrowserModelKey(job.key)));
   for (const key of Array.from(pendingModelThumbs)) {
     if (isAssetBrowserModelKey(key)) {
-      pendingModelThumbs.delete(key);
-      clearModelThumbRequestTimer(key);
-      updateModelThumbElements(key, setModelThumbMissing);
+      cancelPendingModelThumb(key);
     }
   }
   if (modelThumbJob && isAssetBrowserModelKey(modelThumbJob.key)) {
     cancelCurrentModelThumb('cancelled');
   }
-  setTimeout(processModelThumbQueue, 0);
+  scheduleModelThumbQueues(0);
 }
 
 function processModelThumbQueue() {
+  pruneInvisibleQueuedModelThumbs();
   if (modelThumbJob || !modelThumbQueue.length) return;
+  if (modelThumbAwaitingDecisionKey) return;
   const box = document.getElementById('mpv-box');
   if (box && !box.hidden) return;
   if (modelThumbQueue.length > MODEL_THUMB_MAX_QUEUE) {
     const dropped = modelThumbQueue.splice(0, modelThumbQueue.length - MODEL_THUMB_MAX_QUEUE);
     for (const oldJob of dropped) {
       if (!oldJob || !oldJob.key) continue;
-      pendingModelThumbs.delete(oldJob.key);
-      clearModelThumbRequestTimer(oldJob.key);
-      missingModelThumbs.add(oldJob.key);
-      updateModelThumbElements(oldJob.key, setModelThumbMissing);
+      cancelPendingModelThumb(oldJob.key);
     }
   }
+  sortModelThumbQueueByDom(modelThumbQueue);
   const job = modelThumbQueue.shift();
-  if (isAssetBrowserModelKey(job && job.key) && !isAssetBrowserOpen()) {
-    pendingModelThumbs.delete(job.key);
-    clearModelThumbRequestTimer(job.key);
-    setTimeout(processModelThumbQueue, 0);
-    return;
-  }
-  if (isAssetBrowserModelKey(job && job.key) && !hasVisibleModelThumbElement(job.key)) {
-    pendingModelThumbs.delete(job.key);
-    clearModelThumbRequestTimer(job.key);
-    setTimeout(processModelThumbQueue, 0);
+  if (job && !hasVisibleModelThumbElement(job.key)) {
+    cancelPendingModelThumb(job.key);
+    scheduleModelThumbQueues(0);
     return;
   }
   if (!job || loadedModelThumbs.has(job.key) || missingModelThumbs.has(job.key)) {
-    setTimeout(processModelThumbQueue, 0);
+    scheduleModelThumbQueues(0);
     return;
   }
   if (!modelThumbEnsureInit()) {
-    pendingModelThumbs.delete(job.key);
-    clearModelThumbRequestTimer(job.key);
-    missingModelThumbs.add(job.key);
-    updateModelThumbElements(job.key, setModelThumbMissing);
-    setTimeout(processModelThumbQueue, 40);
+    cancelQueuedModelThumbRequest(job.key);
+    markModelThumbMissing(job.key, { reason: 'viewer-init-failed' });
+    scheduleModelThumbQueues(0);
     return;
   }
   modelThumbJob = job;
+  updateModelThumbElements(job.key, el => el.classList.add('pending'));
+  recordModelThumbEvent('render-start', job.key);
   modelThumbJob.startedAt = performance.now();
   modelThumbJob.lastMarkAt = modelThumbJob.startedAt;
   modelThumbJob.generation = modelThumbCancelGeneration;
+  modelThumbJob.receivedTextures = new Set();
+  modelThumbJob.requestedTextures = null;
+  modelThumbJob.textureFailures = 0;
   modelThumbProfile('fetch-start', job.modelUri ? 'uri' : 'base64');
   armModelThumbWatchdog('load-timeout');
   modelThumbJobBytes(job).then(buffer => {
     if (!modelThumbJob || modelThumbJob !== job) return;
     modelThumbProfile('load-start', String(job.fileName || ''));
     try {
-      mpvViewer().loadModel(buffer, job.fileName || '', job.format || 'mdx');
+      mpvViewer().loadModel(buffer, job.fileName || '', job.format || 'mdx', { autoplay: false });
     } catch (e) {
       finishModelThumb(false);
     }
@@ -1055,30 +1237,39 @@ window.addEventListener('message', event => {
   } else if (msg.type === 'objectIconMissing') {
     iconLoader.handleMissing(msg.key || '');
   } else if (msg.type === 'modelThumbLoaded') {
+    completeModelThumbHostRequest(msg.key);
     pendingModelThumbs.delete(msg.key);
-    clearModelThumbRequestTimer(msg.key);
     loadedModelThumbs.set(msg.key, msg.uri);
+    missingModelThumbs.delete(msg.key);
+    missingModelThumbReasons.delete(msg.key);
     updateModelThumbElements(msg.key, el => setModelThumbLoaded(el, msg.uri));
+    recordModelThumbEvent('loaded', msg.key);
+    if (modelThumbAwaitingDecisionKey === msg.key) modelThumbAwaitingDecisionKey = '';
+    scheduleModelThumbQueues(0);
   } else if (msg.type === 'modelThumbMissing') {
-    pendingModelThumbs.delete(msg.key);
-    clearModelThumbRequestTimer(msg.key);
-    missingModelThumbs.add(msg.key);
-    updateModelThumbElements(msg.key, setModelThumbMissing);
+    completeModelThumbHostRequest(msg.key);
+    markModelThumbMissing(msg.key, {
+      reason: msg.reason || 'missing',
+      bytes: msg.bytes,
+      maxBytes: msg.maxBytes,
+    });
+    recordModelThumbEvent('missing', msg.key, { reason: msg.reason || 'missing' });
+    if (modelThumbAwaitingDecisionKey === msg.key) modelThumbAwaitingDecisionKey = '';
+    scheduleModelThumbQueues(0);
   } else if (msg.type === 'modelThumbRender') {
+    completeModelThumbHostRequest(msg.key);
     if (isAssetBrowserModelKey(msg.key) && (!isAssetBrowserOpen() || !hasVisibleModelThumbElement(msg.key))) {
       pendingModelThumbs.delete(msg.key);
-      clearModelThumbRequestTimer(msg.key);
+      updateModelThumbElements(msg.key, setModelThumbQueuedOrCancelled);
       return;
     }
     if (!msg.key || !msg.cacheKey || (!msg.modelUri && !msg.mdxBase64)) {
-      pendingModelThumbs.delete(msg.key);
-      clearModelThumbRequestTimer(msg.key);
-      missingModelThumbs.add(msg.key);
-      updateModelThumbElements(msg.key, setModelThumbMissing);
+      markModelThumbMissing(msg.key, { reason: 'invalid-render-request' });
     } else if (!loadedModelThumbs.has(msg.key) && !missingModelThumbs.has(msg.key)) {
-      clearModelThumbRequestTimer(msg.key);
+      msg.seq = modelThumbSeq++;
       modelThumbQueue.push(msg);
-      processModelThumbQueue();
+      recordModelThumbEvent('render-enqueued', msg.key);
+      scheduleModelThumbQueues(0);
     }
   } else if (msg.type === 'objectDetailsLoaded') {
     pendingDetails.delete(msg.key);
@@ -1139,11 +1330,17 @@ window.addEventListener('message', event => {
   } else if (msg.type === 'mdxTexture') {
     if (modelThumbJob) {
       if (msg.thumbKey && msg.thumbKey !== modelThumbJob.key) return;
+      if (!modelThumbJob.receivedTextures) modelThumbJob.receivedTextures = new Set();
+      modelThumbJob.receivedTextures.add(msg.path);
       if (!msg.thumbKey && modelThumbJob.pendingTextures && modelThumbJob.pendingTextures.has(msg.path)) return;
       if (modelThumbJob.pendingTextures && !modelThumbJob.pendingTextures.has(msg.path)) return;
-      applyMdxTexture(msg);
+      if (msg.missing || msg.unsupported || msg.error) {
+        modelThumbJob.textureFailures = (modelThumbJob.textureFailures || 0) + 1;
+      } else {
+        applyMdxTexture(msg);
+      }
       if (modelThumbJob.pendingTextures) modelThumbJob.pendingTextures.delete(msg.path);
-      modelThumbProfile('texture-received', 'remaining=' + (modelThumbJob.pendingTextures ? modelThumbJob.pendingTextures.size : 0) + ' path=' + (msg.path || ''));
+      modelThumbProfile('texture-received', 'remaining=' + (modelThumbJob.pendingTextures ? modelThumbJob.pendingTextures.size : 0) + ' failures=' + (modelThumbJob.textureFailures || 0) + ' path=' + (msg.path || ''));
       if (!modelThumbJob.pendingTextures || modelThumbJob.pendingTextures.size === 0) scheduleModelThumbCapture(0, 1);
       return;
     }
@@ -1219,7 +1416,7 @@ function hideModelPreview() {
   const box = document.getElementById('mpv-box');
   if (box) box.hidden = true;
   if (mpvViewer() && mpvInited) { try { mpvViewer().setAutoplay(false); } catch (e) {} }
-  setTimeout(processModelThumbQueue, 40);
+  scheduleModelThumbQueues(0);
 }
 function mpvSetPlaying(on) {
   mpvPlaying = on;
@@ -1300,6 +1497,24 @@ function openAssetBrowser(mi) {
   }
   if (search) search.focus();
 }
+
+function openModelAssetBrowserForE2e() {
+  abMi = 0;
+  abActiveTab.set('model');
+  abSearchQuery.set('');
+  abSourceFilter.set('all');
+  const search = document.getElementById('ab-search');
+  if (search) search.value = '';
+  const ov = document.getElementById('ab-overlay');
+  if (ov) ov.hidden = false;
+  if (abCatalog) {
+    renderAssetGrid();
+  } else {
+    const grid = document.getElementById('ab-grid');
+    if (grid) grid.innerHTML = '<div class="ab-empty">Loading game assets...</div>';
+    vscodeApi.postMessage({ type: 'requestAssetCatalog' });
+  }
+}
 function updateAbTabs() {
   const tabs = document.getElementById('ab-tabs');
   if (!tabs) return;
@@ -1326,7 +1541,7 @@ function renderAssetGrid() {
   if (!matches.length) { grid.innerHTML = '<div class="ab-empty">No matching assets</div>'; return; }
   grid.innerHTML = matches.map(o => {
     const icon = activeTab === 'model'
-      ? '<span class="object-icon model-thumb pending" data-key="ab-model:' + esc(o.value) + '" data-model="' + esc(o.value) + '"></span>'
+      ? '<span class="object-icon model-thumb" data-key="ab-model:' + esc(o.value) + '" data-model="' + esc(o.value) + '"></span>'
       : (o.iconPath
         ? '<span class="object-icon" data-key="ab:' + esc(o.value) + '" data-icon="' + esc(o.iconPath) + '"></span>'
         : '<span class="object-icon missing"></span>');
@@ -1367,6 +1582,7 @@ function pickAsset(value) {
   if (close) close.addEventListener('click', closeAssetBrowser);
   if (ov) ov.addEventListener('mousedown', e => { if (e.target === ov) closeAssetBrowser(); });
   if (search) search.addEventListener('input', () => {
+    noteModelThumbUserActivity();
     if (abSearchRaf) cancelAnimationFrame(abSearchRaf);
     abSearchRaf = requestAnimationFrame(() => {
       abSearchRaf = 0;
@@ -1385,6 +1601,17 @@ function pickAsset(value) {
     const card = e.target.closest('.ab-card[data-value]');
     if (card) pickAsset(card.getAttribute('data-value'));
   });
+  if (grid) {
+    grid.addEventListener('scroll', noteModelThumbUserActivity, { passive: true });
+    grid.addEventListener('wheel', noteModelThumbUserActivity, { passive: true });
+    grid.addEventListener('pointerdown', noteModelThumbUserActivity, { passive: true });
+  }
+  if (search) {
+    search.addEventListener('keydown', noteModelThumbUserActivity, { passive: true });
+  }
+  document.addEventListener('scroll', noteModelThumbUserActivity, { passive: true, capture: true });
+  document.addEventListener('wheel', noteModelThumbUserActivity, { passive: true });
+  document.addEventListener('keydown', noteModelThumbUserActivity, { passive: true });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && ov && !ov.hidden) closeAssetBrowser(); });
   effect(() => {
     abActiveTab.get();
@@ -1783,3 +2010,34 @@ document.addEventListener('mousedown', e => {
 setupTree();
 setupDetails();
 render();
+setTimeout(() => { try { modelThumbEnsureInit(); } catch (e) {} }, 0);
+
+window.__wurstModelThumbDebug = {
+  openModelAssetBrowser: openModelAssetBrowserForE2e,
+  state: function () {
+    const visible = Array.prototype.slice.call(document.querySelectorAll('.model-thumb[data-key]')).map(function (el, index) {
+      return {
+        index: index,
+        key: el.getAttribute('data-key') || '',
+        model: el.getAttribute('data-model') || '',
+        pending: el.classList.contains('pending'),
+        missing: el.classList.contains('missing'),
+        reason: missingModelThumbReasons.get(el.getAttribute('data-key') || '') || null,
+        loaded: !!el.querySelector('img'),
+        visible: isModelThumbActuallyVisible(el),
+      };
+    });
+    return {
+      visible: visible,
+      events: modelThumbEvents.slice(),
+      requestQueue: modelThumbRequestQueue.map(function (req) { return req.key; }),
+      renderQueue: modelThumbQueue.map(function (job) { return job.key; }),
+      hostInflight: Array.from(modelThumbHostInflight),
+      activeJob: modelThumbJob ? modelThumbJob.key : '',
+      awaitingDecision: modelThumbAwaitingDecisionKey,
+      loadedCount: loadedModelThumbs.size,
+      missingCount: missingModelThumbs.size,
+      pendingCount: pendingModelThumbs.size,
+    };
+  },
+};

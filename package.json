@@ -24,7 +24,8 @@
     "activationEvents": [
         "workspaceContains:**/wurst.build",
         "workspaceContains:**/*.wurst",
-        "workspaceContains:**/*.jurst"
+        "workspaceContains:**/*.jurst",
+        "onCustomEditor:wurst.objModPreview"
     ],
     "main": "./dist/extension",
     "browser": "./dist/web/extension.js",
@@ -832,6 +833,10 @@
         "compile": "tsc -watch -p ./",
         "compile-web": "webpack",
         "watch-web": "webpack --watch",
+        "test": "npm run test:fuzzy && npm run test:webview",
+        "test:webview": "node ./scripts/test-webview.js",
+        "test:e2e:models:local": "node ./scripts/model-thumbnail-e2e.js",
+        "test:e2e:objmod-thumbs:local": "node ./scripts/objmod-thumbnail-e2e.js",
         "test:wc3-previews": "node ./scripts/wc3-preview-smoke.js",
         "test:fuzzy": "node ./scripts/test-fuzzy.js",
         "package-web": "webpack --mode production --devtool hidden-source-map",

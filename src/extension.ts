@@ -37,8 +37,17 @@ export async function activate(context: ExtensionContext) {
     context.subscriptions.push(registerAgentsGuideOffer(context));
 
     registerBasicCommands(context);
+    openObjModE2eFixture();
 
     await startLanguageClientWhenWorkspaceIsOpen(context);
+}
+
+function openObjModE2eFixture(): void {
+    const file = process.env.WURST_OBJMOD_E2E === '1' ? process.env.WURST_OBJMOD_E2E_FILE : '';
+    if (!file) return;
+    setTimeout(() => {
+        void vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(file), 'wurst.objModPreview', { preview: false });
+    }, 250);
 }
 
 function registerBasicCommands(context: ExtensionContext) {

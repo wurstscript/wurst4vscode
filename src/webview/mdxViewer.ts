@@ -32,6 +32,10 @@ export interface War3ViewerInitOptions {
     callbacks: War3ViewerCallbacks;
 }
 
+export interface War3ViewerLoadOptions {
+    autoplay?: boolean;
+}
+
 type DdsFormatName = 'dxt1' | 'dxt3' | 'dxt5';
 
 interface DdsInfo {
@@ -326,14 +330,9 @@ function clampPitch(p: number): number {
     return Math.max(-limit, Math.min(limit, p));
 }
 
-function renderFrame(ts: number) {
-    animLoopHandle = requestAnimationFrame(renderFrame);
-    if (!canvas || !gl) { lastTimestamp = ts; return; }
-
-        const delta = Math.min(ts - lastTimestamp, 100);
-        lastTimestamp = ts;
-        const activeRenderer = renderer;
-
+function renderCurrentScene(delta: number, reportFrame: boolean): boolean {
+    if (!canvas || !gl) return false;
+    const activeRenderer = renderer;
     try {
         const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
         const w = Math.max(2, Math.round(canvas.clientWidth * pixelRatio));
@@ -370,7 +369,7 @@ function renderFrame(ts: number) {
             activeRenderer.render(mv as unknown as import('gl-matrix').mat4, proj as unknown as import('gl-matrix').mat4, { wireframe });
 
             // report frame to inline script for slider
-            if (callbacks && currentSeqs.length > 0) {
+            if (reportFrame && callbacks && currentSeqs.length > 0) {
                 const seq = currentSeqs[currentSeqIndex];
                 if (seq) {
                     callbacks.onFrameUpdate(activeRenderer.getFrame(), seq.start, seq.end);
@@ -379,10 +378,21 @@ function renderFrame(ts: number) {
         }
 
         renderGizmo();
+        return true;
     } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         reportRenderError(message);
+        return false;
     }
+}
+
+function renderFrame(ts: number) {
+    animLoopHandle = requestAnimationFrame(renderFrame);
+    if (!canvas || !gl) { lastTimestamp = ts; return; }
+
+    const delta = Math.min(ts - lastTimestamp, 100);
+    lastTimestamp = ts;
+    renderCurrentScene(autoplay ? delta : 0, true);
 }
 
 // ─── gizmo ────────────────────────────────────────────────────────────────────
@@ -512,9 +522,13 @@ const War3Viewer = {
         }
     },
 
-    loadModel(buffer: ArrayBuffer, fileName: string, format: 'mdx' | 'mdl' = 'mdx') {
+    loadModel(buffer: ArrayBuffer, fileName: string, format: 'mdx' | 'mdl' = 'mdx', opts?: War3ViewerLoadOptions) {
         const cb = callbacks;
         try {
+            const profile = (phase: string, start: number) => {
+                cb?.onDebug(`load-profile ${phase} ${Math.round(performance.now() - start)}ms`);
+            };
+            const totalStart = performance.now();
             lastRenderError = null;
             const previousRenderer = renderer;
             if (previousRenderer) {
@@ -523,19 +537,26 @@ const War3Viewer = {
             renderer = null;
             gl = null;
 
+            const parseStart = performance.now();
             const model = format === 'mdl'
                 ? parseMDL(new TextDecoder('utf-8').decode(buffer))
                 : parseMDX(buffer);
+            profile('parse', parseStart);
 
             if (!canvas) throw new Error('canvas not initialized');
+            const contextStart = performance.now();
             const newGl = canvas.getContext('webgl2', { antialias: true, alpha: true, depth: true });
             if (!newGl) throw new Error('WebGL2 unavailable');
             gl = newGl;
+            profile('context', contextStart);
 
+            const initStart = performance.now();
             renderer = new ModelRenderer(model);
             renderer.initGL(gl);
+            profile('initGL', initStart);
 
             // camera from model bounds
+            const setupStart = performance.now();
             const info = model.Info;
             const min = info.MinimumExtent, max = info.MaximumExtent;
             const sizeX = max[0] - min[0];
@@ -563,17 +584,16 @@ const War3Viewer = {
             if (currentSeqIndex >= 0) {
                 renderer.setSequence(currentSeqIndex);
             }
-            autoplay = true;
+            autoplay = opts?.autoplay !== false;
+            if (!autoplay) renderer.update(0);
+            profile('setup', setupStart);
 
             // texture paths (skip replaceable textures like team color)
             const texturePaths = model.Textures
                 .filter(t => !t.ReplaceableId && t.Image)
                 .map(t => t.Image);
 
-            // Log every texture slot for diagnostics
-            model.Textures.forEach((t, i) => {
-                cb?.onDebug(`tex[${i}] replaceableId=${t.ReplaceableId} image="${t.Image}"`);
-            });
+            const replaceableTextureCount = model.Textures.filter(t => !!t.ReplaceableId).length;
 
             const loadedInfo: ModelLoadedInfo = {
                 name: (info.Name || fileName).replace(/\0/g, '').trim(),
@@ -584,12 +604,13 @@ const War3Viewer = {
             };
 
             cb?.onModelLoaded(loadedInfo);
+            profile('total-before-textures', totalStart);
 
             if (texturePaths.length > 0 && vscodeApi) {
-                cb?.onDebug(`requesting ${texturePaths.length} texture(s): ${texturePaths.join(', ')}`);
+                cb?.onDebug(`textures: request=${texturePaths.length} replaceable=${replaceableTextureCount} total=${model.Textures.length}`);
                 vscodeApi.postMessage({ type: 'requestTextures', paths: texturePaths });
             } else {
-                cb?.onDebug(`no non-replaceable textures to request (${model.Textures.length} total slots)`);
+                cb?.onDebug(`textures: request=0 replaceable=${replaceableTextureCount} total=${model.Textures.length}`);
             }
         } catch (e) {
             const message = e instanceof Error ? e.message : String(e);
@@ -659,6 +680,7 @@ const War3Viewer = {
         const w = canvas.width;
         const h = canvas.height;
         if (w <= 0 || h <= 0) return null;
+        gl.finish();
         const pixels = new Uint8ClampedArray(w * h * 4);
         gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
         const flipped = new Uint8ClampedArray(pixels.length);
@@ -685,6 +707,11 @@ const War3Viewer = {
 
     setAutoplay(enabled: boolean) {
         autoplay = enabled;
+    },
+
+    renderStillFrame(): boolean {
+        autoplay = false;
+        return renderCurrentScene(0, false);
     },
 
     setRenderMode(mode: string) {

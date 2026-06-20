@@ -22,7 +22,6 @@ const pendingModelThumbs = new Set();
 const loadedModelThumbs = new Map();
 const missingModelThumbs = new Set();
 const missingModelThumbReasons = new Map();
-const modelThumbRequestTimers = new Map();
 const modelThumbRequestQueue = [];
 const modelThumbHostInflight = new Set();
 const modelThumbQueue = [];
@@ -31,17 +30,13 @@ let modelThumbAwaitingDecisionKey = '';
 let modelThumbSeq = 0;
 let modelThumbInited = false;
 let modelThumbTextureTimer = 0;
-let modelThumbWatchdogTimer = 0;
 let modelThumbIdleTimer = 0;
 let modelThumbCancelGeneration = 0;
+let e2eForcedNarrowLayout = false;
 const modelThumbEvents = [];
-const MODEL_THUMB_REQUEST_TIMEOUT_MS = 30000;
-const MODEL_THUMB_RENDER_TIMEOUT_MS = 9000;
 const MODEL_THUMB_HOST_CONCURRENCY = 1;
-const MODEL_THUMB_MAX_QUEUE = 120;
 const MODEL_THUMB_ZERO_ALPHA_RETRIES = 0;
-const MODEL_THUMB_DARK_RETRIES = 0;
-const MODEL_THUMB_TEXTURE_WAIT_RETRIES = 1;
+const MODEL_THUMB_MIN_VISIBLE_PIXELS = 4;
 
 const tree = document.getElementById('tree');
 const details = document.getElementById('details');
@@ -397,7 +392,11 @@ function objectIconHtml(obj, extraClass) {
     const iconKey = obj.key + ':icon:' + iconPath;
     return '<span class="object-icon loading' + cls + '" data-key="' + esc(iconKey) + '" data-icon="' + esc(iconPath) + '" title="' + esc(iconPath) + '"><span class="icon-spinner"></span></span>';
   }
-  if (obj.modelPath) return '<span class="object-icon model' + cls + '" title="' + esc(obj.modelPath) + '"></span>';
+  if (obj.modelPath) {
+    const modelPath = String(obj.modelPath);
+    const modelKey = obj.key + ':model:' + modelPath;
+    return '<span class="object-icon model-thumb' + cls + '" data-key="' + esc(modelKey) + '" data-model="' + esc(modelPath) + '" title="' + esc(modelPath) + '"></span>';
+  }
   return '<span class="object-icon missing' + cls + '" title="No icon field"></span>';
 }
 
@@ -445,6 +444,7 @@ function renderTree() {
     ? '<div class="empty-state">No objects match &ldquo;' + esc(query) + '&rdquo;.<br>Try a different term or clear the search.</div>'
     : '<div class="empty-state">No objects</div>');
   iconLoader.observe(tree);
+  observeModelThumbs(tree);
 }
 
 // Move the selection highlight in place — rebuilding the whole tree (hundreds of rows) just to shift
@@ -579,6 +579,14 @@ function observeModelThumbs(root) {
   }
 }
 
+function requestVisibleModelThumbs(root) {
+  for (const el of (root || document).querySelectorAll('.model-thumb[data-model]')) {
+    const key = el.getAttribute('data-key') || '';
+    if (!key || pendingModelThumbs.has(key) || loadedModelThumbs.has(key) || missingModelThumbs.has(key)) continue;
+    if (isModelThumbActuallyVisible(el)) requestModelThumb(el);
+  }
+}
+
 function isAssetBrowserModelKey(key) {
   return String(key || '').indexOf('ab-model:') === 0;
 }
@@ -650,7 +658,7 @@ function pruneInvisibleQueuedModelThumbs() {
 
 function recordModelThumbEvent(type, key, extra) {
   modelThumbEvents.push(Object.assign({ type, key: key || '', at: Math.round(performance.now()) }, extra || {}));
-  if (modelThumbEvents.length > 1000) modelThumbEvents.splice(0, modelThumbEvents.length - 1000);
+  if (modelThumbEvents.length > 10000) modelThumbEvents.splice(0, modelThumbEvents.length - 10000);
 }
 
 function scheduleModelThumbQueues(delay) {
@@ -663,6 +671,7 @@ function scheduleModelThumbQueues(delay) {
 }
 
 function noteModelThumbUserActivity() {
+  requestVisibleModelThumbs(document);
   pruneInvisibleQueuedModelThumbs();
   scheduleModelThumbQueues(0);
 }
@@ -698,13 +707,6 @@ function processModelThumbRequestQueue() {
   if (modelThumbAwaitingDecisionKey || modelThumbJob || modelThumbQueue.length) return;
   sortModelThumbQueueByDom(modelThumbRequestQueue);
   while (modelThumbHostInflight.size < MODEL_THUMB_HOST_CONCURRENCY && modelThumbRequestQueue.length) {
-    if (modelThumbRequestQueue.length > MODEL_THUMB_MAX_QUEUE) {
-      const dropped = modelThumbRequestQueue.splice(0, modelThumbRequestQueue.length - MODEL_THUMB_MAX_QUEUE);
-      for (const oldReq of dropped) {
-        if (!oldReq || !oldReq.key) continue;
-        cancelPendingModelThumb(oldReq.key);
-      }
-    }
     const req = modelThumbRequestQueue.shift();
     if (!req || !req.key || loadedModelThumbs.has(req.key) || missingModelThumbs.has(req.key) || !pendingModelThumbs.has(req.key)) continue;
     if (!hasVisibleModelThumbElement(req.key)) {
@@ -714,20 +716,12 @@ function processModelThumbRequestQueue() {
     modelThumbHostInflight.add(req.key);
     updateModelThumbElements(req.key, el => el.classList.add('pending'));
     recordModelThumbEvent('host-start', req.key);
-    clearModelThumbRequestTimer(req.key);
-    modelThumbRequestTimers.set(req.key, setTimeout(() => {
-      modelThumbHostInflight.delete(req.key);
-      if (!pendingModelThumbs.has(req.key) || loadedModelThumbs.has(req.key) || missingModelThumbs.has(req.key)) return;
-      markModelThumbMissing(req.key, { reason: 'host-timeout' });
-      scheduleModelThumbQueues(0);
-    }, MODEL_THUMB_REQUEST_TIMEOUT_MS));
     vscodeApi.postMessage({ type: 'loadModelThumb', key: req.key, path: req.path });
   }
 }
 
 function completeModelThumbHostRequest(key) {
   modelThumbHostInflight.delete(key);
-  clearModelThumbRequestTimer(key);
   scheduleModelThumbQueues(0);
 }
 
@@ -738,13 +732,6 @@ function cancelQueuedModelThumbRequest(key) {
     }
   }
   modelThumbHostInflight.delete(key);
-  clearModelThumbRequestTimer(key);
-}
-
-function clearModelThumbRequestTimer(key) {
-  const timer = modelThumbRequestTimers.get(key);
-  if (timer) clearTimeout(timer);
-  modelThumbRequestTimers.delete(key);
 }
 
 function setModelThumbLoaded(el, uri) {
@@ -758,15 +745,8 @@ function setModelThumbQueuedOrCancelled(el) {
 
 function describeModelThumbMissing(reason) {
   if (!reason) return 'Thumbnail unavailable';
-  if (reason.reason === 'too-large') {
-    const kb = reason.bytes ? Math.round(reason.bytes / 1024) : 0;
-    const maxKb = reason.maxBytes ? Math.round(reason.maxBytes / 1024) : 0;
-    return 'Skipped large thumbnail' + (kb && maxKb ? ' (' + kb + ' KB > ' + maxKb + ' KB)' : '');
-  }
   if (reason.reason === 'not-found') return 'Model not found in map or game files';
   if (reason.reason === 'not-model') return 'Resolved asset is not a model';
-  if (reason.reason === 'bad-cache') return 'Thumbnail generation previously failed';
-  if (reason.reason === 'timeout') return 'Thumbnail timed out';
   if (reason.reason === 'error') return 'Thumbnail failed';
   return 'Thumbnail unavailable: ' + reason.reason;
 }
@@ -806,21 +786,6 @@ function modelThumbProfile(phase, detail) {
     detail: detail || '',
   });
   recordModelThumbEvent('profile:' + phase, modelThumbJob.key, { elapsedMs: Math.round(now - modelThumbJob.startedAt), detail: detail || '' });
-}
-
-function clearModelThumbWatchdog() {
-  if (modelThumbWatchdogTimer) clearTimeout(modelThumbWatchdogTimer);
-  modelThumbWatchdogTimer = 0;
-}
-
-function armModelThumbWatchdog(reason) {
-  clearModelThumbWatchdog();
-  const expected = modelThumbJob;
-  modelThumbWatchdogTimer = setTimeout(() => {
-    if (!modelThumbJob || modelThumbJob !== expected) return;
-    modelThumbProfile(reason || 'timeout');
-    finishModelThumb(false);
-  }, MODEL_THUMB_RENDER_TIMEOUT_MS);
 }
 
 async function modelThumbJobBytes(job) {
@@ -898,7 +863,6 @@ function pickStandSequence(seqs) {
 
 function modelThumbOnLoaded(seqs, texturePaths) {
   if (!modelThumbJob) return;
-  clearModelThumbWatchdog();
   const thumbTextures = modelThumbTexturePaths(texturePaths || []);
   modelThumbProfile('model-loaded', 'textures=' + thumbTextures.length + '/' + ((texturePaths && texturePaths.length) || 0));
   const v = mpvViewer();
@@ -917,9 +881,8 @@ function modelThumbOnLoaded(seqs, texturePaths) {
   const requested = modelThumbJob.requestedTextures ? Array.from(modelThumbJob.requestedTextures) : thumbTextures;
   modelThumbJob.pendingTextures = new Set(requested.filter(path => !modelThumbJob.receivedTextures || !modelThumbJob.receivedTextures.has(path)));
   modelThumbJob.textureFailures = modelThumbJob.textureFailures || 0;
-  modelThumbJob.textureWaitRetries = 0;
-  // Fallback only: normally texture replies reschedule this much sooner.
-  scheduleModelThumbCapture(modelThumbJob.pendingTextures.size ? 60 : 0, 1);
+  if (modelThumbJob.pendingTextures.size === 0) scheduleModelThumbCapture(0, 1);
+  else modelThumbProfile('wait-textures', 'remaining=' + modelThumbJob.pendingTextures.size);
 }
 
 function scheduleModelThumbCapture(timeoutMs, frames) {
@@ -955,18 +918,7 @@ function captureModelThumb() {
     return;
   }
   if (modelThumbJob.pendingTextures && modelThumbJob.pendingTextures.size > 0) {
-    modelThumbJob.textureWaitRetries = (modelThumbJob.textureWaitRetries || 0) + 1;
-    modelThumbProfile('capture-wait-textures', 'retry=' + modelThumbJob.textureWaitRetries + ' remaining=' + modelThumbJob.pendingTextures.size);
-    if (modelThumbJob.textureWaitRetries <= MODEL_THUMB_TEXTURE_WAIT_RETRIES) {
-      scheduleModelThumbCapture(60, 1);
-    } else {
-      finishModelThumb(false, 'texture-wait-timeout');
-    }
-    return;
-  }
-  if (modelThumbJob.textureFailures > 0) {
-    modelThumbProfile('capture-skip-texture-failures', 'count=' + modelThumbJob.textureFailures);
-    finishModelThumb(false, 'texture-failed');
+    modelThumbProfile('capture-blocked-textures', 'remaining=' + modelThumbJob.pendingTextures.size);
     return;
   }
   modelThumbProfile('capture-start');
@@ -977,7 +929,7 @@ function captureModelThumb() {
     if (v && typeof v.renderStillFrame === 'function') v.renderStillFrame();
     const out = cropModelThumbCanvas(canvas);
     const quality = modelThumbQuality(out);
-    if (quality.alphaPixels < 24) {
+    if (quality.alphaPixels < MODEL_THUMB_MIN_VISIBLE_PIXELS) {
       modelThumbJob.blackRetries = (modelThumbJob.blackRetries || 0) + 1;
       modelThumbProfile('capture-empty', 'retry=' + modelThumbJob.blackRetries + ' alpha=' + quality.alphaPixels);
       if (modelThumbJob.blackRetries <= MODEL_THUMB_ZERO_ALPHA_RETRIES) {
@@ -988,14 +940,9 @@ function captureModelThumb() {
       return;
     }
     if (quality.tooDark) {
-      modelThumbJob.blackRetries = (modelThumbJob.blackRetries || 0) + 1;
-      modelThumbProfile('capture-too-dark', 'retry=' + modelThumbJob.blackRetries + ' alpha=' + quality.alphaPixels + ' avg=' + Math.round(quality.avgLuma) + ' max=' + quality.maxLuma);
-      if (modelThumbJob.blackRetries <= MODEL_THUMB_DARK_RETRIES) {
-        scheduleModelThumbCapture(80, 1);
-      } else {
-        finishModelThumb(false, 'too-dark');
-      }
-      return;
+      // Some valid WC3 models render as very dark silhouettes in the thumbnail light/camera setup.
+      // Prefer caching a visible thumbnail over spending a render cycle and ending as a permanent "?".
+      modelThumbProfile('capture-dark-accepted', 'alpha=' + quality.alphaPixels + ' avg=' + Math.round(quality.avgLuma) + ' max=' + quality.maxLuma);
     }
     const dataUrl = out.toDataURL('image/webp', 0.58);
     const marker = 'data:image/webp;base64,';
@@ -1033,7 +980,7 @@ function modelThumbQuality(canvas) {
   }
   const avgLuma = alphaPixels ? lumaSum / alphaPixels : 0;
   return {
-    tooDark: alphaPixels < 24 || (avgLuma < 10 && maxLuma < 34),
+    tooDark: alphaPixels >= MODEL_THUMB_MIN_VISIBLE_PIXELS && avgLuma < 10 && maxLuma < 34,
     alphaPixels,
     avgLuma,
     maxLuma,
@@ -1112,7 +1059,6 @@ function finishModelThumb(rendered, reason, localUri) {
   const cacheKey = modelThumbJob.cacheKey;
   const aliasKey = modelThumbJob.aliasKey;
   clearTimeout(modelThumbTextureTimer);
-  clearModelThumbWatchdog();
   if (!rendered) {
     vscodeApi.postMessage({ type: 'modelThumbFailed', key, cacheKey, aliasKey, reason: reason || 'failed' });
     cancelQueuedModelThumbRequest(key);
@@ -1135,7 +1081,6 @@ function cancelCurrentModelThumb(reason) {
   const key = modelThumbJob.key;
   modelThumbProfile(reason || 'cancelled');
   clearTimeout(modelThumbTextureTimer);
-  clearModelThumbWatchdog();
   pendingModelThumbs.delete(key);
   cancelQueuedModelThumbRequest(key);
   if (modelThumbAwaitingDecisionKey === key) modelThumbAwaitingDecisionKey = '';
@@ -1167,13 +1112,6 @@ function processModelThumbQueue() {
   if (modelThumbAwaitingDecisionKey) return;
   const box = document.getElementById('mpv-box');
   if (box && !box.hidden) return;
-  if (modelThumbQueue.length > MODEL_THUMB_MAX_QUEUE) {
-    const dropped = modelThumbQueue.splice(0, modelThumbQueue.length - MODEL_THUMB_MAX_QUEUE);
-    for (const oldJob of dropped) {
-      if (!oldJob || !oldJob.key) continue;
-      cancelPendingModelThumb(oldJob.key);
-    }
-  }
   sortModelThumbQueueByDom(modelThumbQueue);
   const job = modelThumbQueue.shift();
   if (job && !hasVisibleModelThumbElement(job.key)) {
@@ -1201,7 +1139,6 @@ function processModelThumbQueue() {
   modelThumbJob.requestedTextures = null;
   modelThumbJob.textureFailures = 0;
   modelThumbProfile('fetch-start', job.modelUri ? 'uri' : 'base64');
-  armModelThumbWatchdog('load-timeout');
   modelThumbJobBytes(job).then(buffer => {
     if (!modelThumbJob || modelThumbJob !== job) return;
     modelThumbProfile('load-start', String(job.fileName || ''));
@@ -1515,6 +1452,21 @@ function openModelAssetBrowserForE2e() {
     vscodeApi.postMessage({ type: 'requestAssetCatalog' });
   }
 }
+
+function searchModelAssetBrowserForE2e(value) {
+  abActiveTab.set('model');
+  abSearchQuery.set(String(value || ''));
+  const search = document.getElementById('ab-search');
+  if (search) search.value = String(value || '');
+  if (isAssetBrowserOpen() && abCatalog) renderAssetGrid();
+}
+
+function forceNarrowLayoutForE2e(on) {
+  e2eForcedNarrowLayout = !!on;
+  const editor = document.getElementById('object-editor');
+  if (editor) editor.classList.toggle('narrow', !!on);
+}
+
 function updateAbTabs() {
   const tabs = document.getElementById('ab-tabs');
   if (!tabs) return;
@@ -1541,7 +1493,7 @@ function renderAssetGrid() {
   if (!matches.length) { grid.innerHTML = '<div class="ab-empty">No matching assets</div>'; return; }
   grid.innerHTML = matches.map(o => {
     const icon = activeTab === 'model'
-      ? '<span class="object-icon model-thumb" data-key="ab-model:' + esc(o.value) + '" data-model="' + esc(o.value) + '"></span>'
+      ? '<span class="object-icon model-thumb pending" data-key="ab-model:' + esc(o.value) + '" data-model="' + esc(o.value) + '"></span>'
       : (o.iconPath
         ? '<span class="object-icon" data-key="ab:' + esc(o.value) + '" data-icon="' + esc(o.iconPath) + '"></span>'
         : '<span class="object-icon missing"></span>');
@@ -1550,6 +1502,7 @@ function renderAssetGrid() {
   }).join('');
   iconLoader.observe(grid);
   observeModelThumbs(grid);
+  requestAnimationFrame(() => requestVisibleModelThumbs(grid));
 }
 function closeAssetBrowser() {
   const ov = document.getElementById('ab-overlay');
@@ -1971,10 +1924,27 @@ if (searchClear) {
   const editor = document.getElementById('object-editor');
   const splitter = document.getElementById('splitter');
   if (!editor || !splitter) return;
+  const isStacked = () => editor.classList.contains('narrow') || (window.matchMedia && window.matchMedia('(max-width: 720px)').matches);
+  const applySavedWidth = () => {
+    const saved = vscodeApi.getState() || {};
+    if (isStacked()) editor.style.removeProperty('--list-w');
+    else if (saved.listW) editor.style.setProperty('--list-w', saved.listW + 'px');
+  };
   const saved = vscodeApi.getState() || {};
-  if (saved.listW) editor.style.setProperty('--list-w', saved.listW + 'px');
+  if (saved.listW && !isStacked()) editor.style.setProperty('--list-w', saved.listW + 'px');
+  window.addEventListener('resize', applySavedWidth);
+  if (typeof ResizeObserver === 'function') {
+    const ro = new ResizeObserver(entries => {
+      const rect = entries[0] && entries[0].contentRect;
+      if (!rect) return;
+      editor.classList.toggle('narrow', e2eForcedNarrowLayout || rect.width <= 720);
+      applySavedWidth();
+    });
+    ro.observe(editor);
+  }
   let dragging = false;
   splitter.addEventListener('mousedown', e => {
+    if (isStacked()) return;
     dragging = true;
     splitter.classList.add('dragging');
     document.body.style.userSelect = 'none';
@@ -1984,7 +1954,8 @@ if (searchClear) {
   window.addEventListener('mousemove', e => {
     if (!dragging) return;
     const rect = editor.getBoundingClientRect();
-    const w = Math.max(170, Math.min(rect.width - 260, e.clientX - rect.left));
+    const max = Math.max(170, rect.width - 260);
+    const w = Math.max(170, Math.min(max, e.clientX - rect.left));
     editor.style.setProperty('--list-w', w + 'px');
   });
   window.addEventListener('mouseup', () => {
@@ -2014,6 +1985,56 @@ setTimeout(() => { try { modelThumbEnsureInit(); } catch (e) {} }, 0);
 
 window.__wurstModelThumbDebug = {
   openModelAssetBrowser: openModelAssetBrowserForE2e,
+  searchModelAssetBrowser: searchModelAssetBrowserForE2e,
+  forceNarrowLayout: forceNarrowLayoutForE2e,
+  selectObject: function (rawcode) {
+    const needle = String(rawcode || '').toLowerCase();
+    const obj = objects.find(function (candidate) {
+      return String(candidate.baseId || '').toLowerCase() === needle || String(candidate.newId || '').toLowerCase() === needle;
+    });
+    if (!obj) return false;
+    selectObject(obj.key);
+    return true;
+  },
+  layout: function () {
+    const editor = document.getElementById('object-editor');
+    const list = document.querySelector('.object-list');
+    const det = document.getElementById('details');
+    const rect = function (el) {
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
+    };
+    const er = rect(editor);
+    const lr = rect(list);
+    const dr = rect(det);
+    return {
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      editor: er,
+      list: lr,
+      details: dr,
+      stacked: !!(lr && dr && dr.top >= lr.bottom - 1),
+      listVisible: !!(lr && lr.width > 20 && lr.height > 20),
+      detailsVisible: !!(dr && dr.width > 20 && dr.height > 20),
+    };
+  },
+  detailsRows: function () {
+    const mods = detailCache.get(selectedKey) || [];
+    return mods.map(function (mod) {
+      return {
+        fieldId: mod.fieldId || '',
+        label: mod.label || '',
+        currentValue: mod.currentValue || '',
+        baseValue: mod.baseValue || '',
+        overrideValue: mod.overrideValue || '',
+        overridden: !!mod.overridden,
+        editable: !!mod.editable,
+        level: mod.level == null ? null : mod.level,
+        dataPt: mod.dataPt == null ? null : mod.dataPt,
+        assetPath: mod.assetPath || '',
+      };
+    });
+  },
   state: function () {
     const visible = Array.prototype.slice.call(document.querySelectorAll('.model-thumb[data-key]')).map(function (el, index) {
       return {
@@ -2028,6 +2049,18 @@ window.__wurstModelThumbDebug = {
       };
     });
     return {
+      fileInfo: initial.fileInfo || null,
+      selectedKey: selectedKey,
+      selectedObject: objects.find(function (candidate) { return candidate.key === selectedKey; }) || null,
+      assetBrowserOpen: isAssetBrowserOpen(),
+      assetBrowserCount: document.querySelectorAll('#ab-grid .ab-card').length,
+      assetCatalogLoaded: !!abCatalog,
+      assetCatalogCounts: abCatalog ? {
+        models: (abCatalog.model || []).length,
+        icons: (abCatalog.icon || []).length,
+        pathing: (abCatalog.pathing || []).length,
+      } : null,
+      inert3dPlaceholders: document.querySelectorAll('.object-icon.model').length,
       visible: visible,
       events: modelThumbEvents.slice(),
       requestQueue: modelThumbRequestQueue.map(function (req) { return req.key; }),

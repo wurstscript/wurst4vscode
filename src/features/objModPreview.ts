@@ -160,7 +160,7 @@ interface PreviewMod {
     options?: ValueOption[];
 }
 
-interface ValueOption {
+export interface ValueOption {
     value: string;
     label: string;
     detail?: string;
@@ -319,12 +319,28 @@ const ENUM_OPTIONS: Record<string, ValueOption[]> = {
     ],
 };
 
-interface ObjValueCatalog {
+export interface ObjValueCatalog {
     objects: Map<string, ValueOption>;
     icons: ValueOption[];
     models: ValueOption[];
     pathing: ValueOption[];
 }
+
+interface CombinedObjModInfo {
+    mainName: string;
+    skinName?: string;
+}
+
+const MODEL_CATALOG_SLK_SOURCES: Array<{ path: string; modelKeys: string[] }> = [
+    { path: 'Doodads\\Doodads.slk', modelKeys: ['file'] },
+    { path: 'Units\\DestructableData.slk', modelKeys: ['file'] },
+    { path: 'Units\\UnitData.slk', modelKeys: ['file'] },
+    { path: 'Units\\ItemData.slk', modelKeys: ['file'] },
+];
+
+const MODEL_CATALOG_FALLBACKS: Array<{ path: string; label: string; ownerId: string }> = [
+    { path: 'Doodads\\Terrain\\LordaeronTree\\LordaeronTree', label: 'Lordaeron Tree', ownerId: 'FTtw' },
+];
 
 function getObjModSiblingFileName(fileName: string): string | undefined {
     const lower = fileName.toLowerCase();
@@ -506,8 +522,9 @@ function buildFieldRows(entry: ObjModEntry, gameData: ObjEditorData, triggerStri
         const applies = ctx.applies(field);
         const levels = ctx.levelsFor(field);
         for (const level of levels) {
-            const key = fieldKey(field.id, level, undefined);
-            const override = overrideMods.get(key)?.[0] ?? findOverrideByField(entry.mods, field.id, level);
+            const dataPt = extended ? field.data : undefined;
+            const key = fieldKey(field.id, level, dataPt);
+            const override = overrideMods.get(key)?.[0] ?? findOverrideByField(entry.mods, field.id, level, dataPt);
             if (override) usedMods.add(override);
             const baseValue = resolveBaseFieldValue(entry.baseId, field, gameData, level);
             if (!override && (!applies || baseValue === undefined || baseValue === '')) continue;
@@ -516,7 +533,7 @@ function buildFieldRows(entry: ObjModEntry, gameData: ObjEditorData, triggerStri
             const currentValue = formattedOverride ?? formattedBase;
             // Carry the level/dataPt the mod has (or would have) so the host can locate/create it.
             const rowLevel = override ? override.level : (extended ? (level ?? 0) : level);
-            const rowDataPt = override ? override.dataPt : (extended ? field.data : undefined);
+            const rowDataPt = override ? override.dataPt : dataPt;
             const row: PreviewMod = {
                 key,
                 fieldId: field.id,
@@ -872,7 +889,20 @@ function fieldKey(fieldId: string, level?: number, dataPt?: number): string {
     return `${fieldId.toLowerCase()}|${level ?? ''}|${dataPt ?? ''}`;
 }
 
-function findOverrideByField(mods: ObjModMod[], fieldId: string, level?: number): ObjModMod | undefined {
+function findOverrideByField(mods: ObjModMod[], fieldId: string, level?: number, dataPt?: number): ObjModMod | undefined {
+    const norm = (v: number | undefined) => (v === undefined ? null : v);
+    const exact = mods.find((mod) =>
+        mod.fieldId.toLowerCase() === fieldId.toLowerCase() &&
+        norm(mod.level) === norm(level) &&
+        norm(mod.dataPt) === norm(dataPt));
+    if (exact) return exact;
+    if (dataPt !== undefined) {
+        const legacy = mods.find((mod) =>
+            mod.fieldId.toLowerCase() === fieldId.toLowerCase() &&
+            norm(mod.level) === norm(level) &&
+            mod.dataPt === undefined);
+        if (legacy) return legacy;
+    }
     return mods.find((mod) =>
         mod.fieldId.toLowerCase() === fieldId.toLowerCase() &&
         (level === undefined || mod.level === level));
@@ -891,7 +921,7 @@ function resolveBaseDisplayName(baseId: string, summaryData: Pick<ObjSummaryData
 
 function resolveBaseFieldValue(baseId: string, field: MetaField, gameData: ObjEditorData, level?: number): string | undefined {
     const raw = field.slkName.toLowerCase() === 'profile'
-        ? gameData.profile.get(baseId)?.[resolveProfileField(field, level)]
+        ? firstDefined(gameData.profile.get(baseId), resolveProfileFields(field, level))
         : getBaseSlkRow(baseId, field, gameData)?.[resolveSlkField(field, level)];
     // Fields packed into one comma-list cell (e.g. Buttonpos "x,y") select their part via index.
     if (raw !== undefined && field.index !== undefined && raw.indexOf(',') !== -1) {
@@ -915,8 +945,19 @@ function getAnyProfileValue(baseId: string, fields: string[], summaryData: Pick<
     return undefined;
 }
 
-function resolveProfileField(field: MetaField, level?: number): string {
-    return appendRepeat(field.sourceField, field.repeat, level, 1);
+function firstDefined(row: Record<string, string> | undefined, fields: string[]): string | undefined {
+    if (!row) return undefined;
+    for (const field of fields) {
+        const value = row[field];
+        if (value !== undefined) return value;
+    }
+    return undefined;
+}
+
+function resolveProfileFields(field: MetaField, level?: number): string[] {
+    const fields = [appendRepeat(field.sourceField, field.repeat, level, 1)];
+    if (field.repeat > 0 && !fields.includes(field.sourceField)) fields.push(field.sourceField);
+    return fields;
 }
 
 function resolveSlkField(field: MetaField, level?: number): string {
@@ -1009,7 +1050,7 @@ function loadObjProfileData(ext: string): Promise<ProfileTable> {
     return promise;
 }
 
-function loadObjValueCatalog(): Promise<ObjValueCatalog> {
+export function loadObjValueCatalog(): Promise<ObjValueCatalog> {
     const key = 'all';
     let promise = objCatalogCache.get(key);
     if (!promise) {
@@ -1044,14 +1085,39 @@ async function loadObjValueCatalogUncached(): Promise<ObjValueCatalog> {
             }
         }
     }
+    await addSlkModelAssets(modelMap, objects, worldStrings);
+    addModelFallbacks(modelMap);
 
     addPathingFallbacks(pathingMap);
     return {
         objects,
         icons: sortOptions([...iconMap.values()]).slice(0, 700),
-        models: sortOptions([...modelMap.values()]).slice(0, 700),
+        models: sortOptions([...modelMap.values()]),
         pathing: sortOptions([...pathingMap.values()]).slice(0, 300),
     };
+}
+
+function addModelFallbacks(modelMap: Map<string, ValueOption>): void {
+    for (const fallback of MODEL_CATALOG_FALLBACKS) {
+        const model = normalizeModelPath(fallback.path);
+        if (model) addAssetOption(modelMap, model, fallback.label, fallback.ownerId);
+    }
+}
+
+async function addSlkModelAssets(modelMap: Map<string, ValueOption>, objects: Map<string, ValueOption>, worldStrings: Map<string, string>): Promise<void> {
+    await Promise.all(MODEL_CATALOG_SLK_SOURCES.map(async (source) => {
+        const buf = await readGameData(source.path);
+        if (!buf) return;
+        const table = parseSlk(buf.toString('utf8'));
+        for (const [id, row] of table.rows) {
+            const object = objects.get(id.toLowerCase());
+            const label = object?.label || resolveProfileDisplayName(row, worldStrings) || id;
+            for (const key of source.modelKeys) {
+                const model = normalizeProfileModelPath(key, row[key]);
+                if (model) addAssetOption(modelMap, model, label, id);
+            }
+        }
+    }));
 }
 
 function catalogWithDocumentObjects(
@@ -1204,11 +1270,11 @@ function buildObjLoadingHtml(fileName: string): string {
     });
 }
 
-async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPreviewContext, wtsWarning?: string, mdxViewerUri?: string, objModEditorUri?: string): Promise<string> {
+async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPreviewContext, wtsWarning?: string, mdxViewerUri?: string, objModEditorUri?: string, combined?: CombinedObjModInfo): Promise<string> {
     const typeLabel = TYPE_LABELS[parsed.ext.slice(1)] ?? parsed.ext.slice(1).toUpperCase();
     const triggerStrings = loadTriggerStringsForUri(context.uri);
     const { objects, metadataSource } = await buildModel(parsed, triggerStrings);
-    const initialJson = JSON.stringify({ objects, selectedKey: objects[0]?.key ?? '', extended: parsed.extended })
+    const initialJson = JSON.stringify({ objects, selectedKey: objects[0]?.key ?? '', extended: parsed.extended, fileInfo: combined ?? { mainName: fileName } })
         .replace(/</g, '\\u003c')
         .replace(/>/g, '\\u003e')
         .replace(/&/g, '\\u0026')
@@ -1217,6 +1283,9 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
     const overrides = parsed.origObjs.reduce((sum, entry) => sum + entry.mods.length, 0) +
         parsed.customObjs.reduce((sum, entry) => sum + entry.mods.length, 0);
     const summary = `${objects.length} object${objects.length === 1 ? '' : 's'} - ${overrides} override${overrides === 1 ? '' : 's'}`;
+    const combinedMeta = combined?.skinName
+        ? ` - combined ${escapeHtml(combined.mainName)} + ${escapeHtml(combined.skinName)}`
+        : '';
     const errorBanner = parsed.error
         ? `<div class="error">Parse error: ${escapeHtml(parsed.error)}</div>`
         : '';
@@ -2157,16 +2226,31 @@ tr.overridden td {
   place-items: center;
   color: var(--muted);
 }
+.object-editor.narrow {
+  grid-template-columns: 1fr;
+  grid-template-rows: minmax(150px, 34%) minmax(260px, 1fr);
+  overflow: auto;
+}
+.object-editor.narrow .object-list { border-right: 0; border-bottom: 1px solid var(--border); min-height: 150px; }
+.object-editor.narrow .details { min-height: 260px; }
+.object-editor.narrow table { min-width: 520px; }
+.object-editor.narrow .splitter { display: none; }
 @media (max-width: 720px) {
-  .object-editor { grid-template-columns: 1fr; grid-template-rows: minmax(160px, 34%) 0 minmax(0, 1fr); }
-  .object-list { border-right: 0; border-bottom: 1px solid var(--border); }
+  .object-editor {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(150px, 34%) minmax(260px, 1fr);
+    overflow: auto;
+  }
+  .object-list { border-right: 0; border-bottom: 1px solid var(--border); min-height: 150px; }
+  .details { min-height: 260px; }
+  table { min-width: 520px; }
   .splitter { display: none; }
 }
 `,
         body: `<div class="content">
 <div class="md-header">
   <div class="md-title">${escapeHtml(fileName)}</div>
-  <div class="md-meta">WC3 ${escapeHtml(typeLabel)} object data - v${parsed.version} - ${escapeHtml(summary)} - ${escapeHtml(metadataSource)}${parsed.extended ? ' - extended (level/dataPt)' : ''}<span id="editable-badge" class="editable-badge" title="Existing overrides can be edited. Ctrl+S to save.">editable</span></div>
+  <div class="md-meta">WC3 ${escapeHtml(typeLabel)} object data - v${parsed.version} - ${escapeHtml(summary)} - ${escapeHtml(metadataSource)}${parsed.extended ? ' - extended (level/dataPt)' : ''}${combinedMeta}<span id="editable-badge" class="editable-badge" title="Existing overrides can be edited. Ctrl+S to save.">editable</span></div>
 </div>
 ${errorBanner}
 ${warningBanner}
@@ -2527,7 +2611,19 @@ class ObjModDocument implements vscode.CustomDocument {
             : this.mainFile;
     }
 
+    get combinedInfo(): CombinedObjModInfo {
+        return {
+            mainName: uriBaseName(this.mainUri),
+            skinName: this.skinUri ? uriBaseName(this.skinUri) : undefined,
+        };
+    }
+
     dispose(): void {}
+}
+
+function uriBaseName(uri: vscode.Uri): string {
+    const path = uri.path;
+    return path.slice(path.lastIndexOf('/') + 1);
 }
 
 function fileExtOf(uri: vscode.Uri): string {
@@ -2569,7 +2665,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         ).toString();
         // Show a spinner immediately — buildHtml awaits CASC game-data and can exceed 200ms.
         panel.webview.html = buildObjLoadingHtml(fileName);
-        doc.reload = async () => { panel.webview.html = await buildHtml(doc.displayFile, fileName, ctx, doc.wtsWarning, mdxViewerUri, objModEditorUri); };
+        doc.reload = async () => { panel.webview.html = await buildHtml(doc.displayFile, fileName, ctx, doc.wtsWarning, mdxViewerUri, objModEditorUri, doc.combinedInfo); };
 
         panel.webview.onDidReceiveMessage((message) => { void this.handleMessage(message, panel.webview, doc); });
         await doc.reload();

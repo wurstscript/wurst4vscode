@@ -22,6 +22,8 @@ type InstallOptions = {
     offerPostInstallActions?: boolean;
 };
 
+const UPDATE_SNOOZE_UNTIL_KEY = 'wurst.updatePrompt.snoozedUntil';
+
 export function hasNewLayout(): boolean {
     return fs.existsSync(RUNTIME_DIR) && fs.existsSync(COMPILER_DIR);
 }
@@ -247,9 +249,12 @@ async function installFreshFromNightly(options: InstallOptions): Promise<void> {
     );
 }
 
-export async function maybeOfferUpdate(): Promise<void> {
+export async function maybeOfferUpdate(context?: vscode.ExtensionContext): Promise<void> {
     try {
         if (!hasNewLayout() || !fs.existsSync(COMPILER_JAR)) return;
+        const snoozedUntil = context?.globalState.get<number>(UPDATE_SNOOZE_UNTIL_KEY) ?? 0;
+        if (snoozedUntil > Date.now()) return;
+
         const installed = getInstalledVersionString();
         const installedShort = installed ? extractShortSha(installed) : null;
         const latestSha = await fetchNightlyCommitSha();
@@ -262,10 +267,21 @@ export async function maybeOfferUpdate(): Promise<void> {
 
         const choice = await vscode.window.showInformationMessage(
             'A newer WurstScript version is available.',
-            { modal: true, detail }, 'Update', 'Later'
+            { modal: true, detail }, 'Update', 'Later', 'Cancel'
         );
-        if (choice === 'Update') await installWithRetry();
+        if (choice === 'Update') {
+            await context?.globalState.update(UPDATE_SNOOZE_UNTIL_KEY, undefined);
+            await installWithRetry();
+        } else if (choice === 'Later') {
+            await context?.globalState.update(UPDATE_SNOOZE_UNTIL_KEY, nextLocalDayStartMs());
+        }
     } catch (e) {
         console.warn('Update check failed:', e);
     }
+}
+
+function nextLocalDayStartMs(): number {
+    const next = new Date();
+    next.setHours(24, 0, 0, 0);
+    return next.getTime();
 }

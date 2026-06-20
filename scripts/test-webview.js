@@ -12,6 +12,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const ts = require('typescript');
+const vm = require('vm');
 
 const root = path.resolve(__dirname, '..');
 const moduleCache = new Map();
@@ -396,11 +397,111 @@ function testBc5DdsDecode() {
     );
 }
 
+async function testModelThumbnailRequestsTexturesByDefault() {
+    const tmpRoot = fs.mkdtempSync(path.join(require('os').tmpdir(), 'wurst-model-thumb-'));
+    const modelPath = path.join(tmpRoot, 'Footman.mdx');
+    const docPath = path.join(tmpRoot, 'war3map.w3u');
+    fs.writeFileSync(modelPath, Buffer.alloc(256 * 1024, 7));
+    fs.writeFileSync(docPath, Buffer.from([0]));
+
+    const posted = [];
+    const mod = loadTsModuleWithMocks('src/features/preview/modelPreviewHost.ts', {
+        vscode: {
+            workspace: {
+                fs: {
+                    readFile: async (uri) => fs.promises.readFile(uri.fsPath),
+                },
+            },
+            Uri: {
+                file: (fsPath) => ({ fsPath }),
+            },
+        },
+        '../imageAssetSupport': {
+            getCandidateRoots: async () => [tmpRoot],
+            resolveAssetPathWithCasc: async () => modelPath,
+            assetPathVariants: () => [],
+            fastByteHash: () => 'abc123',
+        },
+        './cascStorage': {
+            getModelThumbCacheDir: () => path.join(tmpRoot, 'thumb-cache'),
+        },
+        './imageDecoders': {
+            decodeToRgba: () => ({ rgba: new Uint8Array([0, 0, 0, 255]), width: 1, height: 1 }),
+        },
+    });
+
+    await mod.requestModelThumbnail('Footman.mdx', 'asset-model:0:Footman', { fsPath: docPath }, {
+        postMessage: async (message) => {
+            posted.push(message);
+            return true;
+        },
+    });
+
+    const render = posted.find((message) => message.type === 'modelThumbRender');
+    assert.ok(render, 'uncached model thumbnails should ask the webview to render, even for large models');
+    assert.equal(render.skipTextures, undefined, 'model thumbnail renders must load textures by default');
+    assert.ok(render.mdxBase64, 'model bytes should still be sent for thumbnail rendering');
+    assert.ok(
+        !posted.some((message) => message.type === 'modelThumbMissing' && message.reason === 'too-large'),
+        'large resolved models must not be skipped before thumbnail rendering'
+    );
+}
+
+function testAssetBrowserForwardsModelTextures() {
+    const src = fs.readFileSync(path.join(root, 'src/features/assetLinks.ts'), 'utf8');
+    const match = src.match(/<script>\r?\n([\s\S]*?)\r?\n<\/script>`/);
+    assert.ok(match, 'asset browser inline script should be present');
+    const script = match[1].replace(
+        'var initial = ${initialJson};',
+        "var initial = { activeTab: 'model', tabs: { icon: [], model: [] }, currentValue: '' };"
+    );
+    new vm.Script(script);
+    assert.ok(
+        script.includes("msg.type === 'requestTextures'"),
+        'asset browser model renderer should handle texture requests'
+    );
+    assert.ok(
+        script.includes("thumbKey: modelJob.key"),
+        'asset browser texture requests should be keyed to the active thumbnail job'
+    );
+    assert.ok(
+        script.includes("msg.type === 'mdxTexture'"),
+        'asset browser should consume texture payload replies before thumbnail capture'
+    );
+    assert.ok(
+        !/type === 'requestTextures'\)\s*return/.test(script),
+        'asset browser must not silently drop model texture requests'
+    );
+}
+
+function testNoThumbnailTimingFallbacks() {
+    const host = fs.readFileSync(path.join(root, 'src/features/preview/modelPreviewHost.ts'), 'utf8');
+    const objmod = fs.readFileSync(path.join(root, 'src/webview/objModEditorWebview.ts'), 'utf8');
+    const assetLinks = fs.readFileSync(path.join(root, 'src/features/assetLinks.ts'), 'utf8');
+    const objmodE2e = fs.readFileSync(path.join(root, 'scripts/objmod-thumbnail-e2e.js'), 'utf8');
+    const modelE2e = fs.readFileSync(path.join(root, 'scripts/model-thumbnail-e2e.js'), 'utf8');
+
+    assert.ok(!host.includes('WURST_MODEL_THUMB_MAX_MODEL_BYTES'), 'thumbnail host must not expose a size cutoff for rendering');
+    assert.ok(!host.includes('too-large'), 'thumbnail host must not skip large models');
+    assert.ok(!host.includes('bad-cache-hit'), 'thumbnail host must not suppress retries based on old failures');
+    assert.ok(!objmod.includes('TEXTURE_WAIT_RETRIES'), 'objmod thumbnails must wait for texture completion instead of retry-budget capture');
+    assert.ok(!objmod.includes('texture-wait-timeout'), 'objmod thumbnails must not fail because texture loading took too long');
+    assert.ok(!objmod.includes('texture-failed'), 'objmod thumbnails must not become question marks just because a texture reply was missing/unsupported');
+    assert.ok(!objmod.includes('MODEL_THUMB_RENDER_TIMEOUT'), 'objmod thumbnails must not have a render timeout fallback');
+    assert.ok(!objmod.includes('MODEL_THUMB_MAX_QUEUE'), 'objmod thumbnails must not drop queued renders because of a fixed queue budget');
+    assert.ok(!assetLinks.includes('TEXTURE_WAIT_RETRIES'), 'asset picker thumbnails must wait for texture completion instead of retry-budget capture');
+    assert.ok(!objmodE2e.includes('WURST_OBJMOD_E2E_MAX_MS'), 'objmod thumbnail e2e must not enforce a per-thumbnail timing budget');
+    assert.ok(!modelE2e.includes('WURST_MODEL_THUMB_MAX_MS'), 'model thumbnail e2e must not enforce a per-thumbnail timing budget');
+}
+
 async function main() {
     testSignals();
     await testIconLoader();
     await testFolderModeMapAssetResolution();
     testBc5DdsDecode();
+    await testModelThumbnailRequestsTexturesByDefault();
+    testAssetBrowserForwardsModelTextures();
+    testNoThumbnailTimingFallbacks();
     console.log('webview harness tests passed');
 }
 

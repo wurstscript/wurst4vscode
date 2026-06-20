@@ -45,11 +45,6 @@ function modelThumbCacheDisabled(): boolean {
     return process.env.WURST_MODEL_THUMB_DISABLE_CACHE === '1';
 }
 
-function maxModelThumbBytes(): number {
-    const configured = Number(process.env.WURST_MODEL_THUMB_MAX_MODEL_BYTES || 0);
-    return Number.isFinite(configured) && configured > 0 ? configured : Number.POSITIVE_INFINITY;
-}
-
 type TexturePayload =
     | { blpBase64: string }
     | { ddsBase64: string }
@@ -57,10 +52,8 @@ type TexturePayload =
 
 const texturePayloadCache = new Map<string, TexturePayload>();
 const textureMissingCache = new Set<string>();
-const badModelThumbCache = new Set<string>();
 const MAX_TEXTURE_PAYLOAD_CACHE = 512;
 const MAX_TEXTURE_MISSING_CACHE = 2048;
-const MAX_BAD_MODEL_THUMB_CACHE = 2048;
 const TEXTURE_RESOLVE_CONCURRENCY = 6;
 
 function texturePayloadKey(resolvedPath: string, stat: fs.Stats): string {
@@ -91,23 +84,8 @@ function rememberMissingTexture(key: string): void {
     }
 }
 
-function rememberBadModelThumb(key: string | undefined): void {
-    if (!key) return;
-    if (badModelThumbCache.has(key)) {
-        badModelThumbCache.delete(key);
-    }
-    badModelThumbCache.add(key);
-    while (badModelThumbCache.size > MAX_BAD_MODEL_THUMB_CACHE) {
-        const firstKey = badModelThumbCache.values().next().value;
-        if (!firstKey) break;
-        badModelThumbCache.delete(firstKey);
-    }
-}
-
 export function markModelThumbnailBad(key: string, cacheKey?: string, aliasKey?: string, reason?: string): void {
-    rememberBadModelThumb(cacheKey);
-    rememberBadModelThumb(aliasKey);
-    thumbLog(`${key} bad-cache${reason ? ` reason=${reason}` : ''}${cacheKey ? ` key=${cacheKey}` : ''}${aliasKey && aliasKey !== cacheKey ? ` aliasKey=${aliasKey}` : ''}`);
+    thumbLog(`${key} render-failed${reason ? ` reason=${reason}` : ''}${cacheKey ? ` key=${cacheKey}` : ''}${aliasKey && aliasKey !== cacheKey ? ` aliasKey=${aliasKey}` : ''}`);
 }
 
 function textureMissingKey(texPath: string, roots: readonly string[]): string {
@@ -191,17 +169,6 @@ export async function requestModelThumbnail(modelPath: string, key: string, docu
         const tStatStart = Date.now();
         const stat = await fs.promises.stat(resolved);
         const aliasKey = statThumbKey(resolved, stat);
-        const maxBytes = maxModelThumbBytes();
-        if (Number.isFinite(maxBytes) && stat.size > maxBytes) {
-            thumbLog(`${key} skip-large model="${modelPath}" resolved="${resolved}" bytes=${stat.size} max=${maxBytes} roots=${tRoots - t0}ms resolve=${tResolved - tRoots}ms total=${Date.now() - t0}ms`);
-            await webview.postMessage({ type: 'modelThumbMissing', key, path: modelPath, reason: 'too-large', bytes: stat.size, maxBytes });
-            return;
-        }
-        if (!modelThumbCacheDisabled() && badModelThumbCache.has(aliasKey)) {
-            thumbLog(`${key} bad-cache-hit aliasKey=${aliasKey} roots=${tRoots - t0}ms resolve=${tResolved - tRoots}ms total=${Date.now() - t0}ms`);
-            await webview.postMessage({ type: 'modelThumbMissing', key, path: modelPath, reason: 'bad-cache' });
-            return;
-        }
         const statCached = modelThumbCacheDisabled() ? undefined : await readCachedThumb(aliasKey);
         const tStatCache = Date.now();
         if (statCached) {
@@ -210,18 +177,20 @@ export async function requestModelThumbnail(modelPath: string, key: string, docu
             return;
         }
 
+        const tPrep = Date.now();
+        const bytes = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(resolved)));
+        const tRead = Date.now();
         const cacheKey = aliasKey;
         const format = extOf(resolved) === 'mdl' ? 'mdl' : 'mdx';
         const fileName = resolved.slice(Math.max(resolved.lastIndexOf('/'), resolved.lastIndexOf('\\')) + 1);
-        const tPrep = Date.now();
-        thumbLog(`${key} cache-miss key=${cacheKey} model="${modelPath}" resolved="${resolved}" roots=${tRoots - t0}ms resolve=${tResolved - tRoots}ms stat/cacheRead=${tStatCache - tStatStart}ms prep=${tPrep - tStatCache}ms bytes=${stat.size}`);
+        thumbLog(`${key} cache-miss key=${cacheKey} model="${modelPath}" resolved="${resolved}" roots=${tRoots - t0}ms resolve=${tResolved - tRoots}ms stat/cacheRead=${tStatCache - tStatStart}ms prep=${tPrep - tStatCache}ms read=${tRead - tPrep}ms bytes=${stat.size}`);
         await webview.postMessage({
             type: 'modelThumbRender',
             key,
             path: modelPath,
             cacheKey,
             aliasKey,
-            modelUri: webview.asWebviewUri(vscode.Uri.file(resolved)).toString(),
+            mdxBase64: bytes.toString('base64'),
             format,
             fileName,
         });

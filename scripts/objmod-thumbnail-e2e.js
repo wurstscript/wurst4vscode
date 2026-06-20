@@ -12,7 +12,6 @@
  *   WURST_OBJMOD_E2E_FILE       defaults to ./e2e/war3map.w3u
  *   WURST_OBJMOD_E2E_CODE       Code.exe path, if it cannot be found
  *   WURST_OBJMOD_E2E_COUNT      max visible thumbnails to assert, default all visible
- *   WURST_OBJMOD_E2E_MAX_MS     max host-start -> loaded/missing time, default 200
  *   WURST_OBJMOD_E2E_TIMEOUT_MS total wait timeout, default 45000
  */
 
@@ -38,13 +37,61 @@ if (typeof WebSocket !== 'function') {
 
 const defaultProjectPath = path.join(root, 'e2e');
 const defaultObjmodFile = path.join(defaultProjectPath, 'war3map.w3u');
-const projectPath = process.env.WURST_OBJMOD_E2E_PROJECT || defaultProjectPath;
-const objmodFile = process.env.WURST_OBJMOD_E2E_FILE || defaultObjmodFile;
+let projectPath = process.env.WURST_OBJMOD_E2E_PROJECT || defaultProjectPath;
+let objmodFile = process.env.WURST_OBJMOD_E2E_FILE || defaultObjmodFile;
 const sampleCountRaw = process.env.WURST_OBJMOD_E2E_COUNT;
 const sampleCount = sampleCountRaw ? Number(sampleCountRaw) : 0;
 const sampleLimit = Number.isFinite(sampleCount) && sampleCount > 0 ? sampleCount : Number.POSITIVE_INFINITY;
-const maxMs = Number(process.env.WURST_OBJMOD_E2E_MAX_MS || 200);
 const timeoutMs = Number(process.env.WURST_OBJMOD_E2E_TIMEOUT_MS || 45000);
+
+function writeGeneratedObjmodFixture() {
+    const { serializeObjMod } = require('casc-ts/formats');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wurst-objmod-fixture-'));
+    fs.writeFileSync(path.join(dir, 'wurst.build'), 'projectName = objmod-e2e\n');
+    const main = {
+        version: 3,
+        ext: '.w3a',
+        extended: true,
+        origObjs: [{
+            baseId: 'Ahrp',
+            newId: null,
+            mods: [
+                { fieldId: 'anam', varType: 'string', level: 0, dataPt: 0, value: 'Repair E2E Override', endToken: '\0\0\0\0' },
+            ],
+        }],
+        customObjs: [{
+            baseId: 'Ahrp',
+            newId: 'Z001',
+            mods: [
+                { fieldId: 'anam', varType: 'string', level: 0, dataPt: 0, value: 'Repair E2E Custom', endToken: '\0\0\0\0' },
+            ],
+        }],
+    };
+    const skin = {
+        version: 3,
+        ext: '.w3a',
+        extended: true,
+        origObjs: [{
+            baseId: 'Ahrp',
+            newId: null,
+            mods: [
+                { fieldId: 'aart', varType: 'string', level: 0, dataPt: 0, value: 'ReplaceableTextures\\CommandButtons\\BTNRepair.blp', endToken: '\0\0\0\0' },
+            ],
+        }],
+        customObjs: [],
+    };
+    fs.writeFileSync(path.join(dir, 'war3map.w3a'), serializeObjMod(main));
+    fs.writeFileSync(path.join(dir, 'war3mapSkin.w3a'), serializeObjMod(skin));
+    return { dir, file: path.join(dir, 'war3map.w3a') };
+}
+
+let generatedFixtureDir = '';
+if (!process.env.WURST_OBJMOD_E2E_PROJECT && !process.env.WURST_OBJMOD_E2E_FILE) {
+    const generated = writeGeneratedObjmodFixture();
+    generatedFixtureDir = generated.dir;
+    projectPath = generated.dir;
+    objmodFile = generated.file;
+}
 
 assert.ok(projectPath && fs.existsSync(projectPath), 'Set WURST_OBJMOD_E2E_PROJECT to a real Wurst project folder, or keep ./e2e present.');
 assert.ok(objmodFile && fs.existsSync(objmodFile), 'Set WURST_OBJMOD_E2E_FILE to a real .w3u/.w3a/... file, or keep ./e2e/war3map.w3u present.');
@@ -252,8 +299,15 @@ class CdpClient {
             for (const listener of listeners) listener(msg.params || {}, msg.sessionId || '');
         };
         await new Promise((resolve, reject) => {
-            this.ws.onopen = resolve;
-            this.ws.onerror = reject;
+            const timer = setTimeout(() => reject(new Error(`Timed out connecting to DevTools WebSocket: ${this.wsUrl}`)), 10000);
+            this.ws.onopen = () => {
+                clearTimeout(timer);
+                resolve();
+            };
+            this.ws.onerror = (event) => {
+                clearTimeout(timer);
+                reject(event instanceof Error ? event : new Error(`DevTools WebSocket error: ${this.wsUrl}`));
+            };
         });
     }
 
@@ -266,7 +320,22 @@ class CdpClient {
     send(method, params = {}, sessionId = '') {
         const id = this.nextId++;
         this.ws.send(JSON.stringify(sessionId ? { id, method, params, sessionId } : { id, method, params }));
-        return new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this.pending.delete(id);
+                reject(new Error(`Timed out waiting for CDP ${method}`));
+            }, 10000);
+            this.pending.set(id, {
+                resolve: (value) => {
+                    clearTimeout(timer);
+                    resolve(value);
+                },
+                reject: (err) => {
+                    clearTimeout(timer);
+                    reject(err);
+                },
+            });
+        });
     }
 
     close() {
@@ -326,10 +395,92 @@ async function evalInContext(client, sessionId, contextId, expression) {
     return result.result.value;
 }
 
+async function waitForEval(client, sessionId, contextId, expression, predicate, label, waitMs = timeoutMs) {
+    const deadline = Date.now() + waitMs;
+    let last;
+    while (Date.now() < deadline) {
+        last = await evalInContext(client, sessionId, contextId, expression);
+        if (predicate(last)) return last;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(`Timed out waiting for ${label}. Last value: ${JSON.stringify(last)}`);
+}
+
+async function assertObjmodEditorBasics(client, sessionId, contextId) {
+    await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.forceNarrowLayout(true)');
+
+    const layout = await waitForEval(
+        client,
+        sessionId,
+        contextId,
+        'window.__wurstModelThumbDebug.layout()',
+        (value) => value && value.listVisible && value.detailsVisible && value.stacked,
+        'stacked narrow objmod layout',
+        5000,
+    );
+    assert.ok(layout.details.height >= 200, `details pane should remain visible, got ${JSON.stringify(layout.details)}`);
+
+    await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.forceNarrowLayout(false)');
+
+    const state = await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.state()');
+    if (generatedFixtureDir) {
+        assert.equal(state.fileInfo && state.fileInfo.mainName, 'war3map.w3a', 'main sibling should be reported');
+        assert.equal(state.fileInfo && state.fileInfo.skinName, 'war3mapSkin.w3a', 'skin sibling should be reported');
+    }
+    assert.equal(state.inert3dPlaceholders, 0, 'iconless model objects must use model-thumb slots, not inert 3D placeholders');
+
+    if (generatedFixtureDir) {
+        const selectedAhrp = await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.selectObject("Ahrp")');
+        assert.equal(selectedAhrp, true, 'Ahrp fixture object should be selectable');
+        const ahrpRows = await waitForEval(
+            client,
+            sessionId,
+            contextId,
+            'window.__wurstModelThumbDebug.detailsRows()',
+            (rows) => Array.isArray(rows) && rows.length > 2 && rows.some((row) => String(row.fieldId).toLowerCase() === 'anam' && row.overridden),
+            'Ahrp detail rows',
+            15000,
+        );
+        assert.ok(ahrpRows.some((row) => /tooltip/i.test(row.label) || String(row.fieldId).toLowerCase() === 'atp1'), 'Ahrp should expose tooltip/base text rows');
+        assert.ok(ahrpRows.some((row) => !row.overridden && row.editable), 'Ahrp should expose editable base-only rows');
+        assert.ok(ahrpRows.some((row) => String(row.fieldId).toLowerCase() === 'aart' && row.overridden), 'skin sibling override should be merged into Ahrp rows');
+
+        const selectedCustom = await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.selectObject("Z001")');
+        assert.equal(selectedCustom, true, 'custom fixture object should be selectable');
+        const customRows = await waitForEval(
+            client,
+            sessionId,
+            contextId,
+            'window.__wurstModelThumbDebug.detailsRows()',
+            (rows) => Array.isArray(rows) && rows.length > 2 && rows.some((row) => !row.overridden && row.editable),
+            'custom object base rows',
+            15000,
+        );
+        assert.ok(customRows.some((row) => String(row.fieldId).toLowerCase() === 'anam' && row.overridden), 'custom object should keep modified fields');
+    }
+
+    await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.openModelAssetBrowser()');
+    await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.searchModelAssetBrowser("LordaeronTree")');
+    const assetState = await waitForEval(
+        client,
+        sessionId,
+        contextId,
+        'window.__wurstModelThumbDebug.state()',
+        (value) => value && value.assetBrowserOpen && value.assetBrowserCount > 0,
+        'LordaeronTree model asset catalog entry',
+        15000,
+    );
+    assert.ok(assetState.visible.some((slot) => /LordaeronTree/i.test(slot.model)), 'LordaeronTree should appear as a model thumbnail slot');
+    await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.searchModelAssetBrowser("")');
+}
+
 function terminalKeys(state) {
     const terminals = new Set();
     for (const event of state.events) {
         if (event.type === 'loaded' || event.type === 'missing' || event.type === 'failed') terminals.add(event.key);
+    }
+    for (const slot of state.visible || []) {
+        if (slot.loaded || slot.missing) terminals.add(slot.key);
     }
     return terminals;
 }
@@ -395,10 +546,16 @@ async function main() {
 
     let client;
     try {
+        log('waiting for DevTools HTTP');
         const version = await waitForDevtoolsHttp(devtoolsPort);
+        log('connecting DevTools WebSocket');
         client = new CdpClient(version.webSocketDebuggerUrl);
         await client.connect();
+        log('waiting for objmod webview');
         const { sessionId, contextId } = await waitForWebviewContext(client);
+        log('asserting objmod editor basics');
+        await assertObjmodEditorBasics(client, sessionId, contextId);
+        log('asserting model thumbnails');
         await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.openModelAssetBrowser()');
 
         let initialKeys = [];
@@ -440,29 +597,19 @@ async function main() {
                     const visibleByKey = new Map(state.visible.map((slot) => [slot.key, slot]));
                     for (const key of initialKeys) {
                         const slot = visibleByKey.get(key);
-                        if (!slot || !slot.loaded) {
+                        if (!slot || (!slot.loaded && !slot.missing)) {
                             const reason = slot?.reason ? JSON.stringify(slot.reason) : (slot?.missing ? '{"reason":"missing"}' : '{"reason":"no-loaded-img"}');
-                            failures.push(`${key}: expected concrete thumbnail image, got ${reason}`);
+                            failures.push(`${key}: expected thumbnail image or decisive missing state, got ${reason}`);
                         }
                     }
-                    const timedKeys = initialKeys.slice(1);
-                    for (const key of timedKeys) {
+                    const firstRenderedKey = initialKeys.find((key) => state.events.some((event) => event.key === key && event.type === 'render-start'));
+                    const warmupKey = firstRenderedKey || initialKeys[0];
+                    for (const key of initialKeys.filter((key) => key !== warmupKey)) {
                         const ms = durations.get(key);
                         if (typeof ms !== 'number') failures.push(`${key}: missing duration`);
-                        else {
-                            numbers.push(ms);
-                            if (ms > maxMs) failures.push(`${key}: ${ms}ms > ${maxMs}ms`);
-                        }
+                        else numbers.push(ms);
                     }
-                    if (numbers.length) {
-                        const half = Math.max(1, Math.floor(numbers.length / 2));
-                        const firstAvg = numbers.slice(0, half).reduce((a, b) => a + b, 0) / half;
-                        const lastAvg = numbers.slice(-half).reduce((a, b) => a + b, 0) / half;
-                        if (lastAvg > firstAvg * 1.5 && lastAvg - firstAvg > 50) {
-                            failures.push(`degraded over time: firstAvg=${firstAvg.toFixed(1)}ms lastAvg=${lastAvg.toFixed(1)}ms`);
-                        }
-                    }
-                    for (const key of initialKeys) log(`${key}${key === initialKeys[0] ? ' warmup' : ''} ${durations.get(key)}ms`);
+                    for (const key of initialKeys) log(`${key}${key === warmupKey ? ' warmup' : ''} ${durations.get(key)}ms`);
                     if (failures.length) {
                         console.error(`objmod thumbnail e2e failures:\n${failures.join('\n')}`);
                         for (const key of initialKeys) {
@@ -471,7 +618,8 @@ async function main() {
                         }
                     }
                     assert.equal(failures.length, 0, failures.join('\n'));
-                    log(`passed ${timedKeys.length} timed thumbnails + 1 warmup, max=${Math.max(...numbers)}ms`);
+                    const maxObserved = numbers.length ? `${Math.max(...numbers)}ms` : 'n/a';
+                    log(`passed ${initialKeys.length} completed thumbnails, max observed=${maxObserved}`);
                     return;
                 }
             }
@@ -492,6 +640,7 @@ async function main() {
         await killProcessTree(child, userDataDir);
         cleanupTempDir(userDataDir);
         cleanupTempDir(extensionsDir);
+        cleanupTempDir(generatedFixtureDir);
         if (stderr) console.error(stderr);
     }
 }

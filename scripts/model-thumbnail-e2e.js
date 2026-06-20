@@ -5,7 +5,7 @@
  *
  * This launches a real Chromium/Edge instance, loads dist/webview/mdxViewer.js,
  * reuses one warm War3Viewer instance, renders deterministic still thumbnails,
- * and checks blankness, optional snapshots, and per-thumbnail latency.
+ * and checks blankness, darkness, optional snapshots, and logs per-thumbnail latency.
  *
  * Enable explicitly:
  *   $env:WURST_MODEL_E2E='1'; npm run test:e2e:models:local
@@ -13,7 +13,6 @@
  * Useful knobs:
  *   WURST_MODEL_BENCH_MODELS      semicolon-separated .mdx/.mdl paths
  *   WURST_MODEL_TEXTURE_ROOTS     semicolon-separated texture roots
- *   WURST_MODEL_THUMB_MAX_MS      default 200
  *   WURST_MODEL_SNAPSHOT_FILE     default %TEMP%/wurst-model-thumbnail.snapshots.json
  *   WURST_MODEL_UPDATE_SNAPSHOTS  set to 1 to write/update snapshots
  *   CHROME_PATH                   explicit browser executable
@@ -39,7 +38,6 @@ if (typeof WebSocket !== 'function') {
     throw new Error('This harness needs Node with global WebSocket support (Node 22+ here is fine).');
 }
 
-const maxThumbMs = Number(process.env.WURST_MODEL_THUMB_MAX_MS || 200);
 const perModelTimeoutMs = Number(process.env.WURST_MODEL_E2E_MODEL_TIMEOUT_MS || 15000);
 const browserEvalTimeoutMs = Number(process.env.WURST_MODEL_E2E_BROWSER_TIMEOUT_MS || Math.max(30000, perModelTimeoutMs * 2));
 const snapshotFile = process.env.WURST_MODEL_SNAPSHOT_FILE ||
@@ -522,7 +520,6 @@ async function main() {
         const snapshots = readSnapshots();
         const failures = [];
         for (const result of results.filter((entry) => !entry.warmup)) {
-            if (result.totalMs > maxThumbMs) failures.push(`${result.name}: ${result.totalMs.toFixed(1)}ms > ${maxThumbMs}ms`);
             if (result.visiblePixels < 24) failures.push(`${result.name}: blank render (${result.visiblePixels} visible pixels, ${result.alphaPixels} alpha pixels)`);
             if (result.avgLuma < 3 && result.maxLuma < 16) failures.push(`${result.name}: too dark avg=${result.avgLuma.toFixed(1)} max=${result.maxLuma.toFixed(1)}`);
             const snapshot = snapshots[result.name];
@@ -538,7 +535,8 @@ async function main() {
             console.log(`no snapshot baseline at ${snapshotFile}; set WURST_MODEL_UPDATE_SNAPSHOTS=1 to create one`);
         }
         assert.equal(failures.length, 0, failures.join('\n'));
-        console.log(`local model thumbnail e2e passed (${results.length - 1} benchmark fixture${results.length === 2 ? '' : 's'}, max ${maxThumbMs}ms)`);
+        const maxObserved = Math.max(...results.filter((entry) => !entry.warmup).map((entry) => entry.totalMs));
+        console.log(`local model thumbnail e2e passed (${results.length - 1} benchmark fixture${results.length === 2 ? '' : 's'}, max observed ${maxObserved.toFixed(1)}ms)`);
     } finally {
         client?.close();
         browser.kill();

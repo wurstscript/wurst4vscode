@@ -21,7 +21,7 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
     if (clientRef) return;
 
     await ensureInstalledOrOfferMigration(false);
-    await maybeOfferUpdate();
+    await maybeOfferUpdate(context);
 
     const serverOptions = await getServerOptions();
     const clientOptions: LanguageClientOptions = {

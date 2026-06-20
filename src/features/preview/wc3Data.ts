@@ -18,9 +18,9 @@ export interface SlkTable {
 export type ProfileTable = Map<string, Record<string, string>>;
 
 // Profile/skin TXT files that hold object display names + art, per object kind.
-// Reforged splits art into the *Skin.txt files; classic names live in the Func/Strings pairs.
+// Reforged splits art into the *Skin.txt files; load them after the classic
+// Func/Strings files so skin art overlays base metadata deterministically.
 export const UNIT_PROFILE_PATHS = [
-    'Units\\UnitSkin.txt',
     'Units\\CampaignUnitFunc.txt',
     'Units\\CampaignUnitStrings.txt',
     'Units\\HumanUnitFunc.txt',
@@ -33,10 +33,10 @@ export const UNIT_PROFILE_PATHS = [
     'Units\\UndeadUnitStrings.txt',
     'Units\\NeutralUnitFunc.txt',
     'Units\\NeutralUnitStrings.txt',
+    'Units\\UnitSkin.txt',
 ];
 
 export const ABILITY_PROFILE_PATHS = [
-    'Units\\AbilitySkin.txt',
     'Units\\CampaignAbilityFunc.txt',
     'Units\\CampaignAbilityStrings.txt',
     'Units\\CommonAbilityFunc.txt',
@@ -53,10 +53,10 @@ export const ABILITY_PROFILE_PATHS = [
     'Units\\NeutralAbilityStrings.txt',
     'Units\\ItemAbilityFunc.txt',
     'Units\\ItemAbilityStrings.txt',
+    'Units\\AbilitySkin.txt',
 ];
 
 export const UPGRADE_PROFILE_PATHS = [
-    'Units\\UpgradeSkin.txt',
     'Units\\CampaignUpgradeFunc.txt',
     'Units\\CampaignUpgradeStrings.txt',
     'Units\\HumanUpgradeFunc.txt',
@@ -69,9 +69,10 @@ export const UPGRADE_PROFILE_PATHS = [
     'Units\\UndeadUpgradeStrings.txt',
     'Units\\NeutralUpgradeFunc.txt',
     'Units\\NeutralUpgradeStrings.txt',
+    'Units\\UpgradeSkin.txt',
 ];
 
-export const ITEM_PROFILE_PATHS = ['Units\\ItemSkin.txt', 'Units\\ItemFunc.txt', 'Units\\ItemStrings.txt'];
+export const ITEM_PROFILE_PATHS = ['Units\\ItemFunc.txt', 'Units\\ItemStrings.txt', 'Units\\ItemSkin.txt'];
 export const DESTRUCTABLE_PROFILE_PATHS = ['Units\\DestructableSkin.txt'];
 export const DOODAD_PROFILE_PATHS = ['Doodads\\DoodadSkins.txt'];
 
@@ -167,10 +168,10 @@ export function stripTxtQuotes(value: string): string {
 
 export async function loadProfilePaths(profilePaths: string[]): Promise<ProfileTable> {
     const profile = new Map<string, Record<string, string>>();
-    await Promise.all(profilePaths.map(async (profilePath) => {
+    for (const profilePath of profilePaths) {
         const buf = await readGameData(profilePath);
         if (buf) mergeProfile(profile, parseProfile(buf.toString('utf8')));
-    }));
+    }
     return profile;
 }
 

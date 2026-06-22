@@ -633,7 +633,7 @@ class WurstAssetCodeLensProvider implements vscode.CodeLensProvider {
             if (target.kind === 'sound') {
                 lenses.push(new vscode.CodeLens(target.range, {
                     command: 'wurst.openAssetFromString',
-                    title: 'Play sound...',
+                    title: '▶ Play sound',
                     arguments: [target.currentValue],
                 }));
             }

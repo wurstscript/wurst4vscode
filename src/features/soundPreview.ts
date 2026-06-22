@@ -25,8 +25,8 @@ export function isSoundAssetPath(fsPathOrAssetPath: string): boolean {
     return SOUND_EXTS.has(path.extname(fsPathOrAssetPath).toLowerCase());
 }
 
-// Singleton side panel reused for quick "Play sound" code-lens playtesting,
-// so we don't spawn a fresh editor tab per sound.
+// Singleton side panel reused for "Play sound" code-lens playtesting: opens
+// beside the code, auto-plays, and is reused so we don't spawn a tab per sound.
 let soundPlayerPanel: vscode.WebviewPanel | undefined;
 
 export async function playSoundInline(uri: vscode.Uri): Promise<void> {
@@ -123,7 +123,6 @@ async function buildSoundHtml(uri: vscode.Uri, webview: vscode.Webview, autoplay
   font-weight: 700;
 }
 .play-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
-#play { min-width: 72px; justify-content: center; }
 audio { width: 100%; min-width: 0; }
 .status { color: var(--muted); font-size: 12px; min-height: 16px; overflow-wrap: anywhere; }
 `,
@@ -138,7 +137,6 @@ audio { width: 100%; min-width: 0; }
     <section class="player" aria-label="Sound preview">
       <div class="sound-icon">${escapeHtml(ext || 'AUD')}</div>
       <div class="play-row">
-        <button id="play" class="wv-btn active" type="button">Play</button>
         <audio id="audio" controls preload="metadata"${autoplay ? ' autoplay' : ''}>
           <source src="${escapeHtml(source)}"${type ? ` type="${type}"` : ''}>
         </audio>
@@ -150,29 +148,18 @@ audio { width: 100%; min-width: 0; }
 <script>
 (function () {
   var audio = document.getElementById('audio');
-  var play = document.getElementById('play');
   var status = document.getElementById('status');
   function setStatus(text) { if (status) status.textContent = text || ''; }
-  function sync() { if (play) play.textContent = audio && !audio.paused ? 'Pause' : 'Play'; }
-  if (!audio || !play) return;
-  play.addEventListener('click', function () {
-    if (audio.paused) {
-      var p = audio.play();
-      if (p && p.catch) p.catch(function () { setStatus('Playback failed. This VS Code build may not support the codec.'); });
-    } else {
-      audio.pause();
-    }
-    sync();
-  });
-  audio.addEventListener('play', function () { setStatus('Playing'); sync(); });
-  audio.addEventListener('pause', function () { setStatus(audio.ended ? 'Ended' : 'Paused'); sync(); });
+  if (!audio) return;
+  audio.addEventListener('play', function () { setStatus('Playing'); });
+  audio.addEventListener('pause', function () { setStatus(audio.ended ? 'Ended' : 'Paused'); });
   audio.addEventListener('loadedmetadata', function () {
     if (Number.isFinite(audio.duration)) setStatus('Duration ' + formatDuration(audio.duration));
   });
-  audio.addEventListener('error', function () { setStatus('Could not play this audio file. Try opening it externally if the codec is unsupported.'); sync(); });
+  audio.addEventListener('error', function () { setStatus('Could not play this audio file. Try opening it externally if the codec is unsupported.'); });
   if (${autoplay ? 'true' : 'false'}) {
     var ap = audio.play();
-    if (ap && ap.catch) ap.catch(function () { setStatus('Ready (autoplay blocked - press Play)'); sync(); });
+    if (ap && ap.catch) ap.catch(function () { setStatus('Ready (autoplay blocked - press Play)'); });
   }
   function formatDuration(seconds) {
     var total = Math.max(0, Math.round(seconds));

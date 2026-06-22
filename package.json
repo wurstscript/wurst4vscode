@@ -25,7 +25,8 @@
         "workspaceContains:**/wurst.build",
         "workspaceContains:**/*.wurst",
         "workspaceContains:**/*.jurst",
-        "onCustomEditor:wurst.objModPreview"
+        "onCustomEditor:wurst.objModPreview",
+        "onCustomEditor:wurst.soundPreview"
     ],
     "main": "./dist/extension",
     "browser": "./dist/web/extension.js",
@@ -76,6 +77,26 @@
                 "icon": {
                     "light": "./images/icons/mdx.svg",
                     "dark": "./images/icons/mdx.svg"
+                }
+            },
+            {
+                "id": "wc3-audio",
+                "aliases": [
+                    "WC3 Audio"
+                ],
+                "extensions": [
+                    ".mp3",
+                    ".MP3",
+                    ".wav",
+                    ".WAV",
+                    ".ogg",
+                    ".OGG",
+                    ".flac",
+                    ".FLAC"
+                ],
+                "icon": {
+                    "light": "./images/icons/w3sound.svg",
+                    "dark": "./images/icons/w3sound.svg"
                 }
             },
             {
@@ -438,6 +459,37 @@
                     },
                     {
                         "filenamePattern": "*.MDL"
+                    }
+                ],
+                "priority": "default"
+            },
+            {
+                "viewType": "wurst.soundPreview",
+                "displayName": "WC3 Sound Preview",
+                "selector": [
+                    {
+                        "filenamePattern": "*.mp3"
+                    },
+                    {
+                        "filenamePattern": "*.MP3"
+                    },
+                    {
+                        "filenamePattern": "*.wav"
+                    },
+                    {
+                        "filenamePattern": "*.WAV"
+                    },
+                    {
+                        "filenamePattern": "*.ogg"
+                    },
+                    {
+                        "filenamePattern": "*.OGG"
+                    },
+                    {
+                        "filenamePattern": "*.flac"
+                    },
+                    {
+                        "filenamePattern": "*.FLAC"
                     }
                 ],
                 "priority": "default"

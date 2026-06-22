@@ -6,9 +6,20 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 
 const PROMPT_STATE_PREFIX = 'wurst.agentsGuidePromptDismissed:';
+const UPDATE_PROMPT_STATE_PREFIX = 'wurst.agentsGuideUpdatePromptDismissed:';
 const AGENTS_GUIDE_URL = 'https://raw.githubusercontent.com/wurstscript/WurstSetup/master/templates/AGENTS.md';
+const AGENTS_TEMPLATE_VERSION = '2026-06-22';
+const AGENTS_TEMPLATE_MARKER_PREFIX = '<!-- WURST_AGENTS_TEMPLATE_VERSION:';
+const AGENTS_TEMPLATE_MARKER = `<!-- WURST_AGENTS_TEMPLATE_VERSION: ${AGENTS_TEMPLATE_VERSION} -->`;
+const AGENTS_TEMPLATE_SOURCE_HINT = 'WurstScript Warcraft III map project notes';
 const CREATE_ACTION = 'Create AGENTS.md';
+const REVIEW_UPDATE_ACTION = 'Review Update';
+const OPEN_CURRENT_ACTION = 'Open AGENTS.md';
 const NEVER_ACTION = "Don't Ask Again";
+
+type AgentsGuideOffer =
+    | { kind: 'create'; folder: vscode.WorkspaceFolder; stateKey: string }
+    | { kind: 'update'; folder: vscode.WorkspaceFolder; stateKey: string; warning: string };
 
 export function registerAgentsGuideOffer(context: vscode.ExtensionContext): vscode.Disposable {
     const offer = () => {
@@ -21,12 +32,34 @@ export function registerAgentsGuideOffer(context: vscode.ExtensionContext): vsco
 }
 
 async function offerAgentsGuide(context: vscode.ExtensionContext): Promise<void> {
-    const folder = await findFolderToOffer(context);
-    if (!folder) {
+    const offer = await findFolderToOffer(context);
+    if (!offer) {
         return;
     }
 
-    const stateKey = getStateKey(folder);
+    const { folder, stateKey } = offer;
+    if (offer.kind === 'update') {
+        const choice = await vscode.window.showInformationMessage(
+            `${offer.warning} Review the current WurstSetup template?`,
+            REVIEW_UPDATE_ACTION,
+            OPEN_CURRENT_ACTION,
+            NEVER_ACTION
+        );
+
+        if (choice === REVIEW_UPDATE_ACTION) {
+            await context.workspaceState.update(stateKey, true);
+            await openAgentsGuideUpdate(folder);
+            return;
+        }
+        if (choice === OPEN_CURRENT_ACTION) {
+            await context.workspaceState.update(stateKey, true);
+            await vscode.window.showTextDocument(vscode.Uri.file(path.join(folder.uri.fsPath, 'AGENTS.md')));
+            return;
+        }
+        await context.workspaceState.update(stateKey, true);
+        return;
+    }
+
     const choice = await vscode.window.showInformationMessage(
         `Add an AGENTS.md guide for AI coding agents in "${folder.name}"?`,
         CREATE_ACTION,
@@ -58,16 +91,26 @@ async function offerAgentsGuide(context: vscode.ExtensionContext): Promise<void>
     await context.workspaceState.update(stateKey, true);
 }
 
-async function findFolderToOffer(context: vscode.ExtensionContext): Promise<vscode.WorkspaceFolder | undefined> {
+async function findFolderToOffer(context: vscode.ExtensionContext): Promise<AgentsGuideOffer | undefined> {
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
-        if (context.workspaceState.get<boolean>(getStateKey(folder), false)) {
-            continue;
-        }
-        if (fs.existsSync(path.join(folder.uri.fsPath, 'AGENTS.md'))) {
-            continue;
-        }
         if (await isWurstProject(folder)) {
-            return folder;
+            const agentsPath = path.join(folder.uri.fsPath, 'AGENTS.md');
+            if (!fs.existsSync(agentsPath)) {
+                const stateKey = getStateKey(folder);
+                if (!context.workspaceState.get<boolean>(stateKey, false)) {
+                    return { kind: 'create', folder, stateKey };
+                }
+                continue;
+            }
+
+            const stateKey = getUpdateStateKey(folder);
+            if (context.workspaceState.get<boolean>(stateKey, false)) {
+                continue;
+            }
+            const warning = await agentsTemplateWarning(agentsPath);
+            if (warning) {
+                return { kind: 'update', folder, stateKey, warning };
+            }
         }
     }
     return undefined;
@@ -91,12 +134,52 @@ async function isWurstProject(folder: vscode.WorkspaceFolder): Promise<boolean> 
 
 async function createAgentsGuide(folder: vscode.WorkspaceFolder): Promise<void> {
     const target = path.join(folder.uri.fsPath, 'AGENTS.md');
-    const content = await downloadAgentsGuide();
+    const content = withAgentsTemplateMarker(await downloadAgentsGuide());
     await fs.promises.writeFile(target, content, { encoding: 'utf8', flag: 'wx' });
 }
 
 function getStateKey(folder: vscode.WorkspaceFolder): string {
     return `${PROMPT_STATE_PREFIX}${folder.uri.toString()}`;
+}
+
+function getUpdateStateKey(folder: vscode.WorkspaceFolder): string {
+    return `${UPDATE_PROMPT_STATE_PREFIX}${AGENTS_TEMPLATE_VERSION}:${folder.uri.toString()}`;
+}
+
+async function agentsTemplateWarning(agentsPath: string): Promise<string | undefined> {
+    let content: string;
+    try {
+        content = await fs.promises.readFile(agentsPath, 'utf8');
+    } catch {
+        return undefined;
+    }
+
+    const markerLine = content.split(/\r?\n/).find((line) => line.startsWith(AGENTS_TEMPLATE_MARKER_PREFIX));
+    if (markerLine === AGENTS_TEMPLATE_MARKER) {
+        return undefined;
+    }
+    if (markerLine) {
+        return `AGENTS.md was generated from an older WurstSetup template (${markerLine}).`;
+    }
+    if (content.includes(AGENTS_TEMPLATE_SOURCE_HINT)) {
+        return 'AGENTS.md looks like an older WurstSetup template without a version marker.';
+    }
+    return undefined;
+}
+
+async function openAgentsGuideUpdate(folder: vscode.WorkspaceFolder): Promise<void> {
+    const current = vscode.Uri.file(path.join(folder.uri.fsPath, 'AGENTS.md'));
+    const template = withAgentsTemplateMarker(await downloadAgentsGuide());
+    const currentDoc = await vscode.workspace.openTextDocument(current);
+    await vscode.window.showTextDocument(currentDoc, { viewColumn: vscode.ViewColumn.One, preview: false });
+    const templateDoc = await vscode.workspace.openTextDocument({ content: template, language: 'markdown' });
+    await vscode.window.showTextDocument(templateDoc, { viewColumn: vscode.ViewColumn.Beside, preview: false });
+}
+
+function withAgentsTemplateMarker(content: string): string {
+    return content.includes(AGENTS_TEMPLATE_MARKER_PREFIX)
+        ? content
+        : `${AGENTS_TEMPLATE_MARKER}\n${content}`;
 }
 
 function downloadAgentsGuide(): Promise<string> {

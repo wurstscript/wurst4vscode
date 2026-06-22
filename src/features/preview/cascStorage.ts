@@ -407,6 +407,42 @@ export async function findCascAsset(assetPath: string, log: (msg: string) => voi
 
 export const findGameAsset = findCascAsset;
 
+export async function listGameAssetPaths(
+    predicate: (assetPath: string) => boolean,
+    log: (msg: string) => void = defaultCascLog,
+): Promise<string[]> {
+    const wc3Root = getCascDataRoot(log);
+    if (!wc3Root) return [];
+    const storage = await getCascStorageInstance(wc3Root, log);
+    if (!storage) return [];
+
+    // Expand the main containers before listing; CascStorage discovers sub-TVFS contents lazily.
+    try { await storage.findPathByBasenameAsync('__wurst_no_such_asset__'); } catch {}
+
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const cascPath of storage.listFiles()) {
+        const assetPath = stripCascContainerPrefix(cascPath);
+        if (!assetPath || !predicate(assetPath)) continue;
+        const normalized = normalizeCascAssetPath(assetPath);
+        if (seen.has(normalized)) continue;
+        seen.add(normalized);
+        out.push(assetPath.replace(/\//g, '\\'));
+    }
+    return out.sort((a, b) => a.localeCompare(b));
+}
+
+function stripCascContainerPrefix(cascPath: string): string | undefined {
+    const normalized = cascPath.replace(/\//g, '\\');
+    const parts = normalized.split(':');
+    for (let i = parts.length - 1; i >= 0; i--) {
+        if (/\.w3mod$/i.test(parts[i])) {
+            return parts.slice(i + 1).join(':').replace(/^\\+/, '');
+        }
+    }
+    return normalized.replace(/^\\+/, '');
+}
+
 function defaultCascLog(message: string): void {
     if (process.env.WURST_CASC_DEBUG === '1') {
         console.log(`[wurst-casc] ${message}`);

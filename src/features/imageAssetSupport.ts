@@ -11,6 +11,7 @@ import { decodeRasterPreview, ensureGameAssetCached, writeJpegPreviewFile } from
 import { getGameAssetCacheDir, ensureGameTextureCached } from './preview/cascStorage';
 
 export const IMAGE_EXTS = new Set(['blp', 'dds', 'tga', 'png', 'jpg', 'jpeg']);
+export const SOUND_EXTS = new Set(['mp3', 'wav', 'ogg', 'flac']);
 
 export interface PreviewCacheEntry {
     previewPath: string;
@@ -236,15 +237,16 @@ async function hashImportedAsset(fullPath: string): Promise<string | undefined> 
 }
 
 /**
- * Enumerate user-imported asset files (models + textures) under the project's local roots, so the
+ * Enumerate user-imported asset files (models + textures + sounds) under the project's local roots, so the
  * asset browser can offer them alongside the WC3 game catalog. Paths are returned relative to their
  * root (map-relative, WC3 style) so they resolve and serialize correctly. Bounded to keep it cheap.
  */
-export async function gatherImportedAssets(documentFsPath: string): Promise<{ model: ImportedAsset[]; icon: ImportedAsset[] }> {
+export async function gatherImportedAssets(documentFsPath: string): Promise<{ model: ImportedAsset[]; icon: ImportedAsset[]; sound: ImportedAsset[] }> {
     const cacheDir = getGameAssetCacheDir();
     const roots = (await getCandidateRoots(documentFsPath)).filter((r) => r !== cacheDir);
     const model: ImportedAsset[] = [];
     const icon: ImportedAsset[] = [];
+    const sound: ImportedAsset[] = [];
     const seenValue = new Set<string>();
     let budget = 4000;
 
@@ -264,14 +266,17 @@ export async function gatherImportedAssets(documentFsPath: string): Promise<{ mo
             const ext = path.extname(entry.name).slice(1).toLowerCase();
             const isModel = ext === 'mdx' || ext === 'mdl';
             const isTex = ext === 'blp' || ext === 'dds' || ext === 'tga';
-            if (!isModel && !isTex) continue;
+            const isSound = SOUND_EXTS.has(ext);
+            if (!isModel && !isTex && !isSound) continue;
             const rel = path.relative(root, full).replace(/\//g, '\\');
             const key = rel.toLowerCase();
             if (seenValue.has(key)) continue;
             seenValue.add(key);
             const hash = await hashImportedAsset(full);
             const opt: ImportedAsset = { value: rel, label: entry.name, source: 'import', hash };
-            if (isTex) { opt.iconPath = rel; icon.push(opt); } else { model.push(opt); }
+            if (isTex) { opt.iconPath = rel; icon.push(opt); }
+            else if (isSound) { sound.push(opt); }
+            else { model.push(opt); }
         }
     };
 
@@ -280,7 +285,7 @@ export async function gatherImportedAssets(documentFsPath: string): Promise<{ mo
         await walk(root, root, 0);
     }
     const byLabel = (a: ImportedAsset, b: ImportedAsset) => a.label.localeCompare(b.label);
-    return { model: model.sort(byLabel), icon: icon.sort(byLabel) };
+    return { model: model.sort(byLabel), icon: icon.sort(byLabel), sound: sound.sort(byLabel) };
 }
 
 // WC3 resolves assets by name, ignoring the requested extension: models use
@@ -289,6 +294,7 @@ export async function gatherImportedAssets(documentFsPath: string): Promise<{ mo
 const MODEL_EXTS = ['mdx', 'mdl'];
 const TEXTURE_EXTS = ['blp', 'dds', 'tga'];
 const TEXTURE_SOURCE_EXTS = [...TEXTURE_EXTS, 'tif'];
+const AUDIO_EXTS = ['mp3', 'wav', 'ogg', 'flac'];
 
 function assetExt(assetPath: string): string {
     const slash = Math.max(assetPath.lastIndexOf('/'), assetPath.lastIndexOf('\\'));
@@ -296,21 +302,24 @@ function assetExt(assetPath: string): string {
     return dot > slash ? assetPath.slice(dot + 1).toLowerCase() : '';
 }
 
-export type AssetKind = 'model' | 'texture' | 'any';
+export type AssetKind = 'model' | 'texture' | 'sound' | 'any';
 
 function stripKnownAssetExt(assetPath: string, kind: AssetKind): string {
     const ext = assetExt(assetPath);
     const strip = kind === 'model' ? ext !== ''
         : kind === 'texture' ? ext !== ''
-        : MODEL_EXTS.includes(ext) || TEXTURE_SOURCE_EXTS.includes(ext);
+        : kind === 'sound' ? ext !== ''
+        : MODEL_EXTS.includes(ext) || TEXTURE_SOURCE_EXTS.includes(ext) || AUDIO_EXTS.includes(ext);
     return strip ? assetPath.slice(0, assetPath.length - ext.length - 1) : assetPath;
 }
 
 function lookupExtsForKind(kind: AssetKind, ext: string): string[] {
     if (kind === 'model') return MODEL_EXTS;
     if (kind === 'texture') return TEXTURE_EXTS;
+    if (kind === 'sound') return AUDIO_EXTS;
     if (MODEL_EXTS.includes(ext)) return MODEL_EXTS;
     if (TEXTURE_SOURCE_EXTS.includes(ext)) return TEXTURE_EXTS;
+    if (AUDIO_EXTS.includes(ext)) return AUDIO_EXTS;
     if (ext === '') return [...MODEL_EXTS, ...TEXTURE_EXTS];
     return [];
 }
@@ -433,7 +442,7 @@ export function assetPathVariants(assetPath: string, kind: AssetKind = 'any'): s
 
     const base = stripKnownAssetExt(assetPath, kind);
     const variants: string[] = [];
-    if (MODEL_EXTS.includes(ext) || TEXTURE_EXTS.includes(ext)) variants.push(assetPath);
+    if (MODEL_EXTS.includes(ext) || TEXTURE_EXTS.includes(ext) || AUDIO_EXTS.includes(ext)) variants.push(assetPath);
     for (const e of exts) {
         const v = `${base}.${e}`;
         if (!variants.includes(v)) variants.push(v);

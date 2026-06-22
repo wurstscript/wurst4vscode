@@ -2,9 +2,10 @@
 
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { getCandidateRoots, requestPreviewIcon, resolveAssetPath as resolveAssetPathString, resolveAssetPathWithCasc } from './imageAssetSupport';
+import { gatherImportedAssets, getCandidateRoots, requestPreviewIcon, resolveAssetPath as resolveAssetPathString, resolveAssetPathWithCasc } from './imageAssetSupport';
 import { loadObjValueCatalog, type ValueOption } from './objModPreview';
 import { cacheModelThumbnail, markModelThumbnailBad, postTexturesToWebview, requestModelThumbnail } from './preview/modelPreviewHost';
+import { isSoundAssetPath, playSoundInline } from './soundPreview';
 import { buildPage, ICON_INLINE_CSS, PREVIEW_ICON_CSP } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
 
@@ -37,7 +38,12 @@ function isModelExt(ext: string): boolean {
     return lower === 'mdx' || lower === 'mdl';
 }
 
-type BrowseAssetKind = 'icon' | 'model';
+function isSoundExt(ext: string): boolean {
+    const lower = ext.toLowerCase();
+    return lower === 'mp3' || lower === 'wav' || lower === 'ogg' || lower === 'flac';
+}
+
+type BrowseAssetKind = 'icon' | 'model' | 'sound';
 
 interface BrowseAssetTarget {
     uri: vscode.Uri;
@@ -90,7 +96,7 @@ function addLazyCascLink(
     const args = encodeURIComponent(JSON.stringify([assetPath]));
     const target = vscode.Uri.parse(`command:wurst.openAssetFromString?${args}`);
     const link = new vscode.DocumentLink(range, target);
-    link.tooltip = `Extract and open ${assetPath}`;
+    link.tooltip = `Open ${assetPath}`;
     links.push(link);
 }
 
@@ -114,7 +120,7 @@ function findAssetStrings(document: vscode.TextDocument): BrowseAssetTarget[] {
         const innerStart = match.index + 1;
         const innerEnd = innerStart + assetPath.length;
         if (!isAssetExt(ext)) continue;
-        const kind: BrowseAssetKind = isModelExt(ext) ? 'model' : 'icon';
+        const kind: BrowseAssetKind = isModelExt(ext) ? 'model' : isSoundExt(ext) ? 'sound' : 'icon';
         targets.push({
             uri: document.uri,
             range: new vscode.Range(document.positionAt(innerStart), document.positionAt(innerEnd)),
@@ -157,7 +163,10 @@ async function replaceAssetString(target: BrowseAssetTarget, assetPath: string):
 }
 
 async function openCodeAssetBrowser(context: vscode.ExtensionContext, target: BrowseAssetTarget): Promise<void> {
-    const catalog = await loadObjValueCatalog();
+    const [catalog, imported] = await Promise.all([
+        loadObjValueCatalog(),
+        gatherImportedAssets(target.uri.fsPath),
+    ]);
     const panel = vscode.window.createWebviewPanel(
         'wurst.assetBrowser',
         'Choose Warcraft III Asset',
@@ -173,8 +182,9 @@ async function openCodeAssetBrowser(context: vscode.ExtensionContext, target: Br
         activeTab: target.kind,
         currentValue: target.currentValue,
         tabs: {
-            icon: assetBrowserItems(catalog.icons),
-            model: assetBrowserItems(catalog.models),
+            icon: assetBrowserItems(dedupeAssetOptions([...imported.icon, ...catalog.icons])),
+            model: assetBrowserItems(dedupeAssetOptions([...imported.model, ...catalog.models])),
+            sound: assetBrowserItems(dedupeAssetOptions([...imported.sound, ...catalog.sounds])),
         },
     };
     const initialJson = JSON.stringify(initial)
@@ -205,6 +215,18 @@ async function openCodeAssetBrowser(context: vscode.ExtensionContext, target: Br
     });
 }
 
+function dedupeAssetOptions(options: readonly ValueOption[]): ValueOption[] {
+    const seen = new Set<string>();
+    const out: ValueOption[] = [];
+    for (const option of options) {
+        const key = option.value.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(option);
+    }
+    return out;
+}
+
 function buildAssetBrowserHtml(initialJson: string, currentValue: string, cspSource: string, mdxViewerUri: string): string {
     return buildPage({
         csp: PREVIEW_ICON_CSP.replace("script-src 'unsafe-inline';", `script-src 'unsafe-inline' ${cspSource};`),
@@ -229,6 +251,7 @@ ${ICON_INLINE_CSS}
 .model-thumb.missing::before { content: '?'; }
 .model-thumb.loaded::before { content: none; }
 .model-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sound-thumb { width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 3px; background: var(--input-bg); color: var(--muted); font-family: var(--mono); font-size: 11px; font-weight: 700; }
 .thumb-render-canvas { position: fixed; left: -10000px; top: -10000px; width: 96px; height: 96px; pointer-events: none; opacity: 0; }
 .empty { color: var(--muted); padding: 24px; text-align: center; }
 `,
@@ -236,6 +259,7 @@ ${ICON_INLINE_CSS}
   <div class="toolbar">
     <button id="tab-icon" class="wv-btn tab" type="button" data-tab="icon">Icons</button>
     <button id="tab-model" class="wv-btn tab" type="button" data-tab="model">Models</button>
+    <button id="tab-sound" class="wv-btn tab" type="button" data-tab="sound">Sounds</button>
     <input id="search" class="search" type="search" placeholder="Search assets..." aria-label="Search assets">
   </div>
   <div class="meta">Replacing ${escapeHtml(currentValue)}</div>
@@ -286,14 +310,16 @@ ${ICON_INLINE_CSS}
     var items = list();
     if (!items.length) { grid.innerHTML = '<div class="empty">No matching assets</div>'; return; }
     grid.innerHTML = items.map(function (item, index) {
-      var icon = activeTab === 'icon' && item.iconPath
+      var icon = activeTab === 'sound'
+        ? '<span class="sound-thumb">AUD</span>'
+        : activeTab === 'icon' && item.iconPath
         ? '<span class="object-icon" data-key="asset:' + index + ':' + esc(item.iconPath) + '" data-icon="' + esc(item.iconPath) + '"></span>'
         : '<span class="model-thumb pending" data-key="asset-model:' + index + ':' + esc(item.value) + '" data-model="' + esc(item.value) + '"></span>';
       return '<button class="card" type="button" data-value="' + esc(item.value) + '">' +
         icon + '<span class="card-text"><span class="card-name">' + esc(item.label) + '</span><span class="card-path">' + esc(item.value) + '</span></span></button>';
     }).join('');
     observeIcons(grid);
-    observeModels(grid);
+    if (activeTab === 'model') observeModels(grid);
   }
   function observeIcons(root) {
     if (!observer) {
@@ -602,11 +628,22 @@ class WurstAssetCodeActionProvider implements vscode.CodeActionProvider {
 
 class WurstAssetCodeLensProvider implements vscode.CodeLensProvider {
     provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
-        return findAssetStrings(document).map((target) => new vscode.CodeLens(target.range, {
-            command: 'wurst.browseAssetForString',
-            title: target.kind === 'model' ? 'Browse model...' : 'Browse asset...',
-            arguments: [target],
-        }));
+        const lenses: vscode.CodeLens[] = [];
+        for (const target of findAssetStrings(document)) {
+            if (target.kind === 'sound') {
+                lenses.push(new vscode.CodeLens(target.range, {
+                    command: 'wurst.openAssetFromString',
+                    title: 'Play sound...',
+                    arguments: [target.currentValue],
+                }));
+            }
+            lenses.push(new vscode.CodeLens(target.range, {
+                command: 'wurst.browseAssetForString',
+                title: target.kind === 'model' ? 'Browse model...' : target.kind === 'sound' ? 'Browse sound...' : 'Browse asset...',
+                arguments: [target],
+            }));
+        }
+        return lenses;
     }
 }
 
@@ -623,12 +660,16 @@ class WurstAssetLinkProvider implements vscode.DocumentLinkProvider {
         while ((m = STRING_LITERAL_RE.exec(text)) !== null) {
             const [, assetPath, ext] = m;
             if (!isAssetExt(ext)) continue;
+            if (isSoundExt(ext)) {
+                addLazyCascLink(links, document, m.index + 1, assetPath.length, assetPath);
+                continue;
+            }
             const target = await resolveAssetPath(assetPath, roots);
             if (target) {
                 addLink(links, document, text, m.index + 1, assetPath.length, target);
                 continue;
             }
-            if (isModelExt(ext)) {
+            if (isModelExt(ext) || isSoundExt(ext)) {
                 addLazyCascLink(links, document, m.index + 1, assetPath.length, assetPath);
             }
         }
@@ -662,12 +703,16 @@ class FdfLinkProvider implements vscode.DocumentLinkProvider {
         while ((m = STRING_LITERAL_RE.exec(text)) !== null) {
             const [, assetPath, ext] = m;
             if (!isAssetExt(ext)) continue;
+            if (isSoundExt(ext)) {
+                addLazyCascLink(links, document, m.index + 1, assetPath.length, assetPath);
+                continue;
+            }
             const target = await resolveAssetPath(assetPath, roots);
             if (target) {
                 addLink(links, document, text, m.index + 1, assetPath.length, target);
                 continue;
             }
-            if (isModelExt(ext)) {
+            if (isModelExt(ext) || isSoundExt(ext)) {
                 addLazyCascLink(links, document, m.index + 1, assetPath.length, assetPath);
             }
         }
@@ -704,17 +749,25 @@ class TocLinkProvider implements vscode.DocumentLinkProvider {
 export function registerAssetLinks(context: vscode.ExtensionContext): vscode.Disposable {
     const openAsset = vscode.commands.registerCommand('wurst.openAssetFromString', async (assetPath: string) => {
         if (!assetPath) return;
+        const ext = path.extname(assetPath).slice(1).toLowerCase();
+        const kind = isModelExt(ext) ? 'model' : isSoundExt(ext) ? 'sound' : 'any';
         const resolved = await resolveAssetPathWithCasc(
             assetPath,
-            await candidateRootsForFsPath(vscode.window.activeTextEditor?.document.uri.fsPath)
+            await candidateRootsForFsPath(vscode.window.activeTextEditor?.document.uri.fsPath),
+            kind,
         );
         const target = resolved ? vscode.Uri.file(resolved) : undefined;
         if (!target) {
             vscode.window.showWarningMessage(`Could not resolve asset: ${assetPath}`);
             return;
         }
-        if (path.extname(target.fsPath).toLowerCase() === '.mdx') {
+        const resolvedExt = path.extname(target.fsPath).toLowerCase();
+        if (resolvedExt === '.mdx' || resolvedExt === '.mdl') {
             await vscode.commands.executeCommand('vscode.openWith', target, 'wurst.blpPreview');
+            return;
+        }
+        if (isSoundAssetPath(target.fsPath)) {
+            await playSoundInline(target);
             return;
         }
         await vscode.commands.executeCommand('vscode.open', target);

@@ -7,6 +7,7 @@ import { parseObjMod, serializeObjMod, ObjModFile, ObjModEntry, ObjModMod, ObjMo
 import { ParsedPreviewContext } from './preview/framework';
 import { requestPreviewIcon, getCandidateRoots, resolveAssetPathWithCasc, gatherImportedAssets } from './imageAssetSupport';
 import { postModelToWebview, postTexturesToWebview, requestModelThumbnail, cacheModelThumbnail, markModelThumbnailBad } from './preview/modelPreviewHost';
+import { isSoundAssetPath } from './soundPreview';
 import {
     loadTriggerStringsForUri, resolveTriggerString, TriggerStringTable,
     findWtsUri, nextTriggerStringId, applyWtsEdits,
@@ -20,7 +21,7 @@ import {
     UNIT_PROFILE_PATHS, ABILITY_PROFILE_PATHS, UPGRADE_PROFILE_PATHS,
     ITEM_PROFILE_PATHS, DESTRUCTABLE_PROFILE_PATHS, DOODAD_PROFILE_PATHS,
 } from './preview/wc3Data';
-import { getGameAssetCacheDir } from './preview/cascStorage';
+import { getGameAssetCacheDir, listGameAssetPaths } from './preview/cascStorage';
 export { ObjModFile, ObjModEntry, ObjModMod, ObjModVarType } from 'casc-ts/formats';
 
 const TYPE_LABELS: Record<string, string> = {
@@ -153,7 +154,7 @@ interface PreviewMod {
     displayValue?: string;   // field-aware readable value, e.g. "Human" for "human"
     displayDetail?: string;  // raw value/context shown under displayValue
     displayKind?: 'race' | 'enum' | 'asset' | 'rawcodes';
-    assetType?: 'icon' | 'model' | 'pathing';
+    assetType?: 'icon' | 'model' | 'sound' | 'pathing';
     assetPath?: string;
     resolvedItems?: ValueOption[];
     editorKind?: 'select' | 'datalist';
@@ -323,6 +324,7 @@ export interface ObjValueCatalog {
     objects: Map<string, ValueOption>;
     icons: ValueOption[];
     models: ValueOption[];
+    sounds: ValueOption[];
     pathing: ValueOption[];
 }
 
@@ -636,7 +638,9 @@ function enhancePreviewRow(row: PreviewMod, field: MetaField, catalog: ObjValueC
             ? catalog.icons
             : assetType === 'model'
                 ? catalog.models
-                : catalog.pathing;
+                : assetType === 'sound'
+                    ? catalog.sounds
+                    : catalog.pathing;
         return;
     }
 
@@ -697,7 +701,7 @@ function isRaceField(field: MetaField): boolean {
     return id === 'urac' || id === 'arac' || source === 'race' || type === 'race' || label === 'race';
 }
 
-function fieldAssetType(field: MetaField): 'icon' | 'model' | 'pathing' | undefined {
+function fieldAssetType(field: MetaField): 'icon' | 'model' | 'sound' | 'pathing' | undefined {
     const id = field.id.toLowerCase();
     const source = field.sourceField.toLowerCase();
     const label = field.label.toLowerCase();
@@ -708,6 +712,10 @@ function fieldAssetType(field: MetaField): 'icon' | 'model' | 'pathing' | undefi
     }
     if (ICON_FIELDS.has(id) || type.includes('icon') || label.includes('icon') || label.includes('button')) {
         return 'icon';
+    }
+    if (/\.(mp3|wav|ogg|flac)$/i.test(label) || type.includes('sound') || type.includes('music') ||
+        label.includes('sound') || label.includes('music') || source.includes('sound') || source.includes('music')) {
+        return 'sound';
     }
     if (['umdl', 'amdl', 'ifil', 'bfil', 'dfil'].includes(id) || type.includes('model') || label.includes('model') ||
         (field.category.toLowerCase() === 'art' && (source === 'file' || source === 'model'))) {
@@ -722,9 +730,14 @@ function firstAssetPath(value: string | undefined): string | undefined {
     return (!first || first === '-' || first.startsWith('WESTRING_')) ? undefined : first;
 }
 
-function normalizeAssetValue(value: string, assetType: 'icon' | 'model' | 'pathing'): string | undefined {
+function normalizeAssetValue(value: string, assetType: 'icon' | 'model' | 'sound' | 'pathing'): string | undefined {
     if (assetType === 'icon') return normalizeIconPath(value);
     if (assetType === 'model') return normalizeModelPath(value);
+    if (assetType === 'sound') {
+        const first = firstAssetPath(value);
+        if (!first || !/\.(mp3|wav|ogg|flac)$/i.test(first)) return undefined;
+        return first.replace(/\//g, '\\');
+    }
     const first = firstAssetPath(value);
     if (!first || !/\.(tga|blp|dds)$/i.test(first)) return undefined;
     return first.replace(/\//g, '\\');
@@ -732,7 +745,7 @@ function normalizeAssetValue(value: string, assetType: 'icon' | 'model' | 'pathi
 
 function assetLabel(assetPath: string, assetType: string): string {
     const file = assetPath.split('\\').pop() || assetPath;
-    const clean = file.replace(/\.(blp|dds|tga|png|jpe?g|mdx|mdl)$/i, '');
+    const clean = file.replace(/\.(blp|dds|tga|png|jpe?g|mdx|mdl|mp3|wav|ogg|flac)$/i, '');
     if (assetType === 'icon') return clean.replace(/^(btn|disbtn|pasbtn|att|upg)/i, '');
     return clean;
 }
@@ -1066,6 +1079,7 @@ async function loadObjValueCatalogUncached(): Promise<ObjValueCatalog> {
     const objects = new Map<string, ValueOption>();
     const iconMap = new Map<string, ValueOption>();
     const modelMap = new Map<string, ValueOption>();
+    const soundMap = new Map<string, ValueOption>();
     const pathingMap = new Map<string, ValueOption>();
 
     for (const profile of profiles) {
@@ -1080,6 +1094,8 @@ async function loadObjValueCatalogUncached(): Promise<ObjValueCatalog> {
                 if (icon) addAssetOption(iconMap, icon, label, id);
                 const model = normalizeProfileModelPath(key, value);
                 if (model) addAssetOption(modelMap, model, label, id);
+                const sound = normalizeProfileSoundPath(key, value);
+                if (sound) addAssetOption(soundMap, sound, label, id);
                 const pathing = normalizeProfilePathingPath(key, value);
                 if (pathing) addAssetOption(pathingMap, pathing, label, id);
             }
@@ -1087,12 +1103,14 @@ async function loadObjValueCatalogUncached(): Promise<ObjValueCatalog> {
     }
     await addSlkModelAssets(modelMap, objects, worldStrings);
     addModelFallbacks(modelMap);
+    await addCascSoundAssets(soundMap);
 
     addPathingFallbacks(pathingMap);
     return {
         objects,
         icons: sortOptions([...iconMap.values()]).slice(0, 700),
         models: sortOptions([...modelMap.values()]),
+        sounds: sortOptions([...soundMap.values()]),
         pathing: sortOptions([...pathingMap.values()]).slice(0, 300),
     };
 }
@@ -1197,6 +1215,36 @@ function normalizeProfileModelPath(key: string, value: string): string | undefin
 function normalizeProfilePathingPath(key: string, value: string): string | undefined {
     if (!key.toLowerCase().includes('path')) return undefined;
     return normalizeAssetValue(value, 'pathing');
+}
+
+function normalizeProfileSoundPath(key: string, value: string): string | undefined {
+    const lowerKey = key.toLowerCase();
+    if (!/(sound|music|audio)/.test(lowerKey) && !/\.(mp3|wav|ogg|flac)$/i.test(value)) return undefined;
+    return normalizeAssetValue(value, 'sound');
+}
+
+async function addCascSoundAssets(target: Map<string, ValueOption>): Promise<void> {
+    const paths = await listGameAssetPaths((assetPath) =>
+        /^(sound|music)[\\/]/i.test(assetPath) && /\.(mp3|wav|ogg|flac)$/i.test(assetPath),
+        (msg) => console.log(`[wurst-sound-catalog] ${msg}`),
+    );
+    for (const assetPath of paths) {
+        addSoundAssetOption(target, assetPath.replace(/\//g, '\\'), 'WC3 sound', 'casc');
+        if (/\.flac$/i.test(assetPath)) {
+            addSoundAssetOption(target, assetPath.replace(/\.flac$/i, '.mp3').replace(/\//g, '\\'), 'WC3 sound alias', 'casc');
+        }
+    }
+}
+
+function addSoundAssetOption(target: Map<string, ValueOption>, assetPath: string, label: string, ownerId: string): void {
+    const normalized = assetPath.replace(/\//g, '\\');
+    const key = normalized.toLowerCase();
+    if (target.has(key)) return;
+    target.set(key, {
+        value: normalized,
+        label: `${assetLabel(normalized, 'sound')} - ${label}`,
+        detail: `${ownerId} - ${normalized}`,
+    });
 }
 
 function addPathingFallbacks(target: Map<string, ValueOption>): void {
@@ -1733,6 +1781,13 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 .ab-card .object-icon { width: 48px; height: 48px; }
 .model-thumb,
 .object-icon.model-thumb { background: var(--model-bg); }
+.sound-thumb {
+  background: var(--input-bg);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+}
 .model-thumb img { object-fit: contain; }
 .model-thumb.pending {
   position: relative;
@@ -2289,6 +2344,7 @@ ${warningBanner}
       <div class="ab-tabs" id="ab-tabs">
         <button class="ab-tab" type="button" data-tab="model">Models</button>
         <button class="ab-tab" type="button" data-tab="icon">Icons</button>
+        <button class="ab-tab" type="button" data-tab="sound">Sounds</button>
         <button class="ab-tab" type="button" data-tab="pathing">Pathing</button>
       </div>
       <input id="ab-search" class="ab-search" placeholder="Search game assets…" aria-label="Search assets">
@@ -2324,6 +2380,8 @@ async function openObjModAsset(assetPath: string, uri: vscode.Uri): Promise<void
     const ext = resolved.slice(resolved.lastIndexOf('.')).toLowerCase();
     if (['.mdx', '.mdl', '.blp', '.dds', '.tga'].includes(ext)) {
         await vscode.commands.executeCommand('vscode.openWith', target, 'wurst.blpPreview');
+    } else if (isSoundAssetPath(resolved)) {
+        await vscode.commands.executeCommand('vscode.openWith', target, 'wurst.soundPreview');
     } else {
         await vscode.commands.executeCommand('vscode.open', target);
     }
@@ -2728,6 +2786,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
                 models: dedupeByHashOrBasename([...cat.models, ...imp.model]),
                 // Icons repeat across SD/HD and .blp/.dds/.tga variants — collapse same-named ones.
                 icons: dedupeByHashOrBasename([...cat.icons, ...imp.icon]),
+                sounds: dedupeByHashOrBasename([...cat.sounds, ...imp.sound]),
                 pathing: cat.pathing,
             });
             return;

@@ -267,7 +267,7 @@ export async function maybeOfferUpdate(context?: vscode.ExtensionContext): Promi
 
         const choice = await vscode.window.showInformationMessage(
             'A newer WurstScript version is available.',
-            { modal: true, detail }, 'Update', 'Later', 'Cancel'
+            { modal: true, detail }, 'Update', 'Later'
         );
         if (choice === 'Update') {
             await context?.globalState.update(UPDATE_SNOOZE_UNTIL_KEY, undefined);

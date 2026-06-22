@@ -153,6 +153,9 @@ function assetMiniHtml(mod, mi) {
     return '<button type="button" class="asset-mini asset-open" data-model-preview="' + esc(assetPath) + '" title="' + esc('Preview model: ' + assetPath) + '">' +
       '<span class="asset-mini model-thumb" data-key="' + esc(modelKey) + '" data-model="' + esc(assetPath) + '"></span></button>';
   }
+  if (mod.assetType === 'sound') {
+    return '<button type="button" class="asset-mini asset-open" data-open-asset="' + esc(assetPath) + '" title="' + esc('Play sound: ' + assetPath) + '">AUD</button>';
+  }
   // Pathing texture: open the image preview.
   return '<button type="button" class="asset-mini asset-open" data-open-asset="' + esc(assetPath) + '" title="' + esc('Open texture: ' + assetPath) + '">▶ PAT</button>';
 }
@@ -169,7 +172,7 @@ function resolvedItemsHtml(mod) {
 
 function assetName(value) {
   const file = String(value || '').split('\\\\').pop().split('/').pop();
-  return file.replace(/\\.(blp|dds|tga|png|jpe?g|mdx|mdl)$/i, '').replace(/^(btn|disbtn|pasbtn|att|upg)/i, '') || value;
+  return file.replace(/\\.(blp|dds|tga|png|jpe?g|mdx|mdl|mp3|wav|ogg|flac)$/i, '').replace(/^(btn|disbtn|pasbtn|att|upg)/i, '') || value;
 }
 
 function firstAssetPath(value) {
@@ -186,8 +189,10 @@ function inferAssetType(mod, value) {
   const hay = String((mod.fieldId || '') + ' ' + (mod.label || '') + ' ' + (mod.type || '') + ' ' + (mod.category || '')).toLowerCase();
   const ext = (v.match(/\.([a-z0-9]+)$/i) || [])[1]?.toLowerCase() || '';
   const textureExt = ext === 'blp' || ext === 'dds' || ext === 'tga' || ext === 'png' || ext === 'jpg' || ext === 'jpeg';
+  const soundExt = ext === 'mp3' || ext === 'wav' || ext === 'ogg' || ext === 'flac';
 
   if (ext === 'mdx' || ext === 'mdl') return 'model';
+  if (soundExt) return 'sound';
   if (textureExt) {
     if (hay.includes('pathing')) return 'pathing';
     if (hay.includes('icon') || hay.includes('button') || hay.includes('game interface') || hay.includes('art')) return 'icon';
@@ -195,6 +200,7 @@ function inferAssetType(mod, value) {
   }
   if (hay.includes('pathing map') || hay.includes('pathing texture')) return 'pathing';
   if (hay.includes('icon') || hay.includes('button') || hay.includes('game interface')) return 'icon';
+  if (hay.includes('sound') || hay.includes('music') || hay.includes('audio')) return 'sound';
   if (hay.includes('model') || hay.includes('model file') || ['umdl', 'amdl', 'ifil', 'bfil', 'dfil'].includes(String(mod.fieldId || '').toLowerCase())) return 'model';
   return '';
 }
@@ -204,6 +210,7 @@ function normalizeAssetPathForType(value, type) {
   if (!first) return '';
   if (type === 'model') return /\.(mdx|mdl)$/i.test(first) ? first : first + '.mdl';
   if (type === 'icon') return /\.(blp|dds|tga|png|jpe?g)$/i.test(first) ? first : '';
+  if (type === 'sound') return /\.(mp3|wav|ogg|flac)$/i.test(first) ? first : '';
   if (type === 'pathing') return /\.(blp|dds|tga)$/i.test(first) ? first : '';
   return '';
 }
@@ -1259,7 +1266,7 @@ window.addEventListener('message', event => {
     mpvStatus('');
     if (mpvViewer()) { mpvViewer().loadModel(mpvB64ToArrayBuffer(msg.mdxBase64), msg.fileName || '', msg.format || 'mdx'); mpvSetPlaying(true); }
   } else if (msg.type === 'assetCatalog') {
-    abCatalog = { model: msg.models || [], icon: msg.icons || [], pathing: msg.pathing || [] };
+    abCatalog = { model: msg.models || [], icon: msg.icons || [], sound: msg.sounds || [], pathing: msg.pathing || [] };
     const ov = document.getElementById('ab-overlay');
     if (ov && !ov.hidden) renderAssetGrid();
   } else if (msg.type === 'mdxModelMissing') {
@@ -1411,7 +1418,7 @@ let abMi = -1;
 const abActiveTab = signal('model');
 const abSearchQuery = signal('');
 const abSourceFilter = signal('all');
-let abCatalog = null; // { model: [], icon: [], pathing: [] } — fetched once from the host
+let abCatalog = null; // { model: [], icon: [], sound: [], pathing: [] } - fetched once from the host
 function openAssetBrowser(mi) {
   const mods = detailCache.get(selectedKey) || [];
   const mod = mods[mi];
@@ -1419,7 +1426,7 @@ function openAssetBrowser(mi) {
   abMi = mi;
   // A model field defaults to Models; only icon/pathing fields default elsewhere — never offer the
   // wrong asset class by default.
-  abActiveTab.set((mod.assetType === 'icon' || mod.assetType === 'pathing') ? mod.assetType : 'model');
+  abActiveTab.set((mod.assetType === 'icon' || mod.assetType === 'sound' || mod.assetType === 'pathing') ? mod.assetType : 'model');
   abSearchQuery.set('');
   const search = document.getElementById('ab-search');
   if (search) search.value = '';
@@ -1494,6 +1501,8 @@ function renderAssetGrid() {
   grid.innerHTML = matches.map(o => {
     const icon = activeTab === 'model'
       ? '<span class="object-icon model-thumb pending" data-key="ab-model:' + esc(o.value) + '" data-model="' + esc(o.value) + '"></span>'
+      : activeTab === 'sound'
+        ? '<span class="object-icon sound-thumb">AUD</span>'
       : (o.iconPath
         ? '<span class="object-icon" data-key="ab:' + esc(o.value) + '" data-icon="' + esc(o.iconPath) + '"></span>'
         : '<span class="object-icon missing"></span>');
@@ -1501,8 +1510,10 @@ function renderAssetGrid() {
       icon + '<span class="ab-card-label">' + esc(o.label) + '</span></div>';
   }).join('');
   iconLoader.observe(grid);
-  observeModelThumbs(grid);
-  requestAnimationFrame(() => requestVisibleModelThumbs(grid));
+  if (activeTab === 'model') {
+    observeModelThumbs(grid);
+    requestAnimationFrame(() => requestVisibleModelThumbs(grid));
+  }
 }
 function closeAssetBrowser() {
   const ov = document.getElementById('ab-overlay');
@@ -2058,6 +2069,7 @@ window.__wurstModelThumbDebug = {
       assetCatalogCounts: abCatalog ? {
         models: (abCatalog.model || []).length,
         icons: (abCatalog.icon || []).length,
+        sounds: (abCatalog.sound || []).length,
         pathing: (abCatalog.pathing || []).length,
       } : null,
       inert3dPlaceholders: document.querySelectorAll('.object-icon.model').length,

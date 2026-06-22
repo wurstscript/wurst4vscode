@@ -42,6 +42,7 @@ function getArchiveOutputPath(destDir: string, archiveEntryName: string): string
 function getPreviewViewType(fileName: string): string | undefined {
     const ext = path.extname(fileName).toLowerCase();
     if (['.blp', '.dds', '.tga', '.mdx', '.mdl'].includes(ext)) return 'wurst.blpPreview';
+    if (['.mp3', '.wav', '.ogg', '.flac'].includes(ext)) return 'wurst.soundPreview';
     if (['.w3u', '.w3t', '.w3a', '.w3b', '.w3d', '.w3h', '.w3q'].includes(ext)) return 'wurst.objModPreview';
     if (ext === '.doo') return 'wurst.dooPreview';
     if (ext === '.wpm') return 'wurst.wpmPreview';

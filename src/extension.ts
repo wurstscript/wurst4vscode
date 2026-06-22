@@ -8,6 +8,7 @@ import { startLanguageClient } from './languageServer';
 import { setupDecorators } from './features/compileTimeDecorator';
 import { createNewWurstProject } from './features/newProject';
 import { registerBlpPreview } from './features/blpPreview';
+import { registerSoundPreview } from './features/soundPreview';
 import { registerMpqViewer } from './features/mpqViewer';
 import { registerAssetLinks } from './features/assetLinks';
 import { registerImagePreviewHover } from './features/imagePreviewHover';
@@ -25,6 +26,7 @@ export async function activate(context: ExtensionContext) {
 
     setupDecorators(context);
     context.subscriptions.push(registerBlpPreview(context));
+    context.subscriptions.push(registerSoundPreview(context));
     context.subscriptions.push(registerMpqViewer(context));
     context.subscriptions.push(registerAssetLinks(context));
     context.subscriptions.push(registerImagePreviewHover(context));

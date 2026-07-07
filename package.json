@@ -26,7 +26,8 @@
         "workspaceContains:**/*.wurst",
         "workspaceContains:**/*.jurst",
         "onCustomEditor:wurst.objModPreview",
-        "onCustomEditor:wurst.soundPreview"
+        "onCustomEditor:wurst.soundPreview",
+        "onCommand:wurst.previewMap"
     ],
     "main": "./dist/extension",
     "browser": "./dist/web/extension.js",
@@ -773,6 +774,11 @@
                 "command": "wurst.newProject",
                 "title": "New Wurst Project",
                 "category": "wurst"
+            },
+            {
+                "command": "wurst.previewMap",
+                "title": "Preview Map Terrain (experimental)",
+                "category": "wurst"
             }
         ],
         "menus": {
@@ -793,6 +799,11 @@
                     "command": "wurst.runmap",
                     "when": "resourceExtname == .w3x || resourceExtname == .w3m",
                     "group": "navigation@1"
+                },
+                {
+                    "command": "wurst.previewMap",
+                    "when": "resourceFilename == war3map.w3e",
+                    "group": "navigation@2"
                 }
             ]
         },

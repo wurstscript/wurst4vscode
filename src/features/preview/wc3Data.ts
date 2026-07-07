@@ -80,6 +80,59 @@ export async function readGameData(assetPath: string): Promise<Buffer | null> {
     return findGameAsset(assetPath, (msg) => console.log(`[wurst-wc3-data] ${msg}`));
 }
 
+const DEFAULT_WATER_LEVEL_UNITS = 89.6;
+let terrainWaterLevelsPromise: Promise<Map<string, number>> | undefined;
+let tilesetBlightTexturesPromise: Promise<Map<string, string>> | undefined;
+
+export async function loadTerrainWaterLevel(tileset: string): Promise<number> {
+    if (!terrainWaterLevelsPromise) terrainWaterLevelsPromise = loadTerrainWaterLevelsUncached();
+    const levels = await terrainWaterLevelsPromise;
+    return levels.get(`${tileset}Sha`) ?? DEFAULT_WATER_LEVEL_UNITS;
+}
+
+async function loadTerrainWaterLevelsUncached(): Promise<Map<string, number>> {
+    const levels = new Map<string, number>();
+    const buf = await readGameData('TerrainArt\\Water.slk');
+    if (!buf) return levels;
+    for (const [id, row] of parseSlk(buf.toString('utf8')).rows) {
+        const raw = slkFieldCI(row, ['waterlevel', 'height']);
+        if (raw === undefined) continue;
+        const value = Number(raw);
+        if (Number.isFinite(value)) levels.set(id, value * 128);
+    }
+    return levels;
+}
+
+export async function loadTilesetBlightTexture(tileset: string): Promise<string | undefined> {
+    if (!tilesetBlightTexturesPromise) tilesetBlightTexturesPromise = loadTilesetBlightTexturesUncached();
+    const textures = await tilesetBlightTexturesPromise;
+    return textures.get(tileset);
+}
+
+async function loadTilesetBlightTexturesUncached(): Promise<Map<string, string>> {
+    const textures = new Map<string, string>();
+    const buf = await readGameData('UI\\WorldEditData.txt');
+    if (!buf) return textures;
+    const data = parseProfile(buf.toString('utf8'));
+    const tilesets = data.get('TileSets');
+    if (!tilesets) return textures;
+    for (const [key, value] of Object.entries(tilesets)) {
+        if (!key) continue;
+        const fields = value.split(',').map((part) => stripTxtQuotes(part.trim())).filter(Boolean);
+        if (fields.length > 1) textures.set(key[0], fields[1].toLowerCase().endsWith('.dds') ? fields[1] : `${fields[1]}.dds`);
+    }
+    return textures;
+}
+
+function slkFieldCI(row: Record<string, string>, names: string[]): string | undefined {
+    const entries = Object.entries(row);
+    for (const name of names) {
+        const found = entries.find(([key]) => key.toLowerCase() === name.toLowerCase());
+        if (found && found[1] !== '') return found[1];
+    }
+    return undefined;
+}
+
 export function parseSlk(text: string): SlkTable {
     const headers = new Map<number, string>();
     const rowsByY = new Map<number, Record<string, string>>();
@@ -105,7 +158,7 @@ export function parseSlk(text: string): SlkTable {
 
     const rows = new Map<string, Record<string, string>>();
     for (const row of rowsByY.values()) {
-        const id = row.ID || row.unitID || row.itemID || row.alias || row.doodID || row.destID || row.upgradeID || row.buffID;
+        const id = row.ID || row.tileID || row.cliffID || row.unitID || row.itemID || row.alias || row.doodID || row.destID || row.upgradeID || row.buffID;
         if (id) rows.set(id, row);
     }
     return { rows };

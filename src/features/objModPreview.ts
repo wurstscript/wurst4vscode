@@ -774,7 +774,7 @@ function resolveObjectIconPath(entry: ObjModEntry, summaryData: ObjSummaryData):
         const iconPath = normalizeIconPath(override.value);
         if (iconPath) return iconPath;
     }
-    return normalizeIconPath(getAnyProfileValue(entry.baseId, [
+    return getAnyProfileIconPath(entry.baseId, summaryData) ?? normalizeIconPath(getAnyProfileValue(entry.baseId, [
         'Art',
         'art',
         'ButtonArt',
@@ -846,8 +846,10 @@ function raceFromRawcode(rawcode: string): string {
 
 function normalizeIconPath(value: string | undefined): string | undefined {
     const first = firstAssetPath(value);
-    if (!first || !/\.(blp|dds|tga|png|jpe?g)$/i.test(first)) return undefined;
-    return first.replace(/\//g, '\\');
+    if (!first) return undefined;
+    const normalized = first.replace(/\//g, '\\');
+    if (/\.(blp|dds|tga|png|jpe?g)$/i.test(normalized)) return normalized;
+    return /[\\/]/.test(normalized) && !/\.[^\\/]+$/.test(normalized) ? `${normalized}.blp` : undefined;
 }
 
 function normalizeModelPath(value: string | undefined): string | undefined {
@@ -949,11 +951,28 @@ function getBaseSlkRow(baseId: string, field: MetaField, gameData: ObjEditorData
 }
 
 function getAnyProfileValue(baseId: string, fields: string[], summaryData: Pick<ObjSummaryData, 'profile'>): string | undefined {
-    const row = summaryData.profile.get(baseId);
+    const row = getProfileRow(baseId, summaryData);
     if (!row) return undefined;
     for (const field of fields) {
         const value = row[field];
         if (value !== undefined && value !== '') return value;
+    }
+    return undefined;
+}
+
+function getProfileRow(baseId: string, summaryData: Pick<ObjSummaryData, 'profile'>): Record<string, string> | undefined {
+    return summaryData.profile.get(baseId) ??
+        summaryData.profile.get(baseId.toLowerCase()) ??
+        [...summaryData.profile.entries()].find(([id]) => id.toLowerCase() === baseId.toLowerCase())?.[1];
+}
+
+function getAnyProfileIconPath(baseId: string, summaryData: Pick<ObjSummaryData, 'profile'>): string | undefined {
+    const row = getProfileRow(baseId, summaryData);
+    if (!row) return undefined;
+    for (const [key, value] of Object.entries(row)) {
+        if (!/(art|icon|button|research)/i.test(key)) continue;
+        const icon = normalizeIconPath(value);
+        if (icon) return icon;
     }
     return undefined;
 }
@@ -1418,6 +1437,12 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
   align-items: stretch;
 }
 .value-editor.single { grid-template-columns: minmax(0, 1fr); }
+.value-editor.tooltip-editor {
+  display: block;
+  width: 100%;
+  min-width: var(--edit-w, 100%);
+  max-width: 100%;
+}
 .edit-raw {
   width: 100%;
   box-sizing: border-box;
@@ -1433,6 +1458,19 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
 input.edit-raw { height: var(--cell-h, 24px); }
 textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize: vertical; }
 .edit-raw:focus { outline: 1px solid var(--vscode-focusBorder, var(--vscode-textLink-foreground)); }
+.tt-rich-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+.tt-rich-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
 .tt-preview {
   min-width: 0;
   border: 1px dashed var(--border);
@@ -1444,6 +1482,55 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   white-space: pre-wrap;
   word-break: break-word;
   overflow: auto;
+}
+.tt-rich {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 180px;
+  min-height: max(180px, var(--edit-h, 180px));
+  max-height: min(48vh, 420px);
+  outline: none;
+  cursor: text;
+}
+.tt-rich:focus {
+  border-style: solid;
+  border-color: var(--vscode-focusBorder, var(--vscode-textLink-foreground));
+}
+.tt-raw-panel {
+  color: var(--muted);
+  font-family: var(--vscode-font-family, sans-serif);
+  font-size: 11px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  padding-top: 6px;
+}
+.tt-raw-panel[hidden] { display: none; }
+.tt-raw-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+.tt-raw-head span { flex: 1; min-width: 0; }
+.tt-raw-toggle,
+.tt-copy-raw {
+  margin-left: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--input-bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.tt-raw-toggle.active,
+.tt-raw-toggle:hover,
+.tt-copy-raw:hover { background: var(--hover); }
+.tt-raw-panel .tt-raw-input {
+  display: block;
+  margin-top: 5px;
+  min-height: 92px;
+  max-height: 220px;
 }
 .tt-preview-label {
   color: var(--muted);
@@ -1487,6 +1574,11 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 .tt-collapsed:hover .tt-edit-hint,
 .tt-collapsed:focus-visible .tt-edit-hint { opacity: 0.9; }
 .tt-collapsed .tt-edit-hint { color: color-mix(in srgb, var(--wc3-tip-fg) 60%, transparent); } /* on the dark tooltip box */
+.tt-collapsed .source-pill {
+  flex: 0 0 auto;
+  background: color-mix(in srgb, var(--wc3-tip-bg) 80%, var(--accent) 20%);
+  border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+}
 .cell-edit {
   display: inline-flex;
   align-items: center;
@@ -1835,8 +1927,7 @@ tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--acce
   border: 1px solid var(--input-border, var(--border));
   border-radius: 3px;
   cursor: pointer;
-  background:
-    linear-gradient(135deg, #ff0303 0%, #fe8a0e 20%, #fffc01 40%, #20c000 60%, #54a4ff 80%, #e55bb0 100%);
+  background: #fff;
 }
 .tt-color-sq:hover { border-color: var(--fg); }
 .tt-color-sq:focus-visible,
@@ -1844,19 +1935,6 @@ tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--acce
   outline: 2px solid var(--vscode-focusBorder, #007fd4);
   outline-offset: 1px;
 }
-.tt-btn-sm {
-  height: 20px;
-  min-width: 22px;
-  padding: 0 5px;
-  border: 1px solid var(--input-border, var(--border));
-  border-radius: 3px;
-  background: var(--input-bg);
-  color: var(--fg);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-.tt-btn-sm:hover { background: var(--hover); }
 .tt-pop {
   position: absolute;
   top: 24px;

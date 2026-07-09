@@ -79,12 +79,10 @@ function swatchesHtml() {
   ).join('');
 }
 
-// Compact color bar: one small square that opens a popup (swatches + custom picker), plus |n / |r.
+// Compact color bar: one swatch that reflects the current caret/selection color.
 function colorBarHtml(mi) {
   return '<div class="tt-bar" data-mi="' + mi + '">' +
-    '<button type="button" class="tt-color-sq" title="Color selected text"></button>' +
-    '<button type="button" class="tt-btn-sm" data-act="newline" title="Line break (|n)">|n</button>' +
-    '<button type="button" class="tt-btn-sm" data-act="reset" title="End color (|r)">|r</button>' +
+    '<button type="button" class="tt-color-sq" title="Text color" aria-label="Text color"></button>' +
     '<div class="tt-pop" hidden>' +
       '<div class="tt-swatches">' + swatchesHtml() + '</div>' +
       '<label class="tt-pick"><input type="color" class="tt-color" value="#ffcc00" aria-label="Custom colour"><span>Custom...</span></label>' +
@@ -94,13 +92,21 @@ function colorBarHtml(mi) {
 
 function colorEditorHtml(mod, mi) {
   const v = mod.editValue == null ? '' : String(mod.editValue);
-  return '<div class="value-editor">' +
-    '<div class="tt-edit">' + colorBarHtml(mi) +
-      '<textarea class="edit-raw" data-mi="' + mi + '" rows="3" spellcheck="false">' + esc(v) + '</textarea>' +
+  return '<div class="value-editor tooltip-editor">' +
+    '<div class="tt-edit tt-rich-shell">' +
+      '<div class="tt-rich-head">' +
+        colorBarHtml(mi) +
+        '<span class="tt-preview-label">preview</span>' +
+        (mod.source ? sourcePill(mod) : '') +
+        '<button type="button" class="tt-raw-toggle" data-mi="' + mi + '" aria-expanded="false">Raw</button>' +
+      '</div>' +
+      '<div class="tt-preview tt-rich edit-rich" data-mi="' + mi + '" contenteditable="true" spellcheck="false">' + renderWc3Colors(v) + '</div>' +
+      '<div class="tt-raw-panel" data-mi="' + mi + '" hidden>' +
+        '<div class="tt-raw-head"><span>Raw WC3 text</span><button type="button" class="tt-copy-raw" data-mi="' + mi + '">Copy</button></div>' +
+        '<textarea class="edit-raw tt-raw-input" data-mi="' + mi + '" rows="4" spellcheck="false">' + esc(v) + '</textarea>' +
+      '</div>' +
     '</div>' +
-    '<div><div class="tt-preview-label">preview' + (mod.source ? ' - ' + esc(mod.source) : '') + '</div>' +
-      '<div class="tt-preview" data-preview-for="' + mi + '">' + renderWc3Colors(v) + '</div></div>' +
-    '</div>';
+  '</div>';
 }
 
 function optionsHtml(options, selected) {
@@ -284,7 +290,7 @@ function collapsedView(mod, mi) {
   const dv = mod.editValue == null ? (mod.currentValue == null ? '' : String(mod.currentValue)) : String(mod.editValue);
   if (hasColorMarkup(dv)) {
     return '<div class="tt-collapsed" data-mi="' + mi + '" tabindex="0" role="button" title="Click or press Enter to edit">' +
-      '<span class="tt-collapsed-body">' + renderWc3Colors(dv) + '</span><span class="tt-edit-hint">✎</span></div>';
+      '<span class="tt-collapsed-body">' + renderWc3Colors(dv) + '</span>' + (mod.source ? sourcePill(mod) : '') + '<span class="tt-edit-hint">✎</span></div>';
   }
   const badge = mod.overridden ? '<span class="override-badge" title="This field overrides the base value">modified</span>' : '';
   const disp = decoratedValueHtml(mod, mi, dv);
@@ -319,7 +325,7 @@ function postEdit(mod) {
 
 function commitActiveEditor() {
   const el = document.activeElement;
-  if (!el || !el.classList || !el.classList.contains('edit-raw')) return false;
+  if (!el || !el.classList || (!el.classList.contains('edit-raw') && !el.classList.contains('edit-rich'))) return false;
   if (typeof el._commitNow === 'function') {
     el._commitNow();
     return true;
@@ -358,6 +364,99 @@ function insertText(ta, text) {
   ta.value = val.slice(0, r[0]) + text + val.slice(r[1]);
   const c = r[0] + text.length;
   applyToTextarea(ta, c, c);
+}
+
+function cssColorToHex(color) {
+  const s = String(color || '').trim();
+  const hex = /^#?([0-9a-f]{6})$/i.exec(s);
+  if (hex) return hex[1].toLowerCase();
+  const rgb = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/i.exec(s);
+  if (!rgb) return '';
+  return [rgb[1], rgb[2], rgb[3]].map(v => {
+    const n = Math.max(0, Math.min(255, Number(v) || 0));
+    return n.toString(16).padStart(2, '0');
+  }).join('');
+}
+
+function wc3EscapeText(text) {
+  return String(text || '').replace(/\u00a0/g, ' ').replace(/\|/g, '||');
+}
+
+function richNodeToWc3(node) {
+  if (node.nodeType === Node.TEXT_NODE) return wc3EscapeText(node.nodeValue || '');
+  if (node.nodeType !== Node.ELEMENT_NODE) return '';
+  const el = node;
+  const tag = el.tagName ? el.tagName.toLowerCase() : '';
+  if (tag === 'br') return '|n';
+  let out = '';
+  const children = Array.from(el.childNodes || []);
+  children.forEach((child, index) => {
+    out += richNodeToWc3(child);
+    const childTag = child.tagName ? child.tagName.toLowerCase() : '';
+    if ((childTag === 'div' || childTag === 'p') && index < children.length - 1 && !out.endsWith('|n')) out += '|n';
+  });
+  const color = cssColorToHex(el.style?.color || el.getAttribute?.('color'));
+  return color && out ? '|cff' + color + out + '|r' : out;
+}
+
+function richToWc3(el) {
+  return Array.from(el.childNodes || []).map(richNodeToWc3).join('').replace(/(\|n)+$/g, '');
+}
+
+function setCaretEnd(el) {
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+  const sel = window.getSelection();
+  if (!sel) return;
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function containsNode(parent, node) {
+  while (node) {
+    if (node === parent) return true;
+    node = node.parentNode;
+  }
+  return false;
+}
+
+function richSelectionColor(rich) {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount || !containsNode(rich, sel.anchorNode)) return '';
+  let node = sel.anchorNode;
+  if (node && node.nodeType === Node.TEXT_NODE) node = node.parentNode;
+  while (node && node !== rich) {
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const explicit = cssColorToHex(node.style?.color || node.getAttribute?.('color'));
+      if (explicit) return explicit;
+      const computed = cssColorToHex(window.getComputedStyle(node).color);
+      if (computed && computed !== 'ffffff') return computed;
+    }
+    node = node.parentNode;
+  }
+  return 'ffffff';
+}
+
+function updateColorSwatch(bar, color) {
+  const hex = (color || 'ffffff').replace('#', '').toLowerCase();
+  const sq = bar?.querySelector('.tt-color-sq');
+  const input = bar?.querySelector('.tt-color');
+  if (sq) {
+    sq.style.background = '#' + hex;
+    sq.setAttribute('data-color', hex);
+    sq.title = 'Text color #' + hex;
+  }
+  if (input) input.value = '#' + hex;
+}
+
+function applyRichColor(rich, color) {
+  const hex = String(color || '').replace('#', '').toLowerCase();
+  if (!hex) return;
+  if (richSelectionColor(rich) === hex) return;
+  rich.focus();
+  document.execCommand('foreColor', false, '#' + hex);
+  rich.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 function categoryLabel(category) {
@@ -1608,7 +1707,7 @@ document.addEventListener('keydown', e => {
     vscodeApi.postMessage({ type: 'save' });
     return;
   }
-  if (ae && ae.classList && ae.classList.contains('edit-raw')) return;
+  if (ae && ae.classList && (ae.classList.contains('edit-raw') || ae.classList.contains('edit-rich'))) return;
   if (k === 'z' && !e.shiftKey) { e.preventDefault(); vscodeApi.postMessage({ type: 'undo' }); }
   else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); vscodeApi.postMessage({ type: 'redo' }); }
 });
@@ -1723,6 +1822,32 @@ function setupDetails() {
       vscodeApi.postMessage({ type: 'openAsset', path: openAsset.getAttribute('data-open-asset') || '' });
       return;
     }
+    const rawToggle = e.target.closest('.tt-raw-toggle[data-mi]');
+    if (rawToggle) {
+      e.preventDefault();
+      e.stopPropagation();
+      const mi = rawToggle.getAttribute('data-mi');
+      const panel = details.querySelector('.tt-raw-panel[data-mi="' + mi + '"]');
+      if (panel) {
+        const open = panel.hidden;
+        panel.hidden = !open;
+        rawToggle.setAttribute('aria-expanded', String(open));
+        rawToggle.classList.toggle('active', open);
+      }
+      return;
+    }
+    const copyRaw = e.target.closest('.tt-copy-raw[data-mi]');
+    if (copyRaw) {
+      e.preventDefault();
+      e.stopPropagation();
+      const raw = details.querySelector('.tt-raw-input[data-mi="' + copyRaw.getAttribute('data-mi') + '"]');
+      if (raw) {
+        raw.select();
+        if (navigator.clipboard?.writeText) navigator.clipboard.writeText(raw.value).catch(() => {});
+        else document.execCommand('copy');
+      }
+      return;
+    }
     const collapsed = e.target.closest('.tt-collapsed, .cell-edit');
     if (collapsed) expandEditor(collapsed);
   });
@@ -1782,10 +1907,64 @@ function wireEditRaw(el) {
   ['keyup', 'mouseup', 'select', 'blur', 'click'].forEach(ev => el.addEventListener(ev, saveSel));
 }
 
+function wireRichEditor(rich) {
+  const mi = Number(rich.getAttribute('data-mi'));
+  const mods = detailCache.get(selectedKey) || [];
+  const mod = mods[mi];
+  const raw = rich.closest('.tt-rich-shell')?.querySelector('.tt-raw-input[data-mi="' + mi + '"]');
+  if (!mod || !raw) return;
+  const startVal = mod.editValue == null ? '' : String(mod.editValue);
+  let timer;
+  let postedValue = startVal;
+  const commit = () => {
+    clearTimeout(timer);
+    const value = String(raw.value);
+    if (value === postedValue) return;
+    setModValue(mod, value);
+    markModified(rich, mod);
+    postEdit(mod);
+    postedValue = value;
+  };
+  const schedule = () => {
+    clearTimeout(timer);
+    if (String(raw.value) !== postedValue) timer = setTimeout(commit, 250);
+  };
+  rich._commitNow = commit;
+  raw._commitNow = commit;
+  rich.addEventListener('input', () => {
+    const value = richToWc3(rich);
+    raw.value = value;
+    setModValue(mod, value);
+    schedule();
+  });
+  raw.addEventListener('input', () => {
+    const value = String(raw.value);
+    rich.innerHTML = renderWc3Colors(value);
+    setModValue(mod, value);
+    schedule();
+  });
+  rich.addEventListener('blur', commit);
+  raw.addEventListener('blur', commit);
+}
+
 function wireColorBar(bar) {
   const mi = bar.getAttribute('data-mi');
-  const ta = details.querySelector('.edit-raw[data-mi="' + mi + '"]');
-  if (!ta) return;
+  const shell = bar.closest('.tt-rich-shell');
+  const rich = shell?.querySelector('.edit-rich[data-mi="' + mi + '"]');
+  const ta = shell?.querySelector('.edit-raw[data-mi="' + mi + '"]') ?? details.querySelector('.edit-raw[data-mi="' + mi + '"]');
+  if (!ta && !rich) return;
+  const useRaw = () => document.activeElement === ta;
+  const syncColor = () => { if (rich) updateColorSwatch(bar, richSelectionColor(rich)); };
+  if (rich) {
+    syncColor();
+    rich.addEventListener('keyup', syncColor);
+    rich.addEventListener('mouseup', syncColor);
+    rich.addEventListener('focus', syncColor);
+    rich.addEventListener('input', syncColor);
+    document.addEventListener('selectionchange', () => {
+      if (rich.isConnected && containsNode(rich, window.getSelection()?.anchorNode)) syncColor();
+    });
+  }
   const pop = bar.querySelector('.tt-pop');
   const sq = bar.querySelector('.tt-color-sq');
   if (sq) {
@@ -1798,17 +1977,20 @@ function wireColorBar(bar) {
   if (pop) {
     for (const sw of pop.querySelectorAll('.tt-sw')) {
       sw.addEventListener('mousedown', e => e.preventDefault());
-      sw.addEventListener('click', () => { wrapColor(ta, sw.getAttribute('data-color')); pop.hidden = true; });
+      sw.addEventListener('click', () => {
+        const hex = sw.getAttribute('data-color');
+        if (ta && useRaw()) wrapColor(ta, hex);
+        else if (rich) applyRichColor(rich, hex);
+        updateColorSwatch(bar, hex);
+        pop.hidden = true;
+      });
     }
     const colorInput = pop.querySelector('.tt-color');
-    if (colorInput) colorInput.addEventListener('change', () => { wrapColor(ta, colorInput.value); pop.hidden = true; });
-  }
-  for (const b of bar.querySelectorAll('.tt-btn-sm')) {
-    b.addEventListener('mousedown', e => e.preventDefault());
-    b.addEventListener('click', () => {
-      const act = b.getAttribute('data-act');
-      if (act === 'newline') insertText(ta, '|n');
-      else if (act === 'reset') insertText(ta, '|r');
+    if (colorInput) colorInput.addEventListener('change', () => {
+      if (ta && useRaw()) wrapColor(ta, colorInput.value);
+      else if (rich) applyRichColor(rich, colorInput.value);
+      updateColorSwatch(bar, colorInput.value);
+      pop.hidden = true;
     });
   }
 }
@@ -1820,9 +2002,37 @@ function expandEditor(c) {
   const mods = detailCache.get(selectedKey) || [];
   const mod = mods[mi];
   if (!cell || !mod) return;
+  const before = c.getBoundingClientRect();
   cell.innerHTML = editorHtml(mod, mi);
+  const editor = cell.querySelector('.value-editor');
+  if (editor && c.classList.contains('tt-collapsed')) {
+    editor.style.setProperty('--edit-w', Math.max(1, Math.round(before.width)) + 'px');
+    editor.style.setProperty('--edit-h', Math.max(1, Math.round(before.height)) + 'px');
+  }
+  const rich = cell.querySelector('.edit-rich');
   const ta = cell.querySelector('.edit-raw');
-  if (ta) {
+  if (rich) {
+    wireRichEditor(rich);
+    rich.focus();
+    setCaretEnd(rich);
+    const original = mod.editValue == null ? '' : String(mod.editValue);
+    rich.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        const raw = cell.querySelector('.tt-raw-input[data-mi="' + mi + '"]');
+        if (raw && raw.value !== original) {
+          raw.value = original;
+          raw.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        cell._refocusOnCollapse = true;
+        rich.blur();
+      } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        cell._refocusOnCollapse = true;
+        rich.blur();
+      }
+    });
+  } else if (ta) {
     wireEditRaw(ta);
     ta.focus();
     if (ta.tagName === 'INPUT' && ta.type !== 'number' && ta.setSelectionRange) ta.setSelectionRange(ta.value.length, ta.value.length);
@@ -1879,8 +2089,16 @@ function updateFieldCell(mods, mod) {
   const el = details.querySelector('.edit-raw[data-mi="' + mi + '"]');
   if (el) {
     el.value = mod.editValue == null ? '' : String(mod.editValue);
+    const rich = details.querySelector('.edit-rich[data-mi="' + mi + '"]');
+    if (rich) rich.innerHTML = renderWc3Colors(el.value);
     const pv = details.querySelector('.tt-preview[data-preview-for="' + mi + '"]');
     if (pv) pv.innerHTML = renderWc3Colors(el.value);
+    return;
+  }
+  const rich = details.querySelector('.edit-rich[data-mi="' + mi + '"]');
+  if (rich) {
+    const value = mod.editValue == null ? '' : String(mod.editValue);
+    rich.innerHTML = renderWc3Colors(value);
     return;
   }
   const col = details.querySelector('.tt-collapsed[data-mi="' + mi + '"], .cell-edit[data-mi="' + mi + '"]');

@@ -13,6 +13,7 @@ import {
     normalizeInstallerPaths, migrateLegacyGrillLayout, installLauncherExecutable,
     isRecoverableInstallError, cleanupOldWurstHome, cleanupWurstSetupJar,
     removeDirSafe, upgradeFolder, ensureDirectoryPath,
+    copyDirContents, withRetry,
 } from './fsUtils';
 import { fetchNightlyZipAsset, fetchLatestGrillAsset, fetchNightlyCommitSha, downloadFileWithProgress, extractZipWithByteProgress } from './downloader';
 import { ensureCliOnPath, offerPostInstallActions } from './pathManager';
@@ -20,6 +21,12 @@ import { stopLanguageServerIfRunning } from '../languageServer';
 
 type InstallOptions = {
     offerPostInstallActions?: boolean;
+};
+
+type PreparedNightlyInstall = {
+    tmpWork: string;
+    unpack: string;
+    grillJar: string;
 };
 
 const UPDATE_SNOOZE_UNTIL_KEY = 'wurst.updatePrompt.snoozedUntil';
@@ -155,91 +162,140 @@ export async function ensureGrillAvailable(options: InstallOptions = {}): Promis
 
 export async function installWithRetry(options: InstallOptions = {}): Promise<void> {
     let autoRepairAttempted = false;
-    while (true) {
-        try {
-            await installFreshFromNightly(options);
-            return;
-        } catch (error) {
-            if (!autoRepairAttempted && isRecoverableInstallError(error)) {
-                autoRepairAttempted = true;
-                try { await repairInstallationLayout(); continue; } catch {}
+    let prepared: PreparedNightlyInstall | undefined;
+    try {
+        while (true) {
+            try {
+                prepared = await prepareNightlyInstall(prepared);
+                await installPreparedNightly(prepared, options);
+                return;
+            } catch (error) {
+                if (!autoRepairAttempted && isRecoverableInstallError(error)) {
+                    autoRepairAttempted = true;
+                    try { await repairInstallationLayout(); continue; } catch {}
+                }
+                const message = error instanceof Error ? error.message : String(error);
+                const detail = [
+                    prepared ? 'Retry and Repair will reuse the already downloaded installer files.' : undefined,
+                    isRecoverableInstallError(error)
+                        ? 'If a file is locked, close running Wurst/Java/Warcraft processes or old terminals, then Retry.'
+                        : undefined,
+                ].filter(Boolean).join('\n\n') || undefined;
+                const choice = await vscode.window.showErrorMessage(
+                    `Installation failed: ${message}`, { modal: true, detail }, 'Retry', 'Repair'
+                );
+                if (choice === 'Repair') { await repairInstallationLayout(); continue; }
+                if (choice !== 'Retry') throw error;
             }
-            const message = error instanceof Error ? error.message : String(error);
-            const choice = await vscode.window.showErrorMessage(
-                `Installation failed: ${message}`, { modal: true }, 'Retry', 'Repair', 'Cancel'
-            );
-            if (choice === 'Repair') { await repairInstallationLayout(); continue; }
-            if (choice !== 'Retry') throw error;
+        }
+    } finally {
+        if (prepared) {
+            try { await removeDirSafe(prepared.tmpWork); } catch {}
         }
     }
 }
 
-async function installFreshFromNightly(options: InstallOptions): Promise<void> {
+async function prepareNightlyInstall(existing?: PreparedNightlyInstall): Promise<PreparedNightlyInstall> {
+    if (existing && fs.existsSync(existing.unpack) && fs.existsSync(existing.grillJar)) {
+        return existing;
+    }
+
+    let tmpWork: string | undefined;
+    try {
+        return await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: 'Preparing WurstScript installer', cancellable: false },
+            async (progress) => {
+                progress.report({ message: 'Fetching release info...', increment: 5 });
+                const asset = await fetchNightlyZipAsset();
+
+                tmpWork = path.join(os.tmpdir(), `wurst-install-${Date.now()}-${process.pid}`);
+                const tmpZip = path.join(tmpWork, 'payload.zip');
+                const unpack = path.join(tmpWork, 'unpacked');
+                const grillJar = path.join(tmpWork, 'grill.jar');
+                fs.mkdirSync(unpack, { recursive: true });
+
+                let last = 0;
+                const DL_WEIGHT = 70, EX_WEIGHT = 18, GRILL_WEIGHT = 10;
+
+                await downloadFileWithProgress(asset.url, tmpZip, (pct) => {
+                    const scaled = (pct / 100) * DL_WEIGHT;
+                    const inc = Math.max(0, scaled - last); last += inc;
+                    progress.report({ message: `Downloading compiler... ${Math.floor(pct)}%`, increment: inc });
+                });
+
+                await extractZipWithByteProgress(tmpZip, unpack, (pct) => {
+                    const scaled = DL_WEIGHT + (pct / 100) * EX_WEIGHT;
+                    const inc = Math.max(0, scaled - last); last += inc;
+                    progress.report({ message: `Extracting compiler... ${Math.floor(pct)}%`, increment: inc });
+                });
+                try { fs.unlinkSync(tmpZip); } catch {}
+
+                const srcRuntime = path.join(unpack, 'wurst-runtime');
+                const srcCompiler = path.join(unpack, 'wurst-compiler');
+                if (!fs.existsSync(srcRuntime) || !fs.existsSync(path.join(srcCompiler, 'wurstscript.jar'))) {
+                    throw new Error('Installation incomplete: runtime or compiler not found after extraction.');
+                }
+
+                const grillAsset = await fetchLatestGrillAsset();
+                await downloadFileWithProgress(grillAsset.url, grillJar, (pct) => {
+                    const scaled = DL_WEIGHT + EX_WEIGHT + (pct / 100) * GRILL_WEIGHT;
+                    const inc = Math.max(0, scaled - last); last += inc;
+                    progress.report({ message: `Downloading Grill CLI... ${Math.floor(pct)}%`, increment: inc });
+                });
+
+                progress.report({ message: 'Installer ready', increment: Math.max(0, 100 - last) });
+                return { tmpWork, unpack, grillJar };
+            }
+        );
+    } catch (error) {
+        if (tmpWork) {
+            try { await removeDirSafe(tmpWork); } catch {}
+        }
+        throw error;
+    }
+}
+
+async function installPreparedNightly(prepared: PreparedNightlyInstall, options: InstallOptions): Promise<void> {
     await stopLanguageServerIfRunning();
 
     await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Installing WurstScript', cancellable: false },
         async (progress) => {
-            progress.report({ message: 'Fetching release info…', increment: 5 });
-            const asset = await fetchNightlyZipAsset();
+            progress.report({ message: 'Preparing local install files...', increment: 5 });
+            const attemptWork = path.join(prepared.tmpWork, `attempt-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+            const attemptUnpack = path.join(attemptWork, 'unpacked');
 
-            const tmpWork = path.join(os.tmpdir(), `wurst-install-${Date.now()}`);
-            const tmpZip = path.join(tmpWork, 'payload.zip');
-            const unpack = path.join(tmpWork, 'unpacked');
-            fs.mkdirSync(unpack, { recursive: true });
+            try {
+                copyDirContents(prepared.unpack, attemptUnpack);
 
-            let last = 0;
-            const DL_WEIGHT = 70, EX_WEIGHT = 18, GRILL_WEIGHT = 10;
+                const srcRuntime = path.join(attemptUnpack, 'wurst-runtime');
+                const srcCompiler = path.join(attemptUnpack, 'wurst-compiler');
+                const srcLauncher = path.join(attemptUnpack, process.platform === 'win32' ? 'wurstscript.cmd' : 'wurstscript');
+                const srcGrill = path.join(attemptUnpack, process.platform === 'win32' ? 'grill.cmd' : 'grill');
 
-            await downloadFileWithProgress(asset.url, tmpZip, (pct) => {
-                const scaled = (pct / 100) * DL_WEIGHT;
-                const inc = Math.max(0, scaled - last); last += inc;
-                progress.report({ message: `Downloading compiler… ${Math.floor(pct)}%`, increment: inc });
-            });
+                progress.report({ message: 'Installing bundled runtime...', increment: 25 });
+                fs.mkdirSync(WURST_HOME, { recursive: true });
+                await upgradeFolder(srcRuntime, RUNTIME_DIR);
 
-            await extractZipWithByteProgress(tmpZip, unpack, (pct) => {
-                const scaled = DL_WEIGHT + (pct / 100) * EX_WEIGHT;
-                const inc = Math.max(0, scaled - last); last += inc;
-                progress.report({ message: `Extracting compiler… ${Math.floor(pct)}%`, increment: inc });
-            });
+                progress.report({ message: 'Installing compiler...', increment: 35 });
+                await upgradeFolder(srcCompiler, COMPILER_DIR);
+                installLauncherExecutable(srcLauncher);
+                installLauncherExecutable(srcGrill);
+                chmodRuntimeExecutables();
 
-            const srcRuntime = path.join(unpack, 'wurst-runtime');
-            const srcCompiler = path.join(unpack, 'wurst-compiler');
-            const srcLauncher = path.join(unpack, process.platform === 'win32' ? 'wurstscript.cmd' : 'wurstscript');
-            const srcGrill = path.join(unpack, process.platform === 'win32' ? 'grill.cmd' : 'grill');
+                progress.report({ message: 'Installing Grill CLI...', increment: 20 });
+                ensureDirectoryPath(GRILL_HOME_DIR);
+                const grillDest = path.join(GRILL_HOME_DIR, 'grill.jar');
+                await withRetry(() => fs.copyFileSync(prepared.grillJar, grillDest));
+                console.log('[wurst] Installed Grill CLI at', grillDest);
 
-            if (!fs.existsSync(srcRuntime) || !fs.existsSync(path.join(srcCompiler, 'wurstscript.jar'))) {
-                throw new Error('Installation incomplete: runtime or compiler not found after extraction.');
+                cleanupOldWurstHome();
+                cleanupWurstSetupJar();
+            } finally {
+                try { await removeDirSafe(attemptWork); } catch {}
             }
 
-            fs.mkdirSync(WURST_HOME, { recursive: true });
-            await upgradeFolder(srcRuntime, RUNTIME_DIR);
-            await upgradeFolder(srcCompiler, COMPILER_DIR);
-            installLauncherExecutable(srcLauncher);
-            installLauncherExecutable(srcGrill);
-
-            chmodRuntimeExecutables();
-
-            const grillAsset = await fetchLatestGrillAsset();
-            ensureDirectoryPath(GRILL_HOME_DIR);
-            const tmpGrillJar = path.join(tmpWork, 'grill.jar');
-
-            await downloadFileWithProgress(grillAsset.url, tmpGrillJar, (pct) => {
-                const scaled = DL_WEIGHT + EX_WEIGHT + (pct / 100) * GRILL_WEIGHT;
-                const inc = Math.max(0, scaled - last); last += inc;
-                progress.report({ message: `Downloading Grill CLI… ${Math.floor(pct)}%`, increment: inc });
-            });
-
-            const grillDest = path.join(GRILL_HOME_DIR, 'grill.jar');
-            fs.copyFileSync(tmpGrillJar, grillDest);
-            try { fs.unlinkSync(tmpGrillJar); } catch {}
-            console.log('[wurst] Installed Grill CLI at', grillDest);
-
-            cleanupOldWurstHome();
-            cleanupWurstSetupJar();
-            try { await removeDirSafe(tmpWork); } catch {}
-
-            progress.report({ message: 'Finishing up installation…', increment: Math.max(0, 100 - last) });
+            progress.report({ message: 'Finishing up installation...', increment: 15 });
 
             const pathUpdate = await ensureCliOnPath();
             if (options.offerPostInstallActions !== false) {

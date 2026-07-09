@@ -38,13 +38,27 @@ export function copyDirContents(srcDir: string, destDir: string) {
     }
 }
 
+export async function copyDirContentsWithRetry(srcDir: string, destDir: string) {
+    fs.mkdirSync(destDir, { recursive: true });
+    for (const entry of fs.readdirSync(srcDir)) {
+        const s = path.join(srcDir, entry);
+        const d = path.join(destDir, entry);
+        const st = fs.statSync(s);
+        if (st.isDirectory()) {
+            await copyDirContentsWithRetry(s, d);
+        } else if (st.isFile()) {
+            await withRetry(() => fs.copyFileSync(s, d));
+        }
+    }
+}
+
 export async function upgradeFolder(src: string, dest: string) {
     try {
         if (fs.existsSync(dest)) await removeDirSafe(dest);
         await withRetry(() => fs.renameSync(src, dest));
         return;
     } catch {
-        copyDirContents(src, dest);
+        await copyDirContentsWithRetry(src, dest);
         try { await removeDirSafe(src); } catch {}
     }
 }

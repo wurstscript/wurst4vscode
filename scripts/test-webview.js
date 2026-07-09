@@ -494,6 +494,19 @@ function testNoThumbnailTimingFallbacks() {
     assert.ok(!modelE2e.includes('WURST_MODEL_THUMB_MAX_MS'), 'model thumbnail e2e must not enforce a per-thumbnail timing budget');
 }
 
+function testObjModSaveCommitsFocusedEditor() {
+    const host = fs.readFileSync(path.join(root, 'src/features/objModPreview.ts'), 'utf8');
+    const objmod = fs.readFileSync(path.join(root, 'src/webview/objModEditorWebview.ts'), 'utf8');
+
+    assert.ok(objmod.includes('function commitActiveEditor()'), 'objmod webview should expose an immediate focused-field commit helper');
+    assert.ok(objmod.includes("el._commitNow = commit"), 'focused objmod editors should publish their commit function');
+    assert.ok(objmod.includes("k === 's'"), 'objmod webview should handle Ctrl/Cmd+S explicitly');
+    assert.ok(objmod.includes("vscodeApi.postMessage({ type: 'save' })"), 'objmod webview save shortcut should ask the host to save after committing');
+    assert.ok(host.includes("msg.type === 'save'"), 'objmod host should handle save messages from the webview');
+    assert.ok(host.includes("workbench.action.files.save"), 'objmod host save message should route through VS Code save');
+    assert.ok(host.includes('doc.wtsEdits.clear()'), 'objmod host should clear staged WTS edits after a successful write');
+}
+
 async function main() {
     testSignals();
     await testIconLoader();
@@ -502,6 +515,7 @@ async function main() {
     await testModelThumbnailRequestsTexturesByDefault();
     testAssetBrowserForwardsModelTextures();
     testNoThumbnailTimingFallbacks();
+    testObjModSaveCommitsFocusedEditor();
     console.log('webview harness tests passed');
 }
 

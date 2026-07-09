@@ -2793,6 +2793,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         }
         if (msg.type === 'undo') { void vscode.commands.executeCommand('undo'); return; }
         if (msg.type === 'redo') { void vscode.commands.executeCommand('redo'); return; }
+        if (msg.type === 'save') { void vscode.commands.executeCommand('workbench.action.files.save'); return; }
         if (msg.type === 'editField' && msg.key && msg.fieldId && msg.varType) {
             const edit = applyFieldEdit(doc, {
                 type: 'editField',
@@ -2860,6 +2861,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         }
         const text = applyWtsEdits(original, doc.wtsEdits);
         await vscode.workspace.fs.writeFile(wtsUri, Buffer.from(text, 'utf8'));
+        doc.wtsEdits.clear();
     }
 
     async revertCustomDocument(doc: ObjModDocument): Promise<void> {

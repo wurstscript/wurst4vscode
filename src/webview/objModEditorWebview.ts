@@ -317,6 +317,16 @@ function postEdit(mod) {
   });
 }
 
+function commitActiveEditor() {
+  const el = document.activeElement;
+  if (!el || !el.classList || !el.classList.contains('edit-raw')) return false;
+  if (typeof el._commitNow === 'function') {
+    el._commitNow();
+    return true;
+  }
+  return false;
+}
+
 // Current selection range for a textarea (kept fresh even after blur, so toolbar/color-picker work).
 function taRange(ta) {
   const ss = ta._ss != null ? ta._ss : (ta.selectionStart || 0);
@@ -1591,8 +1601,14 @@ function pickAsset(value) {
 document.addEventListener('keydown', e => {
   if (!(e.ctrlKey || e.metaKey)) return;
   const ae = document.activeElement;
-  if (ae && ae.classList && ae.classList.contains('edit-raw')) return;
   const k = e.key.toLowerCase();
+  if (k === 's') {
+    e.preventDefault();
+    commitActiveEditor();
+    vscodeApi.postMessage({ type: 'save' });
+    return;
+  }
+  if (ae && ae.classList && ae.classList.contains('edit-raw')) return;
   if (k === 'z' && !e.shiftKey) { e.preventDefault(); vscodeApi.postMessage({ type: 'undo' }); }
   else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); vscodeApi.postMessage({ type: 'redo' }); }
 });
@@ -1736,19 +1752,28 @@ function wireEditRaw(el) {
   if (!mod) return;
   const startVal = mod.editValue == null ? '' : String(mod.editValue);
   let timer;
-  let posted = false;
-  const commit = () => { markModified(el, mod); postEdit(mod); posted = true; };
+  let postedValue = startVal;
+  const commit = () => {
+    clearTimeout(timer);
+    const value = String(el.value);
+    if (value === postedValue) return;
+    setModValue(mod, value);
+    markModified(el, mod);
+    postEdit(mod);
+    postedValue = value;
+  };
+  el._commitNow = commit;
   const onEdit = () => {
     setModValue(mod, el.value);
     const preview = details.querySelector('.tt-preview[data-preview-for="' + mi + '"]');
     if (preview) preview.innerHTML = renderWc3Colors(el.value);
     clearTimeout(timer);
     // Only create/update a mod once the value actually changes (clicking a field to view it shouldn't modify it).
-    if (el.value !== startVal || posted) timer = setTimeout(commit, 250);
+    if (String(el.value) !== postedValue) timer = setTimeout(commit, 250);
   };
   el.addEventListener('input', onEdit);
   el.addEventListener('change', onEdit);
-  el.addEventListener('blur', () => { clearTimeout(timer); if (el.value !== startVal || posted) commit(); });
+  el.addEventListener('blur', () => { commit(); el._commitNow = null; });
   // Track selection so the toolbar / color picker act on it even after the textarea blurs.
   const saveSel = () => {
     if (typeof el.selectionStart !== 'number' || typeof el.selectionEnd !== 'number') return;

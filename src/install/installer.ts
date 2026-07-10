@@ -3,7 +3,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { spawnSync } from 'child_process';
+import { execFile, spawnSync } from 'child_process';
 import * as vscode from 'vscode';
 import { workspace } from 'vscode';
 import {
@@ -18,6 +18,11 @@ import {
 import { fetchNightlyZipAsset, fetchLatestGrillAsset, fetchNightlyCommitSha, downloadFileWithProgress, extractZipWithByteProgress } from './downloader';
 import { ensureCliOnPath, offerPostInstallActions } from './pathManager';
 import { stopLanguageServerIfRunning } from '../languageServer';
+import {
+    ensureConflictingWurstProcessesStopped,
+    InstallCoordinationCancelledError,
+    withWurstInstallLock,
+} from './installCoordination';
 
 type InstallOptions = {
     offerPostInstallActions?: boolean;
@@ -61,15 +66,20 @@ function chmodRuntimeExecutables(): void {
     try { fs.chmodSync(path.join(RUNTIME_DIR, 'lib', 'jspawnhelper'), 0o755); } catch {}
 }
 
-export function checkCustomJavaVersion(javaBin: string): void {
+export async function checkCustomJavaVersion(javaBin: string): Promise<void> {
     if (!fs.existsSync(javaBin)) {
         throw new Error(`Custom Java executable not found: "${javaBin}". Check your wurst.javaExecutable setting.`);
     }
-    const res = spawnSync(javaBin, ['-version'], { encoding: 'utf8', windowsHide: true });
-    const output = `${res.stderr || ''}${res.stdout || ''}`.trim();
-    if (res.error || res.status !== 0) {
-        throw new Error(`Failed to run custom Java at "${javaBin}": ${res.error?.message ?? output}`);
-    }
+    const output = await new Promise<string>((resolve, reject) => {
+        execFile(javaBin, ['-version'], { encoding: 'utf8', windowsHide: true }, (error, stdout, stderr) => {
+            const combined = `${stderr || ''}${stdout || ''}`.trim();
+            if (error) {
+                reject(new Error(`Failed to run custom Java at "${javaBin}": ${error.message || combined}`));
+                return;
+            }
+            resolve(combined);
+        });
+    });
     const match = output.match(/version "(\d+)/);
     if (!match) throw new Error(`Could not determine Java version from output:\n${output}`);
     const major = parseInt(match[1], 10);
@@ -81,21 +91,57 @@ export function checkCustomJavaVersion(javaBin: string): void {
     }
 }
 
-export function getInstalledVersionString(): string | null {
+let installedVersionCacheKey = '';
+let installedVersionPromise: Promise<string | null> | undefined;
+
+export function getInstalledVersionString(): Promise<string | null> {
+    const customJava = workspace.getConfiguration('wurst').get<string>('javaExecutable')?.trim() || '';
+    const java = customJava || getBundledJava();
+    if (!customJava && (!fs.existsSync(java) || !fs.existsSync(COMPILER_JAR))) return Promise.resolve(null);
+    if (customJava && !fs.existsSync(COMPILER_JAR)) return Promise.resolve(null);
+
+    let jarStamp = '';
     try {
-        const customJava = workspace.getConfiguration('wurst').get<string>('javaExecutable')?.trim() || '';
-        const java = customJava || getBundledJava();
-        if (!customJava && (!fs.existsSync(java) || !fs.existsSync(COMPILER_JAR))) return null;
-        if (customJava && !fs.existsSync(COMPILER_JAR)) return null;
-        const res = spawnSync(java, ['-jar', COMPILER_JAR, '--version'], { encoding: 'utf8', windowsHide: true });
-        const out = `${res.stdout || ''}\n${res.stderr || ''}`.trim();
-        if (!out) return null;
-        return out.split(/\r?\n/).pop() || out;
-    } catch { return null; }
+        const stat = fs.statSync(COMPILER_JAR);
+        jarStamp = `${stat.size}:${stat.mtimeMs}`;
+    } catch {
+        return Promise.resolve(null);
+    }
+    const cacheKey = `${java}|${jarStamp}`;
+    if (installedVersionPromise && installedVersionCacheKey === cacheKey) {
+        return installedVersionPromise;
+    }
+
+    installedVersionCacheKey = cacheKey;
+    installedVersionPromise = new Promise((resolve) => {
+        execFile(java, ['-jar', COMPILER_JAR, '--version'], { encoding: 'utf8', windowsHide: true }, (error, stdout, stderr) => {
+            if (error) {
+                resolve(null);
+                return;
+            }
+            const out = `${stdout || ''}\n${stderr || ''}`.trim();
+            resolve(out ? (out.split(/\r?\n/).pop() || out) : null);
+        });
+    });
+    return installedVersionPromise;
 }
 
-export function extractShortSha(versionString: string): string | null {
-    return versionString.substring(versionString.lastIndexOf('-') + 2);
+export function extractGitSha(versionString: string): string | null {
+    // Compiler versions have used both `-<sha>` and `-g<sha>` suffixes.  Parse
+    // the last standalone hash instead of relying on a fixed delimiter width.
+    const matches = [...versionString.matchAll(/(?:^|[^0-9a-f])g?([0-9a-f]{7,40})(?=$|[^0-9a-f])/gi)];
+    return matches.at(-1)?.[1].toLowerCase() ?? null;
+}
+
+export function gitShasMatch(left: string, right: string): boolean {
+    const a = left.toLowerCase();
+    const b = right.toLowerCase();
+    if (!/^[0-9a-f]{7,40}$/.test(a) || !/^[0-9a-f]{7,40}$/.test(b)) return false;
+    return a.startsWith(b) || b.startsWith(a);
+}
+
+export function displayGitSha(sha: string): string {
+    return sha.slice(0, 7).toLowerCase();
 }
 
 export function getBundledGrillExecutable(): string | null {
@@ -160,16 +206,35 @@ export async function ensureGrillAvailable(options: InstallOptions = {}): Promis
     }
 }
 
-export async function installWithRetry(options: InstallOptions = {}): Promise<void> {
+let activeInstallPromise: Promise<void> | undefined;
+
+export function installWithRetry(options: InstallOptions = {}): Promise<void> {
+    if (!activeInstallPromise) {
+        activeInstallPromise = runInstallWithRetry(options).finally(() => {
+            activeInstallPromise = undefined;
+        });
+    }
+    return activeInstallPromise;
+}
+
+async function runInstallWithRetry(options: InstallOptions): Promise<void> {
     let autoRepairAttempted = false;
     let prepared: PreparedNightlyInstall | undefined;
+    const initialInstallationStamp = getInstallationStamp();
     try {
         while (true) {
             try {
-                prepared = await prepareNightlyInstall(prepared);
-                await installPreparedNightly(prepared, options);
+                await withWurstInstallLock(async (waited) => {
+                    if (waited && getInstallationStamp() !== initialInstallationStamp) {
+                        console.log('[wurst] Another VS Code window completed the WurstScript installation; skipping duplicate work.');
+                        return;
+                    }
+                    prepared = await prepareNightlyInstall(prepared);
+                    await installPreparedNightly(prepared, options);
+                });
                 return;
             } catch (error) {
+                if (error instanceof InstallCoordinationCancelledError) throw error;
                 if (!autoRepairAttempted && isRecoverableInstallError(error)) {
                     autoRepairAttempted = true;
                     try { await repairInstallationLayout(); continue; } catch {}
@@ -178,7 +243,7 @@ export async function installWithRetry(options: InstallOptions = {}): Promise<vo
                 const detail = [
                     prepared ? 'Retry and Repair will reuse the already downloaded installer files.' : undefined,
                     isRecoverableInstallError(error)
-                        ? 'If a file is locked, close running Wurst/Java/Warcraft processes or old terminals, then Retry.'
+                        ? 'If a file is locked, close other VS Code windows using WurstScript and any running Wurst/Java processes, then Retry.'
                         : undefined,
                 ].filter(Boolean).join('\n\n') || undefined;
                 const choice = await vscode.window.showErrorMessage(
@@ -192,6 +257,16 @@ export async function installWithRetry(options: InstallOptions = {}): Promise<vo
         if (prepared) {
             try { await removeDirSafe(prepared.tmpWork); } catch {}
         }
+    }
+}
+
+function getInstallationStamp(): string {
+    try {
+        const jar = fs.statSync(COMPILER_JAR);
+        const compilerDir = fs.statSync(COMPILER_DIR);
+        return `${jar.size}:${jar.mtimeMs}:${compilerDir.ctimeMs}`;
+    } catch {
+        return 'missing';
     }
 }
 
@@ -256,7 +331,15 @@ async function prepareNightlyInstall(existing?: PreparedNightlyInstall): Promise
 }
 
 async function installPreparedNightly(prepared: PreparedNightlyInstall, options: InstallOptions): Promise<void> {
-    await stopLanguageServerIfRunning();
+    const stoppedLocalServer = await stopLanguageServerIfRunning();
+    try {
+        await ensureConflictingWurstProcessesStopped();
+    } catch (error) {
+        if (stoppedLocalServer && error instanceof InstallCoordinationCancelledError) {
+            await vscode.commands.executeCommand('workbench.action.reloadWindow');
+        }
+        throw error;
+    }
 
     await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Installing WurstScript', cancellable: false },
@@ -311,14 +394,14 @@ export async function maybeOfferUpdate(context?: vscode.ExtensionContext): Promi
         const snoozedUntil = context?.globalState.get<number>(UPDATE_SNOOZE_UNTIL_KEY) ?? 0;
         if (snoozedUntil > Date.now()) return;
 
-        const installed = getInstalledVersionString();
-        const installedShort = installed ? extractShortSha(installed) : null;
+        const installed = await getInstalledVersionString();
+        const installedSha = installed ? extractGitSha(installed) : null;
         const latestSha = await fetchNightlyCommitSha();
-        if (installedShort && latestSha.startsWith(installedShort)) return;
+        if (installedSha && gitShasMatch(installedSha, latestSha)) return;
 
         const detail = [
-            installed ? `Installed: ${installedShort}` : 'Installed: unknown',
-            `Latest: ${latestSha.slice(0, 7)}`,
+            installedSha ? `Installed: ${displayGitSha(installedSha)}` : 'Installed: unknown',
+            `Latest: ${displayGitSha(latestSha)}`,
         ].join('\n');
 
         const choice = await vscode.window.showInformationMessage(
@@ -327,7 +410,8 @@ export async function maybeOfferUpdate(context?: vscode.ExtensionContext): Promi
         );
         if (choice === 'Update') {
             await context?.globalState.update(UPDATE_SNOOZE_UNTIL_KEY, undefined);
-            await installWithRetry();
+            await installWithRetry({ offerPostInstallActions: false });
+            await vscode.commands.executeCommand('workbench.action.reloadWindow');
         } else if (choice === 'Later') {
             await context?.globalState.update(UPDATE_SNOOZE_UNTIL_KEY, nextLocalDayStartMs());
         }

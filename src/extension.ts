@@ -3,8 +3,13 @@
 import * as vscode from 'vscode';
 import { workspace, ExtensionContext } from 'vscode';
 import { initPathManager } from './install/pathManager';
-import { ensureInstalledOrOfferMigration } from './install/installer';
-import { startLanguageClient } from './languageServer';
+import { installWithRetry } from './install/installer';
+import { startLanguageClient, stopLanguageServerIfRunning } from './languageServer';
+import {
+    findConflictingWurstProcesses,
+    forceStopWurstProcesses,
+    InstallCoordinationCancelledError,
+} from './install/installCoordination';
 import { setupDecorators } from './features/compileTimeDecorator';
 import { createNewWurstProject } from './features/newProject';
 import { registerBlpPreview } from './features/blpPreview';
@@ -70,12 +75,49 @@ function registerBasicCommands(context: ExtensionContext) {
             }
         }),
         vscode.commands.registerCommand('wurst.installOrUpdate', async () => {
+            const choice = await vscode.window.showWarningMessage(
+                'Reinstall WurstScript from the latest nightly build? VS Code will reload when installation completes.',
+                { modal: true },
+                'Reinstall'
+            );
+            if (choice !== 'Reinstall') return;
             try {
-                await ensureInstalledOrOfferMigration(true);
-                vscode.window.showInformationMessage('WurstScript is installed and up to date.');
+                await installWithRetry({ offerPostInstallActions: false });
+                await vscode.commands.executeCommand('workbench.action.reloadWindow');
             } catch (e: any) {
+                if (e instanceof InstallCoordinationCancelledError) return;
                 vscode.window.showErrorMessage(`Install/Update failed: ${e?.message || e}`);
             }
+        }),
+        vscode.commands.registerCommand('wurst.stopAllProcesses', async () => {
+            const conflicts = await findConflictingWurstProcesses();
+            if (conflicts.length === 0) {
+                const stoppedLocalServer = await stopLanguageServerIfRunning();
+                vscode.window.showInformationMessage(stoppedLocalServer
+                    ? 'Stopped the WurstScript language server in this VS Code window.'
+                    : 'No running WurstScript processes were found.');
+                return;
+            }
+            const choice = await vscode.window.showWarningMessage(
+                `Force stop ${conflicts.length} WurstScript Java process${conflicts.length === 1 ? '' : 'es'}?`,
+                {
+                    modal: true,
+                    detail: `Process IDs: ${conflicts.map((item) => item.pid).join(', ')}\n\n` +
+                        'Only Java processes using this Wurst installation will be terminated.',
+                },
+                'Force Stop'
+            );
+            if (choice !== 'Force Stop') return;
+            await stopLanguageServerIfRunning();
+            const remaining = await forceStopWurstProcesses(await findConflictingWurstProcesses());
+            if (remaining.length > 0) {
+                vscode.window.showErrorMessage(
+                    `Could not stop Wurst process${remaining.length === 1 ? '' : 'es'} ${remaining.map((item) => item.pid).join(', ')}.`,
+                    { modal: true },
+                );
+                return;
+            }
+            vscode.window.showInformationMessage('Stopped all detected WurstScript processes.');
         }),
         vscode.commands.registerCommand('wurst.newProject', async () => {
             try {
@@ -89,11 +131,13 @@ function registerBasicCommands(context: ExtensionContext) {
 
 async function startLanguageClientWhenWorkspaceIsOpen(context: ExtensionContext): Promise<void> {
     if (!workspace.workspaceFolders?.length) {
-        context.subscriptions.push(workspace.onDidChangeWorkspaceFolders(async () => {
+        const listener = workspace.onDidChangeWorkspaceFolders(async () => {
             if (workspace.workspaceFolders?.length) {
+                listener.dispose();
                 await startLanguageClientWhenWorkspaceIsOpen(context);
             }
-        }));
+        });
+        context.subscriptions.push(listener);
         return;
     }
 

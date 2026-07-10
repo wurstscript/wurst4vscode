@@ -2,8 +2,7 @@ import { base64ToBytes, esc } from './objModWebviewUtils';
 
 type IconMessage = {
   key?: string;
-  mode?: 'jpeg' | 'rgba';
-  jpegBase64?: string;
+  mode?: 'rgba';
   rgbaBase64?: string;
   width?: number;
   height?: number;
@@ -126,25 +125,9 @@ export function createIconLoader(vscodeApi: VscodeApi): IconLoader {
       full.height = h;
       const fctx = full.getContext('2d');
       if (!fctx) return null;
-      if (data.mode === 'rgba' && data.rgbaBase64) {
-        const rgba = base64ToBytes(data.rgbaBase64);
-        fctx.putImageData(new ImageData(new Uint8ClampedArray(rgba), w, h), 0, 0);
-      } else if (data.jpegBase64) {
-        const jpeg = base64ToBytes(data.jpegBase64);
-        const jpegBytes = jpeg.buffer.slice(jpeg.byteOffset, jpeg.byteOffset + jpeg.byteLength) as ArrayBuffer;
-        const bmp = await createImageBitmap(new Blob([jpegBytes], { type: 'image/jpeg' }));
-        fctx.drawImage(bmp, 0, 0, w, h);
-        const id = fctx.getImageData(0, 0, w, h);
-        const px = id.data;
-        for (let i = 0; i < px.length; i += 4) {
-          const r = px[i];
-          px[i] = px[i + 2];
-          px[i + 2] = r;
-        }
-        fctx.putImageData(id, 0, 0);
-      } else {
-        return null;
-      }
+      if (data.mode !== 'rgba' || !data.rgbaBase64) return null;
+      const rgba = base64ToBytes(data.rgbaBase64);
+      fctx.putImageData(new ImageData(new Uint8ClampedArray(rgba), w, h), 0, 0);
       const out = document.createElement('canvas');
       out.width = 48;
       out.height = 48;

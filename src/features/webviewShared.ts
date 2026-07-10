@@ -227,18 +227,10 @@ export const ICON_LAZYLOAD_SCRIPT = `
       var w = data.width, h = data.height;
       var full = document.createElement('canvas'); full.width = w; full.height = h;
       var fctx = full.getContext('2d');
-      if (data.mode === 'rgba') {
-        var rgba = b64ToBytes(data.rgbaBase64);
-        fctx.putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength), w, h), 0, 0);
-        return Promise.resolve(downscale(full));
-      }
-      return createImageBitmap(new Blob([b64ToBytes(data.jpegBase64)], { type: 'image/jpeg' })).then(function (bmp) {
-        fctx.drawImage(bmp, 0, 0, w, h);
-        var id = fctx.getImageData(0, 0, w, h), px = id.data;
-        for (var i = 0; i < px.length; i += 4) { var r = px[i]; px[i] = px[i + 2]; px[i + 2] = r; }
-        fctx.putImageData(id, 0, 0);
-        return downscale(full);
-      });
+      if (data.mode !== 'rgba') return Promise.resolve(null);
+      var rgba = b64ToBytes(data.rgbaBase64);
+      fctx.putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength), w, h), 0, 0);
+      return Promise.resolve(downscale(full));
     } catch (e) { return Promise.resolve(null); }
   }
   function downscale(full) {

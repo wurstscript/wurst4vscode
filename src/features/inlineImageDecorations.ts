@@ -135,7 +135,7 @@ async function getCachedThumbnailUri(fsPath: string): Promise<vscode.Uri | undef
 
     try {
         await fs.promises.mkdir(THUMB_DIR, { recursive: true });
-        const key = crypto.createHash('sha1').update(fsPath).digest('hex');
+        const key = crypto.createHash('sha1').update('rgba-v2\0').update(fsPath).digest('hex');
         const previewPath = await getFreshPreviewPath(path.join(THUMB_DIR, key), mtime);
         if (previewPath) {
             thumbCache.set(fsPath, { pngPath: previewPath, mtime });
@@ -163,7 +163,7 @@ async function getThumbnailUri(fsPath: string): Promise<vscode.Uri | undefined> 
 
     try {
         await fs.promises.mkdir(THUMB_DIR, { recursive: true });
-        const key = crypto.createHash('sha1').update(fsPath).digest('hex');
+        const key = crypto.createHash('sha1').update('rgba-v2\0').update(fsPath).digest('hex');
         const basePath = path.join(THUMB_DIR, key);
 
         const bytes = new Uint8Array(await fs.promises.readFile(fsPath));

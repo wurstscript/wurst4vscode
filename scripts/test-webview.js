@@ -313,7 +313,6 @@ async function testFolderModeMapAssetResolution() {
         './blpPreview': {
             decodeRasterPreview: () => ({ mode: 'rgba', width: 1, height: 1, rgbaBase64: '', description: 'stub' }),
             ensureGameAssetCached: async () => undefined,
-            writeJpegPreviewFile: async () => undefined,
         },
         './preview/cascStorage': {
             getGameAssetCacheDir: () => path.join(tmpRoot, 'game-cache'),
@@ -395,6 +394,78 @@ function testBc5DdsDecode() {
         [128, 128, 255, 255],
         'BC5 normal maps should decode red/green channels and reconstruct blue'
     );
+}
+
+function testInstallerVersionShaParsing() {
+    const noOp = () => undefined;
+    const mod = loadTsModuleWithMocks('src/install/installer.ts', {
+        vscode: { workspace: {}, window: {}, ProgressLocation: {} },
+        '../paths': {
+            WURST_HOME: '', RUNTIME_DIR: '', COMPILER_DIR: '', COMPILER_JAR: '', GRILL_HOME_DIR: '',
+        },
+        './fsUtils': {
+            normalizeInstallerPaths: noOp, migrateLegacyGrillLayout: noOp, installLauncherExecutable: noOp,
+            isRecoverableInstallError: () => false, cleanupOldWurstHome: noOp, cleanupWurstSetupJar: noOp,
+            removeDirSafe: noOp, upgradeFolder: noOp, ensureDirectoryPath: noOp, copyDirContents: noOp,
+            withRetry: noOp,
+        },
+        './downloader': {},
+        './pathManager': {},
+        '../languageServer': {},
+    });
+
+    assert.equal(mod.extractGitSha('WurstScript nightly-5c596122'), '5c596122');
+    assert.equal(mod.extractGitSha('WurstScript nightly-g5C596122-dirty'), '5c596122');
+    assert.equal(mod.extractGitSha('commit 5c5961223c7b189aaf044ae04aaaa9a1e03c5e9c'), '5c5961223c7b189aaf044ae04aaaa9a1e03c5e9c');
+    assert.equal(mod.extractGitSha('1.9.0.0-v0.0.0-3-5a0290ea-10-g73dfd74a6'), '73dfd74a6');
+    assert.equal(mod.extractGitSha('WurstScript nightly'), null);
+    const full = '5c5961223c7b189aaf044ae04aaaa9a1e03c5e9c';
+    assert.equal(mod.gitShasMatch('5c59612', full), true, 'GitHub 7-char labels must match full SHAs');
+    assert.equal(mod.gitShasMatch('5c5961223', full), true, 'adaptive git-describe abbreviations must match full SHAs');
+    assert.equal(mod.gitShasMatch(full, '5c59612'), true, 'comparison must work regardless of which side is abbreviated');
+    assert.equal(mod.gitShasMatch('73dfd74a6', full), false, 'different revisions must not match');
+    assert.equal(mod.gitShasMatch('123', full), false, 'unsafe abbreviations shorter than 7 must not match');
+    assert.equal(mod.displayGitSha('73DFD74A6'), '73dfd74', 'prompt display must always use 7 lowercase characters');
+}
+
+function testNonBlockingStartupAndForcedReinstallWiring() {
+    const extension = fs.readFileSync(path.join(root, 'src/extension.ts'), 'utf8');
+    const languageServer = fs.readFileSync(path.join(root, 'src/languageServer.ts'), 'utf8');
+    const installer = fs.readFileSync(path.join(root, 'src/install/installer.ts'), 'utf8');
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+
+    assert.ok(extension.includes('await installWithRetry({ offerPostInstallActions: false })'), 'manual install/update must force installation');
+    assert.ok(extension.includes("workbench.action.reloadWindow"), 'forced reinstall must reload the stopped language server');
+    assert.ok(!extension.includes('ensureInstalledOrOfferMigration(true)'), 'manual install/update must not use the no-op ensure path');
+    assert.ok(!languageServer.includes('await maybeOfferUpdate(context)'), 'update checks must not delay language-client startup');
+    assert.ok(languageServer.includes('void maybeOfferUpdate(context)'), 'update checks should still run in the background');
+    assert.ok(installer.includes("execFile(java, ['-jar', COMPILER_JAR, '--version']"), 'version detection must use an asynchronous child process');
+    assert.ok(!manifest.activationEvents.includes('workspaceContains:**/*.wurst'), 'activation must not recursively scan for loose Wurst files');
+    assert.ok(manifest.activationEvents.includes('onLanguage:wurst'), 'opening a Wurst document must activate the extension');
+    assert.ok(installer.includes('withWurstInstallLock('), 'install replacement must be serialized across VS Code windows');
+    assert.ok(installer.includes('activeInstallPromise'), 'same-window install requests must share one download/install operation');
+    assert.ok(installer.includes('getInstallationStamp() !== initialInstallationStamp'), 'a mutex waiter must skip duplicate work after another completed install');
+    assert.ok(extension.includes("registerCommand('wurst.stopAllProcesses'"), 'force-stop command must be registered');
+    assert.ok(manifest.contributes.commands.some((item) => item.command === 'wurst.stopAllProcesses'), 'force-stop command must be contributed');
+}
+
+function testWurstProcessMatching() {
+    const runtime = 'C:\\Users\\tester\\.wurst\\wurst-runtime';
+    const jar = 'C:\\Users\\tester\\.wurst\\wurst-compiler\\wurstscript.jar';
+    const mod = loadTsModuleWithMocks('src/install/installCoordination.ts', {
+        vscode: { window: {}, ProgressLocation: {}, Disposable: class { constructor(dispose) { this.dispose = dispose; } } },
+        '../paths': { RUNTIME_DIR: runtime, COMPILER_JAR: jar },
+        './fsUtils': { sleep: async () => undefined },
+    });
+    assert.equal(mod.matchesWurstInstallationProcess({
+        executablePath: `${runtime}\\bin\\java.exe`, commandLine: '',
+    }, runtime, jar), true, 'bundled Java must be detected');
+    assert.equal(mod.matchesWurstInstallationProcess({
+        executablePath: 'C:\\Program Files\\Java\\bin\\java.exe', commandLine: `java -jar "${jar}" -languageServer`,
+    }, runtime, jar), true, 'custom Java running the Wurst compiler must be detected');
+    assert.equal(mod.matchesWurstInstallationProcess({
+        executablePath: 'C:\\Program Files\\Java\\bin\\java.exe', commandLine: 'java -jar unrelated.jar',
+    }, runtime, jar), false, 'unrelated Java processes must never be targeted');
 }
 
 async function testModelThumbnailRequestsTexturesByDefault() {
@@ -512,6 +583,9 @@ async function main() {
     await testIconLoader();
     await testFolderModeMapAssetResolution();
     testBc5DdsDecode();
+    testInstallerVersionShaParsing();
+    testNonBlockingStartupAndForcedReinstallWiring();
+    testWurstProcessMatching();
     await testModelThumbnailRequestsTexturesByDefault();
     testAssetBrowserForwardsModelTextures();
     testNoThumbnailTimingFallbacks();

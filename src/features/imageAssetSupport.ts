@@ -7,7 +7,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import * as zlib from 'zlib';
 
-import { decodeRasterPreview, ensureGameAssetCached, writeJpegPreviewFile } from './blpPreview';
+import { decodeRasterPreview, ensureGameAssetCached } from './blpPreview';
 import { getGameAssetCacheDir, ensureGameTextureCached } from './preview/cascStorage';
 
 export const IMAGE_EXTS = new Set(['blp', 'dds', 'tga', 'png', 'jpg', 'jpeg']);
@@ -518,7 +518,9 @@ export async function getCachedPreview(
 
     try {
         await fs.promises.mkdir(cacheDir, { recursive: true });
-        const key = crypto.createHash('sha1').update(fsPath).digest('hex');
+        // Version the generated raster cache so pre-fix JPEG-backed BLP previews
+        // (which contained unswapped BGR channels) are never reused.
+        const key = crypto.createHash('sha1').update('rgba-v2\0').update(fsPath).digest('hex');
         const previewPath = await getFreshPreviewPath(path.join(cacheDir, key), mtime);
         if (!previewPath) {
             return undefined;
@@ -565,19 +567,14 @@ export async function ensurePreview(
 
     try {
         await fs.promises.mkdir(cacheDir, { recursive: true });
-        const key = crypto.createHash('sha1').update(fsPath).digest('hex');
+        const key = crypto.createHash('sha1').update('rgba-v2\0').update(fsPath).digest('hex');
         const previewBasePath = path.join(cacheDir, key);
         const bytes = new Uint8Array(await fs.promises.readFile(fsPath));
         const decoded = decodeRasterPreview(bytes, ext);
-        const previewPath = decoded.mode === 'jpeg' ? `${previewBasePath}.jpg` : `${previewBasePath}.png`;
-
-        if (decoded.mode === 'jpeg') {
-            await writeJpegPreviewFile(decoded.jpegBase64, previewPath);
-        } else {
-            const rgba = Buffer.from(decoded.rgbaBase64, 'base64');
-            const scaled = scaleDown(rgba, decoded.width, decoded.height, maxDim);
-            await fs.promises.writeFile(previewPath, encodePng(scaled.w, scaled.h, scaled.rgba));
-        }
+        const previewPath = `${previewBasePath}.png`;
+        const rgba = Buffer.from(decoded.rgbaBase64, 'base64');
+        const scaled = scaleDown(rgba, decoded.width, decoded.height, maxDim);
+        await fs.promises.writeFile(previewPath, encodePng(scaled.w, scaled.h, scaled.rgba));
 
         const entry: PreviewCacheEntry = {
             previewPath,
@@ -623,9 +620,10 @@ export async function requestPreviewIcon(
         const ext = fsPath.slice(fsPath.lastIndexOf('.')).toLowerCase();
         const bytes = new Uint8Array(await vscode.workspace.fs.readFile(vscode.Uri.file(fsPath)));
         const decoded = decodeRasterPreview(bytes, ext);
-        await webview.postMessage(decoded.mode === 'jpeg'
-            ? { type: 'objectIconLoaded', key, mode: 'jpeg', jpegBase64: decoded.jpegBase64, width: decoded.width, height: decoded.height }
-            : { type: 'objectIconLoaded', key, mode: 'rgba', rgbaBase64: decoded.rgbaBase64, width: decoded.width, height: decoded.height });
+        await webview.postMessage({
+            type: 'objectIconLoaded', key, mode: 'rgba', rgbaBase64: decoded.rgbaBase64,
+            width: decoded.width, height: decoded.height,
+        });
     } catch {
         await webview.postMessage({ type: 'objectIconMissing', key });
     }

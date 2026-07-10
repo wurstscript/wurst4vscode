@@ -4,16 +4,32 @@
  * Glue layer over `casc-ts/formats` for the extension's asset previewers.
  * The pure BLP / DDS / TGA decoders live in casc-ts; this file adds the
  * wurst4vscode-specific bits: the MDX passthrough variant, the extension-
- * -dispatched `decodePreview` helpers, and the JPEG-to-disk writer used by
- * the inline decoration thumbnail cache.
+ * -dispatched preview helpers and normalization of every raster format to
+ * RGBA for all extension-side consumers.
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
 import { decodeBlp, decodeDds as decodeCascDds, decodeTga, DecodedRasterImage } from 'casc-ts/formats';
+
+// war3-model publishes a CommonJS entry alongside its ESM package marker. The
+// extension host is CommonJS, so describe the two decoder exports we consume
+// without making TypeScript emit an incompatible ESM import.
+type War3ModelDecoder = {
+    decodeBLP(source: ArrayBuffer): unknown;
+    getBLPImageData(blp: unknown, mipmapLevel: number): {
+        width: number;
+        height: number;
+        data: Uint8Array | Uint8ClampedArray;
+    };
+};
+let war3Model: War3ModelDecoder | undefined;
+
+function getWar3ModelDecoder(): War3ModelDecoder {
+    return war3Model ??= require('war3-model') as War3ModelDecoder;
+}
 
 export { decodeBlp, decodeTga };
 export type { DecodedRasterImage };
+export type DecodedRgbaImage = Extract<DecodedRasterImage, { mode: 'rgba' }>;
 
 /**
  * MDX files are passed through as-is — they're decoded in the webview via the
@@ -26,7 +42,7 @@ export type DecodedMdxRaw = {
     format: 'mdx' | 'mdl';
 };
 
-export type DecodedBlpImage = DecodedRasterImage | DecodedMdxRaw;
+export type DecodedBlpImage = DecodedRgbaImage | DecodedMdxRaw;
 
 const DDS_MAGIC = 0x20534444;
 const DDPF_FOURCC = 0x4;
@@ -144,12 +160,39 @@ export function decodeDds(bytes: Uint8Array): DecodedRasterImage {
     }
 }
 
-/** Decode BLP/DDS/TGA directly to RGBA; used by the hover preview. */
+function normalizeToRgba(result: DecodedRasterImage, sourceBytes: Uint8Array): DecodedRgbaImage {
+    if (result.mode === 'rgba') return result;
+
+    // Warcraft JPEG-content BLPs can contain non-standard 4-component JPEGs.
+    // war3-model carries the custom decoder used by the model renderer; reuse
+    // that implementation instead of passing the reconstructed JPEG to a
+    // standards-only decoder.
+    const source = sourceBytes.buffer.slice(
+        sourceBytes.byteOffset,
+        sourceBytes.byteOffset + sourceBytes.byteLength,
+    ) as ArrayBuffer;
+    const decoder = getWar3ModelDecoder();
+    const decoded = decoder.getBLPImageData(decoder.decodeBLP(source), 0);
+    if (decoded.width !== result.width || decoded.height !== result.height) {
+        throw new Error(
+            `BLP JPEG dimensions do not match header (${decoded.width}x${decoded.height}, expected ${result.width}x${result.height})`
+        );
+    }
+    const rgba = new Uint8Array(decoded.data);
+    return {
+        kind: 'raster',
+        mode: 'rgba',
+        width: result.width,
+        height: result.height,
+        rgbaBase64: Buffer.from(rgba).toString('base64'),
+        warnings: result.warnings,
+        description: result.description,
+    };
+}
+
+/** Decode BLP/DDS/TGA directly to normalized RGBA. */
 export function decodeToRgba(bytes: Uint8Array, ext: string): { width: number; height: number; rgba: Uint8Array; description: string } {
-    const result = ext === '.dds' ? decodeDds(bytes)
-                 : ext === '.tga' ? decodeTga(bytes)
-                 : decodeBlp(bytes);
-    if (result.mode !== 'rgba') throw new Error('jpeg-mode BLP not supported for hover preview');
+    const result = decodeRasterPreview(bytes, ext);
     return {
         width: result.width,
         height: result.height,
@@ -158,15 +201,10 @@ export function decodeToRgba(bytes: Uint8Array, ext: string): { width: number; h
     };
 }
 
-/** Decode BLP/DDS/TGA for preview display (either rgba or jpeg). */
-export function decodeRasterPreview(bytes: Uint8Array, ext: string): DecodedRasterImage {
-    return ext === '.dds' ? decodeDds(bytes)
-         : ext === '.tga' ? decodeTga(bytes)
-         : decodeBlp(bytes);
-}
-
-/** Persist a base64-encoded JPEG to disk (used by the inline-thumbnail cache). */
-export async function writeJpegPreviewFile(jpegBase64: string, outputPath: string): Promise<void> {
-    await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
-    await fs.promises.writeFile(outputPath, Buffer.from(jpegBase64, 'base64'));
+/** Decode BLP/DDS/TGA for preview display through one normalized RGBA path. */
+export function decodeRasterPreview(bytes: Uint8Array, ext: string): DecodedRgbaImage {
+    const decoded = ext === '.dds' ? decodeDds(bytes)
+                  : ext === '.tga' ? decodeTga(bytes)
+                  : decodeBlp(bytes);
+    return normalizeToRgba(decoded, bytes);
 }

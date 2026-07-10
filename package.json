@@ -22,9 +22,8 @@
         "Programming Languages"
     ],
     "activationEvents": [
-        "workspaceContains:**/wurst.build",
-        "workspaceContains:**/*.wurst",
-        "workspaceContains:**/*.jurst",
+        "workspaceContains:wurst.build",
+        "onLanguage:wurst",
         "onCustomEditor:wurst.objModPreview",
         "onCustomEditor:wurst.soundPreview",
         "onCommand:wurst.previewMap"
@@ -761,6 +760,11 @@
                 "category": "wurst"
             },
             {
+                "command": "wurst.stopAllProcesses",
+                "title": "Force Stop All WurstScript Processes",
+                "category": "wurst"
+            },
+            {
                 "command": "wurst.showLogs",
                 "title": "Open VSCode output panel for Wurst logs",
                 "category": "wurst"
@@ -892,11 +896,13 @@
         }
     },
     "scripts": {
-        "vscode:prepublish": "npm run package-web",
+        "vscode:prepublish": "npm run package-web && npm run test:vsix-contents",
         "compile": "tsc -watch -p ./",
         "compile-web": "webpack",
         "watch-web": "webpack --watch",
-        "test": "npm run test:fuzzy && npm run test:webview",
+        "test": "npm run test:fuzzy && npm run test:image-decoders && npm run test:webview",
+        "test:image-decoders": "node ./scripts/test-image-decoders.js",
+        "test:vsix-contents": "node ./scripts/test-vsix-contents.js",
         "test:webview": "node ./scripts/test-webview.js",
         "test:e2e:models:local": "node ./scripts/model-thumbnail-e2e.js",
         "test:e2e:objmod-thumbs:local": "node ./scripts/objmod-thumbnail-e2e.js",

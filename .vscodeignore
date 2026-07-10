@@ -4,12 +4,30 @@
 src/**
 out/**
 node_modules/**
+scripts/**
+e2e/**
+wc3data/**
+test/**
+tests/**
+__tests__/**
+fixtures/**
+docs/**
+*.test.*
+*.spec.*
 *.vsix
 tsconfig*.json
 webpack.config.js
 .gitignore
 .eslintrc*
-# dist/ is in .gitignore so vsce would exclude it — explicitly re-include the built output
-!dist/**
+.editorconfig
+.prettierrc
+AGENTS.md
+CLAUDE.md
+vsc-extension-quickstart.md
+package-lock.json
+# dist/ is in .gitignore, so explicitly re-include only runtime artifacts
+!dist/**/*.js
+!dist/**/*.txt
 # source maps are only useful for local debugging, don't ship them
 dist/**/*.map
+**/*.map

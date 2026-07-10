@@ -13,13 +13,13 @@ import {
 } from './preview/cascStorage';
 import {
     DecodedBlpImage,
+    decodeRasterPreview,
     decodeDds,
     decodeTga,
-    decodeBlp,
 } from './preview/imageDecoders';
 
 // Re-exported for backwards-compat with existing callers that import from blpPreview.
-export { decodeRasterPreview, decodeToRgba, writeJpegPreviewFile } from './preview/imageDecoders';
+export { decodeRasterPreview, decodeToRgba } from './preview/imageDecoders';
 export {
     ensureGameTextureCached,
     ensureGameAssetCached,
@@ -748,25 +748,9 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       canvas2d.width = data.width;
       canvas2d.height = data.height;
       ctx.clearRect(0, 0, canvas2d.width, canvas2d.height);
-      if (data.mode === 'rgba') {
-        const rgba = base64ToBytes(data.rgbaBase64);
-        ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer), data.width, data.height), 0, 0);
-      } else {
-        const blob = new Blob([base64ToBytes(data.jpegBase64)], { type: 'image/jpeg' });
-        const objectUrl = URL.createObjectURL(blob);
-        const image = await createImageBitmap(blob);
-        try {
-          ctx.drawImage(image, 0, 0, data.width, data.height);
-          const img = ctx.getImageData(0, 0, data.width, data.height);
-          const px = img.data;
-          for (let i = 0; i < px.length; i += 4) {
-            const r = px[i]; px[i] = px[i + 2]; px[i + 2] = r;
-          }
-          ctx.putImageData(img, 0, 0);
-        } finally {
-          URL.revokeObjectURL(objectUrl);
-        }
-      }
+      if (data.mode !== 'rgba') throw new Error('Raster decoder returned a non-RGBA image');
+      const rgba = base64ToBytes(data.rgbaBase64);
+      ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer), data.width, data.height), 0, 0);
       showWarnings(data.warnings);
       debug('raster rendered');
     }
@@ -1049,16 +1033,10 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
 
 function decodePreview(sourceBytes: Uint8Array, uri: vscode.Uri): DecodedBlpImage {
     const ext = path.extname(uri.fsPath || uri.path).toLowerCase();
-    if (ext === '.dds') {
-        return decodeDds(sourceBytes);
-    }
-    if (ext === '.tga') {
-        return decodeTga(sourceBytes);
-    }
     if (ext === '.mdx' || ext === '.mdl') {
         const mdxBase64 = Buffer.from(sourceBytes).toString('base64');
         const fileName = path.basename(uri.fsPath || uri.path);
         return { kind: 'mdx-raw', mdxBase64, fileName, format: ext === '.mdl' ? 'mdl' : 'mdx' };
     }
-    return decodeBlp(sourceBytes);
+    return decodeRasterPreview(sourceBytes, ext);
 }

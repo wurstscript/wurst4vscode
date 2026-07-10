@@ -14,7 +14,7 @@ export function setupDecorators(context: vscode.ExtensionContext) {
     let activeEditor = vscode.window.activeTextEditor;
 
     function updateDecorations() {
-        if (!activeEditor) return;
+        if (!activeEditor || activeEditor.document.languageId !== 'wurst') return;
         const regEx = /@compiletime\s+(\s*(static|public|private)\s)*function.+/g;
         const text = activeEditor.document.getText();
         const decorations: vscode.DecorationOptions[] = [];
@@ -28,6 +28,7 @@ export function setupDecorators(context: vscode.ExtensionContext) {
     }
 
     function triggerUpdate() {
+        if (!activeEditor || activeEditor.document.languageId !== 'wurst') return;
         if (timeout) clearTimeout(timeout);
         timeout = setTimeout(updateDecorations, 500);
     }
@@ -41,6 +42,10 @@ export function setupDecorators(context: vscode.ExtensionContext) {
         }),
         vscode.workspace.onDidChangeTextDocument((event) => {
             if (activeEditor && event.document === activeEditor.document) triggerUpdate();
+        }),
+        decorator,
+        new vscode.Disposable(() => {
+            if (timeout) clearTimeout(timeout);
         })
     );
 }

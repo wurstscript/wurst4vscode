@@ -551,15 +551,10 @@ ${ICON_INLINE_CSS}
     try {
       var canvas = document.createElement('canvas'); canvas.width = data.width; canvas.height = data.height;
       var ctx = canvas.getContext('2d');
-      if (data.mode === 'rgba') {
-        var rgba = b64ToBytes(data.rgbaBase64);
-        ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength), data.width, data.height), 0, 0);
-        return Promise.resolve(canvas.toDataURL('image/png'));
-      }
-      return createImageBitmap(new Blob([b64ToBytes(data.jpegBase64)], { type: 'image/jpeg' })).then(function (bmp) {
-        ctx.drawImage(bmp, 0, 0);
-        return canvas.toDataURL('image/png');
-      });
+      if (data.mode !== 'rgba') return Promise.resolve('');
+      var rgba = b64ToBytes(data.rgbaBase64);
+      ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength), data.width, data.height), 0, 0);
+      return Promise.resolve(canvas.toDataURL('image/png'));
     } catch (e) { return Promise.resolve(''); }
   }
   function setIcon(el, uri) { el.innerHTML = '<img src="' + esc(uri) + '" alt="">'; }

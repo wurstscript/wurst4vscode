@@ -11,17 +11,17 @@ import { registerFileCreation } from './features/fileCreation';
 
 let clientRef: LanguageClient | null = null;
 
-export async function stopLanguageServerIfRunning(): Promise<void> {
-    if (!clientRef) return;
+export async function stopLanguageServerIfRunning(): Promise<boolean> {
+    if (!clientRef) return false;
     try { await clientRef.stop(); } catch {}
     clientRef = null;
+    return true;
 }
 
 export async function startLanguageClient(context: ExtensionContext): Promise<void> {
     if (clientRef) return;
 
     await ensureInstalledOrOfferMigration(false);
-    await maybeOfferUpdate(context);
 
     const serverOptions = await getServerOptions();
     const clientOptions: LanguageClientOptions = {
@@ -50,10 +50,9 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
         throw error;
     }
 
-    const version = getInstalledVersionString() ?? 'unknown';
     const sb = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     sb.text = '$(check) WurstScript';
-    sb.tooltip = ['WurstScript language server is running.', `Version: ${version}`, 'Click to open logs.'].join('\n');
+    sb.tooltip = ['WurstScript language server is running.', 'Version: detecting...', 'Click to open logs.'].join('\n');
     sb.command = 'wurst.showLogs';
     sb.show();
     context.subscriptions.push(sb);
@@ -72,6 +71,19 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
     context.subscriptions.push(registerCommands(client));
     context.subscriptions.push(registerFileCreation());
     context.subscriptions.push(registerFileChanges(client));
+
+    // Version detection starts a JVM and the update check performs network I/O.
+    // Neither should delay language features or block the extension host.
+    void getInstalledVersionString().then((version) => {
+        try {
+            sb.tooltip = [
+                'WurstScript language server is running.',
+                `Version: ${version ?? 'unknown'}`,
+                'Click to open logs.',
+            ].join('\n');
+        } catch { /* status item was disposed during shutdown */ }
+    });
+    void maybeOfferUpdate(context);
 }
 
 export function registerFileChanges(client: LanguageClient): vscode.FileSystemWatcher {
@@ -98,7 +110,7 @@ async function getServerOptions(): Promise<ServerOptions> {
     }
 
     const java = customJava || getBundledJava();
-    if (customJava) checkCustomJavaVersion(customJava);
+    if (customJava) await checkCustomJavaVersion(customJava);
     const platformOpts = process.platform === 'darwin' ? ['-Dapple.awt.UIElement=true'] : [];
     const args = [...platformOpts, ...javaOpts, '-jar', COMPILER_JAR, '-languageServer'];
 

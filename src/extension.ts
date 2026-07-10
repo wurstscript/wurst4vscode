@@ -25,6 +25,7 @@ import { registerTriggerPreview } from './features/triggerPreview';
 import { registerMapDataPreview } from './features/mapDataPreview';
 import { registerMapPreview } from './features/mapPreview';
 import { registerAgentsGuideOffer } from './features/agentsGuide';
+import { openIssueReport } from './features/issueReporting';
 
 export async function activate(context: ExtensionContext) {
     console.log('Wurst extension activated!');
@@ -125,7 +126,8 @@ function registerBasicCommands(context: ExtensionContext) {
             } catch (e: any) {
                 vscode.window.showErrorMessage(`Failed to create Wurst project: ${e?.message ?? String(e)}`);
             }
-        })
+        }),
+        vscode.commands.registerCommand('wurst.reportIssue', () => openIssueReport())
     );
 }
 

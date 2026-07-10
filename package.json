@@ -1,7 +1,7 @@
 {
     "name": "wurst",
     "displayName": "Wurst language support",
-    "description": "Language support for Wurstscript.",
+    "description": "Modern WurstScript development and Warcraft III map tooling for Visual Studio Code.",
     "icon": "images/wurst_icon.png",
     "license": "SEE LICENSE IN LICENSE.txt",
     "bugs": {
@@ -26,7 +26,8 @@
         "onLanguage:wurst",
         "onCustomEditor:wurst.objModPreview",
         "onCustomEditor:wurst.soundPreview",
-        "onCommand:wurst.previewMap"
+        "onCommand:wurst.previewMap",
+        "onCommand:wurst.reportIssue"
     ],
     "main": "./dist/extension",
     "browser": "./dist/web/extension.js",
@@ -783,6 +784,11 @@
                 "command": "wurst.previewMap",
                 "title": "Preview Map Terrain (experimental)",
                 "category": "wurst"
+            },
+            {
+                "command": "wurst.reportIssue",
+                "title": "Report an Extension Issue",
+                "category": "wurst"
             }
         ],
         "menus": {
@@ -880,6 +886,11 @@
                     "type": "boolean",
                     "default": false,
                     "description": "When previewing MDX models, fetch missing textures from the Warcraft III CDN (requires internet access)."
+                },
+                "wurst.issueReportingHints": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Offer a non-modal, prefilled GitHub issue action after an unexpected preview or parser failure. Nothing is uploaded automatically."
                 },
                 "wurst.trace.server": {
                     "scope": "window",

@@ -565,6 +565,72 @@ function testNoThumbnailTimingFallbacks() {
     assert.ok(!modelE2e.includes('WURST_MODEL_THUMB_MAX_MS'), 'model thumbnail e2e must not enforce a per-thumbnail timing budget');
 }
 
+function testStaticMdxWithoutSequences() {
+    const fixturePath = path.join(root, 'wc3data', 'melon.mdx');
+    assert.ok(fs.existsSync(fixturePath), 'static MDX regression fixture should exist');
+
+    const { parseMDX } = require('war3-model');
+    const bytes = fs.readFileSync(fixturePath);
+    const model = parseMDX(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+    assert.equal(model.Sequences.length, 0, 'melon fixture should exercise a sequence-less WC3 model');
+
+    const previousWindow = global.window;
+    global.window = {};
+    try {
+        const { ensureRenderableSequence } = loadTsModule('src/webview/mdxViewer.ts');
+        assert.equal(ensureRenderableSequence(model), true, 'sequence-less models should receive a static render sequence');
+        assert.equal(model.Sequences.length, 1);
+        assert.deepEqual(Array.from(model.Sequences[0].Interval), [0, 0]);
+        assert.equal(ensureRenderableSequence(model), false, 'the fallback must not modify a model twice');
+        assert.equal(model.Sequences.length, 1);
+    } finally {
+        global.window = previousWindow;
+    }
+}
+
+async function testIssueReportingPrivacyAndDeduplication() {
+    const opened = [];
+    const prompts = [];
+    const vscodeMock = {
+        version: '1.109.0-test',
+        ConfigurationTarget: { Global: 1 },
+        Uri: { parse: (value) => value },
+        extensions: { getExtension: () => ({ packageJSON: { version: '0.test' } }) },
+        env: {
+            openExternal: async (uri) => { opened.push(uri); return true; },
+            clipboard: { writeText: async () => {} },
+        },
+        workspace: {
+            getConfiguration: () => ({
+                get: (_key, fallback) => fallback,
+                update: async () => {},
+            }),
+        },
+        window: {
+            showInformationMessage: async (message) => { prompts.push(message); return undefined; },
+        },
+    };
+    const reporter = loadTsModuleWithMocks('src/features/issueReporting.ts', { vscode: vscodeMock });
+    const issue = {
+        area: 'model preview renderer',
+        message: 'Missing sequence interval in C:\\private\\maps\\melon.mdx',
+        resource: { fsPath: 'C:\\private\\maps\\melon.mdx', path: '/private/maps/melon.mdx' },
+    };
+
+    await reporter.openIssueReport(issue);
+    assert.equal(opened.length, 1);
+    const reportUrl = new URL(opened[0]);
+    const body = reportUrl.searchParams.get('body') || '';
+    assert.ok(body.includes('melon.mdx'), 'prefilled report should identify the resource basename');
+    assert.ok(!body.includes('private'), 'prefilled report must not disclose the local resource path');
+
+    reporter.offerIssueReport(issue);
+    await new Promise((resolve) => setImmediate(resolve));
+    reporter.offerIssueReport(issue);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(prompts.length, 1, 'the same failure shape should only prompt once per session');
+}
+
 function testObjModSaveCommitsFocusedEditor() {
     const host = fs.readFileSync(path.join(root, 'src/features/objModPreview.ts'), 'utf8');
     const objmod = fs.readFileSync(path.join(root, 'src/webview/objModEditorWebview.ts'), 'utf8');
@@ -589,6 +655,8 @@ async function main() {
     await testModelThumbnailRequestsTexturesByDefault();
     testAssetBrowserForwardsModelTextures();
     testNoThumbnailTimingFallbacks();
+    testStaticMdxWithoutSequences();
+    await testIssueReportingPrivacyAndDeduplication();
     testObjModSaveCommitsFocusedEditor();
     console.log('webview harness tests passed');
 }

@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { makeNonce, escapeHtml } from './webviewUtils';
 import { buildPage, sep } from './webviewShared';
+import { offerIssueReport } from './issueReporting';
 import {
     getGameAssetCacheDir,
     findGameTexture,
@@ -167,6 +168,12 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
                 const message = error instanceof Error ? error.message : String(error);
                 await webviewPanel.webview.postMessage({ type: 'error', fileName, message });
                 dbg(`render error for ${fileName}: ${message}`);
+                offerIssueReport({
+                    area: 'image/model preview',
+                    message,
+                    resource: document.uri,
+                    details: error instanceof Error ? error.stack : undefined,
+                });
             }
         };
 
@@ -218,6 +225,13 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
                 dbg(`refresh requested`);
                 cachedBytes = undefined;
                 requestRender();
+                return;
+            }
+            if (type === 'previewError') {
+                const message = (msg as { message?: unknown }).message;
+                if (typeof message === 'string' && message) {
+                    offerIssueReport({ area: 'model preview renderer', message, resource: document.uri });
+                }
                 return;
             }
             if (type === 'requestTextures') {
@@ -726,6 +740,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
             setMeta(currentFileName || 'Model', 'Render failed');
             setLoading(false);
             debug('w3v error: ' + message);
+            vscode.postMessage({ type: 'previewError', message });
           },
           onDebug(msg) { debug('w3v: ' + msg); },
         },
@@ -1009,6 +1024,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
           setMeta(msg.fileName || 'Image', 'Render failed');
           setLoading(false);
           debug('render exception: ' + message);
+          vscode.postMessage({ type: 'previewError', message });
         }
       }
     });
@@ -1018,6 +1034,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       showWarnings(['Webview error: ' + message]);
       setLoading(false);
       debug('window error: ' + message);
+      vscode.postMessage({ type: 'previewError', message });
     });
 
     debug('script boot');

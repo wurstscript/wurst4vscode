@@ -10,6 +10,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { buildPage } from '../webviewShared';
 import { escapeHtml } from '../webviewUtils';
+import { offerIssueReport } from '../issueReporting';
 
 export interface ParsedPreviewerOpts<TData> {
     viewType: string;
@@ -59,6 +60,12 @@ class ParsedEditorProvider<TData> implements vscode.CustomReadonlyEditorProvider
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             panel.webview.html = buildErrorHtml(fileName, message);
+            offerIssueReport({
+                area: `${this.opts.viewType} preview`,
+                message,
+                resource: doc.uri,
+                details: error instanceof Error ? error.stack : undefined,
+            });
         }
     }
 }

@@ -18,6 +18,7 @@ import { loadTerrainWaterLevel, loadTilesetBlightTexture, parseSlk, readGameData
 import { decodeToRgba } from './preview/imageDecoders';
 import { encodePng, scaleDown } from './imageAssetSupport';
 import { getObjectCatalog } from './preview/objectCatalog';
+import { offerIssueReport } from './issueReporting';
 
 const TILE = 128;
 const GROUND_CENTER = 0x2000;
@@ -1167,7 +1168,14 @@ export function registerMapPreview(_context: vscode.ExtensionContext): vscode.Di
         try {
             terrain = await parseW3eTerrain(fs.readFileSync(w3ePath));
         } catch (e) {
-            vscode.window.showErrorMessage(`Map preview: failed to parse terrain - ${e instanceof Error ? e.message : String(e)}`);
+            const message = e instanceof Error ? e.message : String(e);
+            vscode.window.showErrorMessage(`Map preview: failed to parse terrain - ${message}`);
+            offerIssueReport({
+                area: 'map terrain preview',
+                message,
+                resource: vscode.Uri.file(w3ePath),
+                details: e instanceof Error ? e.stack : undefined,
+            });
             return;
         }
 

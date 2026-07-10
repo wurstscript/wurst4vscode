@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import { MpqReader, MpqFileEntry } from 'casc-ts/formats';
 import { makeNonce, escapeHtml } from './webviewUtils';
 import { buildPage, sep } from './webviewShared';
+import { offerIssueReport } from './issueReporting';
 
 const MPQ_VIEW_TYPE = 'wurst.mpqViewer';
 
@@ -148,6 +149,12 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
             } catch (e) {
                 document.parseError = e instanceof Error ? e.message : String(e);
                 log(`ERROR loading MPQ: ${document.parseError}`);
+                offerIssueReport({
+                    area: 'MPQ map viewer',
+                    message: document.parseError,
+                    resource: document.uri,
+                    details: e instanceof Error ? e.stack : undefined,
+                });
             } finally {
                 document.loaded = true;
                 postArchiveState();

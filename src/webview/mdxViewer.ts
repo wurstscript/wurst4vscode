@@ -47,6 +47,27 @@ interface DdsInfo {
 
 type CompressedTextureFormat = Parameters<ModelRenderer['setTextureCompressedImage']>[1];
 type RendererDdsInfo = Parameters<ModelRenderer['setTextureCompressedImage']>[3];
+type ParsedWar3Model = ReturnType<typeof parseMDX>;
+
+/**
+ * Warcraft accepts static MDX models without a SEQS chunk. ModelRenderer
+ * currently assumes sequence 0 exists, so provide an inert sequence for
+ * rendering while leaving every real model sequence untouched.
+ */
+export function ensureRenderableSequence(model: ParsedWar3Model): boolean {
+    if (model.Sequences.length > 0) return false;
+    model.Sequences.push({
+        Name: 'Static',
+        Interval: new Uint32Array([0, 0]),
+        NonLooping: true,
+        MinimumExtent: model.Info.MinimumExtent,
+        MaximumExtent: model.Info.MaximumExtent,
+        BoundsRadius: model.Info.BoundsRadius,
+        MoveSpeed: 0,
+        Rarity: 0,
+    });
+    return true;
+}
 
 // ─── module state ────────────────────────────────────────────────────────────
 
@@ -541,6 +562,9 @@ const War3Viewer = {
             const model = format === 'mdl'
                 ? parseMDL(new TextDecoder('utf-8').decode(buffer))
                 : parseMDX(buffer);
+            if (ensureRenderableSequence(model)) {
+                cb?.onDebug('model has no animation sequences; using static render fallback');
+            }
             profile('parse', parseStart);
 
             if (!canvas) throw new Error('canvas not initialized');

@@ -1,80 +1,109 @@
-# Wurst extension for Visual Studio Code
+# WurstScript for Visual Studio Code
 
-This is a plugin for the [Wurst programming language](https://peq.github.io/WurstScript/), a language for maps and mods for the game Warcraft III.
+Modern Wurst and Jass development for Warcraft III. Write typed WurstScript, compile to Jass or Lua, and build, test, inspect, and run maps without leaving VS Code.
 
-If you run into problems related directly to the plugin, please create a ticket on [GitHub](https://github.com/wurstscript/wurst4vscode).
+![WurstScript code with inlay hints and an inline asset preview](images/marketplace/editor_code.webp)
 
-## Features
+## One extension, complete setup
 
-Context-aware auto completions (default shortcut: `Ctrl+space`) help you to find relevant functions quickly.
-You can also see the documentation of the function and the required arguments.
+The extension installs and updates the Wurst compiler, bundled Java runtime, and Grill CLI automatically. No separate Java or compiler setup is needed.
 
-![Autocomplete](https://i.imgur.com/QPwREHO.gif)
+1. Open an existing project folder containing `wurst.build`, or run **Wurst: New Wurst Project**.
+2. Accept the installation prompt.
+3. Open a `.wurst` file and use the play button to build and run your map.
 
-You can always find the definition of a function (`F12` or `Ctrl+leftclick`, or just peek at the definition with `Ctrl+Shift+F10`). 
+Installation and updates are managed under `~/.wurst`. Updates are coordinated across VS Code windows, reuse prepared downloads when retrying, and detect Wurst processes that are locking installation files.
 
-![Goto declaration](https://i.imgur.com/imIINfH.gif)
+Supported on Windows, macOS, and Linux, with x64 and Arm64 builds where available. NixOS and custom environments can provide Java through `wurst.javaExecutable`.
 
-It is even possible to navigate into the other direction and find all the references of a given definition (`Shift+F12`).
-When navigating via links, remember that vscode provides shortcuts to get to your old position (`ctrl+alt+-` and `ctrl+shift+-`).
+## Language intelligence
 
-![Find references](https://i.imgur.com/xas74JI.gif)
+- Context-aware completion with types, parameters, and documentation
+- Integrated JassDoc for Warcraft III natives and their Wurst wrappers
+- Live diagnostics, inlay hints, signature help, hovers, and quick fixes
+- Go to definition, find references, symbol rename, breadcrumbs, and Outline view
+- File and workspace symbol search
+- Syntax highlighting for Wurst, Jurst/Jass, WTS, FDF, TOC, and MDL
+- `@compiletime` gutter markers and workspace-wide quick-fix support
+- Clickable asset paths, CodeLens actions, hover previews, and inline icons in source files
 
-When you are looking for references inside a file you don't even need to use the features above.
-Vscode will automatically highlight all other references and definitions related to the element currently under the cursor:
+WurstScript itself provides packages, classes, closures, extension methods, compile-time code, unit testing, dependency management, and a large WC3-focused standard library. The same source can target Jass or Lua.
 
-![Highlight references](https://i.imgur.com/Pzh1Zpq.gif)
+## Warcraft III inside VS Code
 
+Opening a supported Warcraft III file selects a dedicated viewer or editor:
 
-### Feature list:
+| Area | Formats and actions |
+| --- | --- |
+| Map archives | Browse `.w3x`/`.w3m` MPQ contents, open entries, extract files, or export a folder-mode map |
+| Object data | Inspect and edit `.w3u`, `.w3t`, `.w3a`, `.w3b`, `.w3d`, `.w3h`, and `.w3q` |
+| Map information | Safely edit supported `.w3i` fields while preserving untouched binary data |
+| Map structures | Inspect `.doo`, `.wpm`, `.wtg`, and `.wct` files |
+| Other map data | Preview `.mmp`, `.shd`, `.w3c`, `.w3r`, `.w3e`, `.w3s`, `.w3l`, `.w3o`, and `.imp` |
+| Images and models | Preview `.blp`, `.dds`, `.tga`, `.mdx`, and `.mdl` with 3D animation and team-color controls |
+| Audio | Play `.mp3`, `.wav`, `.ogg`, and `.flac` assets |
 
-* Syntax highlighting
-* Shows errors and warnings while you type (press `Ctrl+Shift+M` for an overview over all errors and warnings, `F8` and `Shift+F8` to loop through the errors in the current file)
-* Autocomplete after typing a dot or pressing `Ctrl+space`.
-* Parameter-info (press `Ctrl+shift+space`)
-* Goto declaration (`F12` or `Ctrl+leftclick`)
-* Find references (`Shift+F12`)
-* Mouse hover info (hover the mouse over a function or variable to see types and documentation)
-* Some commands are available via the command palette (press `F1` and type "Wurst")
-    * Running units tests
-	* Building maps independently from warcraft3
-    * Running a map 
+Packed `.w3x`/`.w3m` maps and Reforged folder-mode maps can both be selected, built, and run. The MPQ viewer can export an existing archive as a version-control-friendly map folder.
 
-You should also be aware of the following vscode features, which are independent from this Wurst plugin:
+![Browse and extract a Warcraft III MPQ map](images/marketplace/editor_mpq.webp)
 
-* Folding based on indentation
-* Quick Open: Open any file by its name via `Ctrl+P`
-* Search across files (`Ctrl+Shift+F`)
-* [Multiple selections](https://code.visualstudio.com/docs/editor/editingevolved#_multiple-selections)
-* Integrated Git support
+Object-data editors resolve rawcodes, game metadata, icons, base values, and trigger strings while keeping custom overrides editable.
 
-## Setup and Configuration
+![Edit Warcraft III unit object data](images/marketplace/editor_objmod.webp)
 
-Follow the [Wurst Setup Guide](https://wurstscript.github.io/start.html) to install Wurst, the plugin and create your wurst project.
+The `.w3i` editor exposes supported map-information fields while preserving the remainder of the binary file unchanged.
 
-## Getting Started: Your first Wurst project
+![Edit Warcraft III map information](images/marketplace/editor_w3i.webp)
 
-Follow the [Wurst Beginner Guide](https://wurstscript.github.io/tutorials/wurstbeginner.html).
+The experimental **Wurst: Preview Map Terrain** command renders terrain, cliffs, water, doodads, units, and start locations from an exploded map.
 
-## Developer information
+## CASC-backed assets
 
-If you want to build the extension yourself:
+The extension reads stock Warcraft III data directly from the installed game's CASC storage. Asset browsers and previews can resolve:
 
-1. First install 
-    - Node.js (newer than 4.3.1)
-    - Npm  (newer 2.14.12)
-2. clone the project from [GitHub](https://github.com/peq/wurst4vscode).
-3. Change to the project directory (e.g. `cd wurst4vscode`)
-4. Run `npm i`
-5. Open the project in Visual Studio Code (`code .`)
-6. Press `F5` to debug (it should start a new vscode window with Wurst enabled)
-7. Make a pull request with your changes
+- World Editor names, metadata, rawcodes, and localized `WESTRING` labels
+- Unit, item, ability, destructable, doodad, buff, and upgrade icons
+- Reforged skin data, models, textures, and terrain art
+- Project assets across map folders, imports, the workspace, caches, and game data
 
-Contributors can publish the extension to the Extension Marketplace using `vsce publish` as described in the [vsce - Publishing Tool Reference](https://code.visualstudio.com/docs/tools/vscecli).
-To update the version use `npm version patch`.
+This powers searchable object catalogs, inline command-button icons, texture hovers, and models with their dependent textures.
 
+![Preview an animated Warcraft III model and its textures](images/marketplace/editor_models.webp)
 
+## Build, test, and run
 
+Search for **Wurst** in the Command Palette to:
 
+- Create, install, update, or repair a Wurst project
+- Build and run `.w3x`/`.w3m` maps or map folders
+- Run all tests, the current file's tests, or the test under the cursor
+- Start and update maps with Jass Hot Code Reload
+- Configure the Warcraft III executable and launch arguments
+- Inspect logs or stop stale Wurst language-server processes
 
+## Configuration
 
+Most projects need no custom settings. Common overrides are `wurst.wc3path`, `wurst.gameExePath`, `wurst.wc3RunArgs`, `wurst.mapDocumentPath`, `wurst.javaExecutable`, and the Jass Hot Code Reload settings. Search for **Wurst** in VS Code Settings for the complete list.
+
+## Learn WurstScript
+
+- [Installation and quick start](https://wurstlang.org/start.html)
+- [Beginner guide](https://wurstlang.org/wurstbeginner.html)
+- [Language manual](https://wurstlang.org/manual.html)
+- [Documentation and tutorials](https://wurstlang.org/documentation)
+- [WurstScript on GitHub](https://github.com/wurstscript/WurstScript)
+- [Community Discord](https://discord.gg/mSHZpWcadz)
+
+Report extension problems in the [wurst4vscode issue tracker](https://github.com/wurstscript/wurst4vscode/issues).
+
+## Extension development
+
+Install a current Node.js LTS release, clone the repository, and run `npm install`. Open it in VS Code and press `F5` to launch an Extension Development Host.
+
+Before submitting a change:
+
+```sh
+npm test
+npx tsc -p . --noEmit
+npm run vscode:prepublish
+```

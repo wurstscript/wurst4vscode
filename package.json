@@ -36,8 +36,7 @@
             {
                 "id": "wurst",
                 "aliases": [
-                    "Wurst",
-                    "wurst"
+                    "Wurst"
                 ],
                 "extensions": [
                     ".wurst",
@@ -48,9 +47,6 @@
             },
             {
                 "id": "wc3-image",
-                "aliases": [
-                    "WC3 Image"
-                ],
                 "extensions": [
                     ".blp",
                     ".BLP",
@@ -66,9 +62,6 @@
             },
             {
                 "id": "wc3-model",
-                "aliases": [
-                    "WC3 Model"
-                ],
                 "extensions": [
                     ".mdx",
                     ".MDX",
@@ -82,9 +75,6 @@
             },
             {
                 "id": "wc3-audio",
-                "aliases": [
-                    "WC3 Audio"
-                ],
                 "extensions": [
                     ".mp3",
                     ".MP3",
@@ -102,9 +92,6 @@
             },
             {
                 "id": "wc3-map",
-                "aliases": [
-                    "WC3 Map"
-                ],
                 "extensions": [
                     ".w3x",
                     ".W3X",
@@ -118,9 +105,6 @@
             },
             {
                 "id": "wc3-objdata",
-                "aliases": [
-                    "WC3 Object Data"
-                ],
                 "extensions": [
                     ".w3o",
                     ".W3O"
@@ -132,9 +116,6 @@
             },
             {
                 "id": "wc3-map-info",
-                "aliases": [
-                    "WC3 Map Info"
-                ],
                 "extensions": [
                     ".w3i",
                     ".W3I"
@@ -146,9 +127,6 @@
             },
             {
                 "id": "wc3-cameras",
-                "aliases": [
-                    "WC3 Cameras"
-                ],
                 "extensions": [
                     ".w3c",
                     ".W3C"
@@ -160,9 +138,6 @@
             },
             {
                 "id": "wc3-regions",
-                "aliases": [
-                    "WC3 Regions"
-                ],
                 "extensions": [
                     ".w3r",
                     ".W3R"
@@ -174,9 +149,6 @@
             },
             {
                 "id": "wc3-sounds",
-                "aliases": [
-                    "WC3 Sounds"
-                ],
                 "extensions": [
                     ".w3s",
                     ".W3S"
@@ -188,9 +160,6 @@
             },
             {
                 "id": "wc3-lights",
-                "aliases": [
-                    "WC3 Lights"
-                ],
                 "extensions": [
                     ".w3l",
                     ".W3L"
@@ -202,9 +171,6 @@
             },
             {
                 "id": "wc3-units",
-                "aliases": [
-                    "WC3 Units"
-                ],
                 "extensions": [
                     ".w3u",
                     ".W3U"
@@ -216,9 +182,6 @@
             },
             {
                 "id": "wc3-items",
-                "aliases": [
-                    "WC3 Items"
-                ],
                 "extensions": [
                     ".w3t",
                     ".W3T"
@@ -230,9 +193,6 @@
             },
             {
                 "id": "wc3-abilities",
-                "aliases": [
-                    "WC3 Abilities"
-                ],
                 "extensions": [
                     ".w3a",
                     ".W3A"
@@ -244,9 +204,6 @@
             },
             {
                 "id": "wc3-destructibles",
-                "aliases": [
-                    "WC3 Destructibles"
-                ],
                 "extensions": [
                     ".w3b",
                     ".W3B"
@@ -258,9 +215,6 @@
             },
             {
                 "id": "wc3-doodads",
-                "aliases": [
-                    "WC3 Doodads"
-                ],
                 "extensions": [
                     ".w3d",
                     ".W3D"
@@ -272,9 +226,6 @@
             },
             {
                 "id": "wc3-buffs",
-                "aliases": [
-                    "WC3 Buffs and Effects"
-                ],
                 "extensions": [
                     ".w3h",
                     ".W3H"
@@ -286,9 +237,6 @@
             },
             {
                 "id": "wc3-upgrades",
-                "aliases": [
-                    "WC3 Upgrades"
-                ],
                 "extensions": [
                     ".w3q",
                     ".W3Q"
@@ -300,9 +248,6 @@
             },
             {
                 "id": "wc3-trigger",
-                "aliases": [
-                    "WC3 Triggers"
-                ],
                 "extensions": [
                     ".wtg",
                     ".wct"
@@ -314,10 +259,6 @@
             },
             {
                 "id": "wc3-wts",
-                "aliases": [
-                    "WC3 String Table",
-                    "WTS"
-                ],
                 "extensions": [
                     ".wts"
                 ],
@@ -328,9 +269,6 @@
             },
             {
                 "id": "wc3-slk",
-                "aliases": [
-                    "WC3 SLK Data"
-                ],
                 "extensions": [
                     ".slk",
                     ".SLK"
@@ -342,9 +280,6 @@
             },
             {
                 "id": "wc3-terrain",
-                "aliases": [
-                    "WC3 Terrain"
-                ],
                 "extensions": [
                     ".wpm",
                     ".shd",
@@ -360,10 +295,6 @@
             },
             {
                 "id": "wc3-fdf",
-                "aliases": [
-                    "WC3 Frame Definition",
-                    "FDF"
-                ],
                 "extensions": [
                     ".fdf",
                     ".FDF"
@@ -375,10 +306,6 @@
             },
             {
                 "id": "wc3-toc",
-                "aliases": [
-                    "WC3 TOC",
-                    "TOC"
-                ],
                 "extensions": [
                     ".toc",
                     ".TOC"

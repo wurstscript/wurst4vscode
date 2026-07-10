@@ -2,7 +2,7 @@
 
 Modern Wurst and Jass development for Warcraft III. Write typed WurstScript, compile to Jass or Lua, and build, test, inspect, and run maps without leaving VS Code.
 
-![WurstScript code with inlay hints and an inline asset preview](images/marketplace/editor_code.webp)
+![WurstScript code with inlay hints and an inline asset preview](https://raw.githubusercontent.com/wurstscript/wurst4vscode/master/images/marketplace/editor_code.webp)
 
 ## One extension, complete setup
 
@@ -45,15 +45,15 @@ Opening a supported Warcraft III file selects a dedicated viewer or editor:
 
 Packed `.w3x`/`.w3m` maps and Reforged folder-mode maps can both be selected, built, and run. The MPQ viewer can export an existing archive as a version-control-friendly map folder.
 
-![Browse and extract a Warcraft III MPQ map](images/marketplace/editor_mpq.webp)
+![Browse and extract a Warcraft III MPQ map](https://raw.githubusercontent.com/wurstscript/wurst4vscode/master/images/marketplace/editor_mpq.webp)
 
 Object-data editors resolve rawcodes, game metadata, icons, base values, and trigger strings while keeping custom overrides editable.
 
-![Edit Warcraft III unit object data](images/marketplace/editor_objmod.webp)
+![Edit Warcraft III unit object data](https://raw.githubusercontent.com/wurstscript/wurst4vscode/master/images/marketplace/editor_objmod.webp)
 
 The `.w3i` editor exposes supported map-information fields while preserving the remainder of the binary file unchanged.
 
-![Edit Warcraft III map information](images/marketplace/editor_w3i.webp)
+![Edit Warcraft III map information](https://raw.githubusercontent.com/wurstscript/wurst4vscode/master/images/marketplace/editor_w3i.webp)
 
 The experimental **Wurst: Preview Map Terrain** command renders terrain, cliffs, water, doodads, units, and start locations from an exploded map.
 
@@ -68,7 +68,7 @@ The extension reads stock Warcraft III data directly from the installed game's C
 
 This powers searchable object catalogs, inline command-button icons, texture hovers, and models with their dependent textures.
 
-![Preview an animated Warcraft III model and its textures](images/marketplace/editor_models.webp)
+![Preview an animated Warcraft III model and its textures](https://raw.githubusercontent.com/wurstscript/wurst4vscode/master/images/marketplace/editor_models.webp)
 
 ## Build, test, and run
 

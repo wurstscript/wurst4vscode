@@ -12,6 +12,7 @@ tests/**
 __tests__/**
 fixtures/**
 docs/**
+images/marketplace/**
 *.test.*
 *.spec.*
 *.vsix

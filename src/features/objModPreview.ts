@@ -2047,8 +2047,31 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   font-size: 11px;
   margin-top: 3px;
 }
-/* Number values are short — don't stretch the input across the whole column. */
-.value-editor.single input[type="number"] { max-width: 150px; }
+/* Number fields: text input (kept locale-independent, see webview NOTE) + integer/real steppers. */
+.num-editor { display: flex; align-items: stretch; max-width: 170px; }
+.num-editor .num-input { flex: 1; min-width: 0; border-right: none; border-radius: 2px 0 0 2px; }
+.num-steppers {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 0 2px 2px 0;
+  overflow: hidden;
+}
+.num-step {
+  flex: 1;
+  width: 18px;
+  min-height: 0;
+  padding: 0;
+  line-height: 1;
+  font-size: 8px;
+  cursor: pointer;
+  background: var(--input-bg);
+  color: var(--muted);
+  border: none;
+  border-bottom: 1px solid var(--border);
+}
+.num-step:last-child { border-bottom: none; }
+.num-step:hover { background: var(--btn-hover, var(--hover)); color: var(--fg); }
 /* Scannable accent for customized (overridden) fields. */
 tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 70%, transparent); }
 .cell-edit .tt-edit-hint { flex-shrink: 0; }

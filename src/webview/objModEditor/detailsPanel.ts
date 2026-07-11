@@ -3,7 +3,7 @@ import { fuzzyMatch } from '../../features/preview/fuzzy';
 import { esc, renderWc3Colors } from '../objModWebviewUtils';
 import { details, detailCache, pendingDetails, ui, vscodeApi, iconLoader, initial, objects } from './state';
 import { categoryLabel, objectIconHtml, matches, render } from './objectTree';
-import { sourcePill, valueCell, postEdit, setModValue, editorHtml, collapsedView } from './fieldDisplay';
+import { sourcePill, valueCell, postEdit, setModValue, editorHtml, collapsedView, normalizeNumberValue } from './fieldDisplay';
 import { observeModelThumbs } from './modelThumbnails';
 import { wireRichEditor, wireColorBar, setCaretEnd } from './richTextEditor';
 import { openAssetBrowser } from './assetBrowser';
@@ -94,7 +94,28 @@ export function renderDetails() {
 // innerHTML changes), so a single listener covers every collapsed cell and object-jump chip — no
 // more re-wiring 1000+ listeners on each object switch / search / technical toggle.
 export function setupDetails() {
+  // Steppers must not steal focus from the input they adjust (mirrors the color-swatch buttons).
+  details.addEventListener('mousedown', e => {
+    if (e.target.closest('.num-step')) e.preventDefault();
+  });
   details.addEventListener('click', e => {
+    const numStep = e.target.closest('.num-step[data-dir]');
+    if (numStep) {
+      e.preventDefault();
+      e.stopPropagation();
+      const mi = numStep.getAttribute('data-mi');
+      const input = details.querySelector('.num-input[data-mi="' + mi + '"]');
+      if (input) {
+        const varType = input.getAttribute('data-num-type');
+        const stepAmount = Number(input.getAttribute('data-num-step')) || 1;
+        const dir = Number(numStep.getAttribute('data-dir')) || 1;
+        const cur = Number(input.value);
+        input.value = normalizeNumberValue(varType, String((Number.isFinite(cur) ? cur : 0) + dir * stepAmount));
+        input.focus();
+        input.dispatchEvent(new Event('input'));
+      }
+      return;
+    }
     const jump = e.target.closest('.resolved-chip[data-jump]');
     if (jump) {
       const key = jump.getAttribute('data-jump') || '';
@@ -242,6 +263,17 @@ export function expandEditor(c) {
       }
     });
   } else if (ta) {
+    if (ta.classList.contains('num-input')) {
+      // Registered before wireEditRaw's own blur listener so the value is clamped/rounded to a valid
+      // int/unreal *before* that listener commits it.
+      ta.addEventListener('blur', () => {
+        const normalized = normalizeNumberValue(ta.getAttribute('data-num-type'), ta.value);
+        if (normalized !== ta.value) {
+          ta.value = normalized;
+          ta.dispatchEvent(new Event('input'));
+        }
+      });
+    }
     wireEditRaw(ta);
     ta.focus();
     if (ta.tagName === 'INPUT' && ta.type !== 'number' && ta.setSelectionRange) ta.setSelectionRange(ta.value.length, ta.value.length);

@@ -64,20 +64,52 @@ export function objectIconHtml(obj, extraClass) {
   return '<span class="object-icon missing' + cls + '" title="No icon field"></span>';
 }
 
-export function matches(obj) {
-  if (!ui.query) return true;
+// Ranked match: lower is better, -1 means no match. An exact/prefix hit on the rawcode id (what
+// users usually paste in when hunting a specific object, e.g. "A0FY") always outranks a loose fuzzy
+// hit on the longer display-name/source text — otherwise a 1-edit-distance fuzzy match elsewhere in
+// that combined haystack can bury the object whose id you typed exactly.
+export function matchScore(obj, query) {
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return 0;
+  const base = String(obj.baseId || '').toLowerCase();
+  const newId = String(obj.newId || '').toLowerCase();
+  if (base === q || newId === q) return 0;
+  if (base.startsWith(q) || newId.startsWith(q)) return 1;
+  const name = String(obj.displayName || '').toLowerCase();
+  if (name === q) return 2;
+  if (name.startsWith(q)) return 3;
+  if (name.includes(q) || base.includes(q) || newId.includes(q)) return 4;
   const haystack = [obj.displayName, obj.baseId, obj.newId, obj.displaySource, obj.group].filter(Boolean).join(' ');
-  return fuzzyMatch(ui.query, haystack);
+  return fuzzyMatch(query, haystack) ? 5 : -1;
+}
+
+export function matches(obj) {
+  return matchScore(obj, ui.query) >= 0;
 }
 
 export function renderTree() {
+  // Active search: relevance-ranked flat list (best match first) instead of the browse tree — search
+  // results and the group/race browse hierarchy answer different questions, and grouping by race
+  // buried the exact id match the user typed among unrelated sections sorted by race, not relevance.
+  if (ui.query) {
+    const ranked = objects
+      .map(obj => ({ obj, score: matchScore(obj, ui.query) }))
+      .filter(entry => entry.score >= 0)
+      .sort((a, b) => a.score - b.score || a.obj.displayName.localeCompare(b.obj.displayName));
+    tree.innerHTML = ranked.length
+      ? ranked.map(entry => objectRowReplacementHtml(entry.obj)).join('')
+      : '<div class="empty-state">No objects match &ldquo;' + esc(ui.query) + '&rdquo;.<br>Try a different term or clear the search.</div>';
+    iconLoader.observe(tree);
+    observeModelThumbs(tree);
+    return;
+  }
+
   const groups = ['Original', 'Custom'];
   let html = '';
-  const allowCollapse = !ui.query;
   for (const group of groups) {
-    const groupObjects = objects.filter(obj => obj.group === group && matches(obj));
+    const groupObjects = objects.filter(obj => obj.group === group);
     if (!groupObjects.length) continue;
-    const groupClosed = allowCollapse && collapsedGroups.has(group);
+    const groupClosed = collapsedGroups.has(group);
     html += '<button class="group-heading" type="button" data-group="' + esc(group) + '" aria-expanded="' + (groupClosed ? 'false' : 'true') + '">' +
       '<span class="twisty">' + (groupClosed ? '>' : 'v') + '</span>' +
       '<span>' + group + ' Objects</span><span class="folder-count">' + groupObjects.length + '</span></button>';
@@ -87,26 +119,17 @@ export function renderTree() {
     for (const race of races) {
       const raceObjects = groupObjects.filter(obj => (obj.race || 'other') === race);
       const raceKey = group + ':' + race;
-      const raceClosed = allowCollapse && collapsedRaces.has(raceKey);
+      const raceClosed = collapsedRaces.has(raceKey);
       html += '<button class="race-heading" type="button" data-race="' + esc(raceKey) + '" aria-expanded="' + (raceClosed ? 'false' : 'true') + '">' +
         '<span class="twisty">' + (raceClosed ? '>' : 'v') + '</span>' +
         '<span>' + esc(raceLabel(race)) + '</span><span class="folder-count">' + raceObjects.length + '</span></button>';
       if (raceClosed) continue;
       for (const obj of raceObjects) {
-        const active = obj.key === ui.selectedKey ? ' active' : '';
-        const source = obj.displaySource ? ' <span class="source-pill">' + esc(obj.displaySource) + '</span>' : '';
-        const label = obj.displayName + ' — ' + (obj.newId ? obj.baseId + ' to ' + obj.newId : obj.baseId);
-        html += '<button class="object-row' + active + '" type="button" data-key="' + esc(obj.key) + '" aria-label="' + esc(label) + '">' +
-          objectIconHtml(obj, '') +
-          '<span class="object-main"><span class="object-name" title="' + esc(obj.displayName) + '">' + esc(obj.displayName) + source + '</span>' +
-          '<span class="object-id">' + idLine(obj) + '</span></span>' +
-          '</button>';
+        html += objectRowReplacementHtml(obj);
       }
     }
   }
-  tree.innerHTML = html || (ui.query
-    ? '<div class="empty-state">No objects match &ldquo;' + esc(ui.query) + '&rdquo;.<br>Try a different term or clear the search.</div>'
-    : '<div class="empty-state">No objects</div>');
+  tree.innerHTML = html || '<div class="empty-state">No objects</div>';
   iconLoader.observe(tree);
   observeModelThumbs(tree);
 }

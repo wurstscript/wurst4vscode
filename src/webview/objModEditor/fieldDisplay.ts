@@ -136,8 +136,8 @@ export function resolvedItemsHtml(mod) {
 }
 
 export function assetName(value) {
-  const file = String(value || '').split('\\\\').pop().split('/').pop();
-  return file.replace(/\\.(blp|dds|tga|png|jpe?g|mdx|mdl|mp3|wav|ogg|flac)$/i, '').replace(/^(btn|disbtn|pasbtn|att|upg)/i, '') || value;
+  const file = String(value || '').split('\\').pop().split('/').pop();
+  return file.replace(/\.(blp|dds|tga|png|jpe?g|mdx|mdl|mp3|wav|ogg|flac)$/i, '').replace(/^(btn|disbtn|pasbtn|att|upg)/i, '') || value;
 }
 
 export function firstAssetPath(value) {
@@ -219,17 +219,61 @@ export function setModValue(mod, value) {
 export function decoratedValueHtml(mod, mi, raw) {
   refreshDecoratedValue(mod);
   if (mod.displayKind === 'rawcodes' && mod.resolvedItems && mod.resolvedItems.length) return resolvedItemsHtml(mod);
-  if (!mod.displayValue || String(mod.displayValue) === String(raw)) {
+  // Asset fields (icon/model/sound/pathing) always get their mini preview badge, even when there's
+  // no friendlier label to show alongside the raw path — the badge itself is the point (icon swatch,
+  // cached model thumbnail). Only skip the badge for genuinely plain fields with nothing to add.
+  const isAsset = mod.displayKind === 'asset' && !!mod.assetPath;
+  const hasFriendlyLabel = !!mod.displayValue && String(mod.displayValue) !== String(raw);
+  if (!isAsset && !hasFriendlyLabel) {
     return raw === '' ? '<span class="tt-empty">(empty)</span>' : esc(raw);
   }
+  const mainText = hasFriendlyLabel ? mod.displayValue : raw;
   return '<span class="value-display ' + esc(mod.displayKind || '') + '">' +
     assetMiniHtml(mod, mi) +
-    '<span class="value-main" title="' + esc(mod.displayValue) + '">' + esc(mod.displayValue) + '</span>' +
-    '<span class="value-raw" title="' + esc(mod.displayDetail || raw) + '">' + esc(mod.displayDetail || raw) + '</span>' +
+    (mainText === ''
+      ? '<span class="tt-empty">(empty)</span>'
+      : '<span class="value-main" title="' + esc(mainText) + '">' + esc(mainText) + '</span>') +
+    (hasFriendlyLabel ? '<span class="value-raw" title="' + esc(mod.displayDetail || raw) + '">' + esc(mod.displayDetail || raw) + '</span>' : '') +
   '</span>';
 }
 
-// Editor shown on click. Color/text fields get textarea + color bar + preview; everything else a plain input.
+// Clamp/round a typed number field value to something valid for its varType: whole numbers for
+// int, and non-negative for unreal (WC3's "unsigned real"). Invalid/empty text collapses to '0' for
+// int so a stray edit can't leave a non-numeric string in an integer game field.
+export function normalizeNumberValue(varType, raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (s === '') return s;
+  if (varType === 'int') {
+    const n = Math.round(Number(s));
+    return Number.isFinite(n) ? String(n) : '0';
+  }
+  let n = Number(s);
+  if (!Number.isFinite(n)) n = 0;
+  if (varType === 'unreal' && n < 0) n = 0;
+  return String(n);
+}
+
+function numberStepFor(varType) {
+  return varType === 'int' ? 1 : 0.05;
+}
+
+// NOTE: the value input stays type="text" (not type="number") so the '.' decimal is locale-independent —
+// these are raw float/int game values, not locale-formatted numbers (German shows 1,5 for a number
+// input, which corrupts the value). The +/- steppers give integer-safe increments without that risk;
+// inputmode hints a numeric keypad on touch.
+function numberEditorHtml(mod, mi, v) {
+  const step = numberStepFor(mod.varType);
+  return '<div class="value-editor single num-editor">' +
+    '<input class="edit-raw num-input" type="text" inputmode="' + (mod.varType === 'int' ? 'numeric' : 'decimal') + '" data-mi="' + mi + '" data-num-type="' + mod.varType + '" data-num-step="' + step + '" spellcheck="false" value="' + esc(v) + '">' +
+    '<span class="num-steppers">' +
+      '<button type="button" class="num-step" data-mi="' + mi + '" data-dir="1" tabindex="-1" aria-label="Increase value">▲</button>' +
+      '<button type="button" class="num-step" data-mi="' + mi + '" data-dir="-1" tabindex="-1" aria-label="Decrease value">▼</button>' +
+    '</span>' +
+  '</div>';
+}
+
+// Editor shown on click. Color/text fields get textarea + color bar + preview; number fields get a
+// stepper-enhanced input; everything else a plain input.
 export function editorHtml(mod, mi) {
   refreshDecoratedValue(mod);
   if (needsColorEditor(mod)) return colorEditorHtml(mod, mi);
@@ -237,11 +281,8 @@ export function editorHtml(mod, mi) {
   const picker = pickerEditorHtml(mod, mi, v);
   if (picker) return picker;
   const numType = mod.varType === 'int' || mod.varType === 'real' || mod.varType === 'unreal';
-  // NOTE: use a plain text input (not type="number") so the '.' decimal is locale-independent —
-  // these are raw float/int game values, not locale-formatted numbers (German shows 1,5 for a
-  // number input, which corrupts the value). inputmode hints a numeric keypad on touch.
-  const mode = numType ? ' inputmode="' + (mod.varType === 'int' ? 'numeric' : 'decimal') + '"' : '';
-  return '<div class="value-editor single"><input class="edit-raw" type="text"' + mode + ' data-mi="' + mi + '" spellcheck="false" value="' + esc(v) + '"></div>';
+  if (numType) return numberEditorHtml(mod, mi, v);
+  return '<div class="value-editor single"><input class="edit-raw" type="text" data-mi="' + mi + '" spellcheck="false" value="' + esc(v) + '"></div>';
 }
 
 // Compact, click-to-edit view shown by default for every editable cell (keeps the 700-row table light).

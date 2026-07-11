@@ -63,9 +63,9 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
             });
         });
 
-    let buildMap = async (args: any) => {
-        let config = vscode.workspace.getConfiguration('wurst');
-        let wc3path = config.get<string>('wc3path');
+    const buildMap = async (args: any) => {
+        const config = vscode.workspace.getConfiguration('wurst');
+        const wc3path = config.get<string>('wc3path');
 
         let mapPromise: Thenable<string | undefined>;
         const mapPathFromArgs = getMapPathFromInvocation(args);
@@ -77,13 +77,13 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
                 placeHolder: 'Choose a .w3x/.w3m map file or folder',
             });
         }
-        let mappath = await mapPromise;
+        const mappath = await mapPromise;
         if (!mappath) {
             window.showWarningMessage('No map selected for build. Choose a .w3x or .w3m map file or folder and try again.');
             return;
         }
 
-        let request: ExecuteCommandParams = {
+        const request: ExecuteCommandParams = {
             command: 'wurst.buildmap',
             arguments: [
                 {
@@ -95,10 +95,10 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
         return client.sendRequest(ExecuteCommandRequest.type, request);
     };
 
-    let startMap = async (cmd: 'wurst.startmap' | 'wurst.hotstartmap', args: any) => {
-        let config = vscode.workspace.getConfiguration('wurst');
-        let wc3path = config.get<string>('wc3path');
-        let gameExePath = config.get<string>('gameExePath');
+    const startMap = async (cmd: 'wurst.startmap' | 'wurst.hotstartmap', args: any) => {
+        const config = vscode.workspace.getConfiguration('wurst');
+        const wc3path = config.get<string>('wc3path');
+        const gameExePath = config.get<string>('gameExePath');
 
         let mapPromise: Thenable<string | undefined>;
         const mapPathFromArgs = getMapPathFromInvocation(args);
@@ -110,13 +110,13 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
                 placeHolder: 'Choose a .w3x/.w3m map file or folder',
             });
         }
-        let mappath = await mapPromise;
+        const mappath = await mapPromise;
         if (!mappath) {
             window.showWarningMessage('No map selected to run. Choose a .w3x or .w3m map file or folder and try again.');
             return;
         }
 
-        let request: ExecuteCommandParams = {
+        const request: ExecuteCommandParams = {
             command: cmd,
             arguments: [
                 {
@@ -130,15 +130,15 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
         return client.sendRequest(ExecuteCommandRequest.type, request);
     };
 
-    let reloadMap = async () => {
-        let request: ExecuteCommandParams = {
+    const reloadMap = async () => {
+        const request: ExecuteCommandParams = {
             command: 'wurst.hotreload',
             arguments: [{}],
         };
         return client.sendRequest(ExecuteCommandRequest.type, request);
     };
 
-    let startLast = () => {
+    const startLast = () => {
         if (_lastMapConfig) {
             return startMap('wurst.startmap', [_lastMapConfig]);
         } else {
@@ -146,7 +146,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
         }
     };
 
-    let runMapSmart = (args: any) => {
+    const runMapSmart = (args: any) => {
         const fromInvocation = getMapPathFromInvocation(args);
         if (isMapFilePath(fromInvocation)) {
             return startMap('wurst.startmap', [fromInvocation]);
@@ -160,14 +160,14 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
         return startLast();
     };
 
-    let tests = (mode: 'all' | 'file' | 'func', args: any) => {
+    const tests = (mode: 'all' | 'file' | 'func', args: any) => {
         if (!args) {
-            let data: any = {};
+            const data: any = {};
             if (mode != 'all') {
                 data.filename = window.activeTextEditor?.document.fileName;
             }
             if (mode == 'func') {
-                let sel = window.activeTextEditor?.selection;
+                const sel = window.activeTextEditor?.selection;
                 if (sel) {
                     data.line = sel.start.line;
                     data.column = sel.start.character;
@@ -199,16 +199,16 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
         );
     };
 
-    let performCodeAction = (args: any[]) => {
-        let request: ExecuteCommandParams = {
+    const performCodeAction = (args: any[]) => {
+        const request: ExecuteCommandParams = {
             command: 'wurst.perform_code_action',
             arguments: args,
         };
         return client.sendRequest(ExecuteCommandRequest.type, request);
     };
 
-    let fixAllQuickfixes = () => {
-        let request: ExecuteCommandParams = {
+    const fixAllQuickfixes = () => {
+        const request: ExecuteCommandParams = {
             command: 'wurst.fix_all_quickfixes',
             arguments: [],
         };

@@ -9,7 +9,7 @@
  */
 
 const assert = require('assert');
-const crypto = require('crypto');
+const nodeCrypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const ts = require('typescript');
@@ -60,7 +60,7 @@ for (const name of fixtureNames) {
     const rgba = Buffer.from(decoded.rgbaBase64, 'base64');
     assert.equal(rgba.length, decoded.width * decoded.height * 4, `${name}: invalid RGBA length`);
     const dimensions = `${decoded.width}x${decoded.height}`;
-    const hash = crypto.createHash('sha256').update(rgba).digest('hex');
+    const hash = nodeCrypto.createHash('sha256').update(rgba).digest('hex');
     assert.deepEqual([dimensions, hash], expected[name], `${name}: decoded pixels changed`);
 }
 assert.ok(require.cache[war3ModelEntry], 'JPEG BLP decoding should load the custom war3-model decoder');

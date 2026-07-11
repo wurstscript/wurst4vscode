@@ -633,7 +633,13 @@ async function testIssueReportingPrivacyAndDeduplication() {
 
 function testObjModSaveCommitsFocusedEditor() {
     const host = fs.readFileSync(path.join(root, 'src/features/objModPreview.ts'), 'utf8');
-    const objmod = fs.readFileSync(path.join(root, 'src/webview/objModEditorWebview.ts'), 'utf8');
+    // The objmod webview entry point delegates to src/webview/objModEditor/*.ts — concatenate the
+    // whole split so this stays a check on the bundle's behavior, not on which file each piece lives in.
+    const objModEditorDir = path.join(root, 'src/webview/objModEditor');
+    const objmod = [
+        fs.readFileSync(path.join(root, 'src/webview/objModEditorWebview.ts'), 'utf8'),
+        ...fs.readdirSync(objModEditorDir).map((file) => fs.readFileSync(path.join(objModEditorDir, file), 'utf8')),
+    ].join('\n');
 
     assert.ok(objmod.includes('function commitActiveEditor()'), 'objmod webview should expose an immediate focused-field commit helper');
     assert.ok(objmod.includes("el._commitNow = commit"), 'focused objmod editors should publish their commit function');

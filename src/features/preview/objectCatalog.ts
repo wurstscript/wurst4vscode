@@ -19,6 +19,7 @@ import {
     UNIT_PROFILE_PATHS, ABILITY_PROFILE_PATHS, UPGRADE_PROFILE_PATHS,
     ITEM_PROFILE_PATHS, DESTRUCTABLE_PROFILE_PATHS, DOODAD_PROFILE_PATHS,
 } from './wc3Data';
+import { compilerProfileView, loadCompilerKnowledgeBase } from './compilerKnowledgeBase';
 
 export interface ObjectRef {
     name?: string;
@@ -61,10 +62,18 @@ export function resetObjectCatalog(): void {
 
 async function buildCatalog(): Promise<Map<string, ObjectRef>> {
     const worldStrings = await loadWorldEditStrings();
-    const profile = await loadProfilePaths(ALL_PROFILE_PATHS);
     const catalog = new Map<string, ObjectRef>();
 
-    addProfileEntries(catalog, profile, worldStrings);
+    const kb = await loadCompilerKnowledgeBase();
+    if (kb) {
+        for (const records of Object.values(kb.objects)) {
+            addProfileEntries(catalog, compilerProfileView(records), worldStrings);
+        }
+        // Doodads are not included in knowledge-base schema v1.
+        addProfileEntries(catalog, await loadProfilePaths(DOODAD_PROFILE_PATHS), worldStrings);
+    } else {
+        addProfileEntries(catalog, await loadProfilePaths(ALL_PROFILE_PATHS), worldStrings);
+    }
 
     await Promise.all(SLK_NAME_SOURCES.map(async (src) => {
         const buf = await readGameData(src.path);

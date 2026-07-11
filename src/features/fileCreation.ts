@@ -5,7 +5,7 @@ import { workspace, Disposable, WorkspaceEdit, Position } from 'vscode';
 import { basename, extname } from 'path';
 
 function onDocumentOpen(td: TextDocument) {
-    let extension = extname(td.fileName);
+    const extension = extname(td.fileName);
     if (extension != '.wurst' && extension != '.jurst') {
         return;
     }
@@ -13,10 +13,10 @@ function onDocumentOpen(td: TextDocument) {
         return;
     }
 
-    let packageName = basename(td.fileName, extension);
-    let newText = `package ${packageName}\n\n`;
+    const packageName = basename(td.fileName, extension);
+    const newText = `package ${packageName}\n\n`;
 
-    let edit = new WorkspaceEdit();
+    const edit = new WorkspaceEdit();
     edit.insert(td.uri, new Position(1, 1), newText);
     workspace.applyEdit(edit);
 }

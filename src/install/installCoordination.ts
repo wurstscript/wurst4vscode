@@ -64,7 +64,7 @@ function parsePosixProcesses(raw: string): WurstProcess[] {
         if (!match) continue;
         const pid = Number(match[1]);
         const commandLine = match[2];
-        const executablePath = /^"([^\"]+)"|^(\S+)/.exec(commandLine)?.slice(1).find(Boolean) ?? '';
+        const executablePath = /^"([^"]+)"|^(\S+)/.exec(commandLine)?.slice(1).find(Boolean) ?? '';
         result.push({ pid, executablePath, commandLine, languageServer: /(?:^|\s)-languageserver(?:\s|$)/i.test(commandLine) });
     }
     return result;

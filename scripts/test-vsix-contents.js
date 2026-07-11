@@ -34,7 +34,7 @@ const forbidden = [
 const leaked = files.filter((file) => forbidden.some((pattern) => pattern.test(file)));
 assert.deepStrictEqual(leaked, [], `Test/development files would be packaged:\n${leaked.join('\n')}`);
 
-for (const required of ['package.json', 'README.md', 'dist/extension.js']) {
+for (const required of ['package.json', 'README.md', 'dist/extension.js', 'resources/wc3-knowledge-base.json']) {
     assert(files.includes(required), `Required release file is missing: ${required}`);
 }
 

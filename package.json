@@ -836,11 +836,13 @@
     "scripts": {
         "vscode:prepublish": "npm run package-web && npm run test:vsix-contents",
         "compile": "tsc -watch -p ./",
+        "lint": "eslint .",
         "compile-web": "webpack",
         "watch-web": "webpack --watch",
         "test": "npm run test:fuzzy && npm run test:image-decoders && npm run test:webview",
         "test:image-decoders": "node ./scripts/test-image-decoders.js",
         "test:vsix-contents": "node ./scripts/test-vsix-contents.js",
+        "sync:wc3-knowledge-base": "node ./scripts/sync-wc3-knowledge-base.js",
         "test:webview": "node ./scripts/test-webview.js",
         "test:e2e:models:local": "node ./scripts/model-thumbnail-e2e.js",
         "test:e2e:objmod-thumbs:local": "node ./scripts/objmod-thumbnail-e2e.js",
@@ -850,12 +852,16 @@
         "publish": "vsce publish --no-dependencies"
     },
     "devDependencies": {
+        "@eslint/js": "^9.39.5",
         "@types/node": "^22.19.17",
         "@types/vscode": "^1.109.0",
         "@types/webpack-env": "^1.18.8",
         "@vscode/vsce": "^3.7.1",
+        "eslint": "^9.39.5",
+        "globals": "^15.15.0",
         "ts-loader": "^9.5.1",
         "typescript": "^5.9.3",
+        "typescript-eslint": "^8.63.0",
         "war3-model": "file:../war3-model",
         "webpack": "^5.105.0",
         "webpack-cli": "^7.0.2"

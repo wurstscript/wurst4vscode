@@ -22,6 +22,10 @@ import {
     ITEM_PROFILE_PATHS, DESTRUCTABLE_PROFILE_PATHS, DOODAD_PROFILE_PATHS,
 } from './preview/wc3Data';
 import { getGameAssetCacheDir, listGameAssetPaths } from './preview/cascStorage';
+import {
+    loadCompilerKnowledgeBase, compilerLowercaseObjectView, compilerProfileView,
+    CompilerFieldSchema, CompilerObjectKind, CompilerObjectRecord,
+} from './preview/compilerKnowledgeBase';
 export { ObjModFile, ObjModEntry, ObjModMod, ObjModVarType } from 'casc-ts/formats';
 
 const TYPE_LABELS: Record<string, string> = {
@@ -178,12 +182,17 @@ interface ObjEditorData {
     fieldsById: Map<string, MetaField>;
     slkTables: Map<string, SlkTable>;
     profile: ProfileTable;
+    /** Compiler-owned, already merged SLK/profile/skin records. Present for modern compilers. */
+    baseObjects?: Map<string, CompilerObjectRecord>;
+    heroBaseIds?: Set<string>;
+    buildingBaseIds?: Set<string>;
 }
 
 interface ObjSummaryData {
     metadataSource: string;
     worldStrings: Map<string, string>;
     profile: ProfileTable;
+    baseObjects?: Map<string, CompilerObjectRecord>;
 }
 
 interface MetaField {
@@ -207,6 +216,8 @@ interface MetaField {
     useItem: boolean;
     useBuilding: boolean;
     useCreep: boolean;
+    minVal?: string;
+    maxVal?: string;
 }
 
 const objEditorDataCache = new Map<string, Promise<ObjEditorData | undefined>>();
@@ -471,20 +482,23 @@ interface ObjectContext {
 function makeObjectContext(entry: ObjModEntry, gameData: ObjEditorData, ext: string): ObjectContext {
     const baseId = entry.baseId;
     if (ext === '.w3a') {
-        const row = gameData.slkTables.get(SLK_NAME_TO_PATH.AbilityData)?.rows.get(baseId);
-        const code = row?.code || baseId;
-        const isHero = row?.hero === '1';
-        const isItem = row?.item === '1';
-        const levelCount = Math.max(1, Math.min(20, Number(row?.levels) || 1));
+        const compilerRow = getBaseObjectRecord(baseId, gameData);
+        const slkRow = gameData.slkTables.get(SLK_NAME_TO_PATH.AbilityData)?.rows.get(baseId);
+        const value = (field: string) => getRecordValue(compilerRow, field) ?? slkRow?.[field];
+        const code = value('code') || baseId;
+        const isHero = value('hero') === '1';
+        const isItem = value('item') === '1';
+        const levelCount = Math.max(1, Math.min(20, Number(value('levels')) || 1));
         return {
             applies: (f) => abilityFieldApplies(f, baseId, code, isHero, isItem),
             levelsFor: (f) => (f.repeat > 0 ? Array.from({ length: levelCount }, (_, i) => i + 1) : [undefined]),
         };
     }
     if (ext === '.w3u') {
-        const isHero = /^[A-Z]/.test(baseId); // hero unit rawcodes start with a capital letter
+        const isHero = gameData.heroBaseIds?.has(baseId) ?? /^[A-Z]/.test(baseId);
+        const isBuilding = gameData.buildingBaseIds?.has(baseId);
         return {
-            applies: (f) => unitFieldApplies(f, baseId, isHero),
+            applies: (f) => unitFieldApplies(f, baseId, isHero, isBuilding),
             levelsFor: (f) => (f.repeat > 0 ? getFieldLevels(baseId, f, gameData) : [undefined]),
         };
     }
@@ -502,10 +516,12 @@ function abilityFieldApplies(f: MetaField, baseId: string, code: string, isHero:
     return f.useUnit || f.useCreep;
 }
 
-function unitFieldApplies(f: MetaField, baseId: string, isHero: boolean): boolean {
+function unitFieldApplies(f: MetaField, baseId: string, isHero: boolean, isBuilding: boolean | undefined): boolean {
     if (f.useSpecific) return f.useSpecific.includes(baseId);
     if (isHero) return f.useHero;
-    return f.useUnit || f.useBuilding;
+    if (isBuilding === undefined) return f.useUnit || f.useBuilding;
+    if (isBuilding) return f.useBuilding;
+    return f.useUnit;
 }
 
 function buildFieldRows(entry: ObjModEntry, gameData: ObjEditorData, triggerStrings: TriggerStringTable, extended: boolean, ext: string, catalog: ObjValueCatalog): PreviewMod[] {
@@ -529,7 +545,7 @@ function buildFieldRows(entry: ObjModEntry, gameData: ObjEditorData, triggerStri
             const override = overrideMods.get(key)?.[0] ?? findOverrideByField(entry.mods, field.id, level, dataPt);
             if (override) usedMods.add(override);
             const baseValue = resolveBaseFieldValue(entry.baseId, field, gameData, level);
-            if (!override && (!applies || baseValue === undefined || baseValue === '')) continue;
+            if (!override && !applies) continue;
             const formattedOverride = override ? formatValue(override, triggerStrings) : undefined;
             const formattedBase = formatRawValue(baseValue, triggerStrings);
             const currentValue = formattedOverride ?? formattedBase;
@@ -935,7 +951,12 @@ function resolveBaseDisplayName(baseId: string, summaryData: Pick<ObjSummaryData
 }
 
 function resolveBaseFieldValue(baseId: string, field: MetaField, gameData: ObjEditorData, level?: number): string | undefined {
-    const raw = field.slkName.toLowerCase() === 'profile'
+    const compilerRecord = getBaseObjectRecord(baseId, gameData);
+    const raw = compilerRecord
+        ? firstDefinedRecord(compilerRecord, field.slkName.toLowerCase() === 'profile'
+            ? resolveProfileFields(field, level)
+            : [resolveSlkField(field, level)])
+        : field.slkName.toLowerCase() === 'profile'
         ? firstDefined(gameData.profile.get(baseId), resolveProfileFields(field, level))
         : getBaseSlkRow(baseId, field, gameData)?.[resolveSlkField(field, level)];
     // Fields packed into one comma-list cell (e.g. Buttonpos "x,y") select their part via index.
@@ -956,6 +977,26 @@ function getAnyProfileValue(baseId: string, fields: string[], summaryData: Pick<
     for (const field of fields) {
         const value = row[field];
         if (value !== undefined && value !== '') return value;
+    }
+    return undefined;
+}
+
+function getBaseObjectRecord(baseId: string, gameData: ObjEditorData): CompilerObjectRecord | undefined {
+    return gameData.baseObjects?.get(baseId.toLowerCase());
+}
+
+function getRecordValue(record: CompilerObjectRecord | undefined, field: string): string | undefined {
+    if (!record) return undefined;
+    const exact = record[field];
+    if (exact !== undefined) return String(exact);
+    const key = Object.keys(record).find((candidate) => candidate.toLowerCase() === field.toLowerCase());
+    return key === undefined ? undefined : String(record[key]);
+}
+
+function firstDefinedRecord(record: CompilerObjectRecord, fields: string[]): string | undefined {
+    for (const field of fields) {
+        const value = getRecordValue(record, field);
+        if (value !== undefined) return value;
     }
     return undefined;
 }
@@ -1028,6 +1069,16 @@ async function loadObjSummaryDataUncached(ext: string): Promise<ObjSummaryData |
     const config = OBJ_EDITOR_CONFIG[ext];
     if (!config) return undefined;
 
+    const compilerData = await loadCompilerObjData(ext);
+    if (compilerData) {
+        return {
+            metadataSource: compilerData.metadataSource,
+            worldStrings: compilerData.worldStrings,
+            profile: compilerData.profile,
+            baseObjects: compilerData.baseObjects,
+        };
+    }
+
     const worldStrings = await loadWorldEditStrings();
     const profile = await loadObjProfileData(ext);
     return {
@@ -1040,6 +1091,9 @@ async function loadObjSummaryDataUncached(ext: string): Promise<ObjSummaryData |
 async function loadObjEditorDataUncached(ext: string): Promise<ObjEditorData | undefined> {
     const config = OBJ_EDITOR_CONFIG[ext];
     if (!config) return undefined;
+
+    const compilerData = await loadCompilerObjData(ext);
+    if (compilerData) return compilerData;
 
     const metaBuf = await readGameData(config.metaPath);
     if (!metaBuf) return undefined;
@@ -1094,7 +1148,14 @@ export function loadObjValueCatalog(): Promise<ObjValueCatalog> {
 
 async function loadObjValueCatalogUncached(): Promise<ObjValueCatalog> {
     const worldStrings = await loadWorldEditStrings();
-    const profiles = await Promise.all(CATALOG_EXTS.map((ext) => loadObjProfileData(ext)));
+    const kb = await loadCompilerKnowledgeBase();
+    const compilerProfiles: ProfileTable[] = kb
+        ? Object.values(kb.objects).map(compilerProfileView)
+        : [];
+    // Doodads are not part of the current compiler knowledge-base contract yet.
+    const profiles = compilerProfiles.length
+        ? [...compilerProfiles, await loadObjProfileData('.w3d')]
+        : await Promise.all(CATALOG_EXTS.map((ext) => loadObjProfileData(ext)));
     const objects = new Map<string, ValueOption>();
     const iconMap = new Map<string, ValueOption>();
     const modelMap = new Map<string, ValueOption>();
@@ -1131,6 +1192,79 @@ async function loadObjValueCatalogUncached(): Promise<ObjValueCatalog> {
         models: sortOptions([...modelMap.values()]),
         sounds: sortOptions([...soundMap.values()]),
         pathing: sortOptions([...pathingMap.values()]).slice(0, 300),
+    };
+}
+
+function compilerObjectKind(ext: string): Exclude<CompilerObjectKind, 'hero' | 'building'> | undefined {
+    return ({
+        '.w3u': 'unit', '.w3t': 'item', '.w3a': 'ability', '.w3b': 'destructable',
+        '.w3h': 'buff', '.w3q': 'upgrade',
+    } as Record<string, Exclude<CompilerObjectKind, 'hero' | 'building'>>)[ext];
+}
+
+async function loadCompilerObjData(ext: string): Promise<ObjEditorData | undefined> {
+    const kind = compilerObjectKind(ext);
+    if (!kind) return undefined;
+    const kb = await loadCompilerKnowledgeBase();
+    if (!kb) return undefined;
+
+    const schemas = kind === 'unit'
+        ? dedupeCompilerSchemas([
+            ...(kb.fieldSchemas.unit ?? []), ...(kb.fieldSchemas.hero ?? []), ...(kb.fieldSchemas.building ?? []),
+        ])
+        : kb.fieldSchemas[kind];
+    const records = kb.objects[kind];
+    if (!Array.isArray(schemas) || !records || schemas.length === 0) return undefined;
+
+    const fields = schemas.map(makeCompilerMetaField);
+    const fieldsById = new Map(fields.map((field) => [field.id.toLowerCase(), field]));
+    const baseObjects = compilerLowercaseObjectView(records);
+    const profile = compilerProfileView(records);
+    return {
+        metadataSource: 'Wurst compiler game-data knowledge base',
+        worldStrings: await loadWorldEditStrings(),
+        fields,
+        fieldsById,
+        slkTables: new Map(),
+        profile,
+        baseObjects,
+        heroBaseIds: new Set(kb.heroBaseIds ?? []),
+        buildingBaseIds: new Set(kb.buildingBaseIds ?? []),
+    };
+}
+
+function dedupeCompilerSchemas(schemas: CompilerFieldSchema[]): CompilerFieldSchema[] {
+    const result = new Map<string, CompilerFieldSchema>();
+    for (const schema of schemas) {
+        const key = `${schema.id.toLowerCase()}|${schema.data}|${schema.index ?? ''}`;
+        if (!result.has(key)) result.set(key, schema);
+    }
+    return [...result.values()];
+}
+
+function makeCompilerMetaField(schema: CompilerFieldSchema): MetaField {
+    return {
+        id: schema.id,
+        sourceField: schema.field,
+        slkName: schema.slk,
+        slkPath: SLK_NAME_TO_PATH[schema.slk],
+        category: schema.category || 'other',
+        label: schema.displayName || FIELD_LABELS[schema.id.toLowerCase()] || schema.id,
+        rawLabel: schema.displayName || schema.id,
+        type: schema.type || 'string',
+        sort: schema.sort || schema.id,
+        repeat: schema.repeat || 0,
+        data: schema.data || 0,
+        index: schema.index ?? undefined,
+        useUnit: schema.useUnit,
+        useHero: schema.useHero,
+        useItem: schema.useItem,
+        useBuilding: schema.useBuilding,
+        useCreep: schema.useCreep,
+        useSpecific: schema.useSpecific?.length ? schema.useSpecific : undefined,
+        notSpecific: schema.notSpecific?.length ? schema.notSpecific : undefined,
+        minVal: schema.minVal ?? undefined,
+        maxVal: schema.maxVal ?? undefined,
     };
 }
 

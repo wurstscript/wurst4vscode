@@ -1,6 +1,6 @@
 import { IndentAction, LanguageConfiguration } from "vscode";
 
-export let languageConfig = {
+export const languageConfig = {
     comments: {
         lineComment: '//',
         blockComment: ['/*', '*/'],

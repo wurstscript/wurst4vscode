@@ -20,7 +20,6 @@
 
 const assert = require('assert');
 const childProcess = require('child_process');
-const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');

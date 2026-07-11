@@ -1081,8 +1081,12 @@ async function loadObjSummaryDataUncached(ext: string): Promise<ObjSummaryData |
 
     const worldStrings = await loadWorldEditStrings();
     const profile = await loadObjProfileData(ext);
+    // An empty profile table here means every CASC read for it came back null — i.e. no WC3 install
+    // was found at all (not just this one file missing). Naming the file we *tried* without this
+    // check made the header claim a metadata source that in fact contributed nothing.
+    const gameDataMissing = profile.size === 0;
     return {
-        metadataSource: config.metaPath,
+        metadataSource: gameDataMissing ? `${config.metaPath} (not found)` : config.metaPath,
         worldStrings,
         profile,
     };
@@ -1493,6 +1497,12 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
     const warningBanner = wtsWarning
         ? `<div class="warning">${escapeHtml(wtsWarning)}</div>`
         : '';
+    // metadataSource is tagged "(not found)" by loadObjSummaryDataUncached when the profile/wts
+    // lookups behind it came back completely empty — i.e. no WC3 install was found at all, not just
+    // this one file. Surface that plainly instead of leaving raw field ids as the only clue.
+    const gameDataBanner = metadataSource.endsWith('(not found)')
+        ? `<div class="warning">Warcraft III game data not found — showing raw field ids only (no icons, categories, or friendly labels). Checked the default install locations${process.platform === 'win32' ? ' and the Windows registry' : ''}; if Warcraft III is installed somewhere unusual, set the "wurst.wc3path" setting to its folder and reopen this file. Run "Wurst: Show WC3 Data Log" from the Command Palette to see exactly what was checked.</div>`
+        : '';
 
     return buildPage({
         csp: `default-src 'none'; img-src ${context.webview.cspSource} data:; connect-src ${context.webview.cspSource}; style-src 'unsafe-inline'; script-src 'unsafe-inline' ${context.webview.cspSource};`,
@@ -1541,16 +1551,22 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
   padding: 1px 5px;
   border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
   border-radius: 2px;
+  background: transparent;
   color: var(--accent);
+  font: inherit;
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
-  transition: color .13s, border-color .13s;
+  cursor: pointer;
+  transition: color .13s, border-color .13s, background-color .13s;
 }
+.editable-badge:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.editable-badge:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: 1px; }
 .editable-badge.dirty {
   border-color: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 60%, transparent);
   color: var(--vscode-editorWarning-foreground, #cca700);
 }
+.editable-badge.dirty:hover { background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 12%, transparent); }
 .error {
   color: var(--vscode-errorForeground, #f14c4c);
   border-bottom: 1px solid color-mix(in srgb, currentColor 65%, transparent);
@@ -2042,6 +2058,8 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 }
 .ab-card-label { font-size: 10px; line-height: 1.15; opacity: .75; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .ab-empty { color: var(--muted); font-style: italic; padding: 24px; grid-column: 1 / -1; text-align: center; }
+.ab-empty.ab-error { font-style: normal; }
+.ab-empty.ab-error .details-error-reason { margin-inline: auto; }
 .picker-note {
   color: var(--muted);
   font-size: 11px;
@@ -2516,6 +2534,17 @@ tr.overridden td {
   place-items: center;
   color: var(--muted);
 }
+.details-error { text-align: center; }
+.details-error-title { color: var(--fg); margin-bottom: 4px; }
+.details-error-reason {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  max-width: 360px;
+  margin-bottom: 10px;
+  word-break: break-word;
+}
+.details-error .browse-btn { padding: 4px 14px; }
 .object-editor.narrow {
   grid-template-columns: 1fr;
   grid-template-rows: minmax(150px, 34%) minmax(260px, 1fr);
@@ -2540,10 +2569,11 @@ tr.overridden td {
         body: `<div class="content">
 <div class="md-header">
   <div class="md-title">${escapeHtml(fileName)}</div>
-  <div class="md-meta">WC3 ${escapeHtml(typeLabel)} object data - v${parsed.version} - ${escapeHtml(summary)} - ${escapeHtml(metadataSource)}${parsed.extended ? ' - extended (level/dataPt)' : ''}${combinedMeta}<span id="editable-badge" class="editable-badge" title="Existing overrides can be edited. Ctrl+S to save.">editable</span></div>
+  <div class="md-meta">WC3 ${escapeHtml(typeLabel)} object data - v${parsed.version} - ${escapeHtml(summary)} - ${escapeHtml(metadataSource)}${parsed.extended ? ' - extended (level/dataPt)' : ''}${combinedMeta}<button type="button" id="editable-badge" class="editable-badge" title="Existing overrides can be edited. Click or Ctrl+S to save.">editable</button></div>
 </div>
 ${errorBanner}
 ${warningBanner}
+${gameDataBanner}
 <div class="object-editor" id="object-editor">
   <aside class="object-list">
     <div class="search-wrap">
@@ -2625,29 +2655,36 @@ async function openObjModAsset(assetPath: string, uri: vscode.Uri): Promise<void
 async function loadObjectDetails(key: string, webview: vscode.Webview, doc: ObjModDocument): Promise<void> {
     const entry = findEntryByKey(doc.displayFile, key);
     if (!entry) {
-        await webview.postMessage({ type: 'objectDetailsFailed', key });
+        await webview.postMessage({ type: 'objectDetailsFailed', key, reason: 'Object not found' });
         return;
     }
-    const wts = doc.wtsTable;
-    const gameData = await loadObjEditorData(doc.displayFile.ext);
-    if (gameData && !doc.objectCatalog) {
-        doc.objectCatalog = catalogWithDocumentObjects(await loadObjValueCatalog(), doc.displayFile, wts, gameData);
+    try {
+        const wts = doc.wtsTable;
+        const gameData = await loadObjEditorData(doc.displayFile.ext);
+        if (gameData && !doc.objectCatalog) {
+            doc.objectCatalog = catalogWithDocumentObjects(await loadObjValueCatalog(), doc.displayFile, wts, gameData);
+        }
+        const mods = gameData && doc.objectCatalog
+            ? buildFieldRows(
+                entry,
+                gameData,
+                wts,
+                doc.displayFile.extended,
+                doc.displayFile.ext,
+                doc.objectCatalog,
+            )
+            : entry.mods.map((mod) => {
+                const row = buildOverrideOnlyMod(mod, wts, gameData);
+                annotateEditable(row, mod, wts);
+                return row;
+            });
+        await webview.postMessage({ type: 'objectDetailsLoaded', key, mods });
+    } catch (err) {
+        // Game-data/CASC lookups can throw (missing install, bad metadata); without this the webview
+        // was left stuck on its "Loading fields..." spinner forever with no way out but reopening.
+        console.error('[wurst-objmod] failed to build field rows for', key, err);
+        await webview.postMessage({ type: 'objectDetailsFailed', key, reason: err instanceof Error ? err.message : String(err) });
     }
-    const mods = gameData && doc.objectCatalog
-        ? buildFieldRows(
-            entry,
-            gameData,
-            wts,
-            doc.displayFile.extended,
-            doc.displayFile.ext,
-            doc.objectCatalog,
-        )
-        : entry.mods.map((mod) => {
-            const row = buildOverrideOnlyMod(mod, wts, gameData);
-            annotateEditable(row, mod, wts);
-            return row;
-        });
-    await webview.postMessage({ type: 'objectDetailsLoaded', key, mods });
 }
 
 function findEntryByKey(parsed: ObjModFile, key: string): ObjModEntry | undefined {
@@ -2964,7 +3001,19 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         await doc.reload();
     }
 
+    // Thin safety net around the real handler: an uncaught throw here previously vanished into an
+    // unhandled promise rejection (the caller does `void this.handleMessage(...)`), leaving whatever
+    // the webview was waiting on — a save, an edit, a thumbnail — stuck with no feedback at all.
     private async handleMessage(message: unknown, webview: vscode.Webview, doc: ObjModDocument): Promise<void> {
+        try {
+            await this.handleMessageUnsafe(message, webview, doc);
+        } catch (err) {
+            console.error('[wurst-objmod] unhandled webview message error', err);
+            void vscode.window.showErrorMessage(`Wurst object editor: ${err instanceof Error ? err.message : String(err)}`);
+        }
+    }
+
+    private async handleMessageUnsafe(message: unknown, webview: vscode.Webview, doc: ObjModDocument): Promise<void> {
         if (!message || typeof message !== 'object') return;
         const msg = message as {
             type?: string; key?: string; iconPath?: string; path?: string;
@@ -3012,18 +3061,25 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             return;
         }
         if (msg.type === 'requestAssetCatalog') {
-            const [cat, imp] = await Promise.all([
-                loadObjValueCatalog(),
-                gatherImportedAssets(doc.uri.fsPath),
-            ]);
-            void webview.postMessage({
-                type: 'assetCatalog',
-                models: dedupeByHashOrBasename([...cat.models, ...imp.model]),
-                // Icons repeat across SD/HD and .blp/.dds/.tga variants — collapse same-named ones.
-                icons: dedupeByHashOrBasename([...cat.icons, ...imp.icon]),
-                sounds: dedupeByHashOrBasename([...cat.sounds, ...imp.sound]),
-                pathing: cat.pathing,
-            });
+            try {
+                const [cat, imp] = await Promise.all([
+                    loadObjValueCatalog(),
+                    gatherImportedAssets(doc.uri.fsPath),
+                ]);
+                void webview.postMessage({
+                    type: 'assetCatalog',
+                    models: dedupeByHashOrBasename([...cat.models, ...imp.model]),
+                    // Icons repeat across SD/HD and .blp/.dds/.tga variants — collapse same-named ones.
+                    icons: dedupeByHashOrBasename([...cat.icons, ...imp.icon]),
+                    sounds: dedupeByHashOrBasename([...cat.sounds, ...imp.sound]),
+                    pathing: cat.pathing,
+                });
+            } catch (err) {
+                // Without this, a CASC/game-data failure left the asset browser stuck on
+                // "Loading game assets…" forever — the only way out was closing the whole editor.
+                console.error('[wurst-objmod] failed to load asset catalog', err);
+                void webview.postMessage({ type: 'assetCatalogFailed', reason: err instanceof Error ? err.message : String(err) });
+            }
             return;
         }
         if (msg.type === 'undo') { void vscode.commands.executeCommand('undo'); return; }

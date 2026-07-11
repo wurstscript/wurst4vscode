@@ -26,6 +26,7 @@ import { registerMapDataPreview } from './features/mapDataPreview';
 import { registerMapPreview } from './features/mapPreview';
 import { registerAgentsGuideOffer } from './features/agentsGuide';
 import { openIssueReport } from './features/issueReporting';
+import { registerCascDiagnosticsCommand } from './features/preview/cascStorage';
 
 export async function activate(context: ExtensionContext) {
     console.log('Wurst extension activated!');
@@ -45,6 +46,7 @@ export async function activate(context: ExtensionContext) {
     context.subscriptions.push(registerMapDataPreview(context));
     context.subscriptions.push(registerMapPreview(context));
     context.subscriptions.push(registerAgentsGuideOffer(context));
+    context.subscriptions.push(registerCascDiagnosticsCommand());
 
     registerBasicCommands(context);
     openObjModE2eFixture();

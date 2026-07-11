@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { details, detailCache, pendingDetails, objects, ui, iconLoader } from './state';
+import { details, detailCache, pendingDetails, failedDetails, objects, ui, iconLoader } from './state';
 import { setModValue } from './fieldDisplay';
 import { renderDetails, updateFieldCell } from './detailsPanel';
 import { updateObjectRow, updateDetailsHeader } from './objectTree';
@@ -25,7 +25,7 @@ import {
 } from './modelThumbnails';
 import { mpvViewer, mpvB64ToArrayBuffer } from './modelViewerShared';
 import { mpvStatus, mpvSetPlaying } from './modelPreviewPanel';
-import { setAssetCatalog, renderAssetGrid } from './assetBrowser';
+import { setAssetCatalog, renderAssetGrid, handleAssetCatalogFailed } from './assetBrowser';
 
 export function setupMessageHandler() {
   window.addEventListener('message', event => {
@@ -71,15 +71,17 @@ export function setupMessageHandler() {
       }
     } else if (msg.type === 'objectDetailsLoaded') {
       pendingDetails.delete(msg.key);
+      failedDetails.delete(msg.key);
       detailCache.set(msg.key, msg.mods || []);
       if (msg.key === ui.selectedKey) renderDetails();
     } else if (msg.type === 'objectDetailsFailed') {
       pendingDetails.delete(msg.key);
-      detailCache.set(msg.key, []);
+      failedDetails.set(msg.key, msg.reason || '');
       if (msg.key === ui.selectedKey) renderDetails();
     } else if (msg.type === 'invalidateDetails') {
       detailCache.delete(msg.key);
       pendingDetails.delete(msg.key);
+      failedDetails.delete(msg.key);
       if (msg.key === ui.selectedKey) renderDetails();
     } else if (msg.type === 'fieldUpdated') {
       const mods = detailCache.get(msg.key);
@@ -113,8 +115,8 @@ export function setupMessageHandler() {
         badge.classList.toggle('dirty', !!msg.isDirty);
         badge.textContent = msg.isDirty ? '● unsaved' : 'editable';
         badge.title = msg.isDirty
-          ? 'Unsaved changes — Ctrl+S to save.'
-          : 'Existing overrides can be edited. Ctrl+S to save.';
+          ? 'Unsaved changes — click or Ctrl+S to save.'
+          : 'Existing overrides can be edited. Click or Ctrl+S to save.';
       }
     } else if (msg.type === 'mdxModel') {
       mpvStatus('');
@@ -123,6 +125,8 @@ export function setupMessageHandler() {
       setAssetCatalog({ model: msg.models || [], icon: msg.icons || [], sound: msg.sounds || [], pathing: msg.pathing || [] });
       const ov = document.getElementById('ab-overlay');
       if (ov && !ov.hidden) renderAssetGrid();
+    } else if (msg.type === 'assetCatalogFailed') {
+      handleAssetCatalogFailed(msg.reason || '');
     } else if (msg.type === 'mdxModelMissing') {
       mpvStatus('Not found in map or game files:\\n' + (msg.path || '') + '\\n(tried .mdx/.mdl — see "Log (Extension Host)" for CASC details)');
     } else if (msg.type === 'mdxTexture') {

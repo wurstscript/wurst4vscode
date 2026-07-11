@@ -22,6 +22,25 @@ export function getAssetCatalog() {
   return abCatalog;
 }
 
+function requestAssetCatalog() {
+  const grid = document.getElementById('ab-grid');
+  if (grid) grid.innerHTML = '<div class="ab-empty">Loading game assets…</div>';
+  vscodeApi.postMessage({ type: 'requestAssetCatalog' });
+}
+
+// Without this the grid was stuck on "Loading game assets…" forever if the host-side catalog build
+// threw (missing game data, bad CASC install) — there was no way out short of closing the editor.
+export function handleAssetCatalogFailed(reason) {
+  if (!isAssetBrowserOpen()) return;
+  const grid = document.getElementById('ab-grid');
+  if (!grid) return;
+  grid.innerHTML = '<div class="ab-empty ab-error">' +
+    '<div>Couldn\'t load game assets.</div>' +
+    (reason ? '<div class="details-error-reason">' + esc(reason) + '</div>' : '') +
+    '<button type="button" id="ab-catalog-retry" class="browse-btn">Retry</button>' +
+  '</div>';
+}
+
 export function openAssetBrowser(mi) {
   const mods = detailCache.get(ui.selectedKey) || [];
   const mod = mods[mi];
@@ -38,9 +57,7 @@ export function openAssetBrowser(mi) {
   if (abCatalog) {
     renderAssetGrid();
   } else {
-    const grid = document.getElementById('ab-grid');
-    if (grid) grid.innerHTML = '<div class="ab-empty">Loading game assets…</div>';
-    vscodeApi.postMessage({ type: 'requestAssetCatalog' });
+    requestAssetCatalog();
   }
   if (search) search.focus();
 }
@@ -57,9 +74,7 @@ export function openModelAssetBrowserForE2e() {
   if (abCatalog) {
     renderAssetGrid();
   } else {
-    const grid = document.getElementById('ab-grid');
-    if (grid) grid.innerHTML = '<div class="ab-empty">Loading game assets...</div>';
-    vscodeApi.postMessage({ type: 'requestAssetCatalog' });
+    requestAssetCatalog();
   }
 }
 
@@ -169,6 +184,7 @@ export function setupAssetBrowser() {
     abActiveTab.set(tab.getAttribute('data-tab'));
   });
   if (grid) grid.addEventListener('click', e => {
+    if (e.target.closest('#ab-catalog-retry')) { requestAssetCatalog(); return; }
     const card = e.target.closest('.ab-card[data-value]');
     if (card) pickAsset(card.getAttribute('data-value'));
   });

@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { fuzzyMatch } from '../../features/preview/fuzzy';
 import { esc, renderWc3Colors } from '../objModWebviewUtils';
-import { details, detailCache, pendingDetails, ui, vscodeApi, iconLoader, initial, objects } from './state';
+import { details, detailCache, pendingDetails, failedDetails, ui, vscodeApi, iconLoader, initial, objects } from './state';
 import { categoryLabel, objectIconHtml, matches, render } from './objectTree';
 import { sourcePill, valueCell, postEdit, setModValue, editorHtml, collapsedView, normalizeNumberValue } from './fieldDisplay';
 import { observeModelThumbs } from './modelThumbnails';
@@ -11,8 +11,16 @@ import { showModelPreview } from './modelPreviewPanel';
 
 export function requestDetails(obj) {
   if (!obj || detailCache.has(obj.key) || pendingDetails.has(obj.key)) return;
+  failedDetails.delete(obj.key);
   pendingDetails.add(obj.key);
   vscodeApi.postMessage({ type: 'loadObjectDetails', key: obj.key });
+}
+
+export function retryDetails(key) {
+  const obj = objects.find(candidate => candidate.key === key);
+  failedDetails.delete(key);
+  if (key === ui.selectedKey) renderDetails();
+  else requestDetails(obj);
 }
 
 export function renderDetails() {
@@ -26,7 +34,11 @@ export function renderDetails() {
     ? (initial.extended ? ['Field', 'Label', 'Group', 'Type', 'Level', 'Data', 'Value'] : ['Field', 'Label', 'Group', 'Type', 'Value'])
     : ['Field', 'Value'];
   const mods = detailCache.get(obj.key);
-  if (!mods) requestDetails(obj);
+  // A failed load stays failed until the user asks to retry — auto-retrying every render would just
+  // hammer whatever broke (missing game data, a thrown parser error) in a silent loop.
+  const failedReason = failedDetails.get(obj.key);
+  const hasFailed = !mods && failedDetails.has(obj.key);
+  if (!mods && !hasFailed) requestDetails(obj);
   let lastCategory = '';
   const rows = (mods || []).map((mod, mi) => {
     const category = categoryLabel(mod.category);
@@ -61,7 +73,13 @@ export function renderDetails() {
   (mods
     ? '<div class="table-wrap"><table><thead><tr>' + headers.map(h => '<th>' + esc(h) + '</th>').join('') + '</tr></thead>' +
       '<tbody>' + (rows || '<tr><td colspan="' + headers.length + '" class="empty">no modifications</td></tr>') + '</tbody></table></div>'
-    : '<div class="details-loading"><div><div class="wv-spinner"></div><div class="wv-loading-text">Loading fields...</div></div></div>');
+    : hasFailed
+      ? '<div class="details-loading details-error"><div>' +
+          '<div class="details-error-title">Couldn\'t load fields for this object.</div>' +
+          (failedReason ? '<div class="details-error-reason">' + esc(failedReason) + '</div>' : '') +
+          '<button type="button" id="details-retry" class="browse-btn">Retry</button>' +
+        '</div></div>'
+      : '<div class="details-loading"><div><div class="wv-spinner"></div><div class="wv-loading-text">Loading fields...</div></div></div>');
 
   const technicalToggle = document.getElementById('technical-toggle');
   if (technicalToggle) {
@@ -99,6 +117,11 @@ export function setupDetails() {
     if (e.target.closest('.num-step')) e.preventDefault();
   });
   details.addEventListener('click', e => {
+    const retry = e.target.closest('#details-retry');
+    if (retry) {
+      retryDetails(ui.selectedKey);
+      return;
+    }
     const numStep = e.target.closest('.num-step[data-dir]');
     if (numStep) {
       e.preventDefault();
@@ -272,6 +295,17 @@ export function expandEditor(c) {
           ta.value = normalized;
           ta.dispatchEvent(new Event('input'));
         }
+      });
+      // The +/- stepper buttons are tabindex="-1" (they must not steal focus from the input), so
+      // Up/Down here is the only keyboard path to stepping — mirrors native <input type="number">.
+      ta.addEventListener('keydown', e => {
+        if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+        e.preventDefault();
+        const dir = e.key === 'ArrowUp' ? 1 : -1;
+        const stepAmount = Number(ta.getAttribute('data-num-step')) || 1;
+        const cur = Number(ta.value);
+        ta.value = normalizeNumberValue(ta.getAttribute('data-num-type'), String((Number.isFinite(cur) ? cur : 0) + dir * stepAmount));
+        ta.dispatchEvent(new Event('input'));
       });
     }
     wireEditRaw(ta);

@@ -13,6 +13,10 @@ export const detailCache = new Map();
 export const pendingDetails = new Set();
 export const collapsedGroups = new Set();
 export const collapsedRaces = new Set();
+// Keys whose field-row load failed on the host (missing game data, thrown parser error, etc). Kept
+// separate from detailCache so a failed load renders a distinct "couldn't load, retry" state instead
+// of silently looking identical to "this object genuinely has zero fields".
+export const failedDetails = new Map();
 
 export const tree = document.getElementById('tree');
 export const details = document.getElementById('details');

@@ -1,5 +1,6 @@
 'use strict';
 
+import * as child_process from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -14,6 +15,25 @@ let loggedCascRootMessage = '';
 const cascTextureMissCache = new Set<string>();
 const cascAssetMissCache = new Set<string>();
 const MAX_CASC_MISS_CACHE = 4096;
+
+// ---------------------------------------------------------------------------
+// Diagnostics: everything about "where did we look for the WC3 install and
+// what did we find" goes here, visible via "Wurst: Show WC3 Data Log" — the
+// per-call `log` callbacks passed around this file are often console-only (or
+// no-ops), which left multi-drive/custom-install-path detection failures with
+// no way for a user to see what was actually tried.
+// ---------------------------------------------------------------------------
+let cascOutputChannel: vscode.OutputChannel | undefined;
+
+export function getCascOutputChannel(): vscode.OutputChannel {
+    if (!cascOutputChannel) cascOutputChannel = vscode.window.createOutputChannel('Wurst: WC3 Data');
+    return cascOutputChannel;
+}
+
+function channelLog(message: string): void {
+    const iso = new Date().toISOString();
+    getCascOutputChannel().appendLine(`[${iso.slice(11, 23)}] ${message}`);
+}
 
 function normalizeWindowsDriveRoot(value: string | undefined): string | null {
     if (!value) return null;
@@ -43,6 +63,42 @@ function getWindowsDriveRoots(): string[] {
     return roots;
 }
 
+/**
+ * Warcraft III's installer (both the classic installer and Battle.net) has always registered its
+ * install location here, regardless of which drive or folder the user picked — the fixed relative
+ * paths below only cover the *default* locations, so a custom install (a second/third drive, a
+ * Steam-library-style folder, a renamed directory) is invisible to them. `reg.exe` ships with every
+ * Windows install, so this needs no new dependency.
+ */
+function getWindowsRegistryInstallPaths(): string[] {
+    const keys = [
+        'HKLM\\SOFTWARE\\WOW6432Node\\Blizzard Entertainment\\Warcraft III',
+        'HKLM\\SOFTWARE\\Blizzard Entertainment\\Warcraft III',
+        'HKCU\\SOFTWARE\\WOW6432Node\\Blizzard Entertainment\\Warcraft III',
+        'HKCU\\SOFTWARE\\Blizzard Entertainment\\Warcraft III',
+    ];
+    const found: string[] = [];
+    for (const key of keys) {
+        try {
+            const out = child_process.execFileSync('reg', ['query', key, '/v', 'InstallPath'], {
+                encoding: 'utf8',
+                windowsHide: true,
+                timeout: 5000,
+            });
+            const match = /InstallPath\s+REG_SZ\s+(.+)/i.exec(out);
+            const installPath = match?.[1]?.trim();
+            if (installPath) {
+                channelLog(`registry: ${key} -> ${installPath}`);
+                found.push(installPath);
+            }
+        } catch {
+            // Key doesn't exist (not installed, or installed by something that doesn't write it) —
+            // not an error, just try the next candidate.
+        }
+    }
+    return found;
+}
+
 function getWindowsWarcraftPaths(): string[] {
     const relativeCandidates = [
         path.join('Program Files (x86)', 'Warcraft III'),
@@ -50,7 +106,7 @@ function getWindowsWarcraftPaths(): string[] {
         path.join('Games', 'Warcraft III'),
         'Warcraft III',
     ];
-    const paths: string[] = [];
+    const paths: string[] = [...getWindowsRegistryInstallPaths()];
     for (const driveRoot of getWindowsDriveRoots()) {
         for (const rel of relativeCandidates) {
             paths.push(path.join(driveRoot, rel));
@@ -146,6 +202,7 @@ function logCascRootOnce(message: string, log: (msg: string) => void): void {
     }
     loggedCascRootMessage = message;
     log(message);
+    channelLog(message);
 }
 
 function getDisabledButtonFallbackPath(assetPath: string): string | null {
@@ -174,8 +231,10 @@ function getCascDataRoot(log: (msg: string) => void): string | null {
             return dataRoot;
         }
         log(`CASC wurst.wc3path "${wc3path}" has no WC3 CASC root — falling back to default paths`);
+        channelLog(`wurst.wc3path "${wc3path}" has no WC3 CASC root (looked for Data/ + .build.info|.build.db) — falling back to default paths`);
     }
-    for (const p of getDefaultWarcraftPaths()) {
+    const defaultPaths = getDefaultWarcraftPaths();
+    for (const p of defaultPaths) {
         const dataRoot = findCascDataRoot(p);
         if (dataRoot) {
             logCascRootOnce(`CASC root: ${dataRoot}`, log);
@@ -183,7 +242,9 @@ function getCascDataRoot(log: (msg: string) => void): string | null {
             return dataRoot;
         }
     }
-    logCascRootOnce(`CASC skip: no WC3 install found (${getDefaultWarcraftPaths().length} default paths checked)`, log);
+    logCascRootOnce(`CASC skip: no WC3 install found (${defaultPaths.length} default paths checked)`, log);
+    channelLog(`Checked paths:\n${defaultPaths.map((p) => `  - ${p}`).join('\n')}`);
+    channelLog('If Warcraft III is installed somewhere else, set the "wurst.wc3path" setting to its folder.');
     cascDataRootCache = null;
     return null;
 }
@@ -210,11 +271,14 @@ async function getCascStorageInstance(wc3Root: string, log: (msg: string) => voi
     cascStorageOpening = (async () => {
         try {
             log(`CASC opening storage at: ${wc3Root}`);
+            channelLog(`opening storage at: ${wc3Root}`);
             cascStorageInstance = await CascStorage.openAsync(wc3Root, log);
             log(`CASC storage opened (${cascStorageInstance.fileCount} files)`);
+            channelLog(`storage opened (${cascStorageInstance.fileCount} files)`);
             return cascStorageInstance;
         } catch (e) {
             log(`CASC open failed: ${String(e)}`);
+            channelLog(`storage open failed: ${String(e)}`);
             cascStorageRoot = null;
             return null;
         } finally {
@@ -499,3 +563,11 @@ export async function ensureCascAssetCached(assetPath: string): Promise<string |
 }
 
 export const ensureGameAssetCached = ensureCascAssetCached;
+
+export function registerCascDiagnosticsCommand(): vscode.Disposable {
+    return vscode.commands.registerCommand('wurst.showWc3DataLog', () => {
+        // Touch it once so the log has *something* in it even before any preview has loaded.
+        getCascDataRoot(defaultCascLog);
+        getCascOutputChannel().show();
+    });
+}

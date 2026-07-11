@@ -703,6 +703,11 @@
                 "category": "wurst"
             },
             {
+                "command": "wurst.showWc3DataLog",
+                "title": "Show WC3 Data Log (install detection, CASC diagnostics)",
+                "category": "wurst"
+            },
+            {
                 "command": "wurst.newProject",
                 "title": "New Wurst Project",
                 "category": "wurst"

@@ -97,6 +97,11 @@ document.addEventListener('mousedown', e => {
   }
 });
 
+function saveNow() {
+  commitActiveEditor();
+  vscodeApi.postMessage({ type: 'save' });
+}
+
 // Forward undo/redo to the host (so the custom-document edit stack drives them) — except while a
 // text field is focused, where the browser's native text undo should win.
 document.addEventListener('keydown', e => {
@@ -105,14 +110,18 @@ document.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (k === 's') {
     e.preventDefault();
-    commitActiveEditor();
-    vscodeApi.postMessage({ type: 'save' });
+    saveNow();
     return;
   }
   if (ae && ae.classList && (ae.classList.contains('edit-raw') || ae.classList.contains('edit-rich'))) return;
   if (k === 'z' && !e.shiftKey) { e.preventDefault(); vscodeApi.postMessage({ type: 'undo' }); }
   else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); vscodeApi.postMessage({ type: 'redo' }); }
 });
+
+// The dirty badge doubles as a Save button — Ctrl+S is invisible to a mouse-only user, and "editable"
+// on its own gives no hint that clicking it does anything.
+const editableBadge = document.getElementById('editable-badge');
+if (editableBadge) editableBadge.addEventListener('click', saveNow);
 
 setupTree();
 setupDetails();

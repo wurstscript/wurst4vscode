@@ -9,6 +9,7 @@ export const COMPILER_DIR = path.join(WURST_HOME, 'wurst-compiler');
 export const COMPILER_JAR = path.join(COMPILER_DIR, 'wurstscript.jar');
 export const LEGACY_GRILL_DIR = path.join(WURST_HOME, 'grill');
 export const GRILL_HOME_DIR = path.join(WURST_HOME, 'grill-cli');
+export const UPDATE_SNOOZE_FILE = path.join(WURST_HOME, 'update-snooze.json');
 
 export const NIGHTLY_RELEASE_BY_TAG_API = 'https://api.github.com/repos/wurstscript/WurstScript/releases/tags/nightly';
 export const NIGHTLY_COMMIT_API = 'https://api.github.com/repos/wurstscript/WurstScript/commits/nightly';

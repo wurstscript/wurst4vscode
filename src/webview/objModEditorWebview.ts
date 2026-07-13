@@ -88,12 +88,18 @@ function setupSplitter() {
 }
 setupSplitter();
 
-// Close any open color popup when clicking outside its bar.
+// Close any open color popup / category-filter popover when clicking outside it.
 document.addEventListener('mousedown', e => {
   for (const pop of details.querySelectorAll('.tt-pop')) {
     if (pop.hidden) continue;
     const bar = pop.closest('.tt-bar');
     if (!bar || !bar.contains(e.target)) pop.hidden = true;
+  }
+  const catPop = details.querySelector('#cat-filter-pop');
+  if (catPop && !catPop.hidden && !catPop.closest('.cat-filter').contains(e.target)) {
+    catPop.hidden = true;
+    const btn = document.getElementById('cat-filter-btn');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
   }
 });
 

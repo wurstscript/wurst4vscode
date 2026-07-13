@@ -1,8 +1,4 @@
 // @ts-nocheck
-import { renderWc3Colors } from '../objModWebviewUtils';
-import { setModValue, postEdit } from './fieldDisplay';
-import { markModified } from './detailsPanel';
-import { details, detailCache, ui } from './state';
 
 // Current selection range for a textarea (kept fresh even after blur, so toolbar/color-picker work).
 export function taRange(ta) {
@@ -130,63 +126,44 @@ export function applyRichColor(rich, color) {
   rich.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-export function wireRichEditor(rich) {
-  const mi = Number(rich.getAttribute('data-mi'));
-  const mods = detailCache.get(ui.selectedKey) || [];
-  const mod = mods[mi];
-  const raw = rich.closest('.tt-rich-shell')?.querySelector('.tt-raw-input[data-mi="' + mi + '"]');
-  if (!mod || !raw) return;
-  const startVal = mod.editValue == null ? '' : String(mod.editValue);
-  let timer;
-  let postedValue = startVal;
-  const commit = () => {
-    clearTimeout(timer);
-    const value = String(raw.value);
-    if (value === postedValue) return;
-    setModValue(mod, value);
-    markModified(rich, mod);
-    postEdit(mod);
-    postedValue = value;
-  };
-  const schedule = () => {
-    clearTimeout(timer);
-    if (String(raw.value) !== postedValue) timer = setTimeout(commit, 250);
-  };
-  rich._commitNow = commit;
-  raw._commitNow = commit;
-  rich.addEventListener('input', () => {
-    const value = richToWc3(rich);
-    raw.value = value;
-    setModValue(mod, value);
-    schedule();
+// Force plain-text paste into a contenteditable. richToWc3() only understands <br> and inline color —
+// anything else a browser paste brings in (bold, fonts, images, Word markup) would render in the
+// preview but then silently vanish from the saved value on the next input event, with no indication
+// anything changed.
+export function forcePlainTextPaste(el) {
+  el.addEventListener('paste', e => {
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+    document.execCommand('insertText', false, text);
   });
-  raw.addEventListener('input', () => {
-    const value = String(raw.value);
-    rich.innerHTML = renderWc3Colors(value);
-    setModValue(mod, value);
-    schedule();
-  });
-  rich.addEventListener('blur', commit);
-  raw.addEventListener('blur', commit);
 }
 
-export function wireColorBar(bar) {
-  const mi = bar.getAttribute('data-mi');
-  const shell = bar.closest('.tt-rich-shell');
-  const rich = shell?.querySelector('.edit-rich[data-mi="' + mi + '"]');
-  const ta = shell?.querySelector('.edit-raw[data-mi="' + mi + '"]') ?? details.querySelector('.edit-raw[data-mi="' + mi + '"]');
-  if (!ta && !rich) return;
-  const useRaw = () => document.activeElement === ta;
+// Only one tooltip/color editor is ever open at a time in practice, so a single shared listener
+// tracking whichever one was wired most recently is enough — registering a fresh `selectionchange`
+// listener per `wireColorBar` call (once per click-to-edit, with no matching removal) accumulated one
+// leaked, permanently-firing listener per edit for the whole session.
+let activeRichSync = null;
+document.addEventListener('selectionchange', () => {
+  if (!activeRichSync) return;
+  const { rich, bar } = activeRichSync;
+  if (!rich.isConnected) { activeRichSync = null; return; }
+  if (containsNode(rich, window.getSelection()?.anchorNode)) updateColorSwatch(bar, richSelectionColor(rich));
+});
+
+// `rich` is the contenteditable text the bar controls (always present). `getTa`, if given, is called
+// at interaction time to get the current raw-text textarea (it may not exist yet — the raw panel is
+// created lazily — so this can't be captured once up front like `rich` can).
+export function wireColorBar(bar, rich, getTa) {
+  const ta = () => (typeof getTa === 'function' ? getTa() : null);
+  const useRaw = () => document.activeElement === ta();
   const syncColor = () => { if (rich) updateColorSwatch(bar, richSelectionColor(rich)); };
   if (rich) {
+    activeRichSync = { rich, bar };
     syncColor();
     rich.addEventListener('keyup', syncColor);
     rich.addEventListener('mouseup', syncColor);
     rich.addEventListener('focus', syncColor);
     rich.addEventListener('input', syncColor);
-    document.addEventListener('selectionchange', () => {
-      if (rich.isConnected && containsNode(rich, window.getSelection()?.anchorNode)) syncColor();
-    });
   }
   const pop = bar.querySelector('.tt-pop');
   const sq = bar.querySelector('.tt-color-sq');
@@ -202,7 +179,8 @@ export function wireColorBar(bar) {
       sw.addEventListener('mousedown', e => e.preventDefault());
       sw.addEventListener('click', () => {
         const hex = sw.getAttribute('data-color');
-        if (ta && useRaw()) wrapColor(ta, hex);
+        const t = ta();
+        if (t && useRaw()) wrapColor(t, hex);
         else if (rich) applyRichColor(rich, hex);
         updateColorSwatch(bar, hex);
         pop.hidden = true;
@@ -210,7 +188,8 @@ export function wireColorBar(bar) {
     }
     const colorInput = pop.querySelector('.tt-color');
     if (colorInput) colorInput.addEventListener('change', () => {
-      if (ta && useRaw()) wrapColor(ta, colorInput.value);
+      const t = ta();
+      if (t && useRaw()) wrapColor(t, colorInput.value);
       else if (rich) applyRichColor(rich, colorInput.value);
       updateColorSwatch(bar, colorInput.value);
       pop.hidden = true;

@@ -29,5 +29,8 @@ export const ui = {
   query: '',
   fieldQuery: '',
   showTechnical: !!((vscodeApi.getState() || {}).showTechnical),
+  // Field categories hidden from the details table (the "focus on tooltips" custom view). Persisted
+  // across objects/sessions like showTechnical.
+  hiddenCategories: new Set((vscodeApi.getState() || {}).hiddenCategories || []),
   e2eForcedNarrowLayout: false,
 };

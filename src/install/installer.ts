@@ -7,7 +7,7 @@ import { execFile, spawnSync } from 'child_process';
 import * as vscode from 'vscode';
 import { workspace } from 'vscode';
 import {
-    WURST_HOME, RUNTIME_DIR, COMPILER_DIR, COMPILER_JAR, GRILL_HOME_DIR,
+    WURST_HOME, RUNTIME_DIR, COMPILER_DIR, COMPILER_JAR, GRILL_HOME_DIR, UPDATE_SNOOZE_FILE,
 } from '../paths';
 import {
     normalizeInstallerPaths, migrateLegacyGrillLayout, installLauncherExecutable,
@@ -34,7 +34,30 @@ type PreparedNightlyInstall = {
     grillJar: string;
 };
 
-const UPDATE_SNOOZE_UNTIL_KEY = 'wurst.updatePrompt.snoozedUntil';
+// Snooze state lives in a file under ~/.wurst rather than ExtensionContext.globalState so a "Later"
+// choice sticks across separate VS Code profiles/user-data-dirs (e.g. Extension Development Host runs,
+// --user-data-dir test profiles) on the same machine, not just the one profile that showed the dialog.
+function readUpdateSnoozedUntil(): number {
+    try {
+        const data = JSON.parse(fs.readFileSync(UPDATE_SNOOZE_FILE, 'utf8'));
+        return typeof data.snoozedUntil === 'number' ? data.snoozedUntil : 0;
+    } catch {
+        return 0;
+    }
+}
+
+function writeUpdateSnoozedUntil(until: number | undefined): void {
+    try {
+        if (until == null) {
+            fs.rmSync(UPDATE_SNOOZE_FILE, { force: true });
+            return;
+        }
+        fs.mkdirSync(WURST_HOME, { recursive: true });
+        fs.writeFileSync(UPDATE_SNOOZE_FILE, JSON.stringify({ snoozedUntil: until }));
+    } catch (e) {
+        console.warn('Failed to persist update snooze:', e);
+    }
+}
 
 export function hasNewLayout(): boolean {
     return fs.existsSync(RUNTIME_DIR) && fs.existsSync(COMPILER_DIR);
@@ -388,11 +411,10 @@ async function installPreparedNightly(prepared: PreparedNightlyInstall, options:
     );
 }
 
-export async function maybeOfferUpdate(context?: vscode.ExtensionContext): Promise<void> {
+export async function maybeOfferUpdate(): Promise<void> {
     try {
         if (!hasNewLayout() || !fs.existsSync(COMPILER_JAR)) return;
-        const snoozedUntil = context?.globalState.get<number>(UPDATE_SNOOZE_UNTIL_KEY) ?? 0;
-        if (snoozedUntil > Date.now()) return;
+        if (readUpdateSnoozedUntil() > Date.now()) return;
 
         const installed = await getInstalledVersionString();
         const installedSha = installed ? extractGitSha(installed) : null;
@@ -409,11 +431,11 @@ export async function maybeOfferUpdate(context?: vscode.ExtensionContext): Promi
             { modal: true, detail }, 'Update', 'Later'
         );
         if (choice === 'Update') {
-            await context?.globalState.update(UPDATE_SNOOZE_UNTIL_KEY, undefined);
+            writeUpdateSnoozedUntil(undefined);
             await installWithRetry({ offerPostInstallActions: false });
             await vscode.commands.executeCommand('workbench.action.reloadWindow');
         } else if (choice === 'Later') {
-            await context?.globalState.update(UPDATE_SNOOZE_UNTIL_KEY, nextLocalDayStartMs());
+            writeUpdateSnoozedUntil(nextLocalDayStartMs());
         }
     } catch (e) {
         console.warn('Update check failed:', e);

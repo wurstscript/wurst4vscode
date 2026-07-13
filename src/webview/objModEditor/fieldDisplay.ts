@@ -49,23 +49,44 @@ export function colorBarHtml(mi) {
   '</div>';
 }
 
-export function colorEditorHtml(mod, mi) {
-  const v = mod.editValue == null ? '' : String(mod.editValue);
-  return '<div class="value-editor tooltip-editor">' +
-    '<div class="tt-edit tt-rich-shell">' +
-      '<div class="tt-rich-head">' +
-        colorBarHtml(mi) +
-        '<span class="tt-preview-label">preview</span>' +
-        (mod.source ? sourcePill(mod) : '') +
-        '<button type="button" class="tt-raw-toggle" data-mi="' + mi + '" aria-expanded="false">Raw</button>' +
-      '</div>' +
-      '<div class="tt-preview tt-rich edit-rich" data-mi="' + mi + '" contenteditable="true" spellcheck="false">' + renderWc3Colors(v) + '</div>' +
-      '<div class="tt-raw-panel" data-mi="' + mi + '" hidden>' +
-        '<div class="tt-raw-head"><span>Raw WC3 text</span><button type="button" class="tt-copy-raw" data-mi="' + mi + '">Copy</button></div>' +
-        '<textarea class="edit-raw tt-raw-input" data-mi="' + mi + '" rows="4" spellcheck="false">' + esc(v) + '</textarea>' +
-      '</div>' +
+// Distinct |cffRRGGBB colors already present in a WC3 raw string, in first-seen order — lets the
+// toolbar offer "colors already used here" for one-click consistency (e.g. reapplying the same gold
+// used on a keyword elsewhere in the same tooltip) without opening the full preset/custom picker.
+export function extractUsedColors(text, max) {
+  const re = /\|c[0-9a-f]{2}([0-9a-f]{6})/gi;
+  const seen = [];
+  let m;
+  while ((m = re.exec(String(text == null ? '' : text)))) {
+    const hex = m[1].toLowerCase();
+    if (!seen.includes(hex)) seen.push(hex);
+    if (seen.length >= (max || 4)) break;
+  }
+  return seen;
+}
+
+function usedColorsHtml(v) {
+  const used = extractUsedColors(v, 4);
+  if (!used.length) return '';
+  return '<span class="tt-used-colors" title="Colors already used in this tooltip">' +
+    used.map(hex =>
+      '<button type="button" class="tt-sw tt-used-sw" data-color="' + hex + '" style="background:#' + hex + '" title="#' + hex + ' (used in this tooltip)"></button>'
+    ).join('') +
+  '</span>';
+}
+
+// Floating toolbar mounted beside a tooltip field while it's being edited in place (see
+// enterTooltipEdit in detailsPanel.ts) — just the color swatch + an optional raw-text popover, never
+// a copy of the preview itself. The preview the user is looking at stays exactly where it was.
+export function tooltipToolbarHtml(mi, v) {
+  return '<div class="tt-float-toolbar-row">' +
+      colorBarHtml(mi) +
+      usedColorsHtml(v) +
+      '<button type="button" class="tt-raw-toggle" data-mi="' + mi + '" aria-expanded="false">Raw</button>' +
     '</div>' +
-  '</div>';
+    '<div class="tt-raw-panel tt-float-raw" data-mi="' + mi + '" hidden>' +
+      '<div class="tt-raw-head"><span>Raw WC3 text</span><button type="button" class="tt-copy-raw" data-mi="' + mi + '">Copy</button></div>' +
+      '<textarea class="tt-raw-input" data-mi="' + mi + '" rows="4" spellcheck="false">' + esc(v) + '</textarea>' +
+    '</div>';
 }
 
 export function optionsHtml(options, selected) {
@@ -272,11 +293,11 @@ function numberEditorHtml(mod, mi, v) {
   '</div>';
 }
 
-// Editor shown on click. Color/text fields get textarea + color bar + preview; number fields get a
-// stepper-enhanced input; everything else a plain input.
+// Editor shown on click for non-tooltip fields (tooltip/color fields edit in place — see
+// enterTooltipEdit in detailsPanel.ts — and never reach this function). Text fields get a plain
+// input; number fields get a stepper-enhanced input; picker fields get a datalist/select.
 export function editorHtml(mod, mi) {
   refreshDecoratedValue(mod);
-  if (needsColorEditor(mod)) return colorEditorHtml(mod, mi);
   const v = mod.editValue == null ? '' : String(mod.editValue);
   const picker = pickerEditorHtml(mod, mi, v);
   if (picker) return picker;
@@ -286,11 +307,15 @@ export function editorHtml(mod, mi) {
 }
 
 // Compact, click-to-edit view shown by default for every editable cell (keeps the 700-row table light).
+// Tooltip/color fields always render as the dark WC3 tooltip box (.tt-collapsed), whether or not they
+// currently contain color codes, so the box a user clicks on is the exact same box they edit in place —
+// no swap to a differently-shaped container.
 export function collapsedView(mod, mi) {
   const dv = mod.editValue == null ? (mod.currentValue == null ? '' : String(mod.currentValue)) : String(mod.editValue);
-  if (hasColorMarkup(dv)) {
+  if (needsColorEditor(mod)) {
+    const body = dv ? renderWc3Colors(dv) : '<span class="tt-empty">(empty)</span>';
     return '<div class="tt-collapsed" data-mi="' + mi + '" tabindex="0" role="button" title="Click or press Enter to edit">' +
-      '<span class="tt-collapsed-body">' + renderWc3Colors(dv) + '</span>' + (mod.source ? sourcePill(mod) : '') + '<span class="tt-edit-hint">✎</span></div>';
+      '<div class="tt-collapsed-body" data-mi="' + mi + '">' + body + '</div>' + (mod.source ? sourcePill(mod) : '') + '<span class="tt-edit-hint">✎</span></div>';
   }
   const badge = mod.overridden ? '<span class="override-badge" title="This field overrides the base value">modified</span>' : '';
   const disp = decoratedValueHtml(mod, mi, dv);

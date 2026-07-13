@@ -7,20 +7,24 @@ import { sourcePill } from './fieldDisplay';
 import { renderDetails } from './detailsPanel';
 import { hideModelPreview } from './modelPreviewPanel';
 
+// Only the categories whose natural-case raw value doesn't already read fine capitalized (e.g. 'tech'
+// isn't 'Techtree', '-' means unset). Anything else falls through to auto-capitalization below — no
+// need to hand-maintain the full WC3 category vocabulary, which turned out to be bigger than expected
+// (sound/pathing/editor-only categories exist beyond the common abil/art/combat/... set).
+const CATEGORY_LABELS = {
+  abil: 'Abilities',
+  move: 'Movement',
+  tech: 'Techtree',
+  '-': 'Other'
+};
+
 export function categoryLabel(category) {
   const raw = String(category || 'Other');
-  const labels = {
-    abil: 'Abilities',
-    art: 'Art',
-    combat: 'Combat',
-    data: 'Data',
-    move: 'Movement',
-    stats: 'Stats',
-    tech: 'Techtree',
-    text: 'Text',
-    '-': 'Other'
-  };
-  return labels[raw.toLowerCase()] || raw.charAt(0).toUpperCase() + raw.slice(1);
+  return CATEGORY_LABELS[raw.toLowerCase()] || raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+export function categoryKey(category) {
+  return String(category || '-').toLowerCase();
 }
 
 export function raceLabel(race) {

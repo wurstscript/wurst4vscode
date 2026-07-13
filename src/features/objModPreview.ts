@@ -258,6 +258,7 @@ const ENUM_OPTIONS: Record<string, ValueOption[]> = {
         { value: 'magic', label: 'Magic' },
         { value: 'chaos', label: 'Chaos' },
         { value: 'hero', label: 'Hero' },
+        { value: 'spells', label: 'Spells' },
     ],
     defensetype: [
         { value: 'small', label: 'Small' },
@@ -1587,12 +1588,6 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
   align-items: stretch;
 }
 .value-editor.single { grid-template-columns: minmax(0, 1fr); }
-.value-editor.tooltip-editor {
-  display: block;
-  width: 100%;
-  min-width: var(--edit-w, 100%);
-  max-width: 100%;
-}
 .edit-raw {
   width: 100%;
   box-sizing: border-box;
@@ -1608,19 +1603,6 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
 input.edit-raw { height: var(--cell-h, 24px); }
 textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize: vertical; }
 .edit-raw:focus { outline: 1px solid var(--vscode-focusBorder, var(--vscode-textLink-foreground)); }
-.tt-rich-shell {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  width: 100%;
-}
-.tt-rich-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
 .tt-preview {
   min-width: 0;
   border: 1px dashed var(--border);
@@ -1632,19 +1614,6 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   white-space: pre-wrap;
   word-break: break-word;
   overflow: auto;
-}
-.tt-rich {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 180px;
-  min-height: max(180px, var(--edit-h, 180px));
-  max-height: min(48vh, 420px);
-  outline: none;
-  cursor: text;
-}
-.tt-rich:focus {
-  border-style: solid;
-  border-color: var(--vscode-focusBorder, var(--vscode-textLink-foreground));
 }
 .tt-raw-panel {
   color: var(--muted);
@@ -1682,12 +1651,6 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   min-height: 92px;
   max-height: 220px;
 }
-.tt-preview-label {
-  color: var(--muted);
-  font-size: 10px;
-  text-transform: uppercase;
-  margin-bottom: 2px;
-}
 .tt-preview.tt-readonly {
   display: inline-block;
   max-width: 100%;
@@ -1713,6 +1676,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 .tt-collapsed:hover,
 .tt-collapsed:focus-visible { border-color: var(--vscode-focusBorder, var(--vscode-textLink-foreground)); outline: none; }
 .tt-collapsed-body { flex: 1; min-width: 0; }
+.tt-collapsed-body[contenteditable="true"] { outline: none; cursor: text; }
 .tt-empty { color: var(--muted); font-style: italic; }
 .tt-edit-hint {
   flex-shrink: 0;
@@ -1729,6 +1693,36 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   background: color-mix(in srgb, var(--wc3-tip-bg) 80%, var(--accent) 20%);
   border-color: color-mix(in srgb, var(--accent) 65%, transparent);
 }
+/* Editing indicator: outline only — the tooltip box's own background/text colors (--wc3-tip-bg/-fg)
+   are left completely alone, so the preview never loses contrast while being edited. */
+.tt-collapsed.tt-editing {
+  outline: 2px solid var(--vscode-focusBorder, var(--vscode-textLink-foreground));
+  outline-offset: -1px;
+}
+/* Floating color-picker/raw-text toolbar for the in-place tooltip editor: JS-positioned (fixed) beside
+   the row via positionFloatToolbar. It never touches the preview box itself, so entering/leaving edit
+   mode causes zero layout shift and nothing to scroll into view. */
+.tt-float-toolbar {
+  position: fixed;
+  z-index: 60;
+  box-sizing: border-box;
+  background: var(--vscode-editorWidget-background, var(--sidebar));
+  border: 1px solid var(--vscode-editorWidget-border, var(--border));
+  border-radius: 4px;
+  padding: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+.tt-float-toolbar-row { display: flex; align-items: center; gap: 6px; }
+.tt-used-colors {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding-left: 6px;
+  margin-left: 2px;
+  border-left: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+}
+.tt-float-raw { min-width: 260px; }
+.tt-float-raw[hidden] { display: none; }
 .cell-edit {
   display: inline-flex;
   align-items: center;
@@ -2093,7 +2087,6 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 /* Scannable accent for customized (overridden) fields. */
 tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 70%, transparent); }
 .cell-edit .tt-edit-hint { flex-shrink: 0; }
-.tt-edit { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .tt-bar { position: relative; display: inline-flex; align-items: center; gap: 4px; }
 .tt-color-sq {
   width: 20px;
@@ -2167,6 +2160,66 @@ tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--acce
 }
 .field-search:focus { outline: 1px solid var(--vscode-focusBorder, var(--vscode-textLink-foreground)); }
 .field-match { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.cat-filter { position: relative; }
+.cat-filter-btn {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font: inherit;
+}
+.cat-filter-btn:hover,
+.cat-filter-btn[aria-expanded="true"] { border-color: var(--border); background: var(--input-bg); }
+.cat-filter-badge {
+  margin-left: 4px;
+  color: var(--accent);
+  font-size: 10px;
+}
+.cat-filter-pop {
+  position: absolute;
+  top: 26px;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 150px;
+  padding: 7px;
+  background: var(--vscode-editorWidget-background, var(--sidebar));
+  border: 1px solid var(--vscode-editorWidget-border, var(--border));
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.35);
+}
+.cat-filter-pop[hidden] { display: none; }
+.cat-filter-opt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.cat-filter-opt input { margin: 0; }
+.cat-filter-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 5px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+.cat-filter-actions button {
+  flex: 1;
+  padding: 2px 0;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--input-bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.cat-filter-actions button:hover { background: var(--hover); }
 tr.hidden { display: none; }
 .object-editor {
   flex: 1;

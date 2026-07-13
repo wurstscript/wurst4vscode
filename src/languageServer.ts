@@ -83,7 +83,7 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
             ].join('\n');
         } catch { /* status item was disposed during shutdown */ }
     });
-    void maybeOfferUpdate(context);
+    void maybeOfferUpdate();
 }
 
 export function registerFileChanges(client: LanguageClient): vscode.FileSystemWatcher {

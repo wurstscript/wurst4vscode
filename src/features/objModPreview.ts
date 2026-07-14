@@ -5,7 +5,7 @@
 import * as vscode from 'vscode';
 import { parseObjMod, serializeObjMod, ObjModFile, ObjModEntry, ObjModMod, ObjModVarType } from 'casc-ts/formats';
 import { ParsedPreviewContext } from './preview/framework';
-import { requestPreviewIcon, getCandidateRoots, resolveAssetPathWithCasc, gatherImportedAssets } from './imageAssetSupport';
+import { requestPreviewIcon, requestTooltipBackdrop, requestTooltipBorder, getCandidateRoots, resolveAssetPathWithCasc, gatherImportedAssets } from './imageAssetSupport';
 import { postModelToWebview, postTexturesToWebview, requestModelThumbnail, cacheModelThumbnail, markModelThumbnailBad } from './preview/modelPreviewHost';
 import { isSoundAssetPath } from './soundPreview';
 import {
@@ -1631,6 +1631,15 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
      preview is intentionally dark in every theme — using --input-bg would hide light text in light themes. */
   --wc3-tip-bg: #000;
   --wc3-tip-fg: #fff;
+  /* Approximate in-game unit-tooltip width, so text wraps roughly where it would in Warcraft III
+     itself instead of stretching to fill whatever the details column happens to be. This is a best
+     effort figure (the game's actual wrap width also shifts a little with the player's UI console
+     scale) rather than a verified exact pixel match. */
+  --wc3-tip-width: 280px;
+  /* Rendered size of each gold corner/edge border tile (see the .tt-collapsed-box, .tt-preview rule) —
+     the box's own padding is set to clear this, so the frame sits flush at the edge instead of cutting
+     across the text. */
+  --wc3-tip-border-size: 9px;
   --model-bg: color-mix(in srgb, var(--bg) 72%, var(--fg) 28%);
   /* Sticky category rows sit directly under the sticky table header (th: 5+5px padding + 1px border). */
   --table-header-h: 27px;
@@ -1720,12 +1729,61 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
 input.edit-raw { height: var(--cell-h, 24px); }
 textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize: vertical; }
 .edit-raw:focus { outline: 1px solid var(--vscode-focusBorder, var(--vscode-textLink-foreground)); }
+/* The in-game tooltip's fill texture + gold corner/edge tiles (see requestTooltipBackdrop/
+   requestTooltipBorder in imageAssetSupport.ts and applyTooltipBackdrop/applyTooltipBorder in
+   messageHandler.ts), layered as 9 separate background-images: the 4 corners + 4 edges on top
+   (each only set once their tile has actually loaded — var(..., none) otherwise), the tiled fill
+   texture underneath, and --wc3-tip-bg as the plain-color fallback beneath everything. Shared between
+   .tt-collapsed-box and .tt-preview since both are "the tooltip box", just editable vs. read-only —
+   .tt-collapsed itself is just a plain row wrapper so the source-pill/edit-hint can sit beside the box
+   instead of inside it (see the comment on .tt-collapsed below). */
+.tt-collapsed-box,
+.tt-preview {
+  background-color: var(--wc3-tip-bg);
+  background-image:
+    var(--wc3-tip-corner-tl, none), var(--wc3-tip-corner-tr, none),
+    var(--wc3-tip-corner-bl, none), var(--wc3-tip-corner-br, none),
+    var(--wc3-tip-edge-left, none), var(--wc3-tip-edge-right, none),
+    var(--wc3-tip-edge-top, none), var(--wc3-tip-edge-bottom, none),
+    var(--wc3-tip-bg-image, none);
+  background-position:
+    top left, top right, bottom left, bottom right,
+    left var(--wc3-tip-border-size), right var(--wc3-tip-border-size),
+    var(--wc3-tip-border-size) top, var(--wc3-tip-border-size) bottom,
+    0 0;
+  /* Edges are no-repeat, not repeat-y/repeat-x — see the background-size comment below for why. */
+  background-repeat:
+    no-repeat, no-repeat, no-repeat, no-repeat,
+    no-repeat, no-repeat, no-repeat, no-repeat,
+    repeat;
+  /* Each border tile is a 16x16px source, but drawn at --wc3-tip-border-size (smaller) so it reads as a
+     thin frame instead of a chunky inset block — at full 16px, two opposing corners alone (16+16=32px)
+     were taller than a short single-line tooltip box, so they overlapped into a solid gold rectangle
+     instead of a border. The box's own padding (below) is sized to clear this same value, so the frame
+     sits at the true edge instead of cutting across the text.
+     The 4 edges are sized to exactly the strip *between* the two corners on their side (100% minus both
+     corners), rather than tiled the full box length — tiling from the same origin as the corners meant
+     the corner's rounded/receding art didn't fully cover the straight edge tile underneath it, so the
+     edge's straight line poked out past the curve at each corner like a little flag. Since none of
+     these tiles vary along their own length (edgeLeft/edgeRight are solid at every row, edgeTop/
+     edgeBottom at every column), stretching one copy to fill that exact strip looks identical to tiling
+     it, but can no longer overlap the corners at all. */
+  background-size:
+    var(--wc3-tip-border-size) var(--wc3-tip-border-size), var(--wc3-tip-border-size) var(--wc3-tip-border-size),
+    var(--wc3-tip-border-size) var(--wc3-tip-border-size), var(--wc3-tip-border-size) var(--wc3-tip-border-size),
+    var(--wc3-tip-border-size) calc(100% - 2 * var(--wc3-tip-border-size)),
+    var(--wc3-tip-border-size) calc(100% - 2 * var(--wc3-tip-border-size)),
+    calc(100% - 2 * var(--wc3-tip-border-size)) var(--wc3-tip-border-size),
+    calc(100% - 2 * var(--wc3-tip-border-size)) var(--wc3-tip-border-size),
+    auto;
+}
 .tt-preview {
   min-width: 0;
+  max-width: var(--wc3-tip-width);
+  min-height: calc(var(--wc3-tip-border-size) * 2 + 1em);
   border: 1px dashed var(--border);
   border-radius: 2px;
-  padding: 4px 6px;
-  background: var(--wc3-tip-bg);
+  padding: calc(var(--wc3-tip-border-size) + 2px) calc(var(--wc3-tip-border-size) + 3px);
   color: var(--wc3-tip-fg);
   font-family: var(--vscode-font-family, sans-serif);
   white-space: pre-wrap;
@@ -1751,7 +1809,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
    plain textarea showing the literal WC3 string (color codes, |n line breaks) — so toggling Raw never
    resizes the floating toolbar or shifts anything else on the page. */
 .tt-collapsed-raw {
-  flex: 1;
+  flex: 1 1 100%; /* same full-row basis as .tt-collapsed-body, for the same reason (see its comment) */
   min-width: 0;
   background: transparent;
   color: inherit;
@@ -1773,29 +1831,45 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 .tt-collapsed-raw[hidden] { display: none; }
 .tt-preview.tt-readonly {
   display: inline-block;
-  max-width: 100%;
+  max-width: min(100%, var(--wc3-tip-width));
   vertical-align: top;
 }
+/* .tt-collapsed is just a plain row now — like the Hotkey/Name rows, the source-pill (e.g.
+   "TRIGSTR_2431") and edit-hint pencil sit beside the tooltip box, not inside it. They used to be
+   children of the dark box itself, where they either ate into its (now width-capped, see
+   --wc3-tip-width) space or, once wrapped onto their own line, still looked like part of the in-game
+   tooltip rather than an editor annotation. .tt-collapsed-box carries all the actual box styling
+   (background/texture/border/font) so the outer row can stay a plain, unstyled flex container. */
 .tt-collapsed {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 6px;
   min-width: 0;
   min-height: var(--cell-h, 24px);
+  cursor: text;
+}
+.tt-collapsed-box {
+  min-width: 0;
+  max-width: var(--wc3-tip-width);
+  /* At least 2x the border tile size, so top+bottom (or left+right) corner tiles never overlap into a
+     solid block on a short single-line tooltip — see the --wc3-tip-border-size comment above. */
+  min-height: calc(var(--wc3-tip-border-size) * 2 + 1em);
   box-sizing: border-box;
-  padding: 1px 6px;
+  /* Padding clears the border tiles so text never sits under the frame art (this was the "inset
+     overlapping" bug: at the old 1px/6px padding, both text and border occupied the same pixels). */
+  padding: calc(var(--wc3-tip-border-size) + 2px) calc(var(--wc3-tip-border-size) + 3px);
   border: 1px solid transparent;
   border-radius: 3px;
-  background: var(--wc3-tip-bg);
   color: var(--wc3-tip-fg);
   cursor: text;
   font-family: var(--vscode-font-family, sans-serif);
   white-space: pre-wrap;
   word-break: break-word;
 }
-.tt-collapsed:hover,
-.tt-collapsed:focus-visible { border-color: var(--vscode-focusBorder, var(--vscode-textLink-foreground)); outline: none; }
-.tt-collapsed-body { flex: 1; min-width: 0; }
+.tt-collapsed:hover .tt-collapsed-box,
+.tt-collapsed:focus-visible .tt-collapsed-box { border-color: var(--vscode-focusBorder, var(--vscode-textLink-foreground)); }
+.tt-collapsed:focus-visible { outline: none; }
+.tt-collapsed-body { min-width: 0; }
 .tt-collapsed-body[contenteditable="true"] { outline: none; cursor: text; }
 .tt-empty { color: var(--muted); font-style: italic; }
 .tt-edit-hint {
@@ -1807,15 +1881,9 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 }
 .tt-collapsed:hover .tt-edit-hint,
 .tt-collapsed:focus-visible .tt-edit-hint { opacity: 0.9; }
-.tt-collapsed .tt-edit-hint { color: color-mix(in srgb, var(--wc3-tip-fg) 60%, transparent); } /* on the dark tooltip box */
-.tt-collapsed .source-pill {
-  flex: 0 0 auto;
-  background: color-mix(in srgb, var(--wc3-tip-bg) 80%, var(--accent) 20%);
-  border-color: color-mix(in srgb, var(--accent) 65%, transparent);
-}
-/* Editing indicator: outline only — the tooltip box's own background/text colors (--wc3-tip-bg/-fg)
-   are left completely alone, so the preview never loses contrast while being edited. */
-.tt-collapsed.tt-editing {
+/* Editing indicator: outline only, on the box itself — the tooltip box's own background/text colors
+   (--wc3-tip-bg/-fg) are left completely alone, so the preview never loses contrast while being edited. */
+.tt-collapsed.tt-editing .tt-collapsed-box {
   outline: 2px solid var(--vscode-focusBorder, var(--vscode-textLink-foreground));
   outline-offset: -1px;
 }
@@ -3273,6 +3341,14 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         }
         if (msg.type === 'loadObjectIcon' && msg.key && msg.iconPath) {
             await requestPreviewIcon(msg.iconPath, msg.key, webview, doc.uri);
+            return;
+        }
+        if (msg.type === 'requestTooltipBackdrop') {
+            await requestTooltipBackdrop(webview, doc.uri);
+            return;
+        }
+        if (msg.type === 'requestTooltipBorder') {
+            await requestTooltipBorder(webview, doc.uri);
             return;
         }
         if (msg.type === 'loadModelThumb' && msg.key && msg.path) {

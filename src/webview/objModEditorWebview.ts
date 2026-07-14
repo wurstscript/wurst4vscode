@@ -137,4 +137,11 @@ setupMessageHandler();
 render();
 setTimeout(() => { try { modelThumbEnsureInit(); } catch (e) {} }, 0);
 
+// The in-game tooltip's own fill texture and gold border tiles, applied over the plain --wc3-tip-bg
+// color / border once they load (see applyTooltipBackdrop/applyTooltipBorder in messageHandler.ts) —
+// requested once per document open since neither changes, rather than per tooltip field like icons/
+// model thumbs.
+vscodeApi.postMessage({ type: 'requestTooltipBackdrop' });
+vscodeApi.postMessage({ type: 'requestTooltipBorder' });
+
 installDebugApi();

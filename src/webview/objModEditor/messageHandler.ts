@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { base64ToBytes } from '../objModWebviewUtils';
 import { details, detailCache, pendingDetails, failedDetails, objects, ui, iconLoader } from './state';
 import { setModValue } from './fieldDisplay';
 import { renderDetails, updateFieldCell } from './detailsPanel';
@@ -27,11 +28,130 @@ import { mpvViewer, mpvB64ToArrayBuffer } from './modelViewerShared';
 import { mpvStatus, mpvSetPlaying } from './modelPreviewPanel';
 import { setAssetCatalog, renderAssetGrid, handleAssetCatalogFailed } from './assetBrowser';
 
+// The in-game tooltip fill texture (see requestTooltipBackdrop in imageAssetSupport.ts) — decoded once
+// into a data URL and set as a CSS var, so every tooltip preview box picks it up for free via the
+// `background-image: var(--wc3-tip-bg-image, none)` fallback chain already in its CSS. Left unset
+// (falling through to the plain --wc3-tip-bg color) if the game data can't be found.
+function applyTooltipBackdrop(msg) {
+  try {
+    if (msg.mode !== 'rgba' || !msg.rgbaBase64 || !msg.width || !msg.height) {
+      console.error('[wurst-tooltip-backdrop] malformed tooltipBackdropLoaded message', msg);
+      return;
+    }
+    const rgba = base64ToBytes(msg.rgbaBase64);
+    const canvas = document.createElement('canvas');
+    canvas.width = msg.width;
+    canvas.height = msg.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba), msg.width, msg.height), 0, 0);
+    document.documentElement.style.setProperty('--wc3-tip-bg-image', 'url(' + canvas.toDataURL('image/png') + ')');
+    console.log('[wurst-tooltip-backdrop] applied', msg.width, 'x', msg.height);
+  } catch (err) {
+    // Leave --wc3-tip-bg-image unset — the plain --wc3-tip-bg color fallback already covers this.
+    console.error('[wurst-tooltip-backdrop] failed to apply', err);
+  }
+}
+
+// Copies one 16x16 tile out of the wider tile-strip atlas (see TOOLTIP_BORDER_PATH in
+// imageAssetSupport.ts), at tile index `i` (0-based, tiles run left to right).
+function sliceBorderTile(atlasData, atlasWidth, i) {
+  const out = new ImageData(16, 16);
+  const sx0 = i * 16;
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const srcIdx = (y * atlasWidth + (sx0 + x)) * 4;
+      const dstIdx = (y * 16 + x) * 4;
+      out.data[dstIdx] = atlasData.data[srcIdx];
+      out.data[dstIdx + 1] = atlasData.data[srcIdx + 1];
+      out.data[dstIdx + 2] = atlasData.data[srcIdx + 2];
+      out.data[dstIdx + 3] = atlasData.data[srcIdx + 3];
+    }
+  }
+  return out;
+}
+
+// The atlas only has vertical edge tiles (left/right) — no horizontal top/bottom tile exists on its
+// own, because both the left-edge tile (given its content doesn't vary by row) and the top-edge tile
+// (which shouldn't vary by column) are the same shape once you swap their axes: a matrix transpose,
+// dst(x,y) = src(y,x). Confirmed by inspecting the corner tiles, whose top/bottom bevel exactly matches
+// the left-edge tile's stripe once transposed. This is what lets one tile asset serve both edges,
+// exactly like the game's own frame engine does (just done here in a canvas instead of the FDF engine).
+function transposeBorderTile(imgData) {
+  const out = new ImageData(16, 16);
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      const srcIdx = (x * 16 + y) * 4;
+      const dstIdx = (y * 16 + x) * 4;
+      out.data[dstIdx] = imgData.data[srcIdx];
+      out.data[dstIdx + 1] = imgData.data[srcIdx + 1];
+      out.data[dstIdx + 2] = imgData.data[srcIdx + 2];
+      out.data[dstIdx + 3] = imgData.data[srcIdx + 3];
+    }
+  }
+  return out;
+}
+
+function borderTileDataUrl(imgData) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 16;
+  canvas.height = 16;
+  canvas.getContext('2d').putImageData(imgData, 0, 0);
+  return canvas.toDataURL('image/png');
+}
+
+// Slices the gold-border tile atlas (see TOOLTIP_BORDER_PATH in imageAssetSupport.ts) into the 4
+// corners + 4 edges a real 9-slice border needs, and sets each as its own CSS var — the tooltip-box
+// CSS layers all 8 as separate `background-image`s (see .tt-collapsed/.tt-preview) positioned at their
+// respective corner/edge, painted over the plain fill texture. This is a hand-reconstructed
+// approximation of the game's own frame-engine rendering (tile positions/thicknesses read off the
+// decoded atlas, not off the original FDF frame definition), so it may not line up pixel-for-pixel with
+// the real in-game border — but it's the same gold tile artwork, assembled the same way.
+function applyTooltipBorder(msg) {
+  try {
+    if (msg.mode !== 'rgba' || !msg.rgbaBase64 || !msg.width || !msg.height) {
+      console.error('[wurst-tooltip-border] malformed tooltipBorderLoaded message', msg);
+      return;
+    }
+    const rgba = base64ToBytes(msg.rgbaBase64);
+    const atlas = new ImageData(new Uint8ClampedArray(rgba), msg.width, msg.height);
+    const edgeLeft = sliceBorderTile(atlas, msg.width, 0);
+    const edgeRight = sliceBorderTile(atlas, msg.width, 1);
+    const cornerTL = sliceBorderTile(atlas, msg.width, 4);
+    const cornerTR = sliceBorderTile(atlas, msg.width, 5);
+    const cornerBL = sliceBorderTile(atlas, msg.width, 6);
+    const cornerBR = sliceBorderTile(atlas, msg.width, 7);
+    const edgeTop = transposeBorderTile(edgeLeft);
+    const edgeBottom = transposeBorderTile(edgeRight);
+
+    const root = document.documentElement.style;
+    root.setProperty('--wc3-tip-corner-tl', 'url(' + borderTileDataUrl(cornerTL) + ')');
+    root.setProperty('--wc3-tip-corner-tr', 'url(' + borderTileDataUrl(cornerTR) + ')');
+    root.setProperty('--wc3-tip-corner-bl', 'url(' + borderTileDataUrl(cornerBL) + ')');
+    root.setProperty('--wc3-tip-corner-br', 'url(' + borderTileDataUrl(cornerBR) + ')');
+    root.setProperty('--wc3-tip-edge-left', 'url(' + borderTileDataUrl(edgeLeft) + ')');
+    root.setProperty('--wc3-tip-edge-right', 'url(' + borderTileDataUrl(edgeRight) + ')');
+    root.setProperty('--wc3-tip-edge-top', 'url(' + borderTileDataUrl(edgeTop) + ')');
+    root.setProperty('--wc3-tip-edge-bottom', 'url(' + borderTileDataUrl(edgeBottom) + ')');
+    console.log('[wurst-tooltip-border] applied');
+  } catch (err) {
+    console.error('[wurst-tooltip-border] failed to apply', err);
+  }
+}
+
 export function setupMessageHandler() {
   window.addEventListener('message', event => {
     const msg = event.data || {};
     if (msg.type === 'objectIconLoaded') {
       iconLoader.handleLoaded(msg);
+    } else if (msg.type === 'tooltipBackdropLoaded') {
+      applyTooltipBackdrop(msg);
+    } else if (msg.type === 'tooltipBackdropMissing') {
+      console.log('[wurst-tooltip-backdrop] not found — keeping the plain background color');
+    } else if (msg.type === 'tooltipBorderLoaded') {
+      applyTooltipBorder(msg);
+    } else if (msg.type === 'tooltipBorderMissing') {
+      console.log('[wurst-tooltip-border] not found — keeping the plain border');
     } else if (msg.type === 'objectIconMissing') {
       iconLoader.handleMissing(msg.key || '');
     } else if (msg.type === 'modelThumbLoaded') {

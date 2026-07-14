@@ -314,15 +314,18 @@ export function editorHtml(mod, mi) {
 }
 
 // Compact, click-to-edit view shown by default for every editable cell (keeps the 700-row table light).
-// Tooltip/color fields always render as the dark WC3 tooltip box (.tt-collapsed), whether or not they
-// currently contain color codes, so the box a user clicks on is the exact same box they edit in place —
-// no swap to a differently-shaped container.
+// Tooltip/color fields always render as the dark WC3 tooltip box (.tt-collapsed-box), whether or not
+// they currently contain color codes, so the box a user clicks on is the exact same box they edit in
+// place — no swap to a differently-shaped container. The source-pill/edit-hint sit beside the box (in
+// the plain .tt-collapsed row), not inside it — same placement as every other field's Hotkey/Name-style
+// annotations, rather than looking like part of the in-game tooltip.
 export function collapsedView(mod, mi) {
   const dv = mod.editValue == null ? (mod.currentValue == null ? '' : String(mod.currentValue)) : String(mod.editValue);
   if (needsColorEditor(mod)) {
     const body = dv ? renderWc3Colors(dv) : '<span class="tt-empty">(empty)</span>';
     return '<div class="tt-collapsed" data-mi="' + mi + '" tabindex="0" role="button" title="Click or press Enter to edit">' +
-      '<div class="tt-collapsed-body" data-mi="' + mi + '">' + body + '</div>' + (mod.source ? sourcePill(mod) : '') + '<span class="tt-edit-hint">✎</span></div>';
+      '<div class="tt-collapsed-box"><div class="tt-collapsed-body" data-mi="' + mi + '">' + body + '</div></div>' +
+      (mod.source ? sourcePill(mod) : '') + '<span class="tt-edit-hint">✎</span></div>';
   }
   const badge = mod.overridden ? '<span class="override-badge" title="This field overrides the base value">modified</span>' : '';
   const disp = decoratedValueHtml(mod, mi, dv);

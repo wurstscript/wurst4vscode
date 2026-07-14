@@ -5,7 +5,7 @@ import { details, detailCache, pendingDetails, failedDetails, ui, vscodeApi, ico
 import { categoryLabel, categoryKey, objectIconHtml, matches, render } from './objectTree';
 import { sourcePill, valueCell, postEdit, setModValue, editorHtml, collapsedView, normalizeNumberValue, needsColorEditor, tooltipToolbarHtml } from './fieldDisplay';
 import { observeModelThumbs } from './modelThumbnails';
-import { wireColorBar, setCaretEnd, richToWc3, forcePlainTextPaste, wrapColor, applyRichColor, updateColorSwatch } from './richTextEditor';
+import { wireColorBar, setCaretEnd, richToWc3, forcePlainTextPaste, wrapColor, applyRichColor, updateColorSwatch, containsNode } from './richTextEditor';
 import { openAssetBrowser } from './assetBrowser';
 import { showModelPreview } from './modelPreviewPanel';
 
@@ -89,8 +89,14 @@ export function renderDetails() {
       ? '<td class="id">' + esc(mod.fieldId) + '</td><td class="label">' + esc(mod.label || '-') + '</td><td class="type">' + esc(category) + '</td><td class="type">' + esc(mod.type) + '</td>' +
         (initial.extended ? '<td class="num">' + esc(mod.level ?? '') + '</td>' + '<td class="num">' + esc(mod.dataPt ?? '') + '</td>' : '')
       : '<td class="field">' + esc(mod.label || mod.fieldId) + '</td>';
-    const fsearch = esc(((mod.fieldId || '') + ' ' + (mod.label || '') + ' ' + (mod.currentValue || '') + ' ' + (mod.editValue || '') + ' ' + (mod.displayValue || '') + ' ' + (mod.displayDetail || '')).toLowerCase());
-    return groupRow + '<tr class="' + (mod.overridden ? 'overridden' : '') + '" data-cat="' + esc(catKey) + '" data-fsearch="' + fsearch + '">' +
+    // Include the category ("Abilities", "Stats", ...) so a query like "abilities" finds a field whose
+    // own label is just "Normal" — the category is what ties it to that word, not the field name.
+    const fsearch = esc((category + ' ' + (mod.fieldId || '') + ' ' + (mod.label || '') + ' ' + (mod.currentValue || '') + ' ' + (mod.editValue || '') + ' ' + (mod.displayValue || '') + ' ' + (mod.displayDetail || '')).toLowerCase());
+    // "-" is WC3's own placeholder for "no value" (asset paths, rawcode lists, ...) — treat it as blank
+    // too, same as decoratedValueHtml/collapsedView already do when deciding whether to show "(empty)".
+    const currentDisplay = (mod.editValue == null ? (mod.currentValue == null ? '' : String(mod.currentValue)) : String(mod.editValue)).trim();
+    const isEmpty = currentDisplay === '' || currentDisplay === '-';
+    return groupRow + '<tr class="' + (mod.overridden ? 'overridden' : '') + '" data-cat="' + esc(catKey) + '" data-empty="' + (isEmpty ? '1' : '0') + '" data-fsearch="' + fsearch + '">' +
       fieldCell +
       '<td class="value current">' + valueCell(mod, mi) + '</td>' +
     '</tr>';
@@ -107,7 +113,14 @@ export function renderDetails() {
       '<input id="field-search" class="field-search" type="text" placeholder="Search fields…" aria-label="Search fields" spellcheck="false" value="' + esc(ui.fieldQuery) + '">' +
       '<span id="field-match" class="field-match" role="status" aria-live="polite"></span>' +
       categoryFilterHtml() +
-      '<label class="toggle-chip"><input id="technical-toggle" type="checkbox" ' + (ui.showTechnical ? 'checked' : '') + '> technical</label>' +
+      // Grouped so only the group as a whole gets pushed to the right edge (margin-left: auto on
+      // *each* chip individually would split the leftover space between all of them, scattering them
+      // across the bar instead of clustering them together).
+      '<div class="toggle-chip-group">' +
+        '<label class="toggle-chip"><input id="hide-empty-toggle" type="checkbox" ' + (ui.hideEmpty ? 'checked' : '') + '> hide empty</label>' +
+        '<label class="toggle-chip"><input id="hide-unmodified-toggle" type="checkbox" ' + (ui.hideUnmodified ? 'checked' : '') + '> modified only</label>' +
+        '<label class="toggle-chip"><input id="technical-toggle" type="checkbox" ' + (ui.showTechnical ? 'checked' : '') + '> technical</label>' +
+      '</div>' +
     '</div>' : '') +
   '</div>' +
   (mods
@@ -127,6 +140,22 @@ export function renderDetails() {
       ui.showTechnical = technicalToggle.checked;
       vscodeApi.setState(Object.assign({}, vscodeApi.getState() || {}, { showTechnical: ui.showTechnical }));
       renderDetails();
+    });
+  }
+  const hideEmptyToggle = document.getElementById('hide-empty-toggle');
+  if (hideEmptyToggle) {
+    hideEmptyToggle.addEventListener('change', () => {
+      ui.hideEmpty = hideEmptyToggle.checked;
+      vscodeApi.setState(Object.assign({}, vscodeApi.getState() || {}, { hideEmpty: ui.hideEmpty }));
+      filterFields(ui.fieldQuery);
+    });
+  }
+  const hideUnmodifiedToggle = document.getElementById('hide-unmodified-toggle');
+  if (hideUnmodifiedToggle) {
+    hideUnmodifiedToggle.addEventListener('change', () => {
+      ui.hideUnmodified = hideUnmodifiedToggle.checked;
+      vscodeApi.setState(Object.assign({}, vscodeApi.getState() || {}, { hideUnmodified: ui.hideUnmodified }));
+      filterFields(ui.fieldQuery);
     });
   }
 
@@ -151,11 +180,43 @@ export function renderDetails() {
 // Delegated details handlers, wired once. The #details element persists across renders (only its
 // innerHTML changes), so a single listener covers every collapsed cell and object-jump chip — no
 // more re-wiring 1000+ listeners on each object switch / search / technical toggle.
+function stepNumberInput(numStep) {
+  const mi = numStep.getAttribute('data-mi');
+  const input = details.querySelector('.num-input[data-mi="' + mi + '"]');
+  if (!input) return;
+  const varType = input.getAttribute('data-num-type');
+  const stepAmount = Number(input.getAttribute('data-num-step')) || 1;
+  const dir = Number(numStep.getAttribute('data-dir')) || 1;
+  const cur = Number(input.value);
+  input.value = normalizeNumberValue(varType, String((Number.isFinite(cur) ? cur : 0) + dir * stepAmount));
+  input.focus();
+  input.dispatchEvent(new Event('input'));
+}
+
 export function setupDetails() {
-  // Steppers must not steal focus from the input they adjust (mirrors the color-swatch buttons).
+  // Steppers must not steal focus from the input they adjust (mirrors the color-swatch buttons), and
+  // holding one down repeats the step (first tick immediately, then every 60ms after a 400ms delay —
+  // the click handler below no-ops for .num-step since this already applied the single-click case).
+  let numStepHoldTimer = null;
+  let numStepHoldInterval = null;
+  const stopNumStepHold = () => {
+    clearTimeout(numStepHoldTimer); numStepHoldTimer = null;
+    clearInterval(numStepHoldInterval); numStepHoldInterval = null;
+  };
   details.addEventListener('mousedown', e => {
+    const numStep = e.target.closest('.num-step[data-dir]');
+    if (numStep) {
+      e.preventDefault();
+      stepNumberInput(numStep);
+      numStepHoldTimer = setTimeout(() => {
+        numStepHoldInterval = setInterval(() => stepNumberInput(numStep), 60);
+      }, 400);
+      return;
+    }
     if (e.target.closest('.num-step')) e.preventDefault();
   });
+  window.addEventListener('mouseup', stopNumStepHold);
+  window.addEventListener('blur', stopNumStepHold);
   details.addEventListener('change', e => {
     const cb = e.target.closest('#cat-filter-pop input[data-cat-key]');
     if (!cb) return;
@@ -192,27 +253,19 @@ export function setupDetails() {
       filterFields(ui.fieldQuery);
       return;
     }
-    const numStep = e.target.closest('.num-step[data-dir]');
-    if (numStep) {
-      e.preventDefault();
-      e.stopPropagation();
-      const mi = numStep.getAttribute('data-mi');
-      const input = details.querySelector('.num-input[data-mi="' + mi + '"]');
-      if (input) {
-        const varType = input.getAttribute('data-num-type');
-        const stepAmount = Number(input.getAttribute('data-num-step')) || 1;
-        const dir = Number(numStep.getAttribute('data-dir')) || 1;
-        const cur = Number(input.value);
-        input.value = normalizeNumberValue(varType, String((Number.isFinite(cur) ? cur : 0) + dir * stepAmount));
-        input.focus();
-        input.dispatchEvent(new Event('input'));
-      }
-      return;
-    }
+    // Stepping itself already happened on mousedown (see setupDetails) — this just stops the click
+    // from falling through to the row-expand/jump handling below.
+    if (e.target.closest('.num-step[data-dir]')) return;
     const jump = e.target.closest('.resolved-chip[data-jump]');
     if (jump) {
       const key = jump.getAttribute('data-jump') || '';
       if (key) { ui.selectedKey = key; render(); }
+      return;
+    }
+    const xref = e.target.closest('.resolved-chip[data-xref]');
+    if (xref) {
+      const rawcode = xref.getAttribute('data-xref') || '';
+      if (rawcode) vscodeApi.postMessage({ type: 'openObjectReference', rawcode, label: xref.getAttribute('data-xref-label') || '' });
       return;
     }
     const browse = e.target.closest('[data-browse]');
@@ -254,6 +307,12 @@ export function setupDetails() {
       const mod = (detailCache.get(ui.selectedKey) || [])[mi];
       if (mod && needsColorEditor(mod)) enterTooltipEdit(ae, mi, null);
       else expandEditor(ae);
+    } else if (ae && ae.classList && ae.classList.contains('resolved-chip')) {
+      e.preventDefault();
+      const jumpKey = ae.getAttribute('data-jump');
+      const rawcode = ae.getAttribute('data-xref');
+      if (jumpKey) { ui.selectedKey = jumpKey; render(); }
+      else if (rawcode) vscodeApi.postMessage({ type: 'openObjectReference', rawcode, label: ae.getAttribute('data-xref-label') || '' });
     }
   });
 }
@@ -275,6 +334,11 @@ function positionFloatToolbar(toolbar, rect) {
   if (top < margin) top = Math.min(rect.bottom + 4, vh - height - margin);
   toolbar.style.left = Math.round(left) + 'px';
   toolbar.style.top = Math.round(top) + 'px';
+}
+
+function autosizeRaw(ta) {
+  ta.style.height = 'auto';
+  ta.style.height = ta.scrollHeight + 'px';
 }
 
 export function enterTooltipEdit(collapsed, mi, clickEvent) {
@@ -306,19 +370,31 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
   collapsed.classList.add('tt-editing');
   forcePlainTextPaste(body);
 
+  // Raw view swaps in this textarea right beside the rich body, in the same flex row (see .tt-collapsed
+  // in objModPreview.ts) — toggling never touches the floating toolbar's own size/position, so there's
+  // nothing to reposition and nothing that can misfire the outside-click/scroll-close listeners below.
+  const rawArea = document.createElement('textarea');
+  rawArea.className = 'tt-collapsed-raw';
+  rawArea.spellcheck = false;
+  rawArea.rows = 1;
+  rawArea.hidden = true;
+  body.insertAdjacentElement('afterend', rawArea);
+
   const toolbar = document.createElement('div');
   toolbar.className = 'tt-float-toolbar';
   toolbar.innerHTML = tooltipToolbarHtml(mi, original);
   document.body.appendChild(toolbar);
   positionFloatToolbar(toolbar, collapsed.getBoundingClientRect());
 
-  activeTooltipEdit = { collapsed, body, toolbar, mi, original };
+  activeTooltipEdit = { collapsed, body, rawArea, toolbar, mi, original, rawMode: false };
+
+  const currentValue = () => (activeTooltipEdit && activeTooltipEdit.rawMode) ? rawArea.value : richToWc3(body);
 
   let timer;
   let postedValue = original;
   const commit = () => {
     clearTimeout(timer);
-    const value = richToWc3(body);
+    const value = currentValue();
     if (value === postedValue) return;
     setModValue(mod, value);
     markModified(collapsed, mod);
@@ -327,28 +403,39 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
   };
   const schedule = () => {
     clearTimeout(timer);
-    const value = richToWc3(body);
+    const value = currentValue();
     if (value !== postedValue) timer = setTimeout(commit, 250);
   };
   body._commitNow = commit;
-  body.addEventListener('input', () => { setModValue(mod, richToWc3(body)); schedule(); });
-  body.addEventListener('keydown', e => {
+  rawArea._commitNow = commit;
+
+  const onEscapeOrSubmit = e => {
     if (e.key === 'Escape') {
       e.preventDefault();
-      if (richToWc3(body) !== original) { body.innerHTML = renderWc3Colors(original); setModValue(mod, original); }
+      if (currentValue() !== original) {
+        body.innerHTML = renderWc3Colors(original);
+        rawArea.value = original;
+        setModValue(mod, original);
+      }
       exitTooltipEdit(false);
     } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       exitTooltipEdit(true);
     }
-  });
+  };
+  const onBodyInput = () => { setModValue(mod, richToWc3(body)); schedule(); };
+  const onRawInput = () => { setModValue(mod, rawArea.value); autosizeRaw(rawArea); schedule(); };
+  body.addEventListener('input', onBodyInput);
+  body.addEventListener('keydown', onEscapeOrSubmit);
+  rawArea.addEventListener('input', onRawInput);
+  rawArea.addEventListener('keydown', onEscapeOrSubmit);
 
   body.focus({ preventScroll: true });
   if (range) { const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range); }
   else setCaretEnd(body);
 
   const bar = toolbar.querySelector('.tt-bar');
-  if (bar) wireColorBar(bar, body, () => toolbar.querySelector('.tt-raw-input'));
+  if (bar) wireColorBar(bar, body, () => (activeTooltipEdit && activeTooltipEdit.rawMode) ? rawArea : null);
 
   // Quick-reference swatches for colors already used in this tooltip (see tooltipToolbarHtml) — same
   // apply logic as a preset swatch, just outside the popover for one-click access.
@@ -356,41 +443,54 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
     sw.addEventListener('mousedown', e => e.preventDefault());
     sw.addEventListener('click', () => {
       const hex = sw.getAttribute('data-color');
-      const ta = toolbar.querySelector('.tt-raw-input');
-      if (ta && document.activeElement === ta) wrapColor(ta, hex);
+      if (activeTooltipEdit.rawMode) wrapColor(rawArea, hex);
       else applyRichColor(body, hex);
       if (bar) updateColorSwatch(bar, hex);
     });
   }
 
   const rawToggle = toolbar.querySelector('.tt-raw-toggle');
-  const rawPanel = toolbar.querySelector('.tt-float-raw');
-  if (rawToggle && rawPanel) {
+  if (rawToggle) {
     rawToggle.addEventListener('click', () => {
-      const open = rawPanel.hidden;
-      rawPanel.hidden = !open;
-      rawToggle.setAttribute('aria-expanded', String(open));
-      rawToggle.classList.toggle('active', open);
-      if (open) {
-        const ta = rawPanel.querySelector('.tt-raw-input');
-        ta.classList.add('edit-raw');
-        ta.value = richToWc3(body);
-        ta._commitNow = commit;
-        ta.addEventListener('input', () => {
-          const value = String(ta.value);
-          body.innerHTML = renderWc3Colors(value);
-          setModValue(mod, value);
-          schedule();
-        });
-        ta.addEventListener('blur', commit);
+      activeTooltipEdit.rawMode = !activeTooltipEdit.rawMode;
+      rawToggle.setAttribute('aria-pressed', String(activeTooltipEdit.rawMode));
+      rawToggle.classList.toggle('active', activeTooltipEdit.rawMode);
+      rawToggle.textContent = activeTooltipEdit.rawMode ? 'Rich' : 'Raw';
+      if (activeTooltipEdit.rawMode) {
+        rawArea.value = richToWc3(body);
+        body.hidden = true;
+        rawArea.hidden = false;
+        autosizeRaw(rawArea);
+        rawArea.focus();
+        rawArea.setSelectionRange(rawArea.value.length, rawArea.value.length);
+      } else {
+        const value = rawArea.value;
+        body.innerHTML = value ? renderWc3Colors(value) : '';
+        setModValue(mod, value);
+        rawArea.hidden = true;
+        body.hidden = false;
+        body.focus({ preventScroll: true });
+        setCaretEnd(body);
       }
-      positionFloatToolbar(toolbar, collapsed.getBoundingClientRect());
     });
   }
   const copyBtn = toolbar.querySelector('.tt-copy-raw');
   if (copyBtn) {
     copyBtn.addEventListener('click', () => {
-      const text = richToWc3(body);
+      let text;
+      if (activeTooltipEdit.rawMode) {
+        const s = rawArea.selectionStart, e = rawArea.selectionEnd;
+        text = s !== e ? rawArea.value.slice(s, e) : rawArea.value;
+      } else {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount && !sel.isCollapsed && containsNode(body, sel.anchorNode) && containsNode(body, sel.focusNode)) {
+          const wrap = document.createElement('div');
+          wrap.appendChild(sel.getRangeAt(0).cloneContents());
+          text = richToWc3(wrap);
+        } else {
+          text = richToWc3(body);
+        }
+      }
       const flash = ok => {
         clearTimeout(copyBtn._flashTimer);
         const label = copyBtn._origLabel ?? (copyBtn._origLabel = copyBtn.textContent);
@@ -411,26 +511,40 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
   const onFocusOut = () => {
     setTimeout(() => {
       if (!activeTooltipEdit || activeTooltipEdit.mi !== mi || activeTooltipEdit.collapsed !== collapsed) return;
-      if (!body.contains(document.activeElement) && !toolbar.contains(document.activeElement)) exitTooltipEdit(true);
+      if (!body.contains(document.activeElement) && document.activeElement !== rawArea && !toolbar.contains(document.activeElement)) exitTooltipEdit(true);
     }, 120);
   };
   body.addEventListener('focusout', onFocusOut);
+  rawArea.addEventListener('focusout', onFocusOut);
   toolbar.addEventListener('focusout', onFocusOut);
   activeTooltipEdit.cleanup = () => {
     document.removeEventListener('mousedown', onOutsideDown, true);
     window.removeEventListener('resize', onScrollOrResize);
     if (scrollHost) scrollHost.removeEventListener('scroll', onScrollOrResize);
+    // `body` is the persistent .tt-collapsed-body node — reused for every future edit of this same
+    // field — so its listeners MUST be removed here. Leaving them meant a second edit session left
+    // this session's stale onFocusOut (closed over this now-detached toolbar/rawArea) still firing
+    // alongside the new one; since the stale one always saw `document.activeElement` as "outside" its
+    // own detached toolbar, it force-closed the *new* session on its very next focus change (raw
+    // toggle, copy button, anything). That's what made Raw/Copy "instantly close" after first use.
+    body.removeEventListener('input', onBodyInput);
+    body.removeEventListener('keydown', onEscapeOrSubmit);
+    body.removeEventListener('focusout', onFocusOut);
   };
 }
 
 export function exitTooltipEdit(commit) {
   if (!activeTooltipEdit) return;
-  const { collapsed, body, toolbar, mi, cleanup } = activeTooltipEdit;
-  activeTooltipEdit = null;
+  const { collapsed, body, rawArea, toolbar, mi, cleanup } = activeTooltipEdit;
+  // Commit while activeTooltipEdit (and its rawMode flag) is still live — currentValue() inside
+  // commit() needs it to know whether to read rawArea.value or richToWc3(body).
   if (commit && body._commitNow) body._commitNow();
+  activeTooltipEdit = null;
   if (cleanup) cleanup();
   toolbar.remove();
+  if (rawArea) rawArea.remove();
   if (!collapsed.isConnected) return;
+  body.hidden = false;
   body.contentEditable = 'false';
   body.removeAttribute('spellcheck');
   body.classList.remove('edit-rich');
@@ -610,6 +724,10 @@ function updateCatFilterBadge() {
 let lastFieldFilterFirst = null;
 export function filterFields(q) {
   const query = String(q || '').trim().toLowerCase();
+  // Split on whitespace and require every token to match somewhere in the row's haystack (category +
+  // field id/label/value) — order-independent, so "abilities normal" finds the Abilities > Normal row
+  // even though "abilities" only appears via the category and "normal" only via the field label.
+  const tokens = query ? query.split(/\s+/).filter(Boolean) : [];
   const table = details.querySelector('table');
   if (!table) return;
   const rows = table.querySelectorAll('tbody tr');
@@ -627,8 +745,10 @@ export function filterFields(q) {
       return;
     }
     if (catHidden) { tr.classList.add('hidden'); return; }
+    if (ui.hideEmpty && tr.getAttribute('data-empty') === '1') { tr.classList.add('hidden'); return; }
+    if (ui.hideUnmodified && !tr.classList.contains('overridden')) { tr.classList.add('hidden'); return; }
     const hay = tr.getAttribute('data-fsearch') || '';
-    const vis = !query || fuzzyMatch(query, hay);
+    const vis = !tokens.length || tokens.every(tok => fuzzyMatch(tok, hay));
     tr.classList.toggle('hidden', !vis);
     if (vis) { shown++; catHasVisible = true; }
   });

@@ -75,17 +75,16 @@ function usedColorsHtml(v) {
 }
 
 // Floating toolbar mounted beside a tooltip field while it's being edited in place (see
-// enterTooltipEdit in detailsPanel.ts) — just the color swatch + an optional raw-text popover, never
-// a copy of the preview itself. The preview the user is looking at stays exactly where it was.
+// enterTooltipEdit in detailsPanel.ts) — just the color swatch, a Raw/Rich toggle, and a Copy button.
+// Toggling Raw swaps the in-place edit box itself (see enterRawView/enterRichView in detailsPanel.ts)
+// rather than opening a second floating panel, so the toolbar never resizes/repositions itself and
+// nothing else on the page shifts.
 export function tooltipToolbarHtml(mi, v) {
   return '<div class="tt-float-toolbar-row">' +
       colorBarHtml(mi) +
       usedColorsHtml(v) +
-      '<button type="button" class="tt-raw-toggle" data-mi="' + mi + '" aria-expanded="false">Raw</button>' +
-    '</div>' +
-    '<div class="tt-raw-panel tt-float-raw" data-mi="' + mi + '" hidden>' +
-      '<div class="tt-raw-head"><span>Raw WC3 text</span><button type="button" class="tt-copy-raw" data-mi="' + mi + '">Copy</button></div>' +
-      '<textarea class="tt-raw-input" data-mi="' + mi + '" rows="4" spellcheck="false">' + esc(v) + '</textarea>' +
+      '<button type="button" class="tt-raw-toggle" data-mi="' + mi + '" aria-pressed="false" title="Toggle raw WC3 text view">Raw</button>' +
+      '<button type="button" class="tt-copy-raw" data-mi="' + mi + '" title="Copy as raw WC3 text (copies the selection if any, otherwise the whole tooltip)">Copy</button>' +
     '</div>';
 }
 
@@ -146,11 +145,19 @@ export function assetMiniHtml(mod, mi) {
   return '<button type="button" class="asset-mini asset-open" data-open-asset="' + esc(assetPath) + '" title="' + esc('Open texture: ' + assetPath) + '">▶ PAT</button>';
 }
 
+// Every resolved rawcode (an ability/unit/item/etc. id referenced from another object's field, e.g. a
+// unit's Abilities list) is clickable: data-jump selects it right away when it's in this same file's
+// object list; data-xref asks the extension to find which sibling war3map.* file actually customizes
+// it (see locateObjectAcrossSiblings in objModPreview.ts) and jump there — or, for a rawcode that's
+// never been customized anywhere, to say so instead of silently doing nothing.
 export function resolvedItemsHtml(mod) {
   const items = mod.resolvedItems || [];
   return '<span class="value-display rawcodes">' + items.map(item =>
-    '<span class="resolved-chip' + (item.objectKey ? ' linked' : '') + '" title="' + esc(item.objectKey ? 'Open ' + item.label : (item.detail || item.value)) + '"' +
-      (item.objectKey ? ' data-jump="' + esc(item.objectKey) + '"' : '') + '>' +
+    '<span class="resolved-chip linked" tabindex="0" role="button" title="' +
+      esc(item.objectKey ? 'Open ' + item.label : 'Find ' + item.label + ' (' + item.value + ')') + '"' +
+      (item.objectKey
+        ? ' data-jump="' + esc(item.objectKey) + '"'
+        : ' data-xref="' + esc(item.value) + '" data-xref-label="' + esc(item.label) + '"') + '>' +
       '<span>' + esc(item.label) + '</span><span class="raw">' + esc(item.value) + '</span>' +
     '</span>'
   ).join('') + '</span>';

@@ -11,8 +11,10 @@ export const iconLoader = createIconLoader(vscodeApi);
 
 export const detailCache = new Map();
 export const pendingDetails = new Set();
-export const collapsedGroups = new Set();
-export const collapsedRaces = new Set();
+// Collapse state for every browse-tree heading (group/race/campaign/kind), keyed by that node's own
+// path string (see nodeKey() in objectTree.ts) — one Set instead of one per tree level, since the
+// tree can now be up to 4 levels deep (Group > Race > Melee|Campaign > Units/Buildings/Heroes/Special).
+export const collapsedNodes = new Set();
 // Keys whose field-row load failed on the host (missing game data, thrown parser error, etc). Kept
 // separate from detailCache so a failed load renders a distinct "couldn't load, retry" state instead
 // of silently looking identical to "this object genuinely has zero fields".
@@ -32,5 +34,9 @@ export const ui = {
   // Field categories hidden from the details table (the "focus on tooltips" custom view). Persisted
   // across objects/sessions like showTechnical.
   hiddenCategories: new Set((vscodeApi.getState() || {}).hiddenCategories || []),
+  // Density/noise filters for the field table — hide blank fields, or hide everything but overridden
+  // (customized) ones. Persisted like showTechnical.
+  hideEmpty: !!((vscodeApi.getState() || {}).hideEmpty),
+  hideUnmodified: !!((vscodeApi.getState() || {}).hideUnmodified),
   e2eForcedNarrowLayout: false,
 };

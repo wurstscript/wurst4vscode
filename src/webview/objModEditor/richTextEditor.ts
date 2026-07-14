@@ -130,7 +130,12 @@ export function applyRichColor(rich, color) {
 // anything else a browser paste brings in (bold, fonts, images, Word markup) would render in the
 // preview but then silently vanish from the saved value on the next input event, with no indication
 // anything changed.
+// `el` (the tooltip's .tt-collapsed-body) is a fixed DOM node that gets re-entered into edit mode
+// repeatedly across separate click-to-edit sessions — this only needs wiring once, ever, so a second
+// call is a no-op rather than stacking another paste listener (which would insert pasted text twice).
 export function forcePlainTextPaste(el) {
+  if (el._pastePlainWired) return;
+  el._pastePlainWired = true;
   el.addEventListener('paste', e => {
     e.preventDefault();
     const text = (e.clipboardData || window.clipboardData).getData('text/plain');
@@ -153,17 +158,25 @@ document.addEventListener('selectionchange', () => {
 // `rich` is the contenteditable text the bar controls (always present). `getTa`, if given, is called
 // at interaction time to get the current raw-text textarea (it may not exist yet — the raw panel is
 // created lazily — so this can't be captured once up front like `rich` can).
+//
+// `rich` (the tooltip's .tt-collapsed-body) is a fixed DOM node reused across separate edit sessions —
+// `bar` is a fresh toolbar each time, though, so each call's `syncColor` closure is only valid for the
+// toolbar that was live when it was created. Without removing the previous session's listeners first,
+// they'd pile up on `rich` and keep firing (harmlessly here, but the same reuse pattern is exactly
+// what caused focusout listeners elsewhere to fire against a stale, already-detached toolbar).
 export function wireColorBar(bar, rich, getTa) {
   const ta = () => (typeof getTa === 'function' ? getTa() : null);
   const useRaw = () => document.activeElement === ta();
   const syncColor = () => { if (rich) updateColorSwatch(bar, richSelectionColor(rich)); };
   if (rich) {
+    if (rich._colorSyncHandlers) {
+      for (const [ev, fn] of rich._colorSyncHandlers) rich.removeEventListener(ev, fn);
+    }
+    const handlers = [['keyup', syncColor], ['mouseup', syncColor], ['focus', syncColor], ['input', syncColor]];
+    rich._colorSyncHandlers = handlers;
     activeRichSync = { rich, bar };
     syncColor();
-    rich.addEventListener('keyup', syncColor);
-    rich.addEventListener('mouseup', syncColor);
-    rich.addEventListener('focus', syncColor);
-    rich.addEventListener('input', syncColor);
+    for (const [ev, fn] of handlers) rich.addEventListener(ev, fn);
   }
   const pop = bar.querySelector('.tt-pop');
   const sq = bar.querySelector('.tt-color-sq');

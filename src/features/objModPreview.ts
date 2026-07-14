@@ -67,6 +67,10 @@ function metaVarType(type: string): ObjModVarType {
 const NAME_FIELDS = new Set(['unam', 'inam', 'anam', 'bnam', 'dnam', 'fnam', 'gnam']);
 const ICON_FIELDS = new Set(['uico', 'iico', 'aart', 'fart', 'gico']);
 const SUMMARY_MODEL_FIELDS = new Set(['umdl', 'amdl', 'ifil', 'bfil', 'dfil']);
+// "Categorization - Campaign"/"Categorization - Special" — these decide which Melee|Campaign and
+// Units/Buildings/Heroes/Special tree branch a unit falls under (see resolveObjectKind), so an edit
+// to either needs to refresh the object summary the same way a name/icon change does.
+const CLASSIFICATION_FIELDS = new Set(['ucam', 'uspe']);
 
 // Profile keys holding an object's display name, in priority order. Casing varies across WC3
 // profile/skin TXTs; buffs use Bufftip, some doodads use comment — try them all.
@@ -134,6 +138,11 @@ interface PreviewObject {
     overridesCount: number;
     iconPath?: string;
     modelPath?: string;
+    // World Editor-style unit classification (units file only — see resolveObjectKind): which of the
+    // Melee/Campaign x Units/Buildings/Heroes/Special buckets this object's tree row belongs to.
+    // Undefined for every other object kind (abilities, items, ...), where that grouping isn't meaningful.
+    campaign?: boolean;
+    kind?: 'unit' | 'building' | 'hero' | 'special';
 }
 
 interface PreviewMod {
@@ -193,6 +202,8 @@ interface ObjSummaryData {
     worldStrings: Map<string, string>;
     profile: ProfileTable;
     baseObjects?: Map<string, CompilerObjectRecord>;
+    heroBaseIds?: Set<string>;
+    buildingBaseIds?: Set<string>;
 }
 
 interface MetaField {
@@ -224,6 +235,14 @@ const objEditorDataCache = new Map<string, Promise<ObjEditorData | undefined>>()
 const objSummaryDataCache = new Map<string, Promise<ObjSummaryData | undefined>>();
 const objProfileCache = new Map<string, Promise<ProfileTable>>();
 const objCatalogCache = new Map<string, Promise<ObjValueCatalog>>();
+
+/** Live obj-mod editors, keyed by their main file's uri — lets a cross-reference jump (see
+ *  locateObjectAcrossSiblings) find an already-open sibling editor and select the target object in
+ *  it directly, instead of only being able to affect a freshly-opened one. */
+const openObjModDocuments = new Map<string, ObjModDocument>();
+/** Object key to select once a given uri's editor finishes loading — set right before
+ *  `vscode.openWith` opens (or reveals) that file for a cross-reference jump. */
+const pendingObjectSelection = new Map<string, string>();
 
 const CATALOG_EXTS = ['.w3u', '.w3t', '.w3a', '.w3b', '.w3d', '.w3h', '.w3q'];
 const RACE_OPTIONS: ValueOption[] = [
@@ -406,8 +425,8 @@ async function buildModel(parsed: ObjModFile, triggerStrings: TriggerStringTable
     const summaryData = await loadObjSummaryData(parsed.ext);
     return {
         objects: [
-            ...parsed.origObjs.map((entry, index) => buildObject(entry, 'Original', index, triggerStrings, summaryData)),
-            ...parsed.customObjs.map((entry, index) => buildObject(entry, 'Custom', index, triggerStrings, summaryData)),
+            ...parsed.origObjs.map((entry, index) => buildObject(entry, 'Original', index, triggerStrings, summaryData, parsed.ext)),
+            ...parsed.customObjs.map((entry, index) => buildObject(entry, 'Custom', index, triggerStrings, summaryData, parsed.ext)),
         ],
         metadataSource: summaryData?.metadataSource ?? 'override file only',
     };
@@ -419,10 +438,16 @@ function buildObject(
     index: number,
     triggerStrings: TriggerStringTable,
     summaryData: ObjSummaryData | undefined,
+    ext: string,
 ): PreviewObject {
     const resolvedName = resolveObjectNameOverride(entry, triggerStrings);
     const baseName = summaryData ? resolveBaseDisplayName(entry.baseId, summaryData) : undefined;
     const nameOverridden = resolvedName?.value !== undefined && resolvedName.value !== '';
+    // The Melee/Campaign x Units/Buildings/Heroes/Special browse grouping (see objectTree.ts on the
+    // webview side) only makes sense for units — items/abilities/etc. don't have these Categorization
+    // fields at all, so `kind`/`campaign` stay undefined there and the tree falls back to its plain
+    // Race grouping.
+    const isUnitFile = ext === '.w3u';
 
     return {
         key: `${group}:${index}`,
@@ -434,6 +459,8 @@ function buildObject(
         nameOverridden,
         race: summaryData ? resolveObjectRace(entry, summaryData) : raceFromRawcode(entry.baseId),
         overridesCount: entry.mods.length,
+        campaign: isUnitFile && summaryData ? resolveObjectBoolField(entry, 'ucam', 'campaign', summaryData) : undefined,
+        kind: isUnitFile && summaryData ? resolveObjectKind(entry, summaryData) : undefined,
         iconPath: summaryData ? resolveObjectIconPath(entry, summaryData) : undefined,
         modelPath: summaryData ? resolveObjectModelPath(entry, summaryData) : undefined,
     };
@@ -821,6 +848,30 @@ function resolveObjectRace(entry: ObjModEntry, summaryData: ObjSummaryData): str
         raceFromRawcode(entry.baseId);
 }
 
+/**
+ * True/false for a bool-typed field (stored as int 0/1) — an override wins over the base profile
+ * value. Overrides are keyed by the short field *id* (e.g. "ucam", as used in war3map.w3u), while the
+ * base profile row is keyed by the schema's longer field *name* (e.g. "campaign") — these are two
+ * different strings for the same field, both needed here.
+ */
+function resolveObjectBoolField(entry: ObjModEntry, overrideFieldId: string, profileFieldName: string, summaryData: ObjSummaryData): boolean {
+    const override = findOverrideByField(entry.mods, overrideFieldId);
+    if (override) return String(override.value) === '1';
+    return getAnyProfileValue(entry.baseId, [profileFieldName], summaryData) === '1';
+}
+
+/** World Editor-style Units/Buildings/Heroes/Special classification for a unit-file object (see the
+ *  "ucam"/"campaign" and "uspe"/"special" Categorization fields, and the compiler's hero/building id
+ *  sets) — mirrors makeObjectContext's isHero/isBuilding fallback heuristics so tree grouping and field
+ *  applicability never disagree about what an object is. */
+function resolveObjectKind(entry: ObjModEntry, summaryData: ObjSummaryData): 'unit' | 'building' | 'hero' | 'special' {
+    if (resolveObjectBoolField(entry, 'uspe', 'special', summaryData)) return 'special';
+    const isHero = summaryData.heroBaseIds?.has(entry.baseId) ?? /^[A-Z]/.test(entry.baseId);
+    if (isHero) return 'hero';
+    if (summaryData.buildingBaseIds?.has(entry.baseId)) return 'building';
+    return 'unit';
+}
+
 function resolveObjectStringField(
     entry: ObjModEntry,
     overrideFields: Set<string>,
@@ -1077,6 +1128,8 @@ async function loadObjSummaryDataUncached(ext: string): Promise<ObjSummaryData |
             worldStrings: compilerData.worldStrings,
             profile: compilerData.profile,
             baseObjects: compilerData.baseObjects,
+            heroBaseIds: compilerData.heroBaseIds,
+            buildingBaseIds: compilerData.buildingBaseIds,
         };
     }
 
@@ -1221,13 +1274,14 @@ async function loadCompilerObjData(ext: string): Promise<ObjEditorData | undefin
     const records = kb.objects[kind];
     if (!Array.isArray(schemas) || !records || schemas.length === 0) return undefined;
 
-    const fields = schemas.map(makeCompilerMetaField);
+    const worldStrings = await loadWorldEditStrings();
+    const fields = schemas.map((schema) => makeCompilerMetaField(schema, worldStrings));
     const fieldsById = new Map(fields.map((field) => [field.id.toLowerCase(), field]));
     const baseObjects = compilerLowercaseObjectView(records);
     const profile = compilerProfileView(records);
     return {
         metadataSource: 'Wurst compiler game-data knowledge base',
-        worldStrings: await loadWorldEditStrings(),
+        worldStrings,
         fields,
         fieldsById,
         slkTables: new Map(),
@@ -1247,15 +1301,19 @@ function dedupeCompilerSchemas(schemas: CompilerFieldSchema[]): CompilerFieldSch
     return [...result.values()];
 }
 
-function makeCompilerMetaField(schema: CompilerFieldSchema): MetaField {
+function makeCompilerMetaField(schema: CompilerFieldSchema, worldStrings: Map<string, string>): MetaField {
+    // The knowledge base's displayName is sometimes itself a WESTRING_ reference (e.g. "Abilities ->
+    // Skin Normal"/"Skin Hero" report as WESTRING_UEVAL_UABS/UHAS) rather than plain English — resolve
+    // it the same way object names are resolved, or the field's row label is just that raw token.
+    const displayName = schema.displayName ? resolveWorldEditString(schema.displayName, worldStrings) : undefined;
     return {
         id: schema.id,
         sourceField: schema.field,
         slkName: schema.slk,
         slkPath: SLK_NAME_TO_PATH[schema.slk],
         category: schema.category || 'other',
-        label: schema.displayName || FIELD_LABELS[schema.id.toLowerCase()] || schema.id,
-        rawLabel: schema.displayName || schema.id,
+        label: displayName || FIELD_LABELS[schema.id.toLowerCase()] || schema.id,
+        rawLabel: displayName || schema.id,
         type: schema.type || 'string',
         sort: schema.sort || schema.id,
         repeat: schema.repeat || 0,
@@ -1319,6 +1377,58 @@ function catalogWithDocumentObjects(
     parsed.origObjs.forEach((entry, index) => addEntry(entry, 'Original', index));
     parsed.customObjs.forEach((entry, index) => addEntry(entry, 'Custom', index));
     return { ...baseCatalog, objects };
+}
+
+/**
+ * Fills in friendly names for rawcodes that reference custom objects defined in a *different*
+ * war3map.<ext> file than the one currently open (e.g. a unit's Abilities list pointing at a custom
+ * ability in war3map.w3a while viewing war3map.w3u) — otherwise resolveRawcodeList has no name for
+ * them (the base game catalog only knows stock ids) and the field falls back to showing raw codes.
+ * These entries never get an `objectKey`: jumping to them goes through the openObjectReference
+ * command (see locateObjectAcrossSiblings) rather than the local same-document jump.
+ */
+async function catalogWithSiblingObjects(
+    catalog: ObjValueCatalog,
+    mainUri: vscode.Uri,
+    currentExt: string,
+    triggerStrings: TriggerStringTable,
+): Promise<ObjValueCatalog> {
+    const dir = vscode.Uri.joinPath(mainUri, '..');
+    const objects = new Map(catalog.objects);
+    for (const ext of CATALOG_EXTS) {
+        if (ext === currentExt) continue;
+        const uri = vscode.Uri.joinPath(dir, `war3map${ext}`);
+        try {
+            await vscode.workspace.fs.stat(uri);
+        } catch {
+            continue;
+        }
+        let e: EditableObjMod;
+        try {
+            e = await loadEditableObjMod(uri);
+        } catch {
+            continue;
+        }
+        const summaryData = await loadObjSummaryData(ext);
+        if (!summaryData) continue;
+        const addEntry = (entry: ObjModEntry) => {
+            const id = entry.newId || entry.baseId;
+            // A local entry (from catalogWithDocumentObjects) already has a jump-capable objectKey —
+            // don't clobber it with a same-named cross-file entry that lacks one.
+            if (objects.get(id.toLowerCase())?.objectKey) return;
+            const nameOverride = resolveObjectNameOverride(entry, triggerStrings);
+            const baseName = resolveBaseDisplayName(entry.baseId, summaryData);
+            const label = nameOverride?.value ? String(nameOverride.value) : (baseName || id);
+            objects.set(id.toLowerCase(), {
+                value: id,
+                label,
+                detail: entry.newId ? `${entry.baseId} -> ${entry.newId}` : entry.baseId,
+            });
+        };
+        e.displayFile.customObjs.forEach(addEntry);
+        e.displayFile.origObjs.filter((entry) => entry.mods.length > 0).forEach(addEntry);
+    }
+    return { ...catalog, objects };
 }
 
 function resolveProfileDisplayName(row: Record<string, string>, worldStrings: Map<string, string>): string | undefined {
@@ -1480,7 +1590,11 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
     const typeLabel = TYPE_LABELS[parsed.ext.slice(1)] ?? parsed.ext.slice(1).toUpperCase();
     const triggerStrings = loadTriggerStringsForUri(context.uri);
     const { objects, metadataSource } = await buildModel(parsed, triggerStrings);
-    const initialJson = JSON.stringify({ objects, selectedKey: objects[0]?.key ?? '', extended: parsed.extended, fileInfo: combined ?? { mainName: fileName } })
+    // A cross-reference jump (see locateObjectAcrossSiblings) stashes the object to land on here before
+    // opening/revealing this file — consumed once so a later plain reopen falls back to the first object.
+    const pendingKey = pendingObjectSelection.get(context.uri.toString());
+    if (pendingKey) pendingObjectSelection.delete(context.uri.toString());
+    const initialJson = JSON.stringify({ objects, selectedKey: pendingKey ?? objects[0]?.key ?? '', extended: parsed.extended, fileInfo: combined ?? { mainName: fileName } })
         .replace(/</g, '\\u003c')
         .replace(/>/g, '\\u003e')
         .replace(/&/g, '\\u0026')
@@ -1518,8 +1632,11 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
   --wc3-tip-bg: #000;
   --wc3-tip-fg: #fff;
   --model-bg: color-mix(in srgb, var(--bg) 72%, var(--fg) 28%);
-  /* Sticky category rows sit directly under the sticky table header (th: 7+7px padding + 1px border). */
-  --table-header-h: 31px;
+  /* Sticky category rows sit directly under the sticky table header (th: 5+5px padding + 1px border). */
+  --table-header-h: 27px;
+  /* Row height for the field table's collapsed/edit cells — kept as a variable (rather than repeating
+     the number everywhere) so the whole table's density can be tuned in one place. */
+  --cell-h: 21px;
 }
 .content {
   flex: 1;
@@ -1531,7 +1648,7 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
   overflow: hidden;
 }
 .md-header {
-  padding: 10px 16px 9px;
+  padding: 8px 16px 7px;
   border-bottom: 1px solid var(--border);
   background: var(--sidebar);
   flex-shrink: 0;
@@ -1615,21 +1732,6 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   word-break: break-word;
   overflow: auto;
 }
-.tt-raw-panel {
-  color: var(--muted);
-  font-family: var(--vscode-font-family, sans-serif);
-  font-size: 11px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-  padding-top: 6px;
-}
-.tt-raw-panel[hidden] { display: none; }
-.tt-raw-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 5px;
-}
-.tt-raw-head span { flex: 1; min-width: 0; }
 .tt-raw-toggle,
 .tt-copy-raw {
   margin-left: 4px;
@@ -1645,12 +1747,30 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 .tt-raw-toggle.active,
 .tt-raw-toggle:hover,
 .tt-copy-raw:hover { background: var(--hover); }
-.tt-raw-panel .tt-raw-input {
-  display: block;
-  margin-top: 5px;
-  min-height: 92px;
-  max-height: 220px;
+/* In-place raw-text view: same box the rich editor occupies (.tt-collapsed-body), just swapped for a
+   plain textarea showing the literal WC3 string (color codes, |n line breaks) — so toggling Raw never
+   resizes the floating toolbar or shifts anything else on the page. */
+.tt-collapsed-raw {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  color: inherit;
+  border: none;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-family: var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
+/* An explicit display on the base rule above would beat the UA [hidden] default regardless of the
+   hidden DOM attribute (author styles win over UA styles even at equal specificity) — this is what
+   made both the rich box and the raw textarea show at once after toggling. This rule keeps [hidden]
+   authoritative. */
+.tt-collapsed-raw[hidden] { display: none; }
 .tt-preview.tt-readonly {
   display: inline-block;
   max-width: 100%;
@@ -1663,7 +1783,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   min-width: 0;
   min-height: var(--cell-h, 24px);
   box-sizing: border-box;
-  padding: 2px 6px;
+  padding: 1px 6px;
   border: 1px solid transparent;
   border-radius: 3px;
   background: var(--wc3-tip-bg);
@@ -1721,12 +1841,11 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   margin-left: 2px;
   border-left: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
 }
-.tt-float-raw { min-width: 260px; }
-.tt-float-raw[hidden] { display: none; }
 .cell-edit {
-  display: inline-flex;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 4px 6px;
   width: 100%;
   min-width: 0;
   min-height: var(--cell-h, 24px); /* same height as the single-line editor → no row resize on edit */
@@ -2143,8 +2262,10 @@ tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--acce
 .field-search-wrap {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  row-gap: 4px;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: 6px;
 }
 .field-search {
   flex: 1;
@@ -2325,12 +2446,36 @@ tr.hidden { display: none; }
   text-align: left;
   cursor: pointer;
 }
+/* World Editor-style Melee/Campaign and Units/Buildings/Heroes/Special sub-folders (units files only —
+   see the "kind" field set in buildObject). Condensed: same tight vertical rhythm as race-heading,
+   just indented further and a touch smaller/lighter so the hierarchy reads at a glance without eating
+   extra height. */
+.camp-heading,
+.kind-heading {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.camp-heading { padding: 2px 10px 2px 32px; }
+.kind-heading { padding: 2px 10px 2px 42px; font-weight: 500; }
 .group-heading:hover,
-.race-heading:hover {
+.race-heading:hover,
+.camp-heading:hover,
+.kind-heading:hover {
   background: var(--hover);
 }
 .group-heading:focus-visible,
 .race-heading:focus-visible,
+.camp-heading:focus-visible,
+.kind-heading:focus-visible,
 .object-row:focus-visible {
   outline: 1px solid var(--vscode-focusBorder, #007fd4);
   outline-offset: -1px;
@@ -2364,6 +2509,9 @@ tr.hidden { display: none; }
   line-height: 1.25;
   cursor: pointer;
 }
+/* Nested one level deeper under a kind-heading (Units/Buildings/Heroes/Special) than a plain
+   race-heading — matches kind-heading's own indent so rows still read as its children. */
+.object-row.nested { padding-left: 46px; }
 .object-row:hover { background: var(--hover); }
 .object-row.active {
   background: var(--active);
@@ -2473,13 +2621,18 @@ tr.hidden { display: none; }
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin-left: auto;
   color: var(--muted);
   font-size: 12px;
   cursor: pointer;
   user-select: none;
 }
 .toggle-chip input { margin: 0; }
+.toggle-chip-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
 .table-wrap {
   flex: 1;
   min-height: 0;
@@ -2500,12 +2653,12 @@ th {
   z-index: 1;
   background: var(--vscode-editorGroupHeader-tabsBackground, var(--sidebar));
   text-align: left;
-  padding: 7px 8px;
+  padding: 5px 8px;
   font-weight: 600;
   border-bottom: 1px solid var(--border);
 }
 td {
-  padding: 6px 8px;
+  padding: 3px 8px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
   vertical-align: top;
 }
@@ -2546,7 +2699,7 @@ tr.overridden td {
   position: sticky;
   top: var(--table-header-h);
   z-index: 1;
-  padding: 7px 8px 5px;
+  padding: 5px 8px 4px;
   background: var(--vscode-editorGroupHeader-tabsBackground, var(--sidebar));
   color: var(--muted);
   font-size: 11px;
@@ -2715,7 +2868,8 @@ async function loadObjectDetails(key: string, webview: vscode.Webview, doc: ObjM
         const wts = doc.wtsTable;
         const gameData = await loadObjEditorData(doc.displayFile.ext);
         if (gameData && !doc.objectCatalog) {
-            doc.objectCatalog = catalogWithDocumentObjects(await loadObjValueCatalog(), doc.displayFile, wts, gameData);
+            const withDocObjects = catalogWithDocumentObjects(await loadObjValueCatalog(), doc.displayFile, wts, gameData);
+            doc.objectCatalog = await catalogWithSiblingObjects(withDocObjects, doc.mainUri, doc.displayFile.ext, wts);
         }
         const mods = gameData && doc.objectCatalog
             ? buildFieldRows(
@@ -2761,12 +2915,12 @@ async function buildObjectForKey(doc: ObjModDocument, key: string): Promise<Prev
     if (!parts) return undefined;
     const entry = findEntryByKey(doc.displayFile, key);
     if (!entry) return undefined;
-    return buildObject(entry, parts.group, parts.index, doc.wtsTable, await loadObjSummaryData(doc.displayFile.ext));
+    return buildObject(entry, parts.group, parts.index, doc.wtsTable, await loadObjSummaryData(doc.displayFile.ext), doc.displayFile.ext);
 }
 
 function isSummaryField(fieldId: string): boolean {
     const id = fieldId.toLowerCase();
-    return NAME_FIELDS.has(id) || ICON_FIELDS.has(id) || SUMMARY_MODEL_FIELDS.has(id);
+    return NAME_FIELDS.has(id) || ICON_FIELDS.has(id) || SUMMARY_MODEL_FIELDS.has(id) || CLASSIFICATION_FIELDS.has(id);
 }
 
 async function postObjectSummary(webview: vscode.Webview, doc: ObjModDocument, key: string): Promise<void> {
@@ -2961,6 +3115,38 @@ async function loadEditableObjMod(uri: vscode.Uri): Promise<EditableObjMod> {
     return { mainFile: openedParse, mainUri: uri, displayFile: openedParse };
 }
 
+/**
+ * Cross-file rawcode lookup for object-reference chips (e.g. a unit's Abilities list pointing at a
+ * custom ability that lives in this map's own war3map.w3a, not the currently open file). Object files
+ * for a single map all sit beside each other as war3map.<ext> (see getObjModSiblingFileName), so this
+ * just tries each known kind's file in the same folder as `sourceUri` and searches its merged object
+ * list for a customized entry with a matching id. Returns undefined for stock (never-customized)
+ * rawcodes — there's no file to jump to for those.
+ */
+async function locateObjectAcrossSiblings(sourceUri: vscode.Uri, rawcode: string): Promise<{ uri: vscode.Uri; key: string } | undefined> {
+    const dir = vscode.Uri.joinPath(sourceUri, '..');
+    const needle = rawcode.toLowerCase();
+    for (const ext of CATALOG_EXTS) {
+        const uri = vscode.Uri.joinPath(dir, `war3map${ext}`);
+        try {
+            await vscode.workspace.fs.stat(uri);
+        } catch {
+            continue;
+        }
+        let e: EditableObjMod;
+        try {
+            e = await loadEditableObjMod(uri);
+        } catch {
+            continue;
+        }
+        const customIdx = e.displayFile.customObjs.findIndex((entry) => (entry.newId || entry.baseId).toLowerCase() === needle);
+        if (customIdx >= 0) return { uri, key: `Custom:${customIdx}` };
+        const origIdx = e.displayFile.origObjs.findIndex((entry) => entry.mods.length > 0 && entry.baseId.toLowerCase() === needle);
+        if (origIdx >= 0) return { uri, key: `Original:${origIdx}` };
+    }
+    return undefined;
+}
+
 class ObjModDocument implements vscode.CustomDocument {
     wtsEdits = new Map<number, string>();
     reload: (() => Promise<void>) | undefined;
@@ -3001,7 +3187,9 @@ class ObjModDocument implements vscode.CustomDocument {
         };
     }
 
-    dispose(): void {}
+    dispose(): void {
+        openObjModDocuments.delete(this.mainUri.toString());
+    }
 }
 
 function uriBaseName(uri: vscode.Uri): string {
@@ -3040,6 +3228,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         const fileName = doc.uri.path.slice(doc.uri.path.lastIndexOf('/') + 1);
         const ctx: ParsedPreviewContext = { uri: doc.uri, webview: panel.webview };
         doc.panelWebview = panel.webview;
+        openObjModDocuments.set(doc.mainUri.toString(), doc);
         const mdxViewerUri = panel.webview.asWebviewUri(
             vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', 'mdxViewer.js'),
         ).toString();
@@ -3072,9 +3261,14 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             type?: string; key?: string; iconPath?: string; path?: string;
             cacheKey?: string; aliasKey?: string; webpBase64?: string; thumbKey?: string; phase?: string; elapsedMs?: number; deltaMs?: number; detail?: string;
             fieldId?: string; varType?: string; level?: number | null; dataPt?: number | null; value?: string;
+            rawcode?: string; label?: string;
         };
         if (msg.type === 'loadObjectDetails' && msg.key) {
             await loadObjectDetails(msg.key, webview, doc);
+            return;
+        }
+        if (msg.type === 'openObjectReference' && msg.rawcode) {
+            await this.openObjectReference(doc, msg.rawcode, msg.label);
             return;
         }
         if (msg.type === 'loadObjectIcon' && msg.key && msg.iconPath) {
@@ -3174,6 +3368,26 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
 
     private postDirtyState(doc: ObjModDocument): void {
         void doc.panelWebview?.postMessage({ type: 'dirtyStateChanged', isDirty: doc.editDepth !== doc.savedDepth });
+    }
+
+    /** A rawcode chip (e.g. an ability on a unit) that isn't overridden in the currently open file —
+     *  try to find which sibling war3map.* file actually customizes it and jump there. Stock/never-
+     *  customized rawcodes have nothing to open, so that's reported back as a plain info message. */
+    private async openObjectReference(doc: ObjModDocument, rawcode: string, label?: string): Promise<void> {
+        const found = await locateObjectAcrossSiblings(doc.mainUri, rawcode);
+        if (!found) {
+            void vscode.window.showInformationMessage(
+                `${label ? `${label} (${rawcode})` : rawcode} is a stock Warcraft III object — it isn't customized anywhere in this map, so there's nothing to open.`,
+            );
+            return;
+        }
+        const alreadyOpen = openObjModDocuments.get(found.uri.toString());
+        if (alreadyOpen?.panelWebview) {
+            void alreadyOpen.panelWebview.postMessage({ type: 'selectObject', key: found.key });
+        } else {
+            pendingObjectSelection.set(found.uri.toString(), found.key);
+        }
+        await vscode.commands.executeCommand('vscode.openWith', found.uri, 'wurst.objModPreview');
     }
 
     async saveCustomDocument(doc: ObjModDocument): Promise<void> {

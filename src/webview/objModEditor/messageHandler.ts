@@ -2,7 +2,7 @@
 import { details, detailCache, pendingDetails, failedDetails, objects, ui, iconLoader } from './state';
 import { setModValue } from './fieldDisplay';
 import { renderDetails, updateFieldCell } from './detailsPanel';
-import { updateObjectRow, updateDetailsHeader } from './objectTree';
+import { updateObjectRow, updateDetailsHeader, render, renderTree } from './objectTree';
 import {
   completeModelThumbHostRequest,
   pendingModelThumbs,
@@ -99,15 +99,26 @@ export function setupMessageHandler() {
         if (tr) tr.classList.toggle('overridden', !!mod.overridden);
         updateFieldCell(mods, mod);
       }
+    } else if (msg.type === 'selectObject' && msg.key) {
+      // Cross-file rawcode jump landed on this already-open editor (see openObjectReference in
+      // objModPreview.ts) — switch straight to the target object, same as clicking it in the tree.
+      ui.selectedKey = msg.key;
+      render();
     } else if (msg.type === 'objectUpdated' && msg.object && msg.object.key) {
       const index = objects.findIndex(obj => obj.key === msg.object.key);
       if (index < 0) return;
       const oldIcon = objects[index].iconPath || '';
+      // Campaign/kind/race decide which tree branch this row lives under (see renderTree) — if editing
+      // pushed it into a different branch, an in-place row swap would leave it under the wrong heading
+      // until the next full render, so rebuild the tree instead of just patching this one row.
+      const oldBranch = objects[index].race + ':' + objects[index].campaign + ':' + objects[index].kind;
       Object.assign(objects[index], msg.object);
+      const newBranch = objects[index].race + ':' + objects[index].campaign + ':' + objects[index].kind;
       if (oldIcon !== (objects[index].iconPath || '')) {
         iconLoader.clearPrefix(objects[index].key + ':icon:');
       }
-      updateObjectRow(objects[index]);
+      if (oldBranch !== newBranch) renderTree();
+      else updateObjectRow(objects[index]);
       updateDetailsHeader(objects[index]);
     } else if (msg.type === 'dirtyStateChanged') {
       const badge = document.getElementById('editable-badge');

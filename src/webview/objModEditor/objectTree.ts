@@ -52,14 +52,22 @@ const KNOWN_RACES = ['human', 'orc', 'nightelf', 'undead', 'neutral', 'naga', 'd
 // Typing a race name (or a fuzzy near-miss of one) in the object search finds every object of that
 // race, not just ones whose own name/id happens to contain it — same convenience as the World
 // Editor's race folders, but reachable from the search box.
+//
+// `matches()` below calls this once per object during a `.filter(matches)` pass, but the query is the
+// same for every object in that pass — so the last {query, hits} pair is cached here (transparent to
+// callers) instead of re-looping over KNOWN_RACES and re-running fuzzyMatch up to 8x per object.
+let racesQueryCache = { query: null, hits: new Set() };
 export function raceKeysMatchingQuery(query) {
   const q = String(query || '').trim().toLowerCase();
+  if (racesQueryCache.query === q) return racesQueryCache.hits;
   const hits = new Set();
-  if (!q) return hits;
-  for (const race of KNOWN_RACES) {
-    const label = raceLabel(race).toLowerCase();
-    if (race === q || label === q || race.startsWith(q) || label.startsWith(q) || fuzzyMatch(q, label)) hits.add(race);
+  if (q) {
+    for (const race of KNOWN_RACES) {
+      const label = raceLabel(race).toLowerCase();
+      if (race === q || label === q || race.startsWith(q) || label.startsWith(q) || fuzzyMatch(q, label)) hits.add(race);
+    }
   }
+  racesQueryCache = { query: q, hits };
   return hits;
 }
 
@@ -134,19 +142,44 @@ export function renderTree() {
   }
 
   const groups = ['Original', 'Custom'];
+  // Single bucketing pass over `visible` instead of a cascading `.filter()` at each tree level (group ->
+  // race -> campaign -> kind) — the old version rescanned its parent array at every level, which on a
+  // large .w3u file (600+ objects) multiplies out across all four nesting depths on every keystroke.
+  const raceBucketsByGroup = new Map(); // group -> Map<race, { all: obj[], camp: Map<campToken, Map<kind, obj[]>> }>
+  for (const group of groups) raceBucketsByGroup.set(group, new Map());
+  for (const obj of visible) {
+    const raceBuckets = raceBucketsByGroup.get(obj.group);
+    if (!raceBuckets) continue; // group isn't 'Original'/'Custom' — excluded, same as the old .filter()
+    const race = obj.race || 'other';
+    let bucket = raceBuckets.get(race);
+    if (!bucket) { bucket = { all: [], camp: new Map() }; raceBuckets.set(race, bucket); }
+    bucket.all.push(obj);
+    if (obj.kind !== undefined) {
+      const campToken = obj.campaign ? 'campaign' : 'melee';
+      let campMap = bucket.camp.get(campToken);
+      if (!campMap) { campMap = new Map(); bucket.camp.set(campToken, campMap); }
+      let kindArr = campMap.get(obj.kind);
+      if (!kindArr) { kindArr = []; campMap.set(obj.kind, kindArr); }
+      kindArr.push(obj);
+    }
+  }
+
   let html = '';
   for (const group of groups) {
-    const groupObjects = visible.filter(obj => obj.group === group);
-    if (!groupObjects.length) continue;
+    const raceBuckets = raceBucketsByGroup.get(group);
+    let groupCount = 0;
+    for (const bucket of raceBuckets.values()) groupCount += bucket.all.length;
+    if (!groupCount) continue;
     const groupKey = 'group:' + group;
     const groupClosed = collapsedNodes.has(groupKey);
-    html += headingHtml('group', groupKey, group + ' Objects', groupObjects.length, groupClosed);
+    html += headingHtml('group', groupKey, group + ' Objects', groupCount, groupClosed);
     if (groupClosed) continue;
 
-    const races = Array.from(new Set(groupObjects.map(obj => obj.race || 'other')))
+    const races = Array.from(raceBuckets.keys())
       .sort((a, b) => raceRank(a) - raceRank(b) || raceLabel(a).localeCompare(raceLabel(b)));
     for (const race of races) {
-      const raceObjects = groupObjects.filter(obj => (obj.race || 'other') === race);
+      const bucket = raceBuckets.get(race);
+      const raceObjects = bucket.all;
       const raceKey = 'race:' + group + ':' + race;
       const raceClosed = collapsedNodes.has(raceKey);
       html += headingHtml('race', raceKey, raceLabel(race), raceObjects.length, raceClosed);
@@ -159,16 +192,19 @@ export function renderTree() {
         continue;
       }
       for (const isCampaign of [false, true]) {
-        const campObjects = raceObjects.filter(obj => !!obj.campaign === isCampaign);
-        if (!campObjects.length) continue;
         const campToken = isCampaign ? 'campaign' : 'melee';
+        const campMap = bucket.camp.get(campToken);
+        if (!campMap) continue;
+        let campCount = 0;
+        for (const arr of campMap.values()) campCount += arr.length;
+        if (!campCount) continue;
         const campKey = 'camp:' + group + ':' + race + ':' + campToken;
         const campClosed = collapsedNodes.has(campKey);
-        html += headingHtml('camp', campKey, isCampaign ? 'Campaign' : 'Melee', campObjects.length, campClosed);
+        html += headingHtml('camp', campKey, isCampaign ? 'Campaign' : 'Melee', campCount, campClosed);
         if (campClosed) continue;
         for (const kind of KIND_ORDER) {
-          const kindObjects = campObjects.filter(obj => obj.kind === kind);
-          if (!kindObjects.length) continue;
+          const kindObjects = campMap.get(kind);
+          if (!kindObjects || !kindObjects.length) continue;
           const kindKey = 'kind:' + group + ':' + race + ':' + campToken + ':' + kind;
           const kindClosed = collapsedNodes.has(kindKey);
           html += headingHtml('kind', kindKey, KIND_LABELS[kind], kindObjects.length, kindClosed);

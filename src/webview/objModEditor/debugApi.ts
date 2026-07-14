@@ -31,6 +31,87 @@ export function installDebugApi() {
       selectObject(obj.key);
       return true;
     },
+    // Drives the real click-to-edit code path (the delegated #details click handler), rather than
+    // calling internals directly — an e2e clicking through the actual DOM is the point.
+    openFirstTooltipField: function () {
+      const el = document.querySelector('.tt-collapsed[data-mi]');
+      if (!el) return false;
+      el.click();
+      return true;
+    },
+    getEditableBodyText: function () {
+      const body = document.querySelector('.tt-collapsed-body[contenteditable="true"]');
+      return body ? body.textContent : null;
+    },
+    getEditableBodyHtml: function () {
+      const body = document.querySelector('.tt-collapsed-body[contenteditable="true"]');
+      return body ? body.innerHTML : null;
+    },
+    setEditableBodyText: function (text) {
+      const body = document.querySelector('.tt-collapsed-body[contenteditable="true"]');
+      if (!body) return false;
+      body.textContent = String(text == null ? '' : text);
+      body.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    },
+    // Selection-API only (no clipboard access here) — the actual copy/cut/paste has to be a real,
+    // OS-trusted keystroke (see the CDP Input.dispatchKeyEvent calls in the e2e script), since
+    // execCommand('copy'/'cut') silently no-ops for script-synthesized events with no user gesture.
+    selectAllInEditableBody: function () {
+      const body = document.querySelector('.tt-collapsed-body[contenteditable="true"]');
+      if (!body) return false;
+      body.focus();
+      const range = document.createRange();
+      range.selectNodeContents(body);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return true;
+    },
+    // Diagnostic only: what's actually selected + what has focus, right before dispatching a real
+    // Ctrl+C/X, to catch a selection/focus race instead of guessing at one.
+    getSelectionDebugInfo: function () {
+      const body = document.querySelector('.tt-collapsed-body[contenteditable="true"]');
+      const sel = window.getSelection();
+      return {
+        activeElementTag: document.activeElement ? document.activeElement.tagName : null,
+        activeElementClass: document.activeElement ? document.activeElement.className : null,
+        bodyIsActive: document.activeElement === body,
+        selectionText: sel ? sel.toString() : null,
+        selectionRangeCount: sel ? sel.rangeCount : 0,
+        documentHasFocus: document.hasFocus(),
+      };
+    },
+    // Diagnostic only: reads the OS clipboard directly (bypassing the editable body entirely) so a
+    // failed paste-back check can tell whether Ctrl+C never reached the OS clipboard at all, versus
+    // reaching it fine but Ctrl+V failing to insert it.
+    readClipboardText: async function () {
+      try {
+        if (!navigator.clipboard || !navigator.clipboard.readText) return { ok: false, reason: 'no-clipboard-api' };
+        const text = await navigator.clipboard.readText();
+        return { ok: true, text };
+      } catch (e) {
+        return { ok: false, reason: String(e && e.message || e) };
+      }
+    },
+    focusEditableBody: function () {
+      const body = document.querySelector('.tt-collapsed-body[contenteditable="true"]');
+      if (!body) return false;
+      body.focus();
+      return true;
+    },
+    getFloatToolbarRect: function () {
+      const toolbar = document.querySelector('.tt-float-toolbar');
+      if (!toolbar) return null;
+      const r = toolbar.getBoundingClientRect();
+      return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+    },
+    getEditableBoxRect: function () {
+      const box = document.querySelector('.tt-collapsed-box');
+      if (!box) return null;
+      const r = box.getBoundingClientRect();
+      return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+    },
     layout: function () {
       const editor = document.getElementById('object-editor');
       const list = document.querySelector('.object-list');

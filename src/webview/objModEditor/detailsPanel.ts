@@ -5,7 +5,7 @@ import { details, detailCache, pendingDetails, failedDetails, ui, vscodeApi, ico
 import { categoryLabel, categoryKey, objectIconHtml, matches, render } from './objectTree';
 import { sourcePill, valueCell, postEdit, setModValue, editorHtml, collapsedView, normalizeNumberValue, needsColorEditor, tooltipToolbarHtml } from './fieldDisplay';
 import { observeModelThumbs } from './modelThumbnails';
-import { wireColorBar, setCaretEnd, richToWc3, forcePlainTextPaste, wrapColor, applyRichColor, updateColorSwatch, containsNode } from './richTextEditor';
+import { wireColorBar, setCaretEnd, richToWc3, forcePlainTextPaste, forceWc3ColorCopy, wrapColor, applyRichColor, updateColorSwatch, containsNode } from './richTextEditor';
 import { openAssetBrowser } from './assetBrowser';
 import { showModelPreview } from './modelPreviewPanel';
 
@@ -373,6 +373,7 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
   body.classList.add('edit-rich'); // reused by Ctrl+S / undo-vs-native-undo detection elsewhere
   collapsed.classList.add('tt-editing');
   forcePlainTextPaste(body);
+  forceWc3ColorCopy(body);
 
   // Raw view swaps in this textarea right beside the rich body, inside the same .tt-collapsed-box (see
   // objModPreview.ts) — toggling never touches the floating toolbar's own size/position, so there's

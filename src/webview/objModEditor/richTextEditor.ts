@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { renderWc3Colors } from '../objModWebviewUtils';
 
 // Current selection range for a textarea (kept fresh even after blur, so toolbar/color-picker work).
 export function taRange(ta) {
@@ -126,10 +127,20 @@ export function applyRichColor(rich, color) {
   rich.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-// Force plain-text paste into a contenteditable. richToWc3() only understands <br> and inline color —
-// anything else a browser paste brings in (bold, fonts, images, Word markup) would render in the
-// preview but then silently vanish from the saved value on the next input event, with no indication
-// anything changed.
+// Same "does this look like it has WC3 markup" check as fieldDisplay.ts's hasColorMarkup — duplicated
+// rather than imported (it's three lines, and richTextEditor.ts otherwise has no dependency on
+// fieldDisplay.ts) so pasted/copied text can be told apart from ordinary plain text.
+function looksLikeWc3Markup(v) {
+  const s = String(v == null ? '' : v).toLowerCase();
+  return s.indexOf('|c') !== -1 || s.indexOf('|n') !== -1 || s.indexOf('|r') !== -1 || s.indexOf(String.fromCharCode(10)) !== -1;
+}
+
+// Force plain-text paste into a contenteditable, EXCEPT when the pasted text itself is WC3 markup
+// (|cffRRGGBB.../|n/|r — e.g. something copied from this same tooltip editor, or straight out of game
+// data), in which case it's rendered as colors instead of showing the literal codes as text. Browser
+// paste brings in far more than richToWc3() understands (bold, fonts, images, Word markup) — that
+// would render in the preview but then silently vanish from the saved value on the next input event,
+// with no indication anything changed, hence forcing everything else down to plain text.
 // `el` (the tooltip's .tt-collapsed-body) is a fixed DOM node that gets re-entered into edit mode
 // repeatedly across separate click-to-edit sessions — this only needs wiring once, ever, so a second
 // call is a no-op rather than stacking another paste listener (which would insert pasted text twice).
@@ -138,9 +149,74 @@ export function forcePlainTextPaste(el) {
   el._pastePlainWired = true;
   el.addEventListener('paste', e => {
     e.preventDefault();
-    const text = (e.clipboardData || window.clipboardData).getData('text/plain');
-    document.execCommand('insertText', false, text);
+    const cd = e.clipboardData || window.clipboardData;
+    const text = cd.getData('text/plain');
+    if (!text) return;
+    // execCommand('insertText') silently no-ops here often enough to matter: a box that was just
+    // cleared and re-focused programmatically (e.g. right before a paste) doesn't always have the
+    // browser-established caret/Range execCommand relies on, so the paste event fires with the right
+    // clipboard text but nothing gets inserted. Inserting through the Selection/Range API directly
+    // works regardless of how the caret got there, and still lands inside the existing undo
+    // transaction the same way execCommand would.
+    const sel = window.getSelection();
+    const hasRange = sel && sel.rangeCount && el.contains(sel.getRangeAt(0).commonAncestorContainer);
+    const markup = looksLikeWc3Markup(text);
+    if (hasRange) {
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      let lastNode;
+      if (markup) {
+        const tmp = document.createElement('div');
+        tmp.innerHTML = renderWc3Colors(text);
+        const frag = document.createDocumentFragment();
+        while (tmp.firstChild) { lastNode = tmp.firstChild; frag.appendChild(lastNode); }
+        range.insertNode(frag);
+      } else {
+        lastNode = document.createTextNode(text);
+        range.insertNode(lastNode);
+      }
+      if (lastNode) { range.setStartAfter(lastNode); range.collapse(true); }
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } else if (markup) {
+      el.insertAdjacentHTML('beforeend', renderWc3Colors(text));
+    } else {
+      el.textContent += text;
+    }
+    el.dispatchEvent(new Event('input', { bubbles: true }));
   });
+}
+
+// Makes native copy/cut on a tooltip's rich contenteditable put the raw WC3 string (|cffRRGGBB.../|n/
+// |r) on the clipboard instead of the browser's default plain-text serialization (which just reads off
+// rendered characters/colors, discarding the codes that produced them) — so a copy-paste round trip,
+// even into a different tooltip field or a plain text editor, preserves formatting instead of silently
+// flattening it. Copies just the selection if there is one (matching the toolbar's own Copy button),
+// otherwise the whole tooltip. Cut additionally removes the selected content, same as native cut would.
+export function forceWc3ColorCopy(el) {
+  if (el._copyWc3Wired) return;
+  el._copyWc3Wired = true;
+  const handler = e => {
+    const sel = window.getSelection();
+    const hasSelection = sel && sel.rangeCount && !sel.isCollapsed && containsNode(el, sel.anchorNode) && containsNode(el, sel.focusNode);
+    let text;
+    if (hasSelection) {
+      const wrap = document.createElement('div');
+      wrap.appendChild(sel.getRangeAt(0).cloneContents());
+      text = richToWc3(wrap);
+    } else {
+      text = richToWc3(el);
+    }
+    const cd = e.clipboardData || window.clipboardData;
+    cd.setData('text/plain', text);
+    e.preventDefault();
+    if (e.type === 'cut' && hasSelection) {
+      sel.getRangeAt(0).deleteContents();
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  };
+  el.addEventListener('copy', handler);
+  el.addEventListener('cut', handler);
 }
 
 // Only one tooltip/color editor is ever open at a time in practice, so a single shared listener

@@ -350,6 +350,10 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
 
   const body = collapsed.querySelector('.tt-collapsed-body');
   if (!body) return;
+  // The floating toolbar anchors to the actual tooltip box, not `collapsed` (the outer row) — that row
+  // also contains the source-pill/edit-hint beside the box (see fieldDisplay.ts), so its rect extends
+  // well past the box itself and threw the toolbar's position off to the right.
+  const box = collapsed.querySelector('.tt-collapsed-box') || collapsed;
 
   // Same node before and after — the click's caret position is already valid for the body once it's
   // made editable, no coordinate remapping needed.
@@ -370,8 +374,8 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
   collapsed.classList.add('tt-editing');
   forcePlainTextPaste(body);
 
-  // Raw view swaps in this textarea right beside the rich body, in the same flex row (see .tt-collapsed
-  // in objModPreview.ts) — toggling never touches the floating toolbar's own size/position, so there's
+  // Raw view swaps in this textarea right beside the rich body, inside the same .tt-collapsed-box (see
+  // objModPreview.ts) — toggling never touches the floating toolbar's own size/position, so there's
   // nothing to reposition and nothing that can misfire the outside-click/scroll-close listeners below.
   const rawArea = document.createElement('textarea');
   rawArea.className = 'tt-collapsed-raw';
@@ -384,7 +388,7 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
   toolbar.className = 'tt-float-toolbar';
   toolbar.innerHTML = tooltipToolbarHtml(mi, original);
   document.body.appendChild(toolbar);
-  positionFloatToolbar(toolbar, collapsed.getBoundingClientRect());
+  positionFloatToolbar(toolbar, box.getBoundingClientRect());
 
   activeTooltipEdit = { collapsed, body, rawArea, toolbar, mi, original, rawMode: false };
 

@@ -1,8 +1,9 @@
 // @ts-nocheck
 import { fuzzyMatch } from '../../features/preview/fuzzy';
 import { esc, renderWc3Colors } from '../objModWebviewUtils';
+import { batch, effect, untracked } from '../signals';
 import { details, detailCache, pendingDetails, failedDetails, ui, vscodeApi, iconLoader, initial, objects } from './state';
-import { categoryLabel, categoryKey, objectIconHtml, matches, render } from './objectTree';
+import { categoryLabel, categoryKey, objectIconHtml, matches, selectObject } from './objectTree';
 import { sourcePill, valueCell, postEdit, setModValue, editorHtml, collapsedView, normalizeNumberValue, needsColorEditor, tooltipToolbarHtml } from './fieldDisplay';
 import { observeModelThumbs } from './modelThumbnails';
 import { wireColorBar, setCaretEnd, richToWc3, forcePlainTextPaste, forceWc3ColorCopy, wrapColor, applyRichColor, updateColorSwatch, containsNode } from './richTextEditor';
@@ -21,10 +22,6 @@ export function retryDetails(key) {
   failedDetails.delete(key);
   if (key === ui.selectedKey) renderDetails();
   else requestDetails(obj);
-}
-
-function persistHiddenCategories() {
-  vscodeApi.setState(Object.assign({}, vscodeApi.getState() || {}, { hiddenCategories: Array.from(ui.hiddenCategories) }));
 }
 
 // The real WC3 category vocabulary (sound/pathing/editor-only/... on top of the common abil/art/
@@ -60,13 +57,29 @@ function categoryFilterHtml() {
   '</div>';
 }
 
+// Tracks which object's field table is currently painted (module-scope, not exported): renderDetails()
+// reassigns details.innerHTML on every call — including for reasons other than switching objects, like
+// toggling technical mode — which destroys and recreates the scrollable .table-wrap every time. Unlike
+// the object tree (see renderTree() in objectTree.ts), the right response here depends on WHY it's
+// rebuilding: same object → carry the scroll forward (nothing about the content actually changed
+// position-wise); different object → start at the top, since a saved offset means nothing for a
+// completely different field list; very first paint → resume the position restored from persisted
+// state (see state.ts's detailsScrollTop), same intent as switching back to the same object.
+let lastRenderedKey = null;
+
 export function renderDetails() {
   exitTooltipEdit(true); // about to rebuild #details — the in-place editor's anchor is going stale
   const obj = objects.find(candidate => candidate.key === ui.selectedKey) || objects.find(matches) || objects[0];
   if (!obj) {
     details.innerHTML = '<div class="empty-state">No object modifications</div>';
+    lastRenderedKey = null;
     return;
   }
+  const prevTable = details.querySelector('.table-wrap');
+  const scrollTop = lastRenderedKey === null
+    ? ui.detailsScrollTop
+    : (lastRenderedKey === obj.key && prevTable ? prevTable.scrollTop : 0);
+  lastRenderedKey = obj.key;
   ui.selectedKey = obj.key;
   const headers = ui.showTechnical
     ? (initial.extended ? ['Field', 'Label', 'Group', 'Type', 'Level', 'Data', 'Value'] : ['Field', 'Label', 'Group', 'Type', 'Value'])
@@ -109,16 +122,19 @@ export function renderDetails() {
         '<span class="details-rawcode">' + rawcode + '</span>' +
         (obj.displaySource ? sourcePill({ source: obj.displaySource }) : '') + '</div>' +
     '</div>' +
+    // hideEmpty/hideUnmodified/fieldQuery are read untracked here: they only seed these controls'
+    // initial DOM state. Toggling them re-applies via the lighter filterFields() effect below instead
+    // of rebuilding this whole table (see the second effect wired in setupDetails()).
     (mods ? '<div class="field-search-wrap">' +
-      '<input id="field-search" class="field-search" type="text" placeholder="Search fields…" aria-label="Search fields" spellcheck="false" value="' + esc(ui.fieldQuery) + '">' +
+      '<input id="field-search" class="field-search" type="text" placeholder="Search fields…" aria-label="Search fields" spellcheck="false" value="' + esc(untracked(() => ui.fieldQuery)) + '">' +
       '<span id="field-match" class="field-match" role="status" aria-live="polite"></span>' +
       categoryFilterHtml() +
       // Grouped so only the group as a whole gets pushed to the right edge (margin-left: auto on
       // *each* chip individually would split the leftover space between all of them, scattering them
       // across the bar instead of clustering them together).
       '<div class="toggle-chip-group">' +
-        '<label class="toggle-chip"><input id="hide-empty-toggle" type="checkbox" ' + (ui.hideEmpty ? 'checked' : '') + '> hide empty</label>' +
-        '<label class="toggle-chip"><input id="hide-unmodified-toggle" type="checkbox" ' + (ui.hideUnmodified ? 'checked' : '') + '> modified only</label>' +
+        '<label class="toggle-chip"><input id="hide-empty-toggle" type="checkbox" ' + (untracked(() => ui.hideEmpty) ? 'checked' : '') + '> hide empty</label>' +
+        '<label class="toggle-chip"><input id="hide-unmodified-toggle" type="checkbox" ' + (untracked(() => ui.hideUnmodified) ? 'checked' : '') + '> modified only</label>' +
         '<label class="toggle-chip"><input id="technical-toggle" type="checkbox" ' + (ui.showTechnical ? 'checked' : '') + '> technical</label>' +
       '</div>' +
     '</div>' : '') +
@@ -134,44 +150,41 @@ export function renderDetails() {
         '</div></div>'
       : '<div class="details-loading"><div><div class="wv-spinner"></div><div class="wv-loading-text">Loading fields...</div></div></div>');
 
+  const newTable = details.querySelector('.table-wrap');
+  if (newTable) newTable.scrollTop = scrollTop;
+
+  // These three just write signals — the filterFields effect wired in setupDetails() reacts and
+  // re-applies the filter without rebuilding this table (technical, in contrast, changes the headers
+  // themselves, so it's read tracked above and drives a full renderDetails rebuild instead). The
+  // persistUi effect in state.ts picks up the write too, so there's nothing to persist here by hand.
   const technicalToggle = document.getElementById('technical-toggle');
   if (technicalToggle) {
-    technicalToggle.addEventListener('change', () => {
-      ui.showTechnical = technicalToggle.checked;
-      vscodeApi.setState(Object.assign({}, vscodeApi.getState() || {}, { showTechnical: ui.showTechnical }));
-      renderDetails();
-    });
+    technicalToggle.addEventListener('change', () => { ui.showTechnical = technicalToggle.checked; });
   }
   const hideEmptyToggle = document.getElementById('hide-empty-toggle');
   if (hideEmptyToggle) {
-    hideEmptyToggle.addEventListener('change', () => {
-      ui.hideEmpty = hideEmptyToggle.checked;
-      vscodeApi.setState(Object.assign({}, vscodeApi.getState() || {}, { hideEmpty: ui.hideEmpty }));
-      filterFields(ui.fieldQuery);
-    });
+    hideEmptyToggle.addEventListener('change', () => { ui.hideEmpty = hideEmptyToggle.checked; });
   }
   const hideUnmodifiedToggle = document.getElementById('hide-unmodified-toggle');
   if (hideUnmodifiedToggle) {
-    hideUnmodifiedToggle.addEventListener('change', () => {
-      ui.hideUnmodified = hideUnmodifiedToggle.checked;
-      vscodeApi.setState(Object.assign({}, vscodeApi.getState() || {}, { hideUnmodified: ui.hideUnmodified }));
-      filterFields(ui.fieldQuery);
-    });
+    hideUnmodifiedToggle.addEventListener('change', () => { ui.hideUnmodified = hideUnmodifiedToggle.checked; });
   }
 
   const fieldSearch = document.getElementById('field-search');
   if (fieldSearch) {
+    // Debounce the write itself (not just its effect) so rapid keystrokes don't re-filter the table
+    // once per keystroke — same rAF-coalescing convention as the object search box (see applySearch
+    // in objModEditorWebview.ts).
     let fieldFilterRaf = 0;
     fieldSearch.addEventListener('input', () => {
-      ui.fieldQuery = fieldSearch.value;
       if (fieldFilterRaf) cancelAnimationFrame(fieldFilterRaf);
       fieldFilterRaf = requestAnimationFrame(() => {
         fieldFilterRaf = 0;
-        filterFields(ui.fieldQuery);
+        ui.fieldQuery = fieldSearch.value;
       });
     });
   }
-  filterFields(ui.fieldQuery);
+  filterFields(untracked(() => ui.fieldQuery));
 
   iconLoader.observe(details);
   observeModelThumbs(details);
@@ -194,6 +207,41 @@ function stepNumberInput(numStep) {
 }
 
 export function setupDetails() {
+  // Full rebuild: reacts to which object is selected and whether technical mode is on (both change
+  // the header row / whole table shape). This is the details panel's first paint too, since effects
+  // run immediately on creation — no separate bootstrap render() call is needed.
+  effect(() => {
+    renderDetails();
+  }, 'detailsPanel.renderDetails');
+
+  // Lighter re-filter: reacts to the density/search/category filters, none of which change the table's
+  // shape — just re-toggles `.hidden` on existing rows instead of rebuilding them (see filterFields).
+  // Skips its own first run: renderDetails() above already ends with a filterFields() call, and both
+  // effects run immediately on creation, so without this the very first paint would filter twice.
+  let filterPrimed = false;
+  effect(() => {
+    ui.hideEmpty;
+    ui.hideUnmodified;
+    ui.fieldQuery;
+    ui.hiddenCategories.version;
+    if (filterPrimed) filterFields(untracked(() => ui.fieldQuery));
+    else filterPrimed = true;
+  }, 'detailsPanel.filterFields');
+
+  // Keep ui.detailsScrollTop live so a reopen restores the field table's scroll position too — the
+  // persistUi effect in state.ts picks it up like every other field. `scroll` doesn't bubble, so this
+  // has to be a capture-phase listener on the stable #details container rather than a normal delegated
+  // one (which would never see events from the .table-wrap child that's recreated on every render).
+  let detailsScrollRaf = 0;
+  details.addEventListener('scroll', e => {
+    if (!e.target || !e.target.classList || !e.target.classList.contains('table-wrap')) return;
+    if (detailsScrollRaf) cancelAnimationFrame(detailsScrollRaf);
+    detailsScrollRaf = requestAnimationFrame(() => {
+      detailsScrollRaf = 0;
+      ui.detailsScrollTop = e.target.scrollTop;
+    });
+  }, { capture: true, passive: true });
+
   // Steppers must not steal focus from the input they adjust (mirrors the color-swatch buttons), and
   // holding one down repeats the step (first tick immediately, then every 60ms after a 400ms delay —
   // the click handler below no-ops for .num-step since this already applied the single-click case).
@@ -222,9 +270,7 @@ export function setupDetails() {
     if (!cb) return;
     const key = cb.getAttribute('data-cat-key');
     if (cb.checked) ui.hiddenCategories.delete(key); else ui.hiddenCategories.add(key);
-    persistHiddenCategories();
     updateCatFilterBadge();
-    filterFields(ui.fieldQuery);
   });
   details.addEventListener('click', e => {
     const retry = e.target.closest('#details-retry');
@@ -245,12 +291,13 @@ export function setupDetails() {
     const catFilterAll = e.target.closest('#cat-filter-all');
     const catFilterNone = e.target.closest('#cat-filter-none');
     if (catFilterAll || catFilterNone) {
-      if (catFilterAll) ui.hiddenCategories.clear();
-      else categoriesSeenSoFar().forEach(key => ui.hiddenCategories.add(key));
-      persistHiddenCategories();
+      // Batched so the filterFields effect flushes once, not once per category in the "None" case.
+      batch(() => {
+        if (catFilterAll) ui.hiddenCategories.clear();
+        else categoriesSeenSoFar().forEach(key => ui.hiddenCategories.add(key));
+      });
       for (const cb of details.querySelectorAll('#cat-filter-pop input[data-cat-key]')) cb.checked = !ui.hiddenCategories.has(cb.getAttribute('data-cat-key'));
       updateCatFilterBadge();
-      filterFields(ui.fieldQuery);
       return;
     }
     // Stepping itself already happened on mousedown (see setupDetails) — this just stops the click
@@ -259,7 +306,7 @@ export function setupDetails() {
     const jump = e.target.closest('.resolved-chip[data-jump]');
     if (jump) {
       const key = jump.getAttribute('data-jump') || '';
-      if (key) { ui.selectedKey = key; render(); }
+      if (key) selectObject(key);
       return;
     }
     const xref = e.target.closest('.resolved-chip[data-xref]');
@@ -311,7 +358,7 @@ export function setupDetails() {
       e.preventDefault();
       const jumpKey = ae.getAttribute('data-jump');
       const rawcode = ae.getAttribute('data-xref');
-      if (jumpKey) { ui.selectedKey = jumpKey; render(); }
+      if (jumpKey) selectObject(jumpKey);
       else if (rawcode) vscodeApi.postMessage({ type: 'openObjectReference', rawcode, label: ae.getAttribute('data-xref-label') || '' });
     }
   });

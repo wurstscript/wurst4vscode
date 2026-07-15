@@ -78,17 +78,17 @@ function testSignals() {
     let runs = 0;
     const stop = effect(() => {
         runs++;
-        seen = count.get();
+        seen = count.value;
     });
     assert.equal(seen, 0);
     assert.equal(runs, 1);
-    count.set(1);
+    count.value = 1;
     assert.equal(seen, 1);
     assert.equal(runs, 2);
-    count.set(1);
+    count.value = 1;
     assert.equal(runs, 2, 'same value should not rerun effects');
-    stop();
-    count.set(2);
+    stop.dispose();
+    count.value = 2;
     assert.equal(seen, 1, 'disposed effects should stop observing');
 
     const pickLeft = signal(true);
@@ -98,30 +98,30 @@ function testSignals() {
     let branchRuns = 0;
     effect(() => {
         branchRuns++;
-        branch = pickLeft.get() ? left.get() : right.get();
+        branch = pickLeft.value ? left.value : right.value;
     });
     assert.equal(branch, 'left-a');
-    pickLeft.set(false);
+    pickLeft.value = false;
     assert.equal(branch, 'right-a');
     const afterSwitchRuns = branchRuns;
-    left.set('left-b');
+    left.value = 'left-b';
     assert.equal(branchRuns, afterSwitchRuns, 'stale branch dependency should be cleaned up');
-    right.set('right-b');
+    right.value = 'right-b';
     assert.equal(branch, 'right-b');
 
     const a = signal(1);
     const b = signal(2);
-    const sum = computed(() => a.get() + b.get());
+    const sum = computed(() => a.value + b.value);
     let sumSeen = 0;
     let sumRuns = 0;
     effect(() => {
         sumRuns++;
-        sumSeen = sum.get();
+        sumSeen = sum.value;
     });
     assert.equal(sumSeen, 3);
     batch(() => {
-        a.set(3);
-        b.set(4);
+        a.value = 3;
+        b.value = 4;
     });
     assert.equal(sumSeen, 7);
     assert.equal(sumRuns, 2, 'batch should coalesce dependent effect reruns');
@@ -132,12 +132,185 @@ function testSignals() {
     let mixedRuns = 0;
     effect(() => {
         mixedRuns++;
-        mixed = `${tracked.get()}/${untracked(() => ignored.get())}`;
+        mixed = `${tracked.value}/${untracked(() => ignored.value)}`;
     });
-    ignored.set('ignored-b');
+    ignored.value = 'ignored-b';
     assert.equal(mixedRuns, 1, 'untracked reads should not subscribe');
-    tracked.set('tracked-b');
+    tracked.value = 'tracked-b';
     assert.equal(mixed, 'tracked-b/ignored-b');
+}
+
+// Regression test for the exact dependency-tracking pattern objModEditor's tree/details reactive
+// wiring relies on (see objectRowReplacementHtml/selectObject in objectTree.ts and the two effects in
+// detailsPanel.ts's setupDetails()): a "structural" signal (query/collapse state) should trigger a
+// full rebuild, while a "selection" signal read via untracked() must NOT — selection instead moves
+// via a separate, cheap, explicit DOM update (setActiveRow), same shape as the real webview code.
+function testObjModTreeSelectionStaysUntracked() {
+    const { signal, effect, untracked } = loadTsModule('src/webview/signals.ts');
+
+    const query = signal('');
+    const selectedKey = signal('a');
+    let treeRebuilds = 0;
+    let lastActiveInTree = null;
+    effect(() => {
+        query.value; // tracked: a query change must rebuild the tree
+        treeRebuilds++;
+        lastActiveInTree = untracked(() => selectedKey.value); // NOT tracked: selection alone must not rebuild
+    });
+    assert.equal(treeRebuilds, 1, 'tree effect should run once on creation');
+    assert.equal(lastActiveInTree, 'a');
+
+    selectedKey.value = 'b'; // simulates selectObject()'s signal write
+    assert.equal(treeRebuilds, 1, 'selecting a different object must not trigger a full tree rebuild');
+
+    query.value = 'footman';
+    assert.equal(treeRebuilds, 2, 'a query change must still trigger a tree rebuild');
+    assert.equal(lastActiveInTree, 'b', 'the rebuild reflects the current selection even though it is not a tracked dependency');
+}
+
+// Mirrors the two-effect split in detailsPanel.ts's setupDetails(): a full rebuild reacts to
+// selection/technical-mode (which change the table's shape), while density/search/category filters
+// reroute to a separate, lighter effect that only re-applies visibility. state.ts's collapsedNodes/
+// hiddenCategories are Sets that bump a `.version` signal on mutation (see reactiveSet there) — a bare
+// counter signal is all that's needed here to exercise the same "does mutating this dependency trigger
+// only the filter effect" property, without reimplementing that Set wrapper.
+function testObjModDetailsRebuildVsFilterEffectSplit() {
+    const { signal, effect } = loadTsModule('src/webview/signals.ts');
+
+    const selectedKey = signal('a');
+    const showTechnical = signal(false);
+    const hideEmpty = signal(false);
+    const hiddenCategoriesVersion = signal(0); // stands in for state.ts's reactiveSet(...).version
+
+    let fullRebuilds = 0;
+    let filterApplies = 0;
+    effect(() => { selectedKey.value; showTechnical.value; fullRebuilds++; });
+    effect(() => { hideEmpty.value; hiddenCategoriesVersion.value; filterApplies++; });
+
+    assert.equal(fullRebuilds, 1);
+    assert.equal(filterApplies, 1);
+
+    hideEmpty.value = true;
+    assert.equal(fullRebuilds, 1, 'toggling hide-empty must not rebuild the whole table');
+    assert.equal(filterApplies, 2);
+
+    hiddenCategoriesVersion.value++; // simulates ui.hiddenCategories.add('abil')
+    assert.equal(fullRebuilds, 1, 'hiding a category must not rebuild the whole table');
+    assert.equal(filterApplies, 3);
+
+    showTechnical.value = true;
+    assert.equal(fullRebuilds, 2, 'toggling technical mode must rebuild the table (headers differ)');
+    assert.equal(filterApplies, 3, 'a full rebuild alone must not double-run the filter effect');
+
+    selectedKey.value = 'b';
+    assert.equal(fullRebuilds, 3, 'selecting a different object must rebuild the details table');
+}
+
+// Minimal DOM + vscodeApi stub for loading src/webview/objModEditor/state.ts, which reads
+// document.getElementById/acquireVsCodeApi/window.__OBJMOD_INITIAL__ at module-load time.
+function installObjModStateDom(persistedState) {
+    global.window = { __OBJMOD_INITIAL__: undefined };
+    const els = { tree: new FakeElement(), details: new FakeElement(), search: new FakeElement() };
+    global.document = { getElementById: (id) => els[id] || null };
+    let state = persistedState || {};
+    global.acquireVsCodeApi = () => ({
+        postMessage: () => {},
+        getState: () => state,
+        setState: (next) => { state = next; },
+    });
+    return { getState: () => state };
+}
+
+// state.ts is meant to make a reopened editor (a webview reload after our external-change auto-reload
+// or revert, or a fresh VS Code session) pick back up where the user left off, instead of resetting to
+// a blank slate — see the persistUi effect and the restoredSelectedKey logic there.
+function testObjModStateRestoresAndPersistsUiState() {
+    moduleCache.clear();
+    const objects = [{ key: 'Custom:0' }, { key: 'Custom:1' }];
+    const dom = installObjModStateDom({
+        selectedKey: 'Custom:1',
+        query: 'foo',
+        fieldQuery: 'dmg',
+        showTechnical: true,
+        hideEmpty: true,
+        hideUnmodified: false,
+        collapsedNodes: ['group:Original'],
+        hiddenCategories: ['art'],
+        treeScrollTop: 240,
+        detailsScrollTop: 150,
+        listW: 321, // unrelated persisted field (splitter width) the persist effect must not clobber
+    });
+    global.window.__OBJMOD_INITIAL__ = { objects, selectedKey: 'Custom:0', isPendingJump: false, extended: false };
+
+    const state = loadTsModule('src/webview/objModEditor/state.ts');
+
+    assert.equal(state.ui.selectedKey, 'Custom:1', 'a valid restored selection should win over the host default');
+    assert.equal(state.ui.query, 'foo');
+    assert.equal(state.ui.fieldQuery, 'dmg');
+    assert.equal(state.ui.showTechnical, true);
+    assert.equal(state.ui.hideEmpty, true);
+    assert.equal(state.ui.hideUnmodified, false);
+    assert.equal(state.collapsedNodes.has('group:Original'), true);
+    assert.equal(state.ui.hiddenCategories.has('art'), true);
+    assert.equal(state.ui.treeScrollTop, 240, 'the tree scroll position should be restored too');
+    assert.equal(state.ui.detailsScrollTop, 150, 'the details/field table scroll position should be restored too');
+
+    state.ui.query = 'bar';
+    const persistedAfter = dom.getState();
+    assert.equal(persistedAfter.query, 'bar', 'writing a signal should re-persist automatically, with no explicit setState call at the write site');
+    assert.equal(persistedAfter.treeScrollTop, 240, 'persisting one field must not drop the others');
+    assert.equal(persistedAfter.detailsScrollTop, 150, 'persisting one field must not drop the others');
+    assert.equal(persistedAfter.selectedKey, 'Custom:1', 'unrelated restored fields must survive a later persist');
+    assert.equal(persistedAfter.listW, 321, 'fields unrelated to reactive ui state (e.g. splitter width) must not be clobbered');
+}
+
+function testObjModStatePendingJumpOverridesRestoredSelection() {
+    moduleCache.clear();
+    const objects = [{ key: 'Custom:0' }, { key: 'Custom:1' }];
+    installObjModStateDom({ selectedKey: 'Custom:1' });
+    global.window.__OBJMOD_INITIAL__ = { objects, selectedKey: 'Custom:0', isPendingJump: true, extended: false };
+
+    const state = loadTsModule('src/webview/objModEditor/state.ts');
+    assert.equal(state.ui.selectedKey, 'Custom:0', 'a deliberate cross-file rawcode jump must win over a restored selection');
+}
+
+function testObjModStateIgnoresStaleRestoredSelection() {
+    moduleCache.clear();
+    const objects = [{ key: 'Custom:0' }]; // 'Custom:99' below no longer exists in this file
+    installObjModStateDom({ selectedKey: 'Custom:99' });
+    global.window.__OBJMOD_INITIAL__ = { objects, selectedKey: 'Custom:0', isPendingJump: false, extended: false };
+
+    const state = loadTsModule('src/webview/objModEditor/state.ts');
+    assert.equal(state.ui.selectedKey, 'Custom:0', 'a restored selection for an object that no longer exists should fall back to the host default');
+}
+
+// renderTree() reassigns tree.innerHTML on every call, which resets scrollTop to 0 in a real browser —
+// this exercises the explicit capture/restore in objectTree.ts that works around that, using the
+// shared moduleCache to stub out objectTree.ts's heavier sibling modules (model thumbnails/field
+// display/model preview panel) instead of actually loading them.
+function testObjModTreeRenderPreservesScrollPosition() {
+    moduleCache.clear();
+    const objects = [
+        { key: 'Custom:0', group: 'Custom', race: 'human', displayName: 'Alpha', baseId: 'a000' },
+        { key: 'Custom:1', group: 'Custom', race: 'human', displayName: 'Beta', baseId: 'b000' },
+    ];
+    installObjModStateDom({ treeScrollTop: 240 });
+    global.window.__OBJMOD_INITIAL__ = { objects, selectedKey: '', isPendingJump: false, extended: false };
+    global.IntersectionObserver = FakeIntersectionObserver;
+
+    moduleCache.set(path.resolve(root, 'src/webview/objModEditor/modelThumbnails.ts'), { exports: { observeModelThumbs: () => {} } });
+    moduleCache.set(path.resolve(root, 'src/webview/objModEditor/fieldDisplay.ts'), { exports: { sourcePill: () => '' } });
+    moduleCache.set(path.resolve(root, 'src/webview/objModEditor/modelPreviewPanel.ts'), { exports: { hideModelPreview: () => {} } });
+
+    const state = loadTsModule('src/webview/objModEditor/state.ts');
+    const objectTree = loadTsModule('src/webview/objModEditor/objectTree.ts');
+
+    objectTree.renderTree();
+    assert.equal(state.tree.scrollTop, 240, 'the first render should apply the scroll position restored from persisted state');
+
+    state.tree.scrollTop = 77; // simulate the user having scrolled since the first paint
+    objectTree.renderTree();
+    assert.equal(state.tree.scrollTop, 77, 'a later render (e.g. triggered by a search or collapse change) must preserve the current scroll, not jump back to the originally-restored one');
 }
 
 class FakeClassList {
@@ -652,6 +825,12 @@ function testObjModSaveCommitsFocusedEditor() {
 
 async function main() {
     testSignals();
+    testObjModTreeSelectionStaysUntracked();
+    testObjModDetailsRebuildVsFilterEffectSplit();
+    testObjModStateRestoresAndPersistsUiState();
+    testObjModStatePendingJumpOverridesRestoredSelection();
+    testObjModStateIgnoresStaleRestoredSelection();
+    testObjModTreeRenderPreservesScrollPosition();
     await testIconLoader();
     await testFolderModeMapAssetResolution();
     testBc5DdsDecode();

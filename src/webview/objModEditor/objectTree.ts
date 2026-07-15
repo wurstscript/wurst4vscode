@@ -1,10 +1,10 @@
 // @ts-nocheck
 import { fuzzyMatch } from '../../features/preview/fuzzy';
 import { esc } from '../objModWebviewUtils';
+import { effect, untracked } from '../signals';
 import { objects, tree, details, iconLoader, ui, collapsedNodes } from './state';
 import { observeModelThumbs } from './modelThumbnails';
 import { sourcePill } from './fieldDisplay';
-import { renderDetails } from './detailsPanel';
 import { hideModelPreview } from './modelPreviewPanel';
 
 // Only the categories whose natural-case raw value doesn't already read fine capitalized (e.g. 'tech'
@@ -133,11 +133,20 @@ function headingHtml(kindClass, key, label, count, closed) {
 // reflect what's left). Manual collapse/expand state (collapsedNodes) is respected exactly the same
 // as when not searching — a heading a user collapsed stays collapsed, still showing its filtered count,
 // so it can be expanded or re-collapsed same as always instead of being forced open by the search.
+// Reassigning tree.innerHTML (below) destroys and recreates every row, which resets scrollTop to 0 in
+// every browser — so every render (not just the first) has to explicitly carry it forward. `false`
+// until the first render so that one restores the persisted position (see state.ts's treeScrollTop)
+// instead of the live (always-0, nothing painted yet) tree.scrollTop.
+let treeRenderedOnce = false;
+
 export function renderTree() {
+  const scrollTop = treeRenderedOnce ? tree.scrollTop : ui.treeScrollTop;
+  treeRenderedOnce = true;
   const searching = !!ui.query;
   const visible = searching ? objects.filter(matches) : objects;
   if (searching && !visible.length) {
     tree.innerHTML = '<div class="empty-state">No objects match &ldquo;' + esc(ui.query) + '&rdquo;.<br>Try a different term, or a race name like &ldquo;orc&rdquo;.</div>';
+    tree.scrollTop = scrollTop;
     return;
   }
 
@@ -215,6 +224,7 @@ export function renderTree() {
     }
   }
   tree.innerHTML = html || '<div class="empty-state">No objects</div>';
+  tree.scrollTop = scrollTop;
   iconLoader.observe(tree);
   observeModelThumbs(tree);
 }
@@ -222,7 +232,10 @@ export function renderTree() {
 // Move the selection highlight in place — rebuilding the whole tree (hundreds of rows) just to shift
 // one '.active' class made object switching feel sluggish on large .w3a files.
 export function objectRowReplacementHtml(obj) {
-  const active = obj.key === ui.selectedKey ? ' active' : '';
+  // Read untracked: selection changes move the '.active' class via setActiveRow() instead of a full
+  // tree rebuild (see selectObject), so renderTree()'s reactive effect must NOT re-run just because
+  // the selected object changed — only because the query or collapse state changed.
+  const active = obj.key === untracked(() => ui.selectedKey) ? ' active' : '';
   // Objects with a `kind` (units files — see buildObject) always render nested one level deeper, under
   // a kind-heading (Units/Buildings/Heroes/Special), whether in the grouped browse tree or a solo
   // row-refresh — so this can key off the object alone rather than needing render-context passed in.
@@ -280,19 +293,30 @@ export function setActiveRow(key) {
 
 export function selectObject(key) {
   if (!key) return;
+  // Writing the signal is enough to drive the details panel — see the renderDetails effect wired in
+  // setupDetails() (detailsPanel.ts), which reacts to ui.selectedKey automatically. The tree itself
+  // deliberately stays untracked of selection (see objectRowReplacementHtml) for perf on large trees,
+  // so the highlight still needs this explicit, cheap DOM update.
   ui.selectedKey = key;
   setActiveRow(key);
-  renderDetails();
   hideModelPreview(); // the open preview belongs to the previous object — don't leave it stale
 }
 
 // Delegated tree handlers, wired once — survive innerHTML rebuilds, no per-row listener churn.
 export function setupTree() {
+  // Reactive browse tree: rebuilds whenever the search query or the collapse state changes. Runs
+  // immediately on creation (this is the tree's first paint), so no separate bootstrap call is needed.
+  effect(() => {
+    ui.query;
+    collapsedNodes.version;
+    renderTree();
+  }, 'objectTree.renderTree');
+
   tree.addEventListener('click', e => {
     const heading = e.target.closest('.group-heading, .race-heading, .camp-heading, .kind-heading');
     if (heading) {
       const key = heading.getAttribute('data-node') || '';
-      if (key) { if (collapsedNodes.has(key)) collapsedNodes.delete(key); else collapsedNodes.add(key); renderTree(); }
+      if (key) { if (collapsedNodes.has(key)) collapsedNodes.delete(key); else collapsedNodes.add(key); }
       return;
     }
     const row = e.target.closest('.object-row');
@@ -317,9 +341,15 @@ export function setupTree() {
     target.focus();
     target.scrollIntoView({ block: 'nearest' });
   });
-}
-
-export function render() {
-  renderTree();
-  renderDetails();
+  // Keep ui.treeScrollTop live so a reopen (or our external-change auto-reload) restores roughly where
+  // the user was browsing — the persistUi effect in state.ts picks this up like every other field.
+  // rAF-coalesced: scroll fires continuously while dragging the scrollbar/wheeling.
+  let treeScrollRaf = 0;
+  tree.addEventListener('scroll', () => {
+    if (treeScrollRaf) cancelAnimationFrame(treeScrollRaf);
+    treeScrollRaf = requestAnimationFrame(() => {
+      treeScrollRaf = 0;
+      ui.treeScrollTop = tree.scrollTop;
+    });
+  }, { passive: true });
 }

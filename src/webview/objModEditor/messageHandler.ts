@@ -3,7 +3,7 @@ import { base64ToBytes } from '../objModWebviewUtils';
 import { details, detailCache, pendingDetails, failedDetails, objects, ui, iconLoader } from './state';
 import { setModValue } from './fieldDisplay';
 import { renderDetails, updateFieldCell } from './detailsPanel';
-import { updateObjectRow, updateDetailsHeader, render, renderTree } from './objectTree';
+import { updateObjectRow, updateDetailsHeader, selectObject, renderTree } from './objectTree';
 import {
   completeModelThumbHostRequest,
   pendingModelThumbs,
@@ -222,8 +222,9 @@ export function setupMessageHandler() {
     } else if (msg.type === 'selectObject' && msg.key) {
       // Cross-file rawcode jump landed on this already-open editor (see openObjectReference in
       // objModPreview.ts) — switch straight to the target object, same as clicking it in the tree.
-      ui.selectedKey = msg.key;
-      render();
+      // selectObject() moves the highlight and writes ui.selectedKey; the details panel's reactive
+      // effect (see setupDetails() in detailsPanel.ts) re-renders itself in response.
+      selectObject(msg.key);
     } else if (msg.type === 'objectUpdated' && msg.object && msg.object.key) {
       const index = objects.findIndex(obj => obj.key === msg.object.key);
       if (index < 0) return;

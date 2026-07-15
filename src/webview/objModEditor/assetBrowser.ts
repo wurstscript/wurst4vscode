@@ -48,8 +48,8 @@ export function openAssetBrowser(mi) {
   abMi = mi;
   // A model field defaults to Models; only icon/pathing fields default elsewhere — never offer the
   // wrong asset class by default.
-  abActiveTab.set((mod.assetType === 'icon' || mod.assetType === 'sound' || mod.assetType === 'pathing') ? mod.assetType : 'model');
-  abSearchQuery.set('');
+  abActiveTab.value = (mod.assetType === 'icon' || mod.assetType === 'sound' || mod.assetType === 'pathing') ? mod.assetType : 'model';
+  abSearchQuery.value = '';
   const search = document.getElementById('ab-search');
   if (search) search.value = '';
   const ov = document.getElementById('ab-overlay');
@@ -64,9 +64,9 @@ export function openAssetBrowser(mi) {
 
 export function openModelAssetBrowserForE2e() {
   abMi = 0;
-  abActiveTab.set('model');
-  abSearchQuery.set('');
-  abSourceFilter.set('all');
+  abActiveTab.value = 'model';
+  abSearchQuery.value = '';
+  abSourceFilter.value = 'all';
   const search = document.getElementById('ab-search');
   if (search) search.value = '';
   const ov = document.getElementById('ab-overlay');
@@ -79,8 +79,8 @@ export function openModelAssetBrowserForE2e() {
 }
 
 export function searchModelAssetBrowserForE2e(value) {
-  abActiveTab.set('model');
-  abSearchQuery.set(String(value || ''));
+  abActiveTab.value = 'model';
+  abSearchQuery.value = String(value || '');
   const search = document.getElementById('ab-search');
   if (search) search.value = String(value || '');
   if (isAssetBrowserOpen() && abCatalog) renderAssetGrid();
@@ -95,16 +95,16 @@ export function forceNarrowLayoutForE2e(on) {
 export function updateAbTabs() {
   const tabs = document.getElementById('ab-tabs');
   if (!tabs) return;
-  for (const b of tabs.querySelectorAll('.ab-tab')) b.classList.toggle('active', b.getAttribute('data-tab') === abActiveTab.get());
+  for (const b of tabs.querySelectorAll('.ab-tab')) b.classList.toggle('active', b.getAttribute('data-tab') === abActiveTab.value);
 }
 
 export function renderAssetGrid() {
   const grid = document.getElementById('ab-grid');
   if (!grid) return;
-  const activeTab = abActiveTab.get();
+  const activeTab = abActiveTab.value;
   const opts = (abCatalog && abCatalog[activeTab]) || [];
-  const sourceFilter = abSourceFilter.get();
-  const query = abSearchQuery.get().trim();
+  const sourceFilter = abSourceFilter.value;
+  const query = abSearchQuery.value.trim();
   const matches = [];
   let matchedCount = 0;
   for (const o of opts) {
@@ -172,16 +172,16 @@ export function setupAssetBrowser() {
     if (abSearchRaf) cancelAnimationFrame(abSearchRaf);
     abSearchRaf = requestAnimationFrame(() => {
       abSearchRaf = 0;
-      abSearchQuery.set(search.value);
+      abSearchQuery.value = search.value;
     });
   });
   const source = document.getElementById('ab-source');
-  if (source) source.addEventListener('change', () => abSourceFilter.set(source.value || 'all'));
+  if (source) source.addEventListener('change', () => { abSourceFilter.value = source.value || 'all'; });
   if (tabs) tabs.addEventListener('click', e => {
     const tab = e.target.closest('.ab-tab[data-tab]');
     if (!tab) return;
-    if (abActiveTab.get() === 'model' && tab.getAttribute('data-tab') !== 'model') cancelAssetBrowserModelThumbs();
-    abActiveTab.set(tab.getAttribute('data-tab'));
+    if (abActiveTab.value === 'model' && tab.getAttribute('data-tab') !== 'model') cancelAssetBrowserModelThumbs();
+    abActiveTab.value = tab.getAttribute('data-tab');
   });
   if (grid) grid.addEventListener('click', e => {
     if (e.target.closest('#ab-catalog-retry')) { requestAssetCatalog(); return; }
@@ -201,9 +201,9 @@ export function setupAssetBrowser() {
   document.addEventListener('keydown', noteModelThumbUserActivity, { passive: true });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && ov && !ov.hidden) closeAssetBrowser(); });
   effect(() => {
-    abActiveTab.get();
-    abSearchQuery.get();
-    abSourceFilter.get();
+    abActiveTab.value;
+    abSearchQuery.value;
+    abSourceFilter.value;
     updateAbTabs();
     if (isAssetBrowserOpen() && abCatalog) renderAssetGrid();
   });

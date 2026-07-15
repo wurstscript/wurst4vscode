@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { objects, ui, vscodeApi, details, search } from './objModEditor/state';
 import { commitActiveEditor } from './objModEditor/fieldDisplay';
-import { matches, setupTree, render } from './objModEditor/objectTree';
+import { matches, setActiveRow, setupTree } from './objModEditor/objectTree';
 import { setupDetails } from './objModEditor/detailsPanel';
 import { setupAssetBrowser } from './objModEditor/assetBrowser';
 import { setupModelPreviewPanel } from './objModEditor/modelPreviewPanel';
@@ -12,6 +12,11 @@ import { installDebugApi } from './objModEditor/debugApi';
 let searchRaf = 0;
 function applySearch() {
   searchRaf = 0;
+  // Writing ui.query drives the tree's own reactive effect (see setupTree() in objectTree.ts), which
+  // rebuilds it synchronously right here. ui.selectedKey deliberately isn't a tracked dependency of
+  // that rebuild (selection normally moves via the cheap setActiveRow(), not a full tree rebuild) —
+  // so if the query change knocked the selection out of the results, the freshly rebuilt tree still
+  // needs its active row fixed up explicitly, same as a normal click would via selectObject().
   ui.query = search.value.trim().toLowerCase();
   const matched = ui.query ? objects.filter(matches).length : 0;
   const sm = document.getElementById('search-match');
@@ -22,8 +27,17 @@ function applySearch() {
   if (selected && !matches(selected)) {
     ui.selectedKey = (objects.find(matches) || objects[0] || {}).key || '';
   }
-  render();
+  setActiveRow(ui.selectedKey);
 }
+// Restore the last search query for this file (state.ts seeds ui.query from persisted vscodeApi
+// state) so the search box and its match-count/clear-button indicators don't visually reset to empty
+// on every reopen. Runs before setupTree()/setupDetails() further down are called, so their reactive
+// effects' very first render already reflects the restored query — no separate re-render needed.
+if (ui.query) {
+  search.value = ui.query;
+  applySearch();
+}
+
 // Coalesce rapid keystrokes into one render per frame — typing stays smooth on large lists.
 search.addEventListener('input', () => {
   if (searchRaf) cancelAnimationFrame(searchRaf);
@@ -129,12 +143,14 @@ document.addEventListener('keydown', e => {
 const editableBadge = document.getElementById('editable-badge');
 if (editableBadge) editableBadge.addEventListener('click', saveNow);
 
+// setupTree()/setupDetails() each wire a reactive effect that runs immediately on creation — that
+// first run *is* the tree/details panel's initial paint, so no separate bootstrap render() call is
+// needed here.
 setupTree();
 setupDetails();
 setupAssetBrowser();
 setupModelPreviewPanel();
 setupMessageHandler();
-render();
 setTimeout(() => { try { modelThumbEnsureInit(); } catch (e) {} }, 0);
 
 // The in-game tooltip's own fill texture and gold border tiles, applied over the plain --wc3-tip-bg

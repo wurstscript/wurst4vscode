@@ -60,7 +60,10 @@ function parseWindowsProcesses(raw: string): WurstProcess[] {
 function parsePosixProcesses(raw: string): WurstProcess[] {
     const result: WurstProcess[] = [];
     for (const line of raw.split(/\r?\n/)) {
-        const match = /^\s*(\d+)\s+(.+)$/.exec(line);
+        // \S at the start of group 2 (rather than a bare .+ right after \s+) avoids ambiguous
+        // whitespace-adjacency backtracking, since the command always starts right after the pid's
+        // trailing whitespace in real `ps`-style output.
+        const match = /^\s*(\d+)\s+(\S.*)$/.exec(line);
         if (!match) continue;
         const pid = Number(match[1]);
         const commandLine = match[2];
@@ -124,6 +127,7 @@ export async function forceStopWurstProcesses(processes: readonly WurstProcess[]
     return processes.filter((item) => isPidRunning(item.pid));
 }
 
+// eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 export async function ensureConflictingWurstProcessesStopped(): Promise<void> {
     while (true) {
         const conflicts = await findConflictingWurstProcesses();

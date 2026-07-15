@@ -91,6 +91,7 @@ async function offerAgentsGuide(context: vscode.ExtensionContext): Promise<void>
     await context.workspaceState.update(stateKey, true);
 }
 
+// eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 async function findFolderToOffer(context: vscode.ExtensionContext): Promise<AgentsGuideOffer | undefined> {
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
         if (await isWurstProject(folder)) {

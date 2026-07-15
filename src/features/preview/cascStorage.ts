@@ -243,7 +243,7 @@ function getCascDataRoot(log: (msg: string) => void): string | null {
         }
     }
     logCascRootOnce(`CASC skip: no WC3 install found (${defaultPaths.length} default paths checked)`, log);
-    channelLog(`Checked paths:\n${defaultPaths.map((p) => `  - ${p}`).join('\n')}`);
+    channelLog('Checked paths:\n' + defaultPaths.map((p) => '  - ' + p).join('\n'));
     channelLog('If Warcraft III is installed somewhere else, set the "wurst.wc3path" setting to its folder.');
     cascDataRootCache = null;
     return null;
@@ -313,14 +313,22 @@ async function cascReadDirect(wc3Root: string, cascPath: string, log: (msg: stri
     }
 }
 
+type TextureExt = 'dds' | 'blp' | 'tga';
+
 /** Look up a texture. Checks disk cache first; if missing, extracts in-process and caches to disk. */
-export async function findCascTexture(texPath: string, log: (msg: string) => void): Promise<{ buf: Buffer; ext: 'dds' | 'blp' | 'tga' } | null> {
+// eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
+export async function findCascTexture(texPath: string, log: (msg: string) => void): Promise<{ buf: Buffer; ext: TextureExt } | null> {
     const cacheDir = getCacheDir();
     // CASC paths are lowercase with backslash separators
     const basePath = textureBasePath(texPath);
     const ddsPath = `${basePath}.dds`;
     const blpPath = `${basePath}.blp`;
     const tgaPath = `${basePath}.tga`;
+    const pathForExt = (ext: TextureExt): string => {
+        if (ext === 'dds') return ddsPath;
+        if (ext === 'tga') return tgaPath;
+        return blpPath;
+    };
     const fallbackNormalized = getDisabledButtonFallbackPath(texPath);
     const fallbackBasePath = fallbackNormalized ? textureBasePath(fallbackNormalized) : null;
     const fallbackDdsPath = fallbackBasePath ? `${fallbackBasePath}.dds` : null;
@@ -363,7 +371,7 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
     if (fallbackTgaPath) candidates.push([`war3.w3mod:${fallbackTgaPath}`, 'tga']);
 
     for (const [cascPath, ext] of candidates) {
-        const rel = ext === 'dds' ? ddsPath : ext === 'tga' ? tgaPath : blpPath;
+        const rel = pathForExt(ext);
         const cachePath = getCachedAssetPath(cacheDir, rel);
         const buf = await cascReadDirect(wc3Root, cascPath, log);
         if (buf) {
@@ -383,7 +391,7 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
             if (!found) continue;
             const buf = await cascReadDirect(wc3Root, found, log);
             if (!buf) continue;
-            const rel = ext === 'dds' ? ddsPath : ext === 'tga' ? tgaPath : blpPath;
+            const rel = pathForExt(ext);
             const cachePath = getCachedAssetPath(cacheDir, rel);
             log(`CASC basename-resolved texture: ${baseNoExt}.${ext} → ${found} (${buf.length} bytes)`);
             await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });

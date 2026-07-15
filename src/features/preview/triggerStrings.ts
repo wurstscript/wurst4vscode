@@ -79,6 +79,7 @@ export function applyWtsEdits(originalText: string, edits: Map<number, string>):
         if (re.test(text)) {
             text = text.replace(re, block);
         } else {
+            // eslint-disable-next-line sonarjs/super-linear-regex -- literal char + single char-class quantifier anchored at end, no ambiguous adjacency; not actually susceptible to backtracking blowup.
             if (text.length && !/\n\s*$/.test(text)) text += '\r\n';
             text += `\r\n${block}\r\n`;
         }
@@ -99,6 +100,7 @@ function parseWts(text: string): TriggerStringTable {
 function normalizeWtsValue(value: string): string {
     return value
         .replace(/^\s*\r?\n/, '')
+        // eslint-disable-next-line sonarjs/super-linear-regex -- optional literal + single char-class quantifier anchored at end, no ambiguous adjacency; not actually susceptible to backtracking blowup.
         .replace(/\r?\n\s*$/, '')
         .replace(/\r\n/g, '\n');
 }

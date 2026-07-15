@@ -15,7 +15,10 @@ export function setupDecorators(context: vscode.ExtensionContext) {
 
     function updateDecorations() {
         if (!activeEditor || activeEditor.document.languageId !== 'wurst') return;
-        const regEx = /@compiletime\s+(\s*(static|public|private)\s)*function.+/g;
+        // Modifier keywords each require their own trailing \s+ (rather than a repeated group that
+        // wraps its own \s* around the whole thing) so there's no nested-quantifier ambiguity for the
+        // engine to backtrack through — this scans the live document text on every edit.
+        const regEx = /@compiletime\s+(?:(?:static|public|private)\s+)*function.+/g;
         const text = activeEditor.document.getText();
         const decorations: vscode.DecorationOptions[] = [];
         let match: RegExpExecArray | null;

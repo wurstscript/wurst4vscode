@@ -195,6 +195,7 @@ async function waitForNoWindowsCodeProfile(userDataDir, timeoutMs = 5000) {
     }
 }
 
+// eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 async function killProcessTree(child, userDataDir) {
     if (process.platform === 'win32') {
         const pids = new Set(windowsCodePidsForUserDataDir(userDataDir));
@@ -343,10 +344,10 @@ class CdpClient {
     }
 }
 
+// eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 async function waitForWebviewContext(client) {
     const contexts = new Map();
     const attachedTargets = new Set();
-    const attachedSessions = new Set();
     client.on('Runtime.executionContextCreated', ({ context }, sessionId) => {
         if (context && context.id && sessionId) contexts.set(`${sessionId}:${context.id}`, { sessionId, context });
     });
@@ -360,7 +361,6 @@ async function waitForWebviewContext(client) {
                 const attached = await client.send('Target.attachToTarget', { targetId: target.targetId, flatten: true });
                 if (attached?.sessionId) {
                     attachedTargets.add(target.targetId);
-                    attachedSessions.add(attached.sessionId);
                     await client.send('Runtime.enable', {}, attached.sessionId);
                 }
             } catch {
@@ -504,10 +504,12 @@ function profileForKey(events, key) {
             const phase = event.type.replace(/^profile:/, '');
             const elapsed = event.elapsedMs == null ? '' : `@${event.elapsedMs}ms`;
             const reason = event.reason ? ` reason=${event.reason}` : '';
-            return `${phase}${elapsed}${event.detail ? ` ${event.detail}` : ''}${reason}`;
+            const detail = event.detail ? ' ' + event.detail : '';
+            return `${phase}${elapsed}${detail}${reason}`;
         });
 }
 
+// eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 async function main() {
     const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wurst-objmod-e2e-user-'));
     const extensionsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wurst-objmod-e2e-ext-'));
@@ -598,7 +600,10 @@ async function main() {
                     for (const key of initialKeys) {
                         const slot = visibleByKey.get(key);
                         if (!slot || (!slot.loaded && !slot.missing)) {
-                            const reason = slot?.reason ? JSON.stringify(slot.reason) : (slot?.missing ? '{"reason":"missing"}' : '{"reason":"no-loaded-img"}');
+                            let reason;
+                            if (slot?.reason) reason = JSON.stringify(slot.reason);
+                            else if (slot?.missing) reason = '{"reason":"missing"}';
+                            else reason = '{"reason":"no-loaded-img"}';
                             failures.push(`${key}: expected thumbnail image or decisive missing state, got ${reason}`);
                         }
                     }

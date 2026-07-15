@@ -552,6 +552,7 @@ function unitFieldApplies(f: MetaField, baseId: string, isHero: boolean, isBuild
     return f.useUnit;
 }
 
+// eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 function buildFieldRows(entry: ObjModEntry, gameData: ObjEditorData, triggerStrings: TriggerStringTable, extended: boolean, ext: string, catalog: ObjValueCatalog): PreviewMod[] {
     const overrideMods = new Map<string, ObjModMod[]>();
     for (const mod of entry.mods) {
@@ -578,7 +579,10 @@ function buildFieldRows(entry: ObjModEntry, gameData: ObjEditorData, triggerStri
             const formattedBase = formatRawValue(baseValue, triggerStrings);
             const currentValue = formattedOverride ?? formattedBase;
             // Carry the level/dataPt the mod has (or would have) so the host can locate/create it.
-            const rowLevel = override ? override.level : (extended ? (level ?? 0) : level);
+            let rowLevel: number | undefined;
+            if (override) rowLevel = override.level;
+            else if (extended) rowLevel = level ?? 0;
+            else rowLevel = level;
             const rowDataPt = override ? override.dataPt : dataPt;
             const row: PreviewMod = {
                 key,
@@ -652,6 +656,7 @@ function buildOverrideOnlyMod(mod: ObjModMod, triggerStrings: TriggerStringTable
     };
 }
 
+// eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 function enhancePreviewRow(row: PreviewMod, field: MetaField, catalog: ObjValueCatalog): void {
     const raw = row.currentValue == null ? '' : String(row.currentValue).trim();
     if (isRaceField(field)) {
@@ -678,13 +683,10 @@ function enhancePreviewRow(row: PreviewMod, field: MetaField, catalog: ObjValueC
             row.displayDetail = assetPath;
         }
         row.editorKind = 'datalist';
-        row.options = assetType === 'icon'
-            ? catalog.icons
-            : assetType === 'model'
-                ? catalog.models
-                : assetType === 'sound'
-                    ? catalog.sounds
-                    : catalog.pathing;
+        if (assetType === 'icon') row.options = catalog.icons;
+        else if (assetType === 'model') row.options = catalog.models;
+        else if (assetType === 'sound') row.options = catalog.sounds;
+        else row.options = catalog.pathing;
         return;
     }
 
@@ -798,7 +800,7 @@ function resolveRawcodeList(value: string, catalog: ObjValueCatalog): ValueOptio
     if (!value || value.includes('\\') || /\.(blp|dds|tga|mdx|mdl)$/i.test(value)) return undefined;
     const parts = value.split(',').map((part) => stripTxtQuotes(part.trim())).filter(Boolean);
     if (!parts.length || parts.length > 16) return undefined;
-    if (!parts.every((part) => /^[A-Za-z0-9_]{4}$/.test(part))) return undefined;
+    if (!parts.every((part) => /^\w{4}$/.test(part))) return undefined;
     const resolved = parts.map((part) => catalog.objects.get(part.toLowerCase()) ?? { value: part, label: part });
     return resolved.some((item, index) => item.label !== parts[index] || item.objectKey) ? resolved : undefined;
 }
@@ -917,6 +919,7 @@ function normalizeIconPath(value: string | undefined): string | undefined {
     if (!first) return undefined;
     const normalized = first.replace(/\//g, '\\');
     if (/\.(blp|dds|tga|png|jpe?g)$/i.test(normalized)) return normalized;
+    // eslint-disable-next-line sonarjs/super-linear-regex -- single negated char-class quantifier anchored at end, no ambiguous adjacency; not actually susceptible to backtracking blowup.
     return /[\\/]/.test(normalized) && !/\.[^\\/]+$/.test(normalized) ? `${normalized}.blp` : undefined;
 }
 
@@ -1004,13 +1007,15 @@ function resolveBaseDisplayName(baseId: string, summaryData: Pick<ObjSummaryData
 
 function resolveBaseFieldValue(baseId: string, field: MetaField, gameData: ObjEditorData, level?: number): string | undefined {
     const compilerRecord = getBaseObjectRecord(baseId, gameData);
-    const raw = compilerRecord
-        ? firstDefinedRecord(compilerRecord, field.slkName.toLowerCase() === 'profile'
-            ? resolveProfileFields(field, level)
-            : [resolveSlkField(field, level)])
-        : field.slkName.toLowerCase() === 'profile'
-        ? firstDefined(gameData.profile.get(baseId), resolveProfileFields(field, level))
-        : getBaseSlkRow(baseId, field, gameData)?.[resolveSlkField(field, level)];
+    const isProfileField = field.slkName.toLowerCase() === 'profile';
+    let raw: string | undefined;
+    if (compilerRecord) {
+        raw = firstDefinedRecord(compilerRecord, isProfileField ? resolveProfileFields(field, level) : [resolveSlkField(field, level)]);
+    } else if (isProfileField) {
+        raw = firstDefined(gameData.profile.get(baseId), resolveProfileFields(field, level));
+    } else {
+        raw = getBaseSlkRow(baseId, field, gameData)?.[resolveSlkField(field, level)];
+    }
     // Fields packed into one comma-list cell (e.g. Buttonpos "x,y") select their part via index.
     if (raw !== undefined && field.index !== undefined && raw.indexOf(',') !== -1) {
         return (raw.split(',')[field.index] ?? '').trim();
@@ -1204,6 +1209,7 @@ export function loadObjValueCatalog(): Promise<ObjValueCatalog> {
     return promise;
 }
 
+// eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 async function loadObjValueCatalogUncached(): Promise<ObjValueCatalog> {
     const worldStrings = await loadWorldEditStrings();
     const kb = await loadCompilerKnowledgeBase();
@@ -1623,8 +1629,9 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
     // metadataSource is tagged "(not found)" by loadObjSummaryDataUncached when the profile/wts
     // lookups behind it came back completely empty — i.e. no WC3 install was found at all, not just
     // this one file. Surface that plainly instead of leaving raw field ids as the only clue.
+    const registrySuffix = process.platform === 'win32' ? ' and the Windows registry' : '';
     const gameDataBanner = metadataSource.endsWith('(not found)')
-        ? `<div class="warning">Warcraft III game data not found — showing raw field ids only (no icons, categories, or friendly labels). Checked the default install locations${process.platform === 'win32' ? ' and the Windows registry' : ''}; if Warcraft III is installed somewhere unusual, set the "wurst.wc3path" setting to its folder and reopen this file. Run "Wurst: Show WC3 Data Log" from the Command Palette to see exactly what was checked.</div>`
+        ? `<div class="warning">Warcraft III game data not found — showing raw field ids only (no icons, categories, or friendly labels). Checked the default install locations${registrySuffix}; if Warcraft III is installed somewhere unusual, set the "wurst.wc3path" setting to its folder and reopen this file. Run "Wurst: Show WC3 Data Log" from the Command Palette to see exactly what was checked.</div>`
         : '';
 
     return buildPage({
@@ -3055,6 +3062,7 @@ function parseNumericEdit(raw: string, prev: number | string, truncate: boolean)
     return truncate ? Math.trunc(n) : n;
 }
 
+// eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 function applyFieldEdit(doc: ObjModDocument, p: EditFieldMessage): ModEditUndo | undefined {
     const entry = findEntryByKey(doc.displayFile, p.key);
     if (!entry) return undefined;
@@ -3356,6 +3364,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         }
     }
 
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
     private async handleMessageUnsafe(message: unknown, webview: vscode.Webview, doc: ObjModDocument): Promise<void> {
         if (!message || typeof message !== 'object') return;
         const msg = message as {
@@ -3413,7 +3422,8 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             return;
         }
         if (msg.type === 'modelThumbProfile' && msg.key && msg.phase) {
-            console.log(`[wurst-model-thumb] ${msg.key} webview ${msg.phase} +${msg.deltaMs ?? '?'}ms elapsed=${msg.elapsedMs ?? '?'}ms${msg.detail ? ` ${msg.detail}` : ''}`);
+            const detailSuffix = msg.detail ? ' ' + msg.detail : '';
+            console.log(`[wurst-model-thumb] ${msg.key} webview ${msg.phase} +${msg.deltaMs ?? '?'}ms elapsed=${msg.elapsedMs ?? '?'}ms${detailSuffix}`);
             return;
         }
         if (msg.type === 'requestAssetCatalog') {
@@ -3485,8 +3495,9 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
     private async openObjectReference(doc: ObjModDocument, rawcode: string, label?: string): Promise<void> {
         const found = await locateObjectAcrossSiblings(doc.mainUri, rawcode);
         if (!found) {
+            const displayLabel = label ? `${label} (${rawcode})` : rawcode;
             void vscode.window.showInformationMessage(
-                `${label ? `${label} (${rawcode})` : rawcode} is a stock Warcraft III object — it isn't customized anywhere in this map, so there's nothing to open.`,
+                `${displayLabel} is a stock Warcraft III object — it isn't customized anywhere in this map, so there's nothing to open.`,
             );
             return;
         }

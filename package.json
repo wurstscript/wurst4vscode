@@ -864,6 +864,7 @@
         "@types/webpack-env": "^1.18.8",
         "@vscode/vsce": "^3.7.1",
         "eslint": "^9.39.5",
+        "eslint-plugin-sonarjs": "^4.2.0",
         "globals": "^15.15.0",
         "ts-loader": "^9.5.1",
         "typescript": "^5.9.3",

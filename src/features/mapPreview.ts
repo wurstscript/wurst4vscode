@@ -74,9 +74,10 @@ interface TerrainMaterials {
 
 type SlkRows = Map<string, Record<string, string>>;
 
+// eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 async function parseW3eTerrain(data: Buffer): Promise<Terrain> {
     let p = 0;
-    const id = () => data.toString('latin1', p, (p += 4));
+    const id = () => { const start = p; p += 4; return data.toString('latin1', start, p); };
     const i32 = () => { const v = data.readInt32LE(p); p += 4; return v; };
     const f32 = () => { const v = data.readFloatLE(p); p += 4; return v; };
 
@@ -164,6 +165,7 @@ async function parseW3eTerrain(data: Buffer): Promise<Terrain> {
     return { version, tileset, customTileset, width, height, centerX, centerY, groundTiles, cliffTiles, heights, water, ground, cliff, layer, flags, detail, waterMask, min, max };
 }
 
+// eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 async function readDooMarkers(dir: string): Promise<Marker[]> {
     const markers: Marker[] = [];
     let catalog: Awaited<ReturnType<typeof getObjectCatalog>> | undefined;

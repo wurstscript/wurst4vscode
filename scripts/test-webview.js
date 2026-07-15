@@ -153,6 +153,7 @@ function testObjModTreeSelectionStaysUntracked() {
     let treeRebuilds = 0;
     let lastActiveInTree = null;
     effect(() => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- reading .value here (and discarding it) is what registers the tracked dependency; see signals.ts's dependency-tracking design.
         query.value; // tracked: a query change must rebuild the tree
         treeRebuilds++;
         lastActiveInTree = untracked(() => selectedKey.value); // NOT tracked: selection alone must not rebuild
@@ -184,7 +185,9 @@ function testObjModDetailsRebuildVsFilterEffectSplit() {
 
     let fullRebuilds = 0;
     let filterApplies = 0;
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- reading .value (and discarding it) registers the tracked dependency; see signals.ts.
     effect(() => { selectedKey.value; showTechnical.value; fullRebuilds++; });
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- same as above
     effect(() => { hideEmpty.value; hiddenCategoriesVersion.value; filterApplies++; });
 
     assert.equal(fullRebuilds, 1);
@@ -699,6 +702,7 @@ function testAssetBrowserForwardsModelTextures() {
         'var initial = ${initialJson};',
         "var initial = { activeTab: 'model', tabs: { icon: [], model: [] }, currentValue: '' };"
     );
+    // eslint-disable-next-line sonarjs/constructor-for-side-effects -- constructed only to validate the extracted inline script parses (throws SyntaxError otherwise); the instance itself is unused on purpose.
     new vm.Script(script);
     assert.ok(
         script.includes("msg.type === 'requestTextures'"),

@@ -97,5 +97,7 @@ Do not duplicate decoders across features.
 
 ## Validation checklist
 - Compile TypeScript (`npx tsc -p . --noEmit`) after command or API wiring changes.
+- Run `npm run lint` (ESLint, with `eslint-plugin-sonarjs`'s recommended rules — see `eslint.config.js`) and fix anything it flags in files you touched before considering a change done. `src/webview/**` is intentionally excluded (bundled browser JS with a different style — see the ignores comment in `eslint.config.js`).
+  - A handful of pre-existing findings are deliberately suppressed rather than fixed: `sonarjs/cognitive-complexity` and `sonarjs/no-nested-functions` are silenced per-site with `// eslint-disable-next-line ... -- TODO(lint-cleanup): ...` on functions that need a real decomposition pass, not a rushed one — don't add more of these without good reason, and prefer actually reducing complexity when touching one of these functions anyway. `sonarjs/code-eval`, `no-os-command-from-path`, `file-permissions`, `pseudo-random`, and `hashing` are disabled project-wide in `eslint.config.js` with reasoning for each (they assume an untrusted/internet-facing context this codebase doesn't have).
 - Ensure command appears in Command Palette via `contributes.commands`.
 - Ensure command can activate extension when run from a cold start (`activationEvents`).

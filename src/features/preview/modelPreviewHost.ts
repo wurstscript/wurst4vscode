@@ -34,7 +34,8 @@ async function readCachedThumb(cacheKey: string): Promise<{ uri: string; cachePa
 }
 
 function statThumbKey(resolvedPath: string, stat: fs.Stats): string {
-    return `v5s-${fastByteHash(Buffer.from(`${resolvedPath.toLowerCase()}\0${stat.size}\0${Math.round(stat.mtimeMs)}`, 'utf8'))}`;
+    const identity = `${resolvedPath.toLowerCase()}\0${stat.size}\0${Math.round(stat.mtimeMs)}`;
+    return `v5s-${fastByteHash(Buffer.from(identity, 'utf8'))}`;
 }
 
 function thumbLog(message: string): void {
@@ -85,7 +86,10 @@ function rememberMissingTexture(key: string): void {
 }
 
 export function markModelThumbnailBad(key: string, cacheKey?: string, aliasKey?: string, reason?: string): void {
-    thumbLog(`${key} render-failed${reason ? ` reason=${reason}` : ''}${cacheKey ? ` key=${cacheKey}` : ''}${aliasKey && aliasKey !== cacheKey ? ` aliasKey=${aliasKey}` : ''}`);
+    const reasonSuffix = reason ? ` reason=${reason}` : '';
+    const cacheKeySuffix = cacheKey ? ` key=${cacheKey}` : '';
+    const aliasKeySuffix = aliasKey && aliasKey !== cacheKey ? ` aliasKey=${aliasKey}` : '';
+    thumbLog(`${key} render-failed${reasonSuffix}${cacheKeySuffix}${aliasKeySuffix}`);
 }
 
 function textureMissingKey(texPath: string, roots: readonly string[]): string {
@@ -222,7 +226,8 @@ export async function cacheModelThumbnail(key: string, cacheKey: string, webpBas
             return;
         }
         if (modelThumbCacheDisabled()) {
-            thumbLog(`${key} cache-write-disabled key=${cacheKey}${aliasKey ? ` aliasKey=${aliasKey}` : ''} bytes=${bytes.length} decode=${Date.now() - t0}ms total=${Date.now() - t0}ms`);
+            const aliasKeySuffix = aliasKey ? ` aliasKey=${aliasKey}` : '';
+            thumbLog(`${key} cache-write-disabled key=${cacheKey}${aliasKeySuffix} bytes=${bytes.length} decode=${Date.now() - t0}ms total=${Date.now() - t0}ms`);
             await webview.postMessage({ type: 'modelThumbLoaded', key, uri: `data:image/webp;base64,${bytes.toString('base64')}`, cacheKey });
             return;
         }
@@ -235,7 +240,8 @@ export async function cacheModelThumbnail(key: string, cacheKey: string, webpBas
             try { await fs.promises.writeFile(path.join(getModelThumbCacheDir(), `${aliasKey}.webp`), bytes); } catch {}
         }
         const tWrite = Date.now();
-        thumbLog(`${key} cache-write key=${cacheKey}${aliasKey ? ` aliasKey=${aliasKey}` : ''} path="${cachePath}" bytes=${bytes.length} decode=${tDecode - t0}ms mkdir=${tMkdir - tDecode}ms write=${tWrite - tMkdir}ms total=${tWrite - t0}ms`);
+        const aliasKeySuffix = aliasKey ? ` aliasKey=${aliasKey}` : '';
+        thumbLog(`${key} cache-write key=${cacheKey}${aliasKeySuffix} path="${cachePath}" bytes=${bytes.length} decode=${tDecode - t0}ms mkdir=${tMkdir - tDecode}ms write=${tWrite - tMkdir}ms total=${tWrite - t0}ms`);
         await webview.postMessage({ type: 'modelThumbLoaded', key, uri: `data:image/webp;base64,${bytes.toString('base64')}`, cacheKey });
     } catch (err) {
         thumbLog(`${key} cache-write error key=${cacheKey} total=${Date.now() - t0}ms error=${err instanceof Error ? err.message : String(err)}`);

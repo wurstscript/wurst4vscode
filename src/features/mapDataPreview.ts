@@ -889,6 +889,7 @@ ${errorBanner(parsed.error)}
 }
 
 type SelectOption = { value: string; label: string };
+type ControlValue = string | number | undefined;
 
 function renderHeader(fileName: string, meta: string, editable = false): string {
     const badge = editable
@@ -921,7 +922,7 @@ function renderTextarea(label: string, value: string | ResolvedText | undefined,
 </label>`;
 }
 
-function renderSelect(label: string, value: string | number | undefined, options: SelectOption[]): string {
+function renderSelect(label: string, value: ControlValue, options: SelectOption[]): string {
     const selected = controlValue(value);
     const normalizedOptions = options.some((option) => option.value === selected) || selected === ''
         ? options
@@ -946,18 +947,20 @@ function renderCheckbox(label: string, checked: boolean): string {
 </label>`;
 }
 
+function sourcePillHtml(value: ResolvedText, leadingSpace: boolean): string {
+    if (!value.source) return '';
+    const missingClass = value.missing ? ' missing' : '';
+    const title = value.missing ? `${value.source} not found in war3map.wts` : `Resolved from ${value.source}`;
+    const prefix = leadingSpace ? ' ' : '';
+    return `${prefix}<span class="source-pill${missingClass}" title="${escapeHtml(title)}">${escapeHtml(value.source)}</span>`;
+}
+
 function renderFieldLabel(label: string, value: ResolvedText): string {
-    const source = value.source
-        ? `<span class="source-pill${value.missing ? ' missing' : ''}" title="${escapeHtml(value.missing ? `${value.source} not found in war3map.wts` : `Resolved from ${value.source}`)}">${escapeHtml(value.source)}</span>`
-        : '';
-    return `<span class="field-label"><span>${escapeHtml(label)}</span>${source}</span>`;
+    return `<span class="field-label"><span>${escapeHtml(label)}</span>${sourcePillHtml(value, false)}</span>`;
 }
 
 function renderResolvedInline(value: ResolvedText): string {
-    const source = value.source
-        ? ` <span class="source-pill${value.missing ? ' missing' : ''}" title="${escapeHtml(value.missing ? `${value.source} not found in war3map.wts` : `Resolved from ${value.source}`)}">${escapeHtml(value.source)}</span>`
-        : '';
-    return `${escapeHtml(controlValue(value.value))}${source}`;
+    return `${escapeHtml(controlValue(value.value))}${sourcePillHtml(value, true)}`;
 }
 
 function normalizeResolvedText(value: string | number | ResolvedText | undefined): ResolvedText {
@@ -975,7 +978,7 @@ function renderTagField(label: string, values: string[]): string {
 </div>`;
 }
 
-function controlValue(value: string | number | undefined): string {
+function controlValue(value: ControlValue): string {
     return value === undefined || value === '' ? '' : String(value);
 }
 
@@ -1070,6 +1073,7 @@ const W3I_FLAG_DEFS: Array<[number, string]> = [
 ];
 
 function fmt(value: number): string {
+    // eslint-disable-next-line sonarjs/super-linear-regex -- single quantified group anchored at end, no ambiguous adjacency; not actually susceptible to backtracking blowup.
     return value.toFixed(3).replace(/\.?0+$/, '');
 }
 
@@ -1143,7 +1147,7 @@ function editInput(field: keyof W3iFile, label: string, resolved: ResolvedText, 
 </label>`;
 }
 
-function editSelectControl(field: keyof W3iFile, label: string, value: string | number | undefined, options: SelectOption[]): string {
+function editSelectControl(field: keyof W3iFile, label: string, value: ControlValue, options: SelectOption[]): string {
     const selected = controlValue(value);
     const opts = options.some((o) => o.value === selected)
         ? options
@@ -1355,7 +1359,6 @@ class W3iEditorProvider implements vscode.CustomEditorProvider<W3iDocument> {
         if (msg.type === 'edit' && msg.field) {
             const edit = this.makeFieldEdit(doc, msg.field as keyof W3iFile, msg.value ?? '');
             if (edit) this.pushEdit(doc, `Edit ${msg.field}`, edit, false);
-            return;
         }
     }
 

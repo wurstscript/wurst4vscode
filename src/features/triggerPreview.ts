@@ -67,10 +67,11 @@ const COMMON_CSS = `
 // ── WCT HTML rendering ────────────────────────────────────────────────────────
 
 function buildWctHtml(parsed: WctFile, fileName: string, catalog: Map<string, ObjectRef>): string {
-    const versionLabel = parsed.version === -2147483644 ? '0x80000004 (Reforged)' :
-                         parsed.version === 1            ? '1 (TFT)'              :
-                         parsed.version === 0            ? '0 (RoC)'              :
-                         String(parsed.version);
+    let versionLabel: string;
+    if (parsed.version === -2147483644) versionLabel = '0x80000004 (Reforged)';
+    else if (parsed.version === 1) versionLabel = '1 (TFT)';
+    else if (parsed.version === 0) versionLabel = '0 (RoC)';
+    else versionLabel = String(parsed.version);
 
     const errorBanner = parsed.error
         ? `<div class="error">Parse error: ${escHtml(parsed.error)}</div>`
@@ -148,10 +149,11 @@ ${sections.join('\n')}
 // ── WTG HTML rendering ────────────────────────────────────────────────────────
 
 function buildWtgHtml(parsed: WtgFile, fileName: string): string {
-    const versionLabel = parsed.version === 4           ? '4 (RoC)'      :
-                         parsed.version === 7           ? '7 (TFT)'      :
-                         parsed.version === -2147483644 ? '0x80000004 (Reforged)' :
-                         String(parsed.version);
+    let versionLabel: string;
+    if (parsed.version === 4) versionLabel = '4 (RoC)';
+    else if (parsed.version === 7) versionLabel = '7 (TFT)';
+    else if (parsed.version === -2147483644) versionLabel = '0x80000004 (Reforged)';
+    else versionLabel = String(parsed.version);
 
     const errorBanner = parsed.error
         ? `<div class="error">Parse error: ${escHtml(parsed.error)}</div>`
@@ -185,8 +187,9 @@ function buildWtgHtml(parsed: WtgFile, fileName: string): string {
         varsSection = `<section><h2>Variables <span class="count">(0)</span></h2><p class="empty">none</p></section>`;
     } else {
         const rows = parsed.vars.map(v => {
+            const arraySize = v.arraySize !== undefined ? v.arraySize : '';
             const typeStr = v.isArray
-                ? `${escHtml(v.type)}[${v.arraySize !== undefined ? v.arraySize : ''}]`
+                ? `${escHtml(v.type)}[${arraySize}]`
                 : escHtml(v.type);
             const initStr = v.hasInitVal && v.initVal ? escHtml(v.initVal) : '<span class="dim">—</span>';
             return `<tr>

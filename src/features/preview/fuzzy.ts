@@ -13,6 +13,7 @@
  * which a word-length-bounded check would miss. The budget stays low (≤2 edits) so it only forgives
  * small typos, not loose matches.
  */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 export function fuzzyMatch(query: string, text: string): boolean {
     query = String(query === null || query === undefined ? '' : query).toLowerCase().trim();
     if (!query) return true;

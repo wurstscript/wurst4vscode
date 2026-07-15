@@ -19,10 +19,6 @@ const root = path.resolve(__dirname, '..');
 const cascTestdata = path.resolve(root, '..', 'casc-ts', 'testdata');
 const wc3libsResources = path.resolve(root, '..', 'wc3libs', 'src', 'test', 'resources');
 
-function read(relPath) {
-    return fs.readFileSync(path.resolve(root, relPath));
-}
-
 function readExternal(base, relPath) {
     return fs.readFileSync(path.resolve(base, relPath));
 }

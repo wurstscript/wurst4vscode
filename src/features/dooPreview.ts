@@ -32,6 +32,7 @@ function fmt1(n: number): string {
 }
 
 function fmt3(n: number): string {
+    // eslint-disable-next-line sonarjs/super-linear-regex -- single quantified group anchored at end, no ambiguous adjacency; not actually susceptible to backtracking blowup.
     return n.toFixed(3).replace(/\.?0+$/, '');
 }
 
@@ -50,7 +51,8 @@ function objCell(id: string, catalog: Catalog, fallbackName?: string): string {
         ? `<span class="object-icon" data-key="${esc(id)}" data-icon="${esc(ref.iconPath)}"></span>`
         : `<span class="object-icon missing"></span>`;
     const sameAsId = name === id;
-    return `<div class="obj-cell">${icon}<span class="obj-text"><span class="obj-name">${esc(name)}</span>${sameAsId ? '' : `<span class="obj-id">${esc(id)}</span>`}</span></div>`;
+    const idSpan = sameAsId ? '' : `<span class="obj-id">${esc(id)}</span>`;
+    return `<div class="obj-cell">${icon}<span class="obj-text"><span class="obj-name">${esc(name)}</span>${idSpan}</span></div>`;
 }
 
 /** Inline resolved name with rawcode tooltip (for compact drop/ability lists). */
@@ -212,7 +214,8 @@ ${renderSpecialDoodadTable(parsed.specialDoodads ?? [], catalog)}`;
     } else if (!isDoodads && parsed.units) {
         const count  = parsed.units.length;
         const slocs  = parsed.units.filter(u => u.typeId === 'sloc').length;
-        const sub2   = slocs > 0 ? ` — ${slocs} start location${slocs !== 1 ? 's' : ''}` : '';
+        const slocPlural = slocs !== 1 ? 's' : '';
+        const sub2   = slocs > 0 ? ` — ${slocs} start location${slocPlural}` : '';
 
         mainSection = `<section>
 <h2>Units &amp; Items <span class="count">(${count}${sub2})</span></h2>

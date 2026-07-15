@@ -24,7 +24,8 @@ type War3ModelDecoder = {
 let war3Model: War3ModelDecoder | undefined;
 
 function getWar3ModelDecoder(): War3ModelDecoder {
-    return war3Model ??= require('war3-model') as War3ModelDecoder;
+    if (!war3Model) war3Model = require('war3-model') as War3ModelDecoder;
+    return war3Model;
 }
 
 export { decodeBlp, decodeTga };
@@ -99,6 +100,7 @@ function reconstructNormalZ(xByte: number, yByte: number): number {
     return Math.max(0, Math.min(255, Math.round((z * 0.5 + 0.5) * 255)));
 }
 
+// eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 function decodeBc4Bc5Dds(bytes: Uint8Array): DecodedRasterImage | undefined {
     if (bytes.length < 128 || readU32LE(bytes, 0) !== DDS_MAGIC || (readU32LE(bytes, 80) & DDPF_FOURCC) === 0) {
         return undefined;
@@ -203,8 +205,9 @@ export function decodeToRgba(bytes: Uint8Array, ext: string): { width: number; h
 
 /** Decode BLP/DDS/TGA for preview display through one normalized RGBA path. */
 export function decodeRasterPreview(bytes: Uint8Array, ext: string): DecodedRgbaImage {
-    const decoded = ext === '.dds' ? decodeDds(bytes)
-                  : ext === '.tga' ? decodeTga(bytes)
-                  : decodeBlp(bytes);
+    let decoded;
+    if (ext === '.dds') decoded = decodeDds(bytes);
+    else if (ext === '.tga') decoded = decodeTga(bytes);
+    else decoded = decodeBlp(bytes);
     return normalizeToRgba(decoded, bytes);
 }

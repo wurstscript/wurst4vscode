@@ -240,6 +240,7 @@ export function installWithRetry(options: InstallOptions = {}): Promise<void> {
     return activeInstallPromise;
 }
 
+// eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 async function runInstallWithRetry(options: InstallOptions): Promise<void> {
     let autoRepairAttempted = false;
     let prepared: PreparedNightlyInstall | undefined;

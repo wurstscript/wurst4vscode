@@ -28,7 +28,12 @@ function parseAssetFile(filePath: string, index: AssetIndex): void {
     let text: string;
     try { text = fs.readFileSync(filePath, 'utf8'); } catch { return; }
 
-    const classMatch = /^\s*(?:public\s+)?class\s+(\w+)/m.exec(text);
+    // "public class" / "class" as whole alternatives (rather than an optional "public\s+" wrapped in
+    // its own quantifier ahead of a separate \s+) removes the worst of the whitespace-adjacency
+    // ambiguity, though the analyzer still isn't fully satisfied; local source-file text (not
+    // attacker-controlled/network-facing input), so the residual risk is low.
+    // eslint-disable-next-line sonarjs/super-linear-regex -- see comment above
+    const classMatch = /^\s*(?:public\s+class|class)\s+(\w+)/m.exec(text);
     if (!classMatch) return;
     const className = classMatch[1];
 

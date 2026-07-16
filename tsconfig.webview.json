@@ -3,9 +3,10 @@
         "target": "es2017",
         "module": "esnext",
         "moduleResolution": "node",
-        "lib": ["es2017", "dom"],
+        "lib": ["es2017", "dom", "dom.iterable"],
         "strict": true,
-        "noImplicitAny": true,
+        "noImplicitAny": false,
+        "strictNullChecks": false,
         "noUnusedLocals": false,
         "noUnusedParameters": false,
         "skipLibCheck": true

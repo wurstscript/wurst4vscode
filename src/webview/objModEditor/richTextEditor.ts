@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { renderWc3Colors } from '../objModWebviewUtils';
 
 // Current selection range for a textarea (kept fresh even after blur, so toolbar/color-picker work).
@@ -50,17 +49,18 @@ export function wc3EscapeText(text) {
   return String(text || '').replace(/\u00a0/g, ' ').replace(/\|/g, '||');
 }
 
-export function richNodeToWc3(node) {
+export function richNodeToWc3(node: Node): string {
   if (node.nodeType === Node.TEXT_NODE) return wc3EscapeText(node.nodeValue || '');
   if (node.nodeType !== Node.ELEMENT_NODE) return '';
-  const el = node;
+  const el = node as HTMLElement;
   const tag = el.tagName ? el.tagName.toLowerCase() : '';
   if (tag === 'br') return '|n';
   let out = '';
-  const children = Array.from(el.childNodes || []);
+  const children: Node[] = Array.from(el.childNodes || []);
   children.forEach((child, index) => {
     out += richNodeToWc3(child);
-    const childTag = child.tagName ? child.tagName.toLowerCase() : '';
+    const childElement = child.nodeType === Node.ELEMENT_NODE ? child as Element : null;
+    const childTag = childElement?.tagName.toLowerCase() || '';
     if ((childTag === 'div' || childTag === 'p') && index < children.length - 1 && !out.endsWith('|n')) out += '|n';
   });
   const color = cssColorToHex(el.style?.color || el.getAttribute?.('color'));
@@ -68,7 +68,8 @@ export function richNodeToWc3(node) {
 }
 
 export function richToWc3(el) {
-  return Array.from(el.childNodes || []).map(richNodeToWc3).join('').replace(/(\|n)+$/g, '');
+  const children = el.childNodes ? Array.from(el.childNodes as NodeListOf<Node>) : [];
+  return children.map(richNodeToWc3).join('').replace(/(\|n)+$/g, '');
 }
 
 export function setCaretEnd(el) {
@@ -96,9 +97,10 @@ export function richSelectionColor(rich) {
   if (node && node.nodeType === Node.TEXT_NODE) node = node.parentNode;
   while (node && node !== rich) {
     if (node.nodeType === Node.ELEMENT_NODE) {
-      const explicit = cssColorToHex(node.style?.color || node.getAttribute?.('color'));
+      const element = node as HTMLElement;
+      const explicit = cssColorToHex(element.style?.color || element.getAttribute('color'));
       if (explicit) return explicit;
-      const computed = cssColorToHex(window.getComputedStyle(node).color);
+      const computed = cssColorToHex(window.getComputedStyle(element).color);
       if (computed && computed !== 'ffffff') return computed;
     }
     node = node.parentNode;
@@ -223,7 +225,7 @@ export function forceWc3ColorCopy(el) {
 // tracking whichever one was wired most recently is enough — registering a fresh `selectionchange`
 // listener per `wireColorBar` call (once per click-to-edit, with no matching removal) accumulated one
 // leaked, permanently-firing listener per edit for the whole session.
-let activeRichSync = null;
+let activeRichSync: any = null;
 document.addEventListener('selectionchange', () => {
   if (!activeRichSync) return;
   const { rich, bar } = activeRichSync;

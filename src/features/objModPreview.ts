@@ -3242,10 +3242,11 @@ class ObjModDocument implements vscode.CustomDocument {
     /** The owning panel, so an external-change prompt can bring this editor to the front before asking
         VS Code to revert/save it (both of those act on the active editor). */
     panel: vscode.WebviewPanel | undefined;
-    /** Linear edit-stack position vs. the last-saved position — drives the header dirty badge so it
-        tracks VS Code's own dirty state (undoing back to the saved point shows clean again). */
-    editDepth = 0;
-    savedDepth = 0;
+    /** Identity of the current history state and the last-saved state. Unlike a numeric stack depth,
+        revisions remain distinct when the user undoes and then creates a new edit branch. */
+    currentRevision = 0;
+    savedRevision = 0;
+    nextRevision = 1;
     /** Bytes we last read or wrote for each watched file (mainUri/skinUri/wtsUri), keyed by uri string.
         Lets an external-change check tell a real edit from another app apart from the echo of our own
         write — see ObjModEditorProvider.snapshotKnownBytes/checkExternalChange. */
@@ -3307,13 +3308,68 @@ function fileExtOf(uri: vscode.Uri): string {
     return name.slice(name.lastIndexOf('.'));
 }
 
+interface ObjModBackupData {
+    version: 1;
+    mainUri: string;
+    skinUri?: string;
+    mainBase64: string;
+    skinBase64?: string;
+    wtsUri?: string;
+    wtsExists: boolean;
+    wtsWarning?: string;
+    wtsTable: Array<[number, string]>;
+    wtsEdits: Array<[number, string]>;
+    currentRevision: number;
+    savedRevision: number;
+    nextRevision: number;
+}
+
+async function openObjModBackup(uri: vscode.Uri, backupId: string): Promise<ObjModDocument> {
+    const backupUri = vscode.Uri.parse(backupId);
+    const raw = Buffer.from(await vscode.workspace.fs.readFile(backupUri)).toString('utf8');
+    const backup = JSON.parse(raw) as ObjModBackupData;
+    if (backup.version !== 1 || !backup.mainBase64 || !backup.mainUri || !Array.isArray(backup.wtsTable)) {
+        throw new Error('Unsupported or malformed object-editor backup.');
+    }
+    const ext = fileExtOf(uri);
+    const mainFile = parseObjMod(Buffer.from(backup.mainBase64, 'base64'), ext);
+    const skinFile = backup.skinBase64
+        ? parseObjMod(Buffer.from(backup.skinBase64, 'base64'), ext)
+        : undefined;
+    const mainUri = vscode.Uri.parse(backup.mainUri);
+    const skinUri = backup.skinUri ? vscode.Uri.parse(backup.skinUri) : undefined;
+    const displayFile = skinFile ? mergeObjModFiles(mainFile, skinFile) : mainFile;
+    const doc = new ObjModDocument(
+        uri,
+        mainFile,
+        mainUri,
+        skinFile,
+        skinUri,
+        displayFile,
+        new Map(backup.wtsTable),
+        backup.wtsUri ? vscode.Uri.parse(backup.wtsUri) : undefined,
+        backup.wtsExists,
+        backup.wtsWarning,
+    );
+    doc.wtsEdits = new Map(backup.wtsEdits);
+    doc.currentRevision = backup.currentRevision;
+    doc.savedRevision = backup.savedRevision;
+    doc.nextRevision = Math.max(backup.nextRevision, backup.currentRevision + 1, backup.savedRevision + 1);
+    return doc;
+}
+
 class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument> {
     private readonly _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<ObjModDocument>>();
     readonly onDidChangeCustomDocument = this._onDidChange.event;
 
     constructor(private readonly extensionUri: vscode.Uri) {}
 
-    async openCustomDocument(uri: vscode.Uri): Promise<ObjModDocument> {
+    async openCustomDocument(uri: vscode.Uri, openContext: vscode.CustomDocumentOpenContext): Promise<ObjModDocument> {
+        if (openContext.backupId) {
+            const restored = await openObjModBackup(uri, openContext.backupId);
+            await this.snapshotKnownBytes(restored);
+            return restored;
+        }
         const e = await loadEditableObjMod(uri);
         const wtsTable = loadTriggerStringsForUri(uri);
         const { uri: wtsUri, exists } = findWtsUri(uri);
@@ -3452,6 +3508,8 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         if (msg.type === 'redo') { void vscode.commands.executeCommand('redo'); return; }
         if (msg.type === 'save') { void vscode.commands.executeCommand('workbench.action.files.save'); return; }
         if (msg.type === 'editField' && msg.key && msg.fieldId && msg.varType) {
+            const beforeRevision = doc.currentRevision;
+            const afterRevision = doc.nextRevision++;
             const edit = applyFieldEdit(doc, {
                 type: 'editField',
                 key: msg.key,
@@ -3476,17 +3534,17 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             this._onDidChange.fire({
                 document: doc,
                 label: `Edit ${msg.fieldId}`,
-                undo: () => { edit.revert(); doc.editDepth--; post(); this.postDirtyState(doc); },
-                redo: () => { edit.apply(); doc.editDepth++; post(); this.postDirtyState(doc); },
+                undo: () => { edit.revert(); doc.currentRevision = beforeRevision; post(); this.postDirtyState(doc); },
+                redo: () => { edit.apply(); doc.currentRevision = afterRevision; post(); this.postDirtyState(doc); },
             });
-            doc.editDepth++;
+            doc.currentRevision = afterRevision;
             this.postDirtyState(doc);
             if (isSummaryField(fieldId)) void postObjectSummary(webview, doc, key);
         }
     }
 
     private postDirtyState(doc: ObjModDocument): void {
-        void doc.panelWebview?.postMessage({ type: 'dirtyStateChanged', isDirty: doc.editDepth !== doc.savedDepth });
+        void doc.panelWebview?.postMessage({ type: 'dirtyStateChanged', isDirty: doc.currentRevision !== doc.savedRevision });
     }
 
     /** A rawcode chip (e.g. an ability on a unit) that isn't overridden in the currently open file —
@@ -3512,47 +3570,58 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
 
     async saveCustomDocument(doc: ObjModDocument): Promise<void> {
         try {
-            // writeObjModIfChanged/writeWts already hand back the bytes now on disk (written, or found
-            // unchanged) — record those directly instead of re-reading every file back with
+            // Preflight every serialization and the WTS merge before the first write. This prevents a
+            // validation/read failure in a later sibling from leaving an earlier file partially saved.
+            const mainBytes = serializeValidated(doc.mainFile, doc.mainUri.path);
+            const skinBytes = doc.skinFile && doc.skinUri
+                ? serializeValidated(doc.skinFile, doc.skinUri.path)
+                : undefined;
+            const wtsBytes = await this.prepareWts(doc, doc.wtsUri, doc.wtsExists);
+            // writeBytesIfChanged hands back the bytes now on disk (written, or found unchanged) —
+            // record those directly instead of re-reading every file back with
             // snapshotKnownBytes, so the file watcher doesn't mistake this save's own fs events for an
             // external change (see checkExternalChange).
-            doc.knownBytes.set(doc.mainUri.toString(), await writeObjModIfChanged(doc.mainFile, doc.mainUri));
-            if (doc.skinFile && doc.skinUri) {
-                doc.knownBytes.set(doc.skinUri.toString(), await writeObjModIfChanged(doc.skinFile, doc.skinUri));
+            doc.knownBytes.set(doc.mainUri.toString(), await writeBytesIfChanged(mainBytes, doc.mainUri));
+            if (skinBytes && doc.skinUri) {
+                doc.knownBytes.set(doc.skinUri.toString(), await writeBytesIfChanged(skinBytes, doc.skinUri));
             }
-            const wtsBytes = await this.writeWts(doc, doc.wtsUri, doc.wtsExists);
-            if (doc.wtsUri) {
+            if (wtsBytes && doc.wtsUri) {
+                await vscode.workspace.fs.writeFile(doc.wtsUri, wtsBytes);
                 doc.wtsExists = true;
-                if (wtsBytes) doc.knownBytes.set(doc.wtsUri.toString(), wtsBytes);
+                doc.knownBytes.set(doc.wtsUri.toString(), wtsBytes);
+                doc.wtsEdits.clear();
             }
-            doc.savedDepth = doc.editDepth;
+            doc.savedRevision = doc.currentRevision;
             this.postDirtyState(doc);
         } catch (err) {
-            // Validation failed — surface it and rethrow so VS Code keeps the document dirty (nothing written).
+            // Surface the failure and rethrow so VS Code keeps the document dirty. Preflight failures happen
+            // before any write; an actual filesystem failure may still have written an earlier sibling.
             void vscode.window.showErrorMessage(`Object data not saved: ${err instanceof Error ? err.message : String(err)}`);
             throw err;
         }
     }
 
     async saveCustomDocumentAs(doc: ObjModDocument, targetResource: vscode.Uri): Promise<void> {
-        await vscode.workspace.fs.writeFile(targetResource, serializeValidated(doc.openedFile, targetResource.path));
+        const objModBytes = serializeValidated(doc.openedFile, targetResource.path);
         const { uri: wtsUri, exists } = findWtsUri(targetResource);
-        await this.writeWts(doc, wtsUri, exists);
+        const wtsBytes = await this.prepareWts(doc, wtsUri, exists);
+        await vscode.workspace.fs.writeFile(targetResource, objModBytes);
+        if (wtsBytes && wtsUri) {
+            await vscode.workspace.fs.writeFile(wtsUri, wtsBytes);
+            doc.wtsEdits.clear();
+        }
     }
 
-    /** Returns the bytes written, or undefined if there was nothing staged to flush (see
-     *  writeObjModIfChanged — same "hand back what's now on disk" reasoning). */
-    private async writeWts(doc: ObjModDocument, wtsUri: vscode.Uri | undefined, wtsExists: boolean): Promise<Buffer | undefined> {
+    /** Builds the final WTS bytes without writing, so callers can finish all fallible preflight work
+     *  before they modify any of the document's sibling files. */
+    private async prepareWts(doc: ObjModDocument, wtsUri: vscode.Uri | undefined, wtsExists: boolean): Promise<Buffer | undefined> {
         if (!doc.wtsEdits.size || !wtsUri) return undefined;
         let original = '';
         if (wtsExists) {
             try { original = Buffer.from(await vscode.workspace.fs.readFile(wtsUri)).toString('utf8'); } catch { /* create fresh */ }
         }
         const text = applyWtsEdits(original, doc.wtsEdits);
-        const bytes = Buffer.from(text, 'utf8');
-        await vscode.workspace.fs.writeFile(wtsUri, bytes);
-        doc.wtsEdits.clear();
-        return bytes;
+        return Buffer.from(text, 'utf8');
     }
 
     async revertCustomDocument(doc: ObjModDocument): Promise<void> {
@@ -3560,7 +3629,25 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
     }
 
     async backupCustomDocument(doc: ObjModDocument, context: vscode.CustomDocumentBackupContext): Promise<vscode.CustomDocumentBackup> {
-        await vscode.workspace.fs.writeFile(context.destination, serializeValidated(doc.openedFile, doc.uri.path));
+        const backup: ObjModBackupData = {
+            version: 1,
+            mainUri: doc.mainUri.toString(),
+            skinUri: doc.skinUri?.toString(),
+            mainBase64: serializeValidated(doc.mainFile, doc.mainUri.path).toString('base64'),
+            skinBase64: doc.skinFile && doc.skinUri
+                ? serializeValidated(doc.skinFile, doc.skinUri.path).toString('base64')
+                : undefined,
+            wtsUri: doc.wtsUri?.toString(),
+            wtsExists: doc.wtsExists,
+            wtsWarning: doc.wtsWarning,
+            wtsTable: Array.from(doc.wtsTable),
+            wtsEdits: Array.from(doc.wtsEdits),
+            currentRevision: doc.currentRevision,
+            savedRevision: doc.savedRevision,
+            nextRevision: doc.nextRevision,
+        };
+        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(context.destination, '..'));
+        await vscode.workspace.fs.writeFile(context.destination, Buffer.from(JSON.stringify(backup), 'utf8'));
         return { id: context.destination.toString(), delete: () => vscode.workspace.fs.delete(context.destination).then(() => undefined, () => undefined) };
     }
 
@@ -3575,8 +3662,9 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         doc.skinUri = e.skinUri;
         doc.displayFile = e.displayFile;
         doc.objectCatalog = undefined;
-        doc.editDepth = 0;
-        doc.savedDepth = 0;
+        doc.currentRevision = 0;
+        doc.savedRevision = 0;
+        doc.nextRevision = 1;
         doc.wtsTable = loadTriggerStringsForUri(doc.uri);
         doc.wtsEdits.clear();
         const { exists } = findWtsUri(doc.uri);
@@ -3636,7 +3724,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         if (!changed) return;
 
         const label = uriBaseName(doc.mainUri);
-        if (doc.editDepth === doc.savedDepth) {
+        if (doc.currentRevision === doc.savedRevision) {
             // Nothing of yours is at risk — just pick up the new content and say so, no prompt needed.
             await this.reloadDocFromDisk(doc);
             vscode.window.setStatusBarMessage(`$(sync) ${label} changed on disk — reloaded.`, 4000);
@@ -3704,11 +3792,9 @@ function serializeValidated(file: ObjModFile, name: string): Buffer {
     return bytes;
 }
 
-/** Serialize (validated) and write an objmod file only when its bytes differ from disk. Returns the
- *  bytes now on disk either way, so callers that need to know what's there (see saveCustomDocument's
- *  knownBytes bookkeeping) don't have to read the file right back to find out. */
-async function writeObjModIfChanged(file: ObjModFile, uri: vscode.Uri): Promise<Buffer> {
-    const bytes = serializeValidated(file, uri.path.slice(uri.path.lastIndexOf('/') + 1));
+/** Write prevalidated objmod bytes only when they differ from disk. Returns the bytes now on disk either
+ *  way, so callers can update watcher bookkeeping without reading the file right back. */
+async function writeBytesIfChanged(bytes: Buffer, uri: vscode.Uri): Promise<Buffer> {
     try {
         const existing = Buffer.from(await vscode.workspace.fs.readFile(uri));
         if (existing.equals(bytes)) return existing;

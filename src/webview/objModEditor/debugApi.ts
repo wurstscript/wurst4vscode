@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { initial, objects, detailCache, ui } from './state';
 import { selectObject } from './objectTree';
 import { openModelAssetBrowserForE2e, searchModelAssetBrowserForE2e, forceNarrowLayoutForE2e, getAssetCatalog } from './assetBrowser';
@@ -91,7 +90,7 @@ export function installDebugApi() {
         const text = await navigator.clipboard.readText();
         return { ok: true, text };
       } catch (e) {
-        return { ok: false, reason: String(e && e.message || e) };
+        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
       }
     },
     focusEditableBody: function () {

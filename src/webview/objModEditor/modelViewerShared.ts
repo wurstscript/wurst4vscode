@@ -1,7 +1,6 @@
-// @ts-nocheck
 import { base64ToBytes } from '../objModWebviewUtils';
 
-export function mpvViewer() { return window.War3Viewer || null; }
+export function mpvViewer(): any { return window.War3Viewer || null; }
 
 export function mpvB64ToArrayBuffer(b64) {
   const bytes = base64ToBytes(b64);

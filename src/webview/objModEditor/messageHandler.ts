@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { base64ToBytes } from '../objModWebviewUtils';
 import { details, detailCache, pendingDetails, failedDetails, objects, ui, iconLoader } from './state';
 import { setModValue } from './fieldDisplay';

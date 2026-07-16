@@ -1,26 +1,25 @@
-// @ts-nocheck
 import { esc, base64ToBytes } from '../objModWebviewUtils';
 import { vscodeApi } from './state';
 import { mpvViewer, mpvB64ToArrayBuffer } from './modelViewerShared';
 import { abActiveTab } from './assetBrowser';
 import { resetMpvInited } from './modelPreviewPanel';
 
-let modelThumbObserver;
-export const pendingModelThumbs = new Set();
-export const loadedModelThumbs = new Map();
-export const missingModelThumbs = new Set();
-export const missingModelThumbReasons = new Map();
-export const modelThumbRequestQueue = [];
-export const modelThumbHostInflight = new Set();
-export const modelThumbQueue = [];
-let modelThumbJob = null;
+let modelThumbObserver: IntersectionObserver | undefined;
+export const pendingModelThumbs = new Set<string>();
+export const loadedModelThumbs = new Map<string, string>();
+export const missingModelThumbs = new Set<string>();
+export const missingModelThumbReasons = new Map<string, any>();
+export const modelThumbRequestQueue: any[] = [];
+export const modelThumbHostInflight = new Set<string>();
+export const modelThumbQueue: any[] = [];
+let modelThumbJob: any = null;
 let modelThumbAwaitingDecisionKey = '';
 let modelThumbSeq = 0;
 let modelThumbInited = false;
-let modelThumbTextureTimer = 0;
-let modelThumbIdleTimer = 0;
+let modelThumbTextureTimer: ReturnType<typeof setTimeout> | 0 = 0;
+let modelThumbIdleTimer: ReturnType<typeof setTimeout> | 0 = 0;
 let modelThumbCancelGeneration = 0;
-export const modelThumbEvents = [];
+export const modelThumbEvents: any[] = [];
 const MODEL_THUMB_HOST_CONCURRENCY = 1;
 const MODEL_THUMB_ZERO_ALPHA_RETRIES = 0;
 const MODEL_THUMB_MIN_VISIBLE_PIXELS = 4;
@@ -98,7 +97,7 @@ export function isModelThumbActuallyVisible(el) {
   const rect = el.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return false;
   if (isAssetBrowserModelKey(key)) {
-    if (!isAssetBrowserOpen() || abActiveTab.get() !== 'model') return false;
+    if (!isAssetBrowserOpen() || abActiveTab.peek() !== 'model') return false;
     const grid = document.getElementById('ab-grid');
     if (!grid || !grid.contains(el)) return false;
     return rectsIntersect(rect, grid.getBoundingClientRect());
@@ -148,7 +147,7 @@ export function pruneInvisibleQueuedModelThumbs() {
   }
 }
 
-export function recordModelThumbEvent(type, key, extra) {
+export function recordModelThumbEvent(type, key, extra = {}) {
   modelThumbEvents.push(Object.assign({ type, key: key || '', at: Math.round(performance.now()) }, extra || {}));
   if (modelThumbEvents.length > 10000) modelThumbEvents.splice(0, modelThumbEvents.length - 10000);
 }
@@ -264,7 +263,7 @@ function modelThumbElementsForKey(key) {
   return Array.prototype.slice.call(document.querySelectorAll('.model-thumb[data-key]')).filter(el => (el.getAttribute('data-key') || '') === key);
 }
 
-function modelThumbProfile(phase, detail) {
+function modelThumbProfile(phase, detail = '') {
   if (!modelThumbJob) return;
   const now = performance.now();
   const previous = modelThumbJob.lastMarkAt || modelThumbJob.startedAt || now;
@@ -453,7 +452,7 @@ function captureModelThumb() {
     modelThumbProfile('capture-posted', 'bytes=' + Math.round((dataUrl.length - marker.length) * 0.75));
     finishModelThumb(true, '', dataUrl);
   } catch (e) {
-    modelThumbProfile('capture-error', String(e && e.message ? e.message : e));
+    modelThumbProfile('capture-error', e instanceof Error ? e.message : String(e));
     finishModelThumb(false, 'capture-error');
   }
 }
@@ -490,7 +489,7 @@ export function cropModelThumbCanvas(canvas) {
   normalizeAdditivePixels(px);
   const src = document.createElement('canvas');
   src.width = w; src.height = h;
-  const sctx = src.getContext('2d');
+  const sctx = src.getContext('2d')!;
   sctx.putImageData(id, 0, 0);
   let minX = w, minY = h, maxX = -1, maxY = -1;
   for (let y = 0; y < h; y++) {
@@ -511,7 +510,7 @@ export function cropModelThumbCanvas(canvas) {
   const cw = maxX - minX + 1, ch = maxY - minY + 1;
   const out = document.createElement('canvas');
   out.width = 96; out.height = 96;
-  const octx = out.getContext('2d');
+  const octx = out.getContext('2d')!;
   octx.imageSmoothingEnabled = true;
   octx.imageSmoothingQuality = 'high';
   const scale = Math.min(96 / cw, 96 / ch);
@@ -531,7 +530,7 @@ export function readModelThumbFrame(canvas) {
   const src = document.createElement('canvas');
   src.width = canvas.width;
   src.height = canvas.height;
-  const sctx = src.getContext('2d');
+  const sctx = src.getContext('2d')!;
   sctx.drawImage(canvas, 0, 0);
   return sctx.getImageData(0, 0, src.width, src.height);
 }
@@ -549,7 +548,7 @@ export function normalizeAdditivePixels(px) {
   }
 }
 
-export function finishModelThumb(rendered, reason, localUri) {
+export function finishModelThumb(rendered, reason = '', localUri = '') {
   if (!modelThumbJob) return;
   const key = modelThumbJob.key;
   const cacheKey = modelThumbJob.cacheKey;
@@ -657,7 +656,7 @@ export function applyMdxTexture(msg) {
     v.onTextureDds(msg.path, mpvB64ToArrayBuffer(msg.ddsBase64));
   } else if (msg.rgbaBase64 && msg.width && msg.height) {
     const rgba = base64ToBytes(msg.rgbaBase64);
-    v.onTextureImageData(msg.path, new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength), msg.width, msg.height));
+    v.onTextureImageData(msg.path, new ImageData(new Uint8ClampedArray(Array.from(rgba)), msg.width, msg.height));
   } else {
     v.onTexture(msg.path, msg.blpBase64 ? mpvB64ToArrayBuffer(msg.blpBase64) : null);
   }

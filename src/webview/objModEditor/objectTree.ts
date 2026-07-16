@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { fuzzyMatch } from '../../features/preview/fuzzy';
 import { esc } from '../objModWebviewUtils';
 import { effect, untracked } from '../signals';
@@ -56,11 +55,11 @@ const KNOWN_RACES = ['human', 'orc', 'nightelf', 'undead', 'neutral', 'naga', 'd
 // `matches()` below calls this once per object during a `.filter(matches)` pass, but the query is the
 // same for every object in that pass — so the last {query, hits} pair is cached here (transparent to
 // callers) instead of re-looping over KNOWN_RACES and re-running fuzzyMatch up to 8x per object.
-let racesQueryCache = { query: null, hits: new Set() };
+let racesQueryCache: { query: string | null; hits: Set<string> } = { query: null, hits: new Set<string>() };
 export function raceKeysMatchingQuery(query) {
   const q = String(query || '').trim().toLowerCase();
   if (racesQueryCache.query === q) return racesQueryCache.hits;
-  const hits = new Set();
+  const hits = new Set<string>();
   if (q) {
     for (const race of KNOWN_RACES) {
       const label = raceLabel(race).toLowerCase();

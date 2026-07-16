@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { fuzzyMatch } from '../../features/preview/fuzzy';
 import { esc } from '../objModWebviewUtils';
 import { effect, signal } from '../signals';
@@ -6,13 +5,14 @@ import { detailCache, details, ui, vscodeApi, iconLoader } from './state';
 import { observeModelThumbs, requestVisibleModelThumbs, isAssetBrowserOpen, cancelAssetBrowserModelThumbs, noteModelThumbUserActivity } from './modelThumbnails';
 import { setModValue, postEdit } from './fieldDisplay';
 import { markModified, collapseCell } from './detailsPanel';
+import type { AssetCatalog, AssetOption } from './types';
 
 // ── Asset browser (rich visual picker over WC3 game data, by category) ────────
 let abMi = -1;
 export const abActiveTab = signal('model');
 export const abSearchQuery = signal('');
 export const abSourceFilter = signal('all');
-let abCatalog = null; // { model: [], icon: [], sound: [], pathing: [] } - fetched once from the host
+let abCatalog: AssetCatalog | null = null; // { model: [], icon: [], sound: [], pathing: [] } - fetched once from the host
 
 export function setAssetCatalog(catalog) {
   abCatalog = catalog;
@@ -105,7 +105,7 @@ export function renderAssetGrid() {
   const opts = (abCatalog && abCatalog[activeTab]) || [];
   const sourceFilter = abSourceFilter.value;
   const query = abSearchQuery.value.trim();
-  const matches = [];
+  const matches: AssetOption[] = [];
   let matchedCount = 0;
   for (const o of opts) {
     if (sourceFilter === 'import' && o.source !== 'import') continue;

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { fuzzyMatch } from '../../features/preview/fuzzy';
 import { esc, renderWc3Colors } from '../objModWebviewUtils';
 import { batch, effect, untracked } from '../signals';
@@ -30,7 +29,7 @@ export function retryDetails(key) {
 // open, and it only grows (never reshuffles/disappears) as detailCache accumulates more objects.
 const CATEGORY_SORT_ORDER = ['text', 'art', 'stats', 'combat', 'move', 'abil', 'tech', 'data', 'sound'];
 function categoriesSeenSoFar() {
-  const seen = new Set();
+  const seen = new Set<string>();
   for (const mods of detailCache.values()) for (const mod of mods) seen.add(categoryKey(mod.category));
   return Array.from(seen).sort((a, b) => {
     const ra = CATEGORY_SORT_ORDER.indexOf(a), rb = CATEGORY_SORT_ORDER.indexOf(b);
@@ -65,7 +64,7 @@ function categoryFilterHtml() {
 // position-wise); different object → start at the top, since a saved offset means nothing for a
 // completely different field list; very first paint → resume the position restored from persisted
 // state (see state.ts's detailsScrollTop), same intent as switching back to the same object.
-let lastRenderedKey = null;
+let lastRenderedKey: string | null = null;
 
 export function renderDetails() {
   exitTooltipEdit(true); // about to rebuild #details — the in-place editor's anchor is going stale
@@ -245,8 +244,8 @@ export function setupDetails() {
   // Steppers must not steal focus from the input they adjust (mirrors the color-swatch buttons), and
   // holding one down repeats the step (first tick immediately, then every 60ms after a 400ms delay —
   // the click handler below no-ops for .num-step since this already applied the single-click case).
-  let numStepHoldTimer = null;
-  let numStepHoldInterval = null;
+  let numStepHoldTimer: ReturnType<typeof setTimeout> | null = null;
+  let numStepHoldInterval: ReturnType<typeof setInterval> | null = null;
   const stopNumStepHold = () => {
     clearTimeout(numStepHoldTimer); numStepHoldTimer = null;
     clearInterval(numStepHoldInterval); numStepHoldInterval = null;
@@ -368,7 +367,7 @@ export function setupDetails() {
 // becomes contenteditable, at its existing position and size — nothing is swapped for a copy
 // elsewhere, so there's no layout shift and no scroll jump. Only the small color-picker/raw-text
 // toolbar floats (position: fixed, doesn't participate in table layout) beside the row.
-let activeTooltipEdit = null;
+let activeTooltipEdit: any = null;
 
 function positionFloatToolbar(toolbar, rect) {
   const vw = window.innerWidth, vh = window.innerHeight;
@@ -404,7 +403,7 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
 
   // Same node before and after — the click's caret position is already valid for the body once it's
   // made editable, no coordinate remapping needed.
-  let range = null;
+  let range: Range | null = null;
   if (clickEvent && typeof document.caretRangeFromPoint === 'function') {
     const r = document.caretRangeFromPoint(clickEvent.clientX, clickEvent.clientY);
     if (r && body.contains(r.startContainer)) range = r;
@@ -773,7 +772,7 @@ function updateCatFilterBadge() {
 
 // Filter the details table rows by field id / label / value AND by the category checklist, without
 // rebuilding (keeps focus while typing, and keeps the category popover open while its checkboxes change).
-let lastFieldFilterFirst = null;
+let lastFieldFilterFirst: Element | null = null;
 export function filterFields(q) {
   const query = String(q || '').trim().toLowerCase();
   // Split on whitespace and require every token to match somewhere in the row's haystack (category +
@@ -786,7 +785,7 @@ export function filterFields(q) {
   // Single pass: toggle field-row visibility and roll up each category's visible-child count at the
   // same time (was two full passes over a 700-row table on every keystroke).
   let shown = 0;
-  let cat = null, catHasVisible = false, catHidden = false;
+  let cat: Element | null = null, catHasVisible = false, catHidden = false;
   const flush = () => { if (cat) cat.classList.toggle('hidden', catHidden || !catHasVisible); };
   rows.forEach(tr => {
     if (tr.classList.contains('category-row')) {

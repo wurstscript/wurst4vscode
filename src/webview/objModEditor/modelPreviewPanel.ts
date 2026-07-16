@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { esc } from '../objModWebviewUtils';
 import { vscodeApi } from './state';
 import { mpvViewer, mpvB64ToArrayBuffer } from './modelViewerShared';

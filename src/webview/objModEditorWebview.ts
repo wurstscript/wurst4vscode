@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { objects, ui, vscodeApi, details, search } from './objModEditor/state';
 import { commitActiveEditor } from './objModEditor/fieldDisplay';
 import { matches, setActiveRow, setupTree } from './objModEditor/objectTree';
@@ -107,10 +106,10 @@ document.addEventListener('mousedown', e => {
   for (const pop of details.querySelectorAll('.tt-pop')) {
     if (pop.hidden) continue;
     const bar = pop.closest('.tt-bar');
-    if (!bar || !bar.contains(e.target)) pop.hidden = true;
+    if (!bar || !bar.contains(e.target as Node)) pop.hidden = true;
   }
   const catPop = details.querySelector('#cat-filter-pop');
-  if (catPop && !catPop.hidden && !catPop.closest('.cat-filter').contains(e.target)) {
+  if (catPop && !catPop.hidden && !catPop.closest('.cat-filter').contains(e.target as Node)) {
     catPop.hidden = true;
     const btn = document.getElementById('cat-filter-btn');
     if (btn) btn.setAttribute('aria-expanded', 'false');

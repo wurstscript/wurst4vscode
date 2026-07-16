@@ -827,6 +827,25 @@ function testObjModSaveCommitsFocusedEditor() {
     assert.ok(host.includes('doc.wtsEdits.clear()'), 'objmod host should clear staged WTS edits after a successful write');
 }
 
+function testObjModEditorTypeAndRecoveryGuards() {
+    const host = fs.readFileSync(path.join(root, 'src/features/objModPreview.ts'), 'utf8');
+    const webviewFiles = [
+        path.join(root, 'src/webview/objModEditorWebview.ts'),
+        ...fs.readdirSync(path.join(root, 'src/webview/objModEditor'))
+            .filter((file) => file.endsWith('.ts'))
+            .map((file) => path.join(root, 'src/webview/objModEditor', file)),
+    ];
+    const webview = webviewFiles.map((file) => fs.readFileSync(file, 'utf8')).join('\n');
+
+    assert.ok(!webview.includes('@ts-nocheck'), 'objmod webview sources must remain typechecked');
+    assert.ok(webview.includes("abActiveTab.peek() !== 'model'"), 'thumbnail visibility must use the Signal API');
+    assert.ok(host.includes('openContext.backupId'), 'objmod documents must restore VS Code hot-exit backups');
+    assert.ok(host.includes('skinBase64'), 'objmod backups must include the skin sibling');
+    assert.ok(host.includes('wtsEdits: Array.from(doc.wtsEdits)'), 'objmod backups must include staged WTS edits');
+    assert.ok(host.includes('currentRevision = beforeRevision'), 'undo must restore a history identity, not decrement a depth');
+    assert.ok(!host.includes('doc.editDepth'), 'branch-unsafe edit depth tracking must not return');
+}
+
 async function main() {
     testSignals();
     testObjModTreeSelectionStaysUntracked();
@@ -839,6 +858,7 @@ async function main() {
     await testFolderModeMapAssetResolution();
     testBc5DdsDecode();
     testInstallerVersionShaParsing();
+    testObjModEditorTypeAndRecoveryGuards();
     testNonBlockingStartupAndForcedReinstallWiring();
     testWurstProcessMatching();
     await testModelThumbnailRequestsTexturesByDefault();

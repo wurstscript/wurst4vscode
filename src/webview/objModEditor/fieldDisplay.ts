@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { esc, renderWc3Colors } from '../objModWebviewUtils';
 import { ui, vscodeApi } from './state';
 
@@ -54,7 +53,7 @@ export function colorBarHtml(mi) {
 // used on a keyword elsewhere in the same tooltip) without opening the full preset/custom picker.
 export function extractUsedColors(text, max) {
   const re = /\|c[0-9a-f]{2}([0-9a-f]{6})/gi;
-  const seen = [];
+  const seen: string[] = [];
   let m;
   while ((m = re.exec(String(text == null ? '' : text)))) {
     const hex = m[1].toLowerCase();

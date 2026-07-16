@@ -1,17 +1,17 @@
-// @ts-nocheck
 import { createIconLoader } from '../objModIconLoader';
 import { effect, signal } from '../signals';
+import type { ObjModField, ObjModInitial, ObjModObject, VsCodeApi } from './types';
 
-declare const acquireVsCodeApi: any;
+declare const acquireVsCodeApi: () => VsCodeApi;
 
-export const initial = window.__OBJMOD_INITIAL__ || { objects: [], selectedKey: "", extended: false };
-export const objects = initial.objects || [];
+export const initial: ObjModInitial = window.__OBJMOD_INITIAL__ || { objects: [], selectedKey: '', extended: false };
+export const objects: ObjModObject[] = initial.objects || [];
 
 export const vscodeApi = acquireVsCodeApi();
 export const iconLoader = createIconLoader(vscodeApi);
 
-export const detailCache = new Map();
-export const pendingDetails = new Set();
+export const detailCache = new Map<string, ObjModField[]>();
+export const pendingDetails = new Set<string>();
 
 // Everything below is restored from vscodeApi's per-document persisted state (survives a webview
 // reload — including our own external-change auto-reload/revert, see objModPreview.ts — and a full
@@ -22,7 +22,7 @@ const persisted = vscodeApi.getState() || {};
 // A Set whose mutations bump a signal, so an effect that reads `.version` (once, anywhere in its run)
 // gets re-run whenever the set's membership changes — without every consumer having to switch from
 // `.has()`/`.add()`/`.delete()` to signal `.value` reads/writes.
-function reactiveSet(initialValues) {
+function reactiveSet<T>(initialValues: Iterable<T>) {
   const version = signal(0);
   const set = new Set(initialValues);
   return {
@@ -43,11 +43,11 @@ export const collapsedNodes = reactiveSet(Array.isArray(persisted.collapsedNodes
 // Keys whose field-row load failed on the host (missing game data, thrown parser error, etc). Kept
 // separate from detailCache so a failed load renders a distinct "couldn't load, retry" state instead
 // of silently looking identical to "this object genuinely has zero fields".
-export const failedDetails = new Map();
+export const failedDetails = new Map<string, string>();
 
-export const tree = document.getElementById('tree');
-export const details = document.getElementById('details');
-export const search = document.getElementById('search');
+export const tree = document.getElementById('tree') as HTMLElement;
+export const details = document.getElementById('details') as HTMLElement;
+export const search = document.getElementById('search') as HTMLInputElement;
 
 // A cross-file rawcode jump (see locateObjectAcrossSiblings in objModPreview.ts) always wins over a
 // restored selection — the user just asked to look at a specific object, so honor that over whatever

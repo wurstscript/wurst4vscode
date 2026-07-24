@@ -34,6 +34,9 @@ export interface War3ViewerInitOptions {
 
 export interface War3ViewerLoadOptions {
     autoplay?: boolean;
+    freezeAnimation?: boolean;
+    textureCacheKey?: string;
+    maxTextureDimension?: number;
 }
 
 type DdsFormatName = 'dxt1' | 'dxt3' | 'dxt5';
@@ -80,10 +83,128 @@ let callbacks: War3ViewerCallbacks | null = null;
 let animLoopHandle = 0;
 let lastTimestamp = 0;
 let autoplay = true;
+let animationFrozen = false;
 let war3ModelConsoleHooked = false;
 let originalConsoleLog: typeof console.log | null = null;
 let lastRenderError: string | null = null;
 const retiredRenderers = new Set<ModelRenderer>();
+interface CachedThumbnailTexture {
+    imageData: ImageData | null;
+    gl?: WebGL2RenderingContext;
+    texture?: WebGLTexture;
+}
+const decodedTextureCaches = new Map<string, Map<string, CachedThumbnailTexture>>();
+const decodedTextureCacheBytes = new Map<string, number>();
+const MAX_DECODED_TEXTURE_CACHE_ENTRIES = 256;
+const MAX_DECODED_TEXTURE_CACHE_BYTES = 32 * 1024 * 1024;
+let currentTextureCacheKey = '';
+let currentModelTexturePaths = new Set<string>();
+let currentMaxTextureDimension = 0;
+
+function downscaleTextureImageData(imageData: ImageData): ImageData {
+    const maxDimension = currentMaxTextureDimension;
+    if (maxDimension <= 0 || Math.max(imageData.width, imageData.height) <= maxDimension) {
+        return imageData;
+    }
+    const scale = maxDimension / Math.max(imageData.width, imageData.height);
+    const width = Math.max(1, Math.round(imageData.width * scale));
+    const height = Math.max(1, Math.round(imageData.height * scale));
+    const source = document.createElement('canvas');
+    source.width = imageData.width;
+    source.height = imageData.height;
+    source.getContext('2d')!.putImageData(imageData, 0, 0);
+    const target = document.createElement('canvas');
+    target.width = width;
+    target.height = height;
+    const context = target.getContext('2d')!;
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+    context.drawImage(source, 0, 0, width, height);
+    return context.getImageData(0, 0, width, height);
+}
+
+function normalizedTexturePath(texturePath: string): string {
+    return texturePath.replace(/\//g, '\\').toLowerCase();
+}
+
+function currentDecodedTextureCache(): Map<string, CachedThumbnailTexture> | undefined {
+    if (!currentTextureCacheKey) return undefined;
+    let cache = decodedTextureCaches.get(currentTextureCacheKey);
+    if (!cache) {
+        cache = new Map();
+        decodedTextureCaches.set(currentTextureCacheKey, cache);
+    }
+    return cache;
+}
+
+function cachedTextureBytes(entry: CachedThumbnailTexture | undefined): number {
+    return entry?.imageData?.data.byteLength || 0;
+}
+
+function deleteCachedTexture(cache: Map<string, CachedThumbnailTexture>, key: string): void {
+    const entry = cache.get(key);
+    if (!entry) return;
+    if (entry.texture && entry.gl) entry.gl.deleteTexture(entry.texture);
+    cache.delete(key);
+    decodedTextureCacheBytes.set(
+        currentTextureCacheKey,
+        Math.max(0, (decodedTextureCacheBytes.get(currentTextureCacheKey) || 0) - cachedTextureBytes(entry)),
+    );
+}
+
+function trimDecodedTextureCache(cache: Map<string, CachedThumbnailTexture>): void {
+    while (
+        cache.size > MAX_DECODED_TEXTURE_CACHE_ENTRIES ||
+        (decodedTextureCacheBytes.get(currentTextureCacheKey) || 0) > MAX_DECODED_TEXTURE_CACHE_BYTES
+    ) {
+        let oldestUnused: string | undefined;
+        for (const key of cache.keys()) {
+            if (!currentModelTexturePaths.has(key)) {
+                oldestUnused = key;
+                break;
+            }
+        }
+        if (!oldestUnused) break;
+        deleteCachedTexture(cache, oldestUnused);
+    }
+}
+
+function rememberDecodedTexture(texturePath: string, imageData: ImageData | null): void {
+    const cache = currentDecodedTextureCache();
+    if (!cache) return;
+    const key = normalizedTexturePath(texturePath);
+    const texture = renderer?.getTexture(texturePath);
+    const previous = cache.get(key);
+    if (previous?.texture && previous.texture !== texture && previous.gl) previous.gl.deleteTexture(previous.texture);
+    const next = { imageData, gl: texture ? gl ?? undefined : undefined, texture };
+    cache.delete(key);
+    cache.set(key, next);
+    decodedTextureCacheBytes.set(
+        currentTextureCacheKey,
+        (decodedTextureCacheBytes.get(currentTextureCacheKey) || 0) - cachedTextureBytes(previous) + cachedTextureBytes(next),
+    );
+    trimDecodedTextureCache(cache);
+}
+
+function applyCachedTexture(texturePath: string): boolean {
+    const cache = currentDecodedTextureCache();
+    if (!cache) return false;
+    const key = normalizedTexturePath(texturePath);
+    if (!cache.has(key)) return false;
+    const cached = cache.get(key)!;
+    cache.delete(key);
+    cache.set(key, cached);
+    if (cached.texture && cached.gl === gl && renderer?.adoptTexture(texturePath, cached.texture)) {
+        return true;
+    }
+    if (cached.imageData && renderer) {
+        renderer.setTextureImageData(texturePath, [cached.imageData]);
+        const texture = renderer.getTexture(texturePath);
+        cached.gl = texture ? gl ?? undefined : undefined;
+        cached.texture = texture;
+    }
+    return true;
+}
 
 function parseDdsInfo(buffer: ArrayBuffer): DdsInfo {
     const view = new DataView(buffer);
@@ -172,6 +293,7 @@ let currentSeqs: SequenceInfo[] = [];
 let currentSeqIndex = 0;
 const initialCenter: [number, number, number] = [0, 0, 0];
 let initialDistance = 3.0;
+const studioLightColor = new Float32Array([1.8, 1.8, 1.8]);
 
 function resetCameraOrientation() {
     yaw = DEFAULT_YAW;
@@ -185,6 +307,7 @@ function clearRendererState() {
     renderer = null;
     gl = null;
     autoplay = false;
+    animationFrozen = false;
 }
 
 function reportRenderError(message: string) {
@@ -381,11 +504,16 @@ function renderCurrentScene(delta: number, reportFrame: boolean): boolean {
             const forwardY = fy / fLen;
             const forwardZ = fz / fLen;
             const cameraQuat = quatFromCameraAxes(forwardX, forwardY, forwardZ, 0, 0, 1);
+            const cameraPosition = new Float32Array([ex, ey, ez]);
             activeRenderer.setCamera(
-                new Float32Array([ex, ey, ez]) as unknown as import('gl-matrix').vec3,
+                cameraPosition as unknown as import('gl-matrix').vec3,
                 cameraQuat as unknown as import('gl-matrix').quat
             );
-            activeRenderer.update(autoplay ? delta : 0);
+            // A standalone preview has no WC3 world/environment lighting. Use a stable studio key
+            // light from the camera so HD/Reforged normals do not turn the asset into a silhouette.
+            activeRenderer.setLightPosition(cameraPosition as unknown as import('gl-matrix').vec3);
+            activeRenderer.setLightColor(studioLightColor as unknown as import('gl-matrix').vec3);
+            if (!animationFrozen) activeRenderer.update(autoplay ? delta : 0);
             const mv = mat4LookAt(ex, ey, ez, center[0], center[1], center[2], 0, 0, 1);
             activeRenderer.render(mv as unknown as import('gl-matrix').mat4, proj as unknown as import('gl-matrix').mat4, { wireframe });
 
@@ -413,6 +541,7 @@ function renderFrame(ts: number) {
 
     const delta = Math.min(ts - lastTimestamp, 100);
     lastTimestamp = ts;
+    if (animationFrozen) return;
     renderCurrentScene(autoplay ? delta : 0, true);
 }
 
@@ -551,6 +680,9 @@ const War3Viewer = {
             };
             const totalStart = performance.now();
             lastRenderError = null;
+            currentTextureCacheKey = opts?.textureCacheKey || '';
+            currentMaxTextureDimension = Math.max(0, opts?.maxTextureDimension || 0);
+            animationFrozen = opts?.freezeAnimation === true;
             const previousRenderer = renderer;
             if (previousRenderer) {
                 retireRenderer(previousRenderer);
@@ -576,6 +708,9 @@ const War3Viewer = {
 
             const initStart = performance.now();
             renderer = new ModelRenderer(model);
+            // This viewer renders with studio lighting and never enables renderer environment maps.
+            // Avoid synchronous cubemap convolution/prefilter work when a model references one.
+            renderer.setEnvironmentMapProcessingEnabled(false);
             renderer.initGL(gl);
             profile('initGL', initStart);
 
@@ -608,14 +743,23 @@ const War3Viewer = {
             if (currentSeqIndex >= 0) {
                 renderer.setSequence(currentSeqIndex);
             }
-            autoplay = opts?.autoplay !== false;
+            autoplay = !animationFrozen && opts?.autoplay !== false;
             if (!autoplay) renderer.update(0);
             profile('setup', setupStart);
 
             // texture paths (skip replaceable textures like team color)
-            const texturePaths = model.Textures
+            const texturePaths = [...new Set(model.Textures
                 .filter(t => !t.ReplaceableId && t.Image)
-                .map(t => t.Image);
+                .map(t => t.Image))];
+            currentModelTexturePaths = new Set(texturePaths.map(normalizedTexturePath));
+            const decodedCache = currentDecodedTextureCache();
+            if (decodedCache) trimDecodedTextureCache(decodedCache);
+            const requestedTexturePaths: string[] = [];
+            let reusedTextureCount = 0;
+            for (const texturePath of texturePaths) {
+                if (applyCachedTexture(texturePath)) reusedTextureCount++;
+                else requestedTexturePaths.push(texturePath);
+            }
 
             const replaceableTextureCount = model.Textures.filter(t => !!t.ReplaceableId).length;
 
@@ -624,17 +768,17 @@ const War3Viewer = {
                 geosetCount: model.Geosets.length,
                 textureCount: model.Textures.length,
                 sequences: currentSeqs,
-                texturePaths,
+                texturePaths: requestedTexturePaths,
             };
 
             cb?.onModelLoaded(loadedInfo);
             profile('total-before-textures', totalStart);
 
-            if (texturePaths.length > 0 && vscodeApi) {
-                cb?.onDebug(`textures: request=${texturePaths.length} replaceable=${replaceableTextureCount} total=${model.Textures.length}`);
-                vscodeApi.postMessage({ type: 'requestTextures', paths: texturePaths });
+            if (requestedTexturePaths.length > 0 && vscodeApi) {
+                cb?.onDebug(`textures: request=${requestedTexturePaths.length} reused=${reusedTextureCount} replaceable=${replaceableTextureCount} total=${model.Textures.length}`);
+                vscodeApi.postMessage({ type: 'requestTextures', paths: requestedTexturePaths });
             } else {
-                cb?.onDebug(`textures: request=0 replaceable=${replaceableTextureCount} total=${model.Textures.length}`);
+                cb?.onDebug(`textures: request=0 reused=${reusedTextureCount} replaceable=${replaceableTextureCount} total=${model.Textures.length}`);
             }
         } catch (e) {
             const message = e instanceof Error ? e.message : String(e);
@@ -644,21 +788,38 @@ const War3Viewer = {
         }
     },
 
+    clearModel() {
+        clearRendererState();
+        currentSeqs = [];
+        currentSeqIndex = -1;
+        currentModelTexturePaths.clear();
+        if (canvas) {
+            const context = canvas.getContext('webgl2');
+            if (context) {
+                context.viewport(0, 0, canvas.width, canvas.height);
+                context.clearColor(0, 0, 0, 0);
+                context.clear(context.COLOR_BUFFER_BIT | context.DEPTH_BUFFER_BIT);
+            }
+        }
+    },
+
     onTexture(texPath: string, buffer: ArrayBuffer | null) {
         if (!renderer) return;
         if (!buffer) {
+            rememberDecodedTexture(texPath, null);
             callbacks?.onDebug('texture not found: ' + texPath);
             return;
         }
         try {
             const blp = decodeBLP(buffer);
             const like = getBLPImageData(blp, 0);
-            const imageData = new ImageData(
+            const imageData = downscaleTextureImageData(new ImageData(
                 new Uint8ClampedArray(like.data as unknown as ArrayBuffer),
                 like.width,
                 like.height
-            );
+            ));
             renderer.setTextureImageData(texPath, [imageData]);
+            rememberDecodedTexture(texPath, imageData);
             callbacks?.onDebug('texture ok: ' + texPath);
         } catch (e) {
             callbacks?.onDebug('texture decode error (' + texPath + '): ' + String(e));
@@ -685,6 +846,7 @@ const War3Viewer = {
                 format = s3tc.COMPRESSED_RGBA_S3TC_DXT5_EXT;
             }
             renderer.setTextureCompressedImage(texPath, format as CompressedTextureFormat, buffer, info as RendererDdsInfo);
+            rememberDecodedTexture(texPath, null);
             callbacks?.onDebug('texture (dds) ok: ' + texPath);
             return true;
         } catch (e) {
@@ -696,7 +858,18 @@ const War3Viewer = {
     onTextureImageData(texPath: string, imageData: ImageData) {
         if (!renderer) return;
         renderer.setTextureImageData(texPath, [imageData]);
+        rememberDecodedTexture(texPath, imageData);
         callbacks?.onDebug('texture (rgba) ok: ' + texPath);
+    },
+
+    clearTextureCache(cacheKey = currentTextureCacheKey) {
+        const cache = decodedTextureCaches.get(cacheKey);
+        if (!cache) return;
+        for (const entry of cache.values()) {
+            if (entry.texture && entry.gl) entry.gl.deleteTexture(entry.texture);
+        }
+        cache.clear();
+        decodedTextureCacheBytes.set(cacheKey, 0);
     },
 
     readPixelsImageData(): ImageData | null {
@@ -727,10 +900,12 @@ const War3Viewer = {
         if (!renderer) return;
         autoplay = false;
         renderer.setFrame(frame);
+        renderer.update(0);
     },
 
     setAutoplay(enabled: boolean) {
         autoplay = enabled;
+        if (enabled) animationFrozen = false;
     },
 
     renderStillFrame(): boolean {

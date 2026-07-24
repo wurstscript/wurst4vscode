@@ -22,10 +22,11 @@ import {
   nextModelThumbSeq,
   modelThumbQueue,
   handleMdxTextureMessage,
+  handleModelThumbTexturesComplete,
 } from './modelThumbnails';
 import { mpvViewer, mpvB64ToArrayBuffer } from './modelViewerShared';
-import { mpvStatus, mpvSetPlaying } from './modelPreviewPanel';
-import { setAssetCatalog, renderAssetGrid, handleAssetCatalogFailed } from './assetBrowser';
+import { mpvStatus, mpvSetPlaying, mpvFillAnims } from './modelPreviewPanel';
+import { setAssetCatalog, handleAssetCatalogFailed } from './assetBrowser';
 
 // The in-game tooltip fill texture (see requestTooltipBackdrop in imageAssetSupport.ts) — decoded once
 // into a data URL and set as a CSS var, so every tooltip preview box picks it up for free via the
@@ -254,12 +255,14 @@ export function setupMessageHandler() {
       if (mpvViewer()) { mpvViewer().loadModel(mpvB64ToArrayBuffer(msg.mdxBase64), msg.fileName || '', msg.format || 'mdx'); mpvSetPlaying(true); }
     } else if (msg.type === 'assetCatalog') {
       setAssetCatalog({ model: msg.models || [], icon: msg.icons || [], sound: msg.sounds || [], pathing: msg.pathing || [] });
-      const ov = document.getElementById('ab-overlay');
-      if (ov && !ov.hidden) renderAssetGrid();
     } else if (msg.type === 'assetCatalogFailed') {
       handleAssetCatalogFailed(msg.reason || '');
     } else if (msg.type === 'mdxModelMissing') {
+      if (mpvViewer()) mpvViewer().clearModel();
+      mpvFillAnims([]);
       mpvStatus('Not found in map or game files:\\n' + (msg.path || '') + '\\n(tried .mdx/.mdl — see "Log (Extension Host)" for CASC details)');
+    } else if (msg.type === 'modelThumbTexturesComplete') {
+      handleModelThumbTexturesComplete(msg);
     } else if (msg.type === 'mdxTexture') {
       handleMdxTextureMessage(msg);
     }

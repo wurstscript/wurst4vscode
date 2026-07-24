@@ -1,7 +1,7 @@
 import { fuzzyMatch } from '../../features/preview/fuzzy';
 import { esc } from '../objModWebviewUtils';
 import { effect, signal } from '../signals';
-import { detailCache, details, ui, vscodeApi, iconLoader } from './state';
+import { detailCache, details, ui, vscodeApi, iconLoader, assetBrowserUi } from './state';
 import { observeModelThumbs, requestVisibleModelThumbs, isAssetBrowserOpen, cancelAssetBrowserModelThumbs, noteModelThumbUserActivity } from './modelThumbnails';
 import { setModValue, postEdit } from './fieldDisplay';
 import { markModified, collapseCell } from './detailsPanel';
@@ -9,17 +9,14 @@ import type { AssetCatalog, AssetOption } from './types';
 
 // ── Asset browser (rich visual picker over WC3 game data, by category) ────────
 let abMi = -1;
-export const abActiveTab = signal('model');
-export const abSearchQuery = signal('');
-export const abSourceFilter = signal('all');
-let abCatalog: AssetCatalog | null = null; // { model: [], icon: [], sound: [], pathing: [] } - fetched once from the host
+const abCatalog = signal<AssetCatalog | null>(null);
 
 export function setAssetCatalog(catalog) {
-  abCatalog = catalog;
+  abCatalog.value = catalog;
 }
 
 export function getAssetCatalog() {
-  return abCatalog;
+  return abCatalog.peek();
 }
 
 function requestAssetCatalog() {
@@ -48,42 +45,35 @@ export function openAssetBrowser(mi) {
   abMi = mi;
   // A model field defaults to Models; only icon/pathing fields default elsewhere — never offer the
   // wrong asset class by default.
-  abActiveTab.value = (mod.assetType === 'icon' || mod.assetType === 'sound' || mod.assetType === 'pathing') ? mod.assetType : 'model';
-  abSearchQuery.value = '';
+  assetBrowserUi.activeTab = (mod.assetType === 'icon' || mod.assetType === 'sound' || mod.assetType === 'pathing') ? mod.assetType : 'model';
+  assetBrowserUi.searchQuery = '';
   const search = document.getElementById('ab-search');
   if (search) search.value = '';
   const ov = document.getElementById('ab-overlay');
   if (ov) ov.hidden = false;
-  if (abCatalog) {
-    renderAssetGrid();
-  } else {
-    requestAssetCatalog();
-  }
+  assetBrowserUi.open = true;
+  if (!abCatalog.peek()) requestAssetCatalog();
   if (search) search.focus();
 }
 
 export function openModelAssetBrowserForE2e() {
   abMi = 0;
-  abActiveTab.value = 'model';
-  abSearchQuery.value = '';
-  abSourceFilter.value = 'all';
+  assetBrowserUi.activeTab = 'model';
+  assetBrowserUi.searchQuery = '';
+  assetBrowserUi.sourceFilter = 'all';
   const search = document.getElementById('ab-search');
   if (search) search.value = '';
   const ov = document.getElementById('ab-overlay');
   if (ov) ov.hidden = false;
-  if (abCatalog) {
-    renderAssetGrid();
-  } else {
-    requestAssetCatalog();
-  }
+  assetBrowserUi.open = true;
+  if (!abCatalog.peek()) requestAssetCatalog();
 }
 
 export function searchModelAssetBrowserForE2e(value) {
-  abActiveTab.value = 'model';
-  abSearchQuery.value = String(value || '');
+  assetBrowserUi.activeTab = 'model';
+  assetBrowserUi.searchQuery = String(value || '');
   const search = document.getElementById('ab-search');
   if (search) search.value = String(value || '');
-  if (isAssetBrowserOpen() && abCatalog) renderAssetGrid();
 }
 
 export function forceNarrowLayoutForE2e(on) {
@@ -95,16 +85,17 @@ export function forceNarrowLayoutForE2e(on) {
 export function updateAbTabs() {
   const tabs = document.getElementById('ab-tabs');
   if (!tabs) return;
-  for (const b of tabs.querySelectorAll('.ab-tab')) b.classList.toggle('active', b.getAttribute('data-tab') === abActiveTab.value);
+  for (const b of tabs.querySelectorAll('.ab-tab')) b.classList.toggle('active', b.getAttribute('data-tab') === assetBrowserUi.activeTab);
 }
 
 export function renderAssetGrid() {
   const grid = document.getElementById('ab-grid');
   if (!grid) return;
-  const activeTab = abActiveTab.value;
-  const opts = (abCatalog && abCatalog[activeTab]) || [];
-  const sourceFilter = abSourceFilter.value;
-  const query = abSearchQuery.value.trim();
+  const activeTab = assetBrowserUi.activeTab;
+  const catalog = abCatalog.value;
+  const opts = (catalog && catalog[activeTab]) || [];
+  const sourceFilter = assetBrowserUi.sourceFilter;
+  const query = assetBrowserUi.searchQuery.trim();
   const matches: AssetOption[] = [];
   let matchedCount = 0;
   for (const o of opts) {
@@ -119,13 +110,14 @@ export function renderAssetGrid() {
   if (!matches.length) { grid.innerHTML = '<div class="ab-empty">No matching assets</div>'; return; }
   grid.innerHTML = matches.map(o => {
     const icon = activeTab === 'model'
-      ? '<span class="object-icon model-thumb pending" data-key="ab-model:' + esc(o.value) + '" data-model="' + esc(o.value) + '"></span>'
+      ? '<span class="object-icon model-thumb" data-key="ab-model:' + esc(o.value) + '" data-model="' + esc(o.value) + '"></span>'
       : activeTab === 'sound'
         ? '<span class="object-icon sound-thumb">AUD</span>'
       : (o.iconPath
         ? '<span class="object-icon" data-key="ab:' + esc(o.value) + '" data-icon="' + esc(o.iconPath) + '"></span>'
         : '<span class="object-icon missing"></span>');
-    return '<div class="ab-card" data-value="' + esc(o.value) + '" title="' + esc(o.label + ' — ' + o.value) + '">' +
+    const previewHint = activeTab === 'model' ? ' — Ctrl+click to open full preview' : '';
+    return '<div class="ab-card" data-value="' + esc(o.value) + '" title="' + esc(o.label + ' — ' + o.value + previewHint) + '">' +
       icon + '<span class="ab-card-label">' + esc(o.label) + '</span></div>';
   }).join('');
   iconLoader.observe(grid);
@@ -136,6 +128,7 @@ export function renderAssetGrid() {
 }
 
 export function closeAssetBrowser() {
+  assetBrowserUi.open = false;
   const ov = document.getElementById('ab-overlay');
   if (ov) ov.hidden = true;
   cancelAssetBrowserModelThumbs();
@@ -172,20 +165,25 @@ export function setupAssetBrowser() {
     if (abSearchRaf) cancelAnimationFrame(abSearchRaf);
     abSearchRaf = requestAnimationFrame(() => {
       abSearchRaf = 0;
-      abSearchQuery.value = search.value;
+      assetBrowserUi.searchQuery = search.value;
     });
   });
   const source = document.getElementById('ab-source');
-  if (source) source.addEventListener('change', () => { abSourceFilter.value = source.value || 'all'; });
+  if (source) source.addEventListener('change', () => { assetBrowserUi.sourceFilter = source.value || 'all'; });
   if (tabs) tabs.addEventListener('click', e => {
     const tab = e.target.closest('.ab-tab[data-tab]');
     if (!tab) return;
-    if (abActiveTab.value === 'model' && tab.getAttribute('data-tab') !== 'model') cancelAssetBrowserModelThumbs();
-    abActiveTab.value = tab.getAttribute('data-tab');
+    if (assetBrowserUi.activeTab === 'model' && tab.getAttribute('data-tab') !== 'model') cancelAssetBrowserModelThumbs();
+    assetBrowserUi.activeTab = tab.getAttribute('data-tab');
   });
   if (grid) grid.addEventListener('click', e => {
     if (e.target.closest('#ab-catalog-retry')) { requestAssetCatalog(); return; }
     const card = e.target.closest('.ab-card[data-value]');
+    if (card && assetBrowserUi.activeTab === 'model' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      vscodeApi.postMessage({ type: 'openAsset', path: card.getAttribute('data-value') || '' });
+      return;
+    }
     if (card) pickAsset(card.getAttribute('data-value'));
   });
   if (grid) {
@@ -201,10 +199,11 @@ export function setupAssetBrowser() {
   document.addEventListener('keydown', noteModelThumbUserActivity, { passive: true });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && ov && !ov.hidden) closeAssetBrowser(); });
   effect(() => {
-    abActiveTab.value;
-    abSearchQuery.value;
-    abSourceFilter.value;
+    assetBrowserUi.activeTab;
+    assetBrowserUi.searchQuery;
+    assetBrowserUi.sourceFilter;
+    const open = assetBrowserUi.open;
     updateAbTabs();
-    if (isAssetBrowserOpen() && abCatalog) renderAssetGrid();
-  });
+    if (open && abCatalog.value) renderAssetGrid();
+  }, 'assetBrowser.render');
 }

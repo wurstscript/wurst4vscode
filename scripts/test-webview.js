@@ -614,7 +614,7 @@ function testNonBlockingStartupAndForcedReinstallWiring() {
     assert.ok(extension.includes("workbench.action.reloadWindow"), 'forced reinstall must reload the stopped language server');
     assert.ok(!extension.includes('ensureInstalledOrOfferMigration(true)'), 'manual install/update must not use the no-op ensure path');
     assert.ok(!languageServer.includes('await maybeOfferUpdate(context)'), 'update checks must not delay language-client startup');
-    assert.ok(languageServer.includes('void maybeOfferUpdate(context)'), 'update checks should still run in the background');
+    assert.ok(languageServer.includes('void maybeOfferUpdate()'), 'update checks should still run in the background');
     assert.ok(installer.includes("execFile(java, ['-jar', COMPILER_JAR, '--version']"), 'version detection must use an asynchronous child process');
     assert.ok(!manifest.activationEvents.includes('workspaceContains:**/*.wurst'), 'activation must not recursively scan for loose Wurst files');
     assert.ok(manifest.activationEvents.includes('onLanguage:wurst'), 'opening a Wurst document must activate the extension');
@@ -685,13 +685,21 @@ async function testModelThumbnailRequestsTexturesByDefault() {
     });
 
     const render = posted.find((message) => message.type === 'modelThumbRender');
-    assert.ok(render, 'uncached model thumbnails should ask the webview to render, even for large models');
+    assert.ok(render, 'uncached model thumbnails should render regardless of model byte size');
     assert.equal(render.skipTextures, undefined, 'model thumbnail renders must load textures by default');
     assert.ok(render.mdxBase64, 'model bytes should still be sent for thumbnail rendering');
-    assert.ok(
-        !posted.some((message) => message.type === 'modelThumbMissing' && message.reason === 'too-large'),
-        'large resolved models must not be skipped before thumbnail rendering'
-    );
+
+    posted.length = 0;
+    await mod.requestModelThumbnail('Footman.mdx', 'asset-model:1:Footman', { fsPath: docPath }, {
+        asWebviewUri: () => ({ toString: () => 'vscode-webview://model/Footman.mdx' }),
+        postMessage: async (message) => {
+            posted.push(message);
+            return true;
+        },
+    }, true);
+    const uriRender = posted.find((message) => message.type === 'modelThumbRender');
+    assert.equal(uriRender.modelUri, 'vscode-webview://model/Footman.mdx', 'objmod thumbnails should fetch large models directly from an allowed webview URI');
+    assert.equal(uriRender.mdxBase64, undefined, 'URI-backed model loads should avoid base64 IPC duplication');
 }
 
 function testAssetBrowserForwardsModelTextures() {
@@ -717,29 +725,89 @@ function testAssetBrowserForwardsModelTextures() {
         'asset browser should consume texture payload replies before thumbnail capture'
     );
     assert.ok(
+        script.includes("msg.type === 'modelThumbTexturesComplete'"),
+        'asset browser should finish texture waits with an explicit host batch-complete message'
+    );
+    assert.ok(
         !/type === 'requestTextures'\)\s*return/.test(script),
         'asset browser must not silently drop model texture requests'
     );
 }
 
-function testNoThumbnailTimingFallbacks() {
+function testThumbnailLifecycleGuards() {
     const host = fs.readFileSync(path.join(root, 'src/features/preview/modelPreviewHost.ts'), 'utf8');
-    const objmod = fs.readFileSync(path.join(root, 'src/webview/objModEditorWebview.ts'), 'utf8');
+    const objmod = fs.readFileSync(path.join(root, 'src/webview/objModEditor/modelThumbnails.ts'), 'utf8');
+    const modelPreviewPanel = fs.readFileSync(path.join(root, 'src/webview/objModEditor/modelPreviewPanel.ts'), 'utf8');
+    const messageHandler = fs.readFileSync(path.join(root, 'src/webview/objModEditor/messageHandler.ts'), 'utf8');
+    const assetBrowser = fs.readFileSync(path.join(root, 'src/webview/objModEditor/assetBrowser.ts'), 'utf8');
+    const thumbnailWorker = fs.readFileSync(path.join(root, 'src/webview/mdxThumbnailWorker.ts'), 'utf8');
+    const webpack = fs.readFileSync(path.join(root, 'webpack.config.js'), 'utf8');
     const assetLinks = fs.readFileSync(path.join(root, 'src/features/assetLinks.ts'), 'utf8');
-    const objmodE2e = fs.readFileSync(path.join(root, 'scripts/objmod-thumbnail-e2e.js'), 'utf8');
-    const modelE2e = fs.readFileSync(path.join(root, 'scripts/model-thumbnail-e2e.js'), 'utf8');
+    const viewer = fs.readFileSync(path.join(root, 'src/webview/mdxViewer.ts'), 'utf8');
+    const hdFragment = fs.readFileSync(path.join(root, '../war3-model/renderer/shaders/webgl/hdNew.fs.glsl'), 'utf8');
+    const hdVertex = fs.readFileSync(path.join(root, '../war3-model/renderer/shaders/webgl/hdHardwareSkinningNew.vs.glsl'), 'utf8');
 
-    assert.ok(!host.includes('WURST_MODEL_THUMB_MAX_MODEL_BYTES'), 'thumbnail host must not expose a size cutoff for rendering');
-    assert.ok(!host.includes('too-large'), 'thumbnail host must not skip large models');
+    assert.ok(!host.includes('WURST_MODEL_THUMB_MAX_MODEL_BYTES'), 'thumbnail generation must not omit large models');
+    assert.ok(!host.includes("reason: 'too-large'"), 'model size must not become a missing-thumbnail reason');
+    assert.ok(host.includes("type: 'modelThumbTexturesComplete'"), 'thumbnail texture batches need an explicit terminal message');
+    assert.ok(host.includes('MODEL_THUMB_TEXTURE_MAX_DIMENSION'), 'thumbnail textures should use a bounded upload size');
+    assert.ok(host.includes('scaleDown(dec.rgba'), 'thumbnail textures should be downscaled before webview transfer and GPU upload');
+    assert.ok(host.includes("if (ext === 'blp')"), 'BLP thumbnails should retain the renderer decoder rather than using the generic preview decoder');
+    assert.ok(viewer.includes('downscaleTextureImageData'), 'decoded BLP thumbnail textures should be reduced before GPU upload');
+    assert.ok(objmod.includes('maxTextureDimension: 256'), 'thumbnail renders should opt into bounded browser-side BLP uploads');
+    assert.ok(host.includes('return `v8s-'), 'the cache version must invalidate thumbnails captured before isolated studio-light rendering');
+    assert.ok(!objmod.includes('capture-dark-accepted'), 'dark frames must never be persisted as successful thumbnails');
+    assert.ok(objmod.includes('reload-full-textures'), 'a dark fast-path render should retry with full-size textures before failing');
+    assert.ok(objmod.includes('Array.from(new Set((texturePaths || [])'), 'thumbnail capture must wait for every referenced material texture');
+    assert.ok(!objmod.includes('(?:normal|orm)'), 'thumbnail loading must not omit HD material textures');
+    assert.ok(objmod.includes('freezeAnimation: true'), 'thumbnail renders should explicitly freeze animation');
+    assert.ok(viewer.includes('if (animationFrozen) return'), 'the animation frame loop should not update or rerender frozen thumbnails');
+    assert.ok(objmod.includes("toDataURL('image/webp', 0.84)"), 'small thumbnail captures should not use visibly blurry WebP compression');
+    assert.ok(objmod.includes('new Worker(modelThumbWorkerBlobUrl'), 'objmod thumbnail rendering should run in a webview-compatible Blob worker');
+    assert.ok(objmod.includes('fetch(initial.thumbnailWorkerUri'), 'the worker bundle must be fetched before creating its Blob URL');
+    assert.ok(!objmod.includes('new Worker(initial.thumbnailWorkerUri)'), 'VS Code resource URLs cannot be passed directly to the Worker constructor');
+    const ensureInit = /export function modelThumbEnsureInit\(\) \{([\s\S]*?)\n\}/.exec(objmod)?.[1] || '';
+    assert.ok(!ensureInit.includes('mpvViewer()'), 'worker startup failure must not fall back to rendering on the objmod UI thread');
+    assert.ok(webpack.includes("mdxThumbnailWorker: './src/webview/mdxThumbnailWorker.ts'"), 'the isolated thumbnail worker must be bundled');
+    assert.ok(thumbnailWorker.includes('new OffscreenCanvas'), 'thumbnail WebGL should use a worker-owned OffscreenCanvas');
+    assert.ok(
+        thumbnailWorker.includes('empty-frame-after-${sampledFrames}-samples'),
+        'a single invisible animation frame must not turn a renderable model into a missing thumbnail',
+    );
+    assert.ok(thumbnailWorker.includes('setEnvironmentMapProcessingEnabled(false)'), 'unused environment-map preprocessing must be disabled for thumbnails');
+    assert.ok(
+        thumbnailWorker.indexOf('setEnvironmentMapProcessingEnabled(false)') < thumbnailWorker.indexOf('renderer.initGL(gl)'),
+        'environment-map preprocessing must be disabled before renderer initialization',
+    );
+    assert.ok(hdFragment.includes('normalize(vTBN * normal)'), 'HD normal maps must retain their outward-facing Z axis');
+    assert.ok(!hdFragment.includes('normalize(vTBN * -normal)'), 'HD normal maps must not invert their surface-facing Z axis');
+    assert.ok(hdVertex.includes('mat4 sum = mat4(0.0)'), 'HD skinning must initialize its weighted matrix sum');
+    assert.ok(host.includes('thumbnail-diagnostics.jsonl'), 'thumbnail runs should produce a compact inspectable diagnostic file');
+    assert.ok(host.includes('textureBytes:'), 'worker-decodable textures should cross the webview as binary data rather than base64');
+    assert.ok(!thumbnailWorker.includes('fetch(message.textureUri)'), 'blob workers must not fetch authenticated VS Code resource URLs');
+    assert.ok(
+        host.includes('compactDdsForThumbnail(bytes)'),
+        'large DDS textures must transfer only thumbnail-sized mip levels to the worker and GPU',
+    );
+    assert.ok(assetBrowser.includes('(e.ctrlKey || e.metaKey)'), 'Ctrl+clicking a model card should open its full preview');
+    assert.ok(viewer.includes('applyCachedTexture(texturePath)'), 'the warm thumbnail viewer should reuse decoded textures');
+    assert.ok(viewer.includes('clearModel()'), 'the model viewer should expose an explicit stale-preview reset');
+    assert.ok(modelPreviewPanel.includes('mpvViewer().clearModel()'), 'inline preview must clear the prior model before resolving a new path');
+    assert.ok(
+        /msg\.type === 'mdxModelMissing'[\s\S]{0,120}clearModel\(\)/.test(messageHandler),
+        'a missing full preview must not leave the previous successful model visible',
+    );
+    assert.ok(viewer.includes('renderer?.adoptTexture(texturePath, cached.texture)'), 'warm thumbnail renderers should reuse same-context GPU textures without uploading again');
+    assert.ok(/setTextureCompressedImage[\s\S]{0,200}rememberDecodedTexture\(texPath, null\)/.test(viewer), 'compressed DDS GPU textures should join the warm renderer cache');
+    assert.ok(viewer.includes("textureCacheKey: 'thumbnail'") || objmod.includes("textureCacheKey: 'thumbnail'"), 'thumbnail loads must opt into the warm texture cache');
     assert.ok(!host.includes('bad-cache-hit'), 'thumbnail host must not suppress retries based on old failures');
     assert.ok(!objmod.includes('TEXTURE_WAIT_RETRIES'), 'objmod thumbnails must wait for texture completion instead of retry-budget capture');
     assert.ok(!objmod.includes('texture-wait-timeout'), 'objmod thumbnails must not fail because texture loading took too long');
     assert.ok(!objmod.includes('texture-failed'), 'objmod thumbnails must not become question marks just because a texture reply was missing/unsupported');
-    assert.ok(!objmod.includes('MODEL_THUMB_RENDER_TIMEOUT'), 'objmod thumbnails must not have a render timeout fallback');
+    assert.ok(!objmod.includes('MODEL_THUMB_HOST_TIMEOUT_MS'), 'valid models must not be omitted by an arbitrary host timeout');
+    assert.ok(!objmod.includes('MODEL_THUMB_RENDER_TIMEOUT_MS'), 'valid models must not be omitted by an arbitrary render timeout');
     assert.ok(!objmod.includes('MODEL_THUMB_MAX_QUEUE'), 'objmod thumbnails must not drop queued renders because of a fixed queue budget');
     assert.ok(!assetLinks.includes('TEXTURE_WAIT_RETRIES'), 'asset picker thumbnails must wait for texture completion instead of retry-budget capture');
-    assert.ok(!objmodE2e.includes('WURST_OBJMOD_E2E_MAX_MS'), 'objmod thumbnail e2e must not enforce a per-thumbnail timing budget');
-    assert.ok(!modelE2e.includes('WURST_MODEL_THUMB_MAX_MS'), 'model thumbnail e2e must not enforce a per-thumbnail timing budget');
 }
 
 function testStaticMdxWithoutSequences() {
@@ -838,7 +906,8 @@ function testObjModEditorTypeAndRecoveryGuards() {
     const webview = webviewFiles.map((file) => fs.readFileSync(file, 'utf8')).join('\n');
 
     assert.ok(!webview.includes('@ts-nocheck'), 'objmod webview sources must remain typechecked');
-    assert.ok(webview.includes("abActiveTab.peek() !== 'model'"), 'thumbnail visibility must use the Signal API');
+    assert.ok(webview.includes("assetBrowserUi.activeTab !== 'model'"), 'thumbnail visibility must use shared reactive browser state');
+    assert.ok(!webview.includes("from './assetBrowser';\nimport { resetMpvInited"), 'thumbnail scheduling must not depend on a circular asset-browser import');
     assert.ok(host.includes('openContext.backupId'), 'objmod documents must restore VS Code hot-exit backups');
     assert.ok(host.includes('skinBase64'), 'objmod backups must include the skin sibling');
     assert.ok(host.includes('wtsEdits: Array.from(doc.wtsEdits)'), 'objmod backups must include staged WTS edits');
@@ -863,7 +932,7 @@ async function main() {
     testWurstProcessMatching();
     await testModelThumbnailRequestsTexturesByDefault();
     testAssetBrowserForwardsModelTextures();
-    testNoThumbnailTimingFallbacks();
+    testThumbnailLifecycleGuards();
     testStaticMdxWithoutSequences();
     await testIssueReportingPrivacyAndDeduplication();
     testObjModSaveCommitsFocusedEditor();

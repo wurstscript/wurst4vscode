@@ -111,6 +111,16 @@ const viewerConfig = {
 	performance: { hints: false },
 };
 
+/** Thumbnail rendering runs in a dedicated worker so model parsing, texture decoding and WebGL
+ * never share the objmod editor's UI event loop. */
+const thumbnailWorkerConfig = {
+	...viewerConfig,
+	target: 'webworker',
+	entry: {
+		mdxThumbnailWorker: './src/webview/mdxThumbnailWorker.ts',
+	},
+};
+
 /** @type WebpackConfig */
 const nodeExtensionConfig = {
 	mode: 'none',
@@ -143,4 +153,4 @@ const nodeExtensionConfig = {
 	devtool: 'nosources-source-map',
 };
 
-module.exports = [webExtensionConfig, viewerConfig, nodeExtensionConfig];
+module.exports = [webExtensionConfig, viewerConfig, thumbnailWorkerConfig, nodeExtensionConfig];

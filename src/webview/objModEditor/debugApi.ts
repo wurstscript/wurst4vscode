@@ -14,6 +14,7 @@ import {
   loadedModelThumbs,
   missingModelThumbs,
   pendingModelThumbs,
+  getModelThumbWorkerState,
 } from './modelThumbnails';
 
 export function installDebugApi() {
@@ -187,6 +188,7 @@ export function installDebugApi() {
         loadedCount: loadedModelThumbs.size,
         missingCount: missingModelThumbs.size,
         pendingCount: pendingModelThumbs.size,
+        worker: getModelThumbWorkerState(),
       };
     },
   };

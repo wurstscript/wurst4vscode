@@ -3,10 +3,18 @@
 /** VS Code preview for WC3 Object Modification files. Parser lives in `casc-ts/formats`. */
 
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { parseObjMod, serializeObjMod, ObjModFile, ObjModEntry, ObjModMod, ObjModVarType } from 'casc-ts/formats';
 import { ParsedPreviewContext } from './preview/framework';
 import { requestPreviewIcon, requestTooltipBackdrop, requestTooltipBorder, getCandidateRoots, resolveAssetPathWithCasc, gatherImportedAssets } from './imageAssetSupport';
-import { postModelToWebview, postTexturesToWebview, requestModelThumbnail, cacheModelThumbnail, markModelThumbnailBad } from './preview/modelPreviewHost';
+import {
+    postModelToWebview,
+    postTexturesToWebview,
+    requestModelThumbnail,
+    cacheModelThumbnail,
+    markModelThumbnailBad,
+    recordModelThumbnailProfile,
+} from './preview/modelPreviewHost';
 import { isSoundAssetPath } from './soundPreview';
 import {
     loadTriggerStringsForUri, resolveTriggerString, TriggerStringTable,
@@ -1592,7 +1600,16 @@ function buildObjLoadingHtml(fileName: string): string {
     });
 }
 
-async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPreviewContext, wtsWarning?: string, mdxViewerUri?: string, objModEditorUri?: string, combined?: CombinedObjModInfo): Promise<string> {
+async function buildHtml(
+    parsed: ObjModFile,
+    fileName: string,
+    context: ParsedPreviewContext,
+    wtsWarning?: string,
+    mdxViewerUri?: string,
+    objModEditorUri?: string,
+    thumbnailWorkerUri?: string,
+    combined?: CombinedObjModInfo,
+): Promise<string> {
     const typeLabel = TYPE_LABELS[parsed.ext.slice(1)] ?? parsed.ext.slice(1).toUpperCase();
     const triggerStrings = loadTriggerStringsForUri(context.uri);
     const { objects, metadataSource } = await buildModel(parsed, triggerStrings);
@@ -1608,6 +1625,7 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
         isPendingJump: !!pendingKey,
         extended: parsed.extended,
         fileInfo: combined ?? { mainName: fileName },
+        thumbnailWorkerUri,
     })
         .replace(/</g, '\\u003c')
         .replace(/>/g, '\\u003e')
@@ -1635,7 +1653,7 @@ async function buildHtml(parsed: ObjModFile, fileName: string, context: ParsedPr
         : '';
 
     return buildPage({
-        csp: `default-src 'none'; img-src ${context.webview.cspSource} data:; connect-src ${context.webview.cspSource}; style-src 'unsafe-inline'; script-src 'unsafe-inline' ${context.webview.cspSource};`,
+        csp: `default-src 'none'; img-src ${context.webview.cspSource} data:; connect-src ${context.webview.cspSource}; style-src 'unsafe-inline'; script-src 'unsafe-inline' ${context.webview.cspSource}; worker-src blob:;`,
         title: escapeHtml(fileName),
         extraCss: `
 :root {
@@ -3384,6 +3402,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             enableScripts: true,
             localResourceRoots: [
                 ...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri),
+                vscode.Uri.file(path.dirname(doc.uri.fsPath)),
                 vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview'),
                 vscode.Uri.file(getGameAssetCacheDir()),
             ],
@@ -3400,9 +3419,23 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         const objModEditorUri = panel.webview.asWebviewUri(
             vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', 'objModEditorWebview.js'),
         ).toString();
+        const thumbnailWorkerUri = panel.webview.asWebviewUri(
+            vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', 'mdxThumbnailWorker.js'),
+        ).toString();
         // Show a spinner immediately — buildHtml awaits CASC game-data and can exceed 200ms.
         panel.webview.html = buildObjLoadingHtml(fileName);
-        doc.reload = async () => { panel.webview.html = await buildHtml(doc.displayFile, fileName, ctx, doc.wtsWarning, mdxViewerUri, objModEditorUri, doc.combinedInfo); };
+        doc.reload = async () => {
+            panel.webview.html = await buildHtml(
+                doc.displayFile,
+                fileName,
+                ctx,
+                doc.wtsWarning,
+                mdxViewerUri,
+                objModEditorUri,
+                thumbnailWorkerUri,
+                doc.combinedInfo,
+            );
+        };
 
         panel.webview.onDidReceiveMessage((message) => { void this.handleMessage(message, panel.webview, doc); });
         await doc.reload();
@@ -3450,7 +3483,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             return;
         }
         if (msg.type === 'loadModelThumb' && msg.key && msg.path) {
-            await requestModelThumbnail(msg.path, msg.key, doc.uri, webview);
+            await requestModelThumbnail(msg.path, msg.key, doc.uri, webview, true);
             return;
         }
         if (msg.type === 'modelThumbRendered' && msg.key && msg.cacheKey && msg.webpBase64) {
@@ -3472,14 +3505,16 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         }
         if (msg.type === 'requestTextures' && Array.isArray((msg as { paths?: unknown }).paths)) {
             const paths = (msg as { paths: unknown[] }).paths.filter((p): p is string => typeof p === 'string');
-            void postTexturesToWebview(paths, doc.uri, webview, msg.thumbKey).catch((err) => {
+            void postTexturesToWebview(paths, doc.uri, webview, msg.thumbKey, !!msg.thumbKey).catch((err) => {
                 console.error(`[wurst-model-thumb] texture request failed: ${err instanceof Error ? err.message : String(err)}`);
             });
             return;
         }
         if (msg.type === 'modelThumbProfile' && msg.key && msg.phase) {
-            const detailSuffix = msg.detail ? ' ' + msg.detail : '';
-            console.log(`[wurst-model-thumb] ${msg.key} webview ${msg.phase} +${msg.deltaMs ?? '?'}ms elapsed=${msg.elapsedMs ?? '?'}ms${detailSuffix}`);
+            recordModelThumbnailProfile(msg.key, msg.phase, msg.elapsedMs, msg.detail);
+            if (msg.phase === 'worker-rendered' || msg.phase === 'worker-failed' || msg.phase === 'worker-error') {
+                console.log(`[wurst-model-thumb] ${msg.key} ${msg.phase} elapsed=${msg.elapsedMs ?? '?'}ms`);
+            }
             return;
         }
         if (msg.type === 'requestAssetCatalog') {

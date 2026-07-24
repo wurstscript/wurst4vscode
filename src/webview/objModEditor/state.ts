@@ -109,6 +109,25 @@ export const ui = {
   set e2eForcedNarrowLayout(v) { e2eForcedNarrowLayoutSignal.value = v; },
 };
 
+// Asset-browser state is shared by the browser renderer and the lazy model-thumbnail scheduler.
+// Keep it here, instead of importing the browser from the thumbnail module, so the two features do
+// not form a circular module dependency and async thumbnail callbacks always read one source of truth.
+const assetBrowserOpenSignal = signal(false);
+const assetBrowserActiveTabSignal = signal('model');
+const assetBrowserSearchQuerySignal = signal('');
+const assetBrowserSourceFilterSignal = signal('all');
+
+export const assetBrowserUi = {
+  get open() { return assetBrowserOpenSignal.value; },
+  set open(v) { assetBrowserOpenSignal.value = v; },
+  get activeTab() { return assetBrowserActiveTabSignal.value; },
+  set activeTab(v) { assetBrowserActiveTabSignal.value = v; },
+  get searchQuery() { return assetBrowserSearchQuerySignal.value; },
+  set searchQuery(v) { assetBrowserSearchQuerySignal.value = v; },
+  get sourceFilter() { return assetBrowserSourceFilterSignal.value; },
+  set sourceFilter(v) { assetBrowserSourceFilterSignal.value = v; },
+};
+
 // One place that persists every restorable field above, instead of every mutation site remembering to
 // call vscodeApi.setState itself — write it here once and every future reactive field is covered for
 // free. Merges onto whatever's already persisted (e.g. the splitter width in objModEditorWebview.ts)

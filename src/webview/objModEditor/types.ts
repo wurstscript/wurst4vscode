@@ -54,6 +54,7 @@ export interface ObjModInitial {
   isPendingJump?: boolean;
   extended: boolean;
   fileInfo?: Record<string, unknown>;
+  thumbnailWorkerUri?: string;
 }
 
 declare global {

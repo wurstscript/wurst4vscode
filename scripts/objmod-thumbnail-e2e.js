@@ -12,7 +12,9 @@
  *   WURST_OBJMOD_E2E_FILE       defaults to ./e2e/war3map.w3u
  *   WURST_OBJMOD_E2E_CODE       Code.exe path, if it cannot be found
  *   WURST_OBJMOD_E2E_COUNT      max visible thumbnails to assert, default all visible
- *   WURST_OBJMOD_E2E_TIMEOUT_MS total wait timeout, default 45000
+ *   WURST_OBJMOD_E2E_SEARCH     optional model-catalog search query
+ *   WURST_OBJMOD_E2E_MAX_MS     max warm per-thumbnail lifecycle, default 200ms
+ *   WURST_OBJMOD_E2E_TIMEOUT_MS total wait timeout, default 90000
  */
 
 const assert = require('assert');
@@ -42,7 +44,12 @@ let objmodFile = process.env.WURST_OBJMOD_E2E_FILE || defaultObjmodFile;
 const sampleCountRaw = process.env.WURST_OBJMOD_E2E_COUNT;
 const sampleCount = sampleCountRaw ? Number(sampleCountRaw) : 0;
 const sampleLimit = Number.isFinite(sampleCount) && sampleCount > 0 ? sampleCount : Number.POSITIVE_INFINITY;
-const timeoutMs = Number(process.env.WURST_OBJMOD_E2E_TIMEOUT_MS || 45000);
+const searchQuery = process.env.WURST_OBJMOD_E2E_SEARCH || '';
+const maxThumbnailMs = Number(process.env.WURST_OBJMOD_E2E_MAX_MS || 200);
+// A concurrently running VS Code installer holds the vscode-updating mutex; new isolated profiles
+// wait up to 30 seconds before creating their first renderer. Leave enough time after that for
+// extension activation, CASC catalog loading, and the uncached worker renders.
+const timeoutMs = Number(process.env.WURST_OBJMOD_E2E_TIMEOUT_MS || 90000);
 
 function writeGeneratedObjmodFixture() {
     const { serializeObjMod } = require('casc-ts/formats');
@@ -509,6 +516,16 @@ function profileForKey(events, key) {
         });
 }
 
+function rendererModeForKey(events, key) {
+    const parsed = events.find((event) => event.key === key && event.type === 'profile:worker-parsed');
+    if (!parsed?.detail) return 'unknown';
+    try {
+        return JSON.parse(parsed.detail).isHD ? 'hd' : 'sd';
+    } catch {
+        return 'unknown';
+    }
+}
+
 // eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 async function main() {
     const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wurst-objmod-e2e-user-'));
@@ -531,6 +548,7 @@ async function main() {
         '--new-window',
         '--skip-welcome',
         '--skip-release-notes',
+        '--disable-updates',
         '--disable-workspace-trust',
         `--remote-debugging-port=${devtoolsPort}`,
         `--user-data-dir=${userDataDir}`,
@@ -541,6 +559,7 @@ async function main() {
     ], childEnv);
 
     let stderr = '';
+    let passed = false;
     child.stderr.on('data', (chunk) => {
         stderr += String(chunk);
         if (stderr.length > 8000) stderr = stderr.slice(stderr.length - 8000);
@@ -550,6 +569,14 @@ async function main() {
     try {
         log('waiting for DevTools HTTP');
         const version = await waitForDevtoolsHttp(devtoolsPort);
+        if (process.env.WURST_E2E_VERBOSE === '1') {
+            console.log(`[verbose] launcher pid=${child.pid} exitCode=${child.exitCode} profilePids=${windowsCodePidsForUserDataDir(userDataDir).join(',')}`);
+            const pages = await requestFirstJson([
+                `http://127.0.0.1:${devtoolsPort}/json/list`,
+                `http://localhost:${devtoolsPort}/json/list`,
+            ]).catch((error) => ({ error: error.message }));
+            console.log(`[verbose] initial /json/list: ${JSON.stringify(pages)}`);
+        }
         log('connecting DevTools WebSocket');
         client = new CdpClient(version.webSocketDebuggerUrl);
         await client.connect();
@@ -559,6 +586,14 @@ async function main() {
         await assertObjmodEditorBasics(client, sessionId, contextId);
         log('asserting model thumbnails');
         await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.openModelAssetBrowser()');
+        if (searchQuery) {
+            await evalInContext(
+                client,
+                sessionId,
+                contextId,
+                `window.__wurstModelThumbDebug.searchModelAssetBrowser(${JSON.stringify(searchQuery)})`,
+            );
+        }
 
         let initialKeys = [];
         const violations = [];
@@ -597,24 +632,41 @@ async function main() {
                     const failures = [];
                     const numbers = [];
                     const visibleByKey = new Map(state.visible.map((slot) => [slot.key, slot]));
+                    if (state.worker?.state !== 'ready') {
+                        failures.push(`thumbnail worker did not start: ${JSON.stringify(state.worker || null)}`);
+                    }
                     for (const key of initialKeys) {
                         const slot = visibleByKey.get(key);
-                        if (!slot || (!slot.loaded && !slot.missing)) {
-                            let reason;
+                        if (!slot?.loaded) {
+                            let reason = '{"reason":"no-loaded-img"}';
                             if (slot?.reason) reason = JSON.stringify(slot.reason);
                             else if (slot?.missing) reason = '{"reason":"missing"}';
-                            else reason = '{"reason":"no-loaded-img"}';
-                            failures.push(`${key}: expected thumbnail image or decisive missing state, got ${reason}`);
+                            failures.push(`${key}: expected a rendered thumbnail image, got ${reason}`);
                         }
                     }
-                    const firstRenderedKey = initialKeys.find((key) => state.events.some((event) => event.key === key && event.type === 'render-start'));
-                    const warmupKey = firstRenderedKey || initialKeys[0];
-                    for (const key of initialKeys.filter((key) => key !== warmupKey)) {
+                    const warmupKeys = new Set();
+                    const warmedModes = new Set();
+                    for (const key of initialKeys) {
+                        if (!state.events.some((event) => event.key === key && event.type === 'render-start')) continue;
+                        const mode = rendererModeForKey(state.events, key);
+                        if (warmedModes.has(mode)) continue;
+                        warmedModes.add(mode);
+                        warmupKeys.add(key);
+                    }
+                    for (const key of initialKeys.filter((key) => !warmupKeys.has(key))) {
                         const ms = durations.get(key);
                         if (typeof ms !== 'number') failures.push(`${key}: missing duration`);
-                        else numbers.push(ms);
+                        else {
+                            numbers.push(ms);
+                            if (Number.isFinite(maxThumbnailMs) && ms > maxThumbnailMs) {
+                                failures.push(`${key}: ${ms}ms exceeded ${maxThumbnailMs}ms warm lifecycle budget`);
+                            }
+                        }
                     }
-                    for (const key of initialKeys) log(`${key}${key === warmupKey ? ' warmup' : ''} ${durations.get(key)}ms`);
+                    for (const key of initialKeys) {
+                        const warmup = warmupKeys.has(key) ? ` ${rendererModeForKey(state.events, key)}-warmup` : '';
+                        log(`${key}${warmup} ${durations.get(key)}ms`);
+                    }
                     if (failures.length) {
                         console.error(`objmod thumbnail e2e failures:\n${failures.join('\n')}`);
                         for (const key of initialKeys) {
@@ -625,6 +677,7 @@ async function main() {
                     assert.equal(failures.length, 0, failures.join('\n'));
                     const maxObserved = numbers.length ? `${Math.max(...numbers)}ms` : 'n/a';
                     log(`passed ${initialKeys.length} completed thumbnails, max observed=${maxObserved}`);
+                    passed = true;
                     return;
                 }
             }
@@ -643,10 +696,16 @@ async function main() {
     } finally {
         client?.close();
         await killProcessTree(child, userDataDir);
-        cleanupTempDir(userDataDir);
-        cleanupTempDir(extensionsDir);
-        cleanupTempDir(generatedFixtureDir);
-        if (stderr) console.error(stderr);
+        if (process.env.WURST_E2E_KEEP_TEMP === '1') {
+            log(`kept userDataDir=${userDataDir}`);
+            log(`kept extensionsDir=${extensionsDir}`);
+            if (generatedFixtureDir) log(`kept fixtureDir=${generatedFixtureDir}`);
+        } else {
+            cleanupTempDir(userDataDir);
+            cleanupTempDir(extensionsDir);
+            cleanupTempDir(generatedFixtureDir);
+        }
+        if (stderr && !passed) console.error(stderr);
     }
 }
 

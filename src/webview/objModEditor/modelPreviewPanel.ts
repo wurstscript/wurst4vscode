@@ -68,6 +68,10 @@ export function showModelPreview(path) {
   if (name) { name.textContent = path.split(/[\\\\/]/).pop() || path; name.title = path; }
   if (!mpvViewer()) { mpvStatus('Model viewer unavailable.'); return; }
   mpvEnsureInit();
+  // Never leave the previous model visible while this path resolves. Otherwise a missing catalog
+  // entry appears to preview successfully even though the status belongs to the new failed request.
+  mpvViewer().clearModel();
+  mpvFillAnims([]);
   mpvStatus('Loading…');
   vscodeApi.postMessage({ type: 'loadModel', path: path });
 }

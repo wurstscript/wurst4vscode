@@ -318,7 +318,7 @@ ${ICON_INLINE_CSS}
         ? '<span class="sound-thumb">AUD</span>'
         : activeTab === 'icon' && item.iconPath
         ? '<span class="object-icon" data-key="asset:' + index + ':' + esc(item.iconPath) + '" data-icon="' + esc(item.iconPath) + '"></span>'
-        : '<span class="model-thumb pending" data-key="asset-model:' + index + ':' + esc(item.value) + '" data-model="' + esc(item.value) + '"></span>';
+        : '<span class="model-thumb" data-key="asset-model:' + index + ':' + esc(item.value) + '" data-model="' + esc(item.value) + '"></span>';
       return '<button class="card" type="button" data-value="' + esc(item.value) + '">' +
         icon + '<span class="card-text"><span class="card-name">' + esc(item.label) + '</span><span class="card-path">' + esc(item.value) + '</span></span></button>';
     }).join('');
@@ -363,6 +363,7 @@ ${ICON_INLINE_CSS}
       var key = el.getAttribute('data-key') || '';
       if (modelLoaded.has(key)) setModelLoaded(el, modelLoaded.get(key));
       else if (modelMissing.has(key)) setModelMissing(el, modelMissing.get(key));
+      else if (modelPending.has(key)) el.classList.add('pending');
       else modelObserver.observe(el);
     });
   }
@@ -480,7 +481,7 @@ ${ICON_INLINE_CSS}
     modelJob.requestedTextures = null;
     modelJob.pendingTextures = new Set();
     try {
-      mpvViewer().loadModel(loadModelBytes(job), job.fileName || '', job.format || 'mdx', { autoplay: false });
+      mpvViewer().loadModel(loadModelBytes(job), job.fileName || '', job.format || 'mdx', { autoplay: false, textureCacheKey: 'thumbnail' });
     } catch (e) {
       markModelFailed(job.key, 'load-error');
     }
@@ -594,6 +595,10 @@ ${ICON_INLINE_CSS}
       if (modelPending.has(msg.key)) completeModelRequest(msg.key);
     } else if (msg.type === 'modelThumbRender') {
       renderModelThumb(msg);
+    } else if (msg.type === 'modelThumbTexturesComplete') {
+      if (!modelJob || msg.thumbKey !== modelJob.key) return;
+      if (modelJob.pendingTextures) modelJob.pendingTextures.clear();
+      scheduleModelCapture(0, 1);
     } else if (msg.type === 'mdxTexture') {
       if (!modelJob || (msg.thumbKey && msg.thumbKey !== modelJob.key)) return;
       if (msg.path) {

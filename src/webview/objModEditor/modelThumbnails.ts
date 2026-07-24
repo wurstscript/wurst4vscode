@@ -1,8 +1,6 @@
 import { esc, base64ToBytes } from '../objModWebviewUtils';
-import { vscodeApi } from './state';
+import { vscodeApi, assetBrowserUi, initial } from './state';
 import { mpvViewer, mpvB64ToArrayBuffer } from './modelViewerShared';
-import { abActiveTab } from './assetBrowser';
-import { resetMpvInited } from './modelPreviewPanel';
 
 let modelThumbObserver: IntersectionObserver | undefined;
 export const pendingModelThumbs = new Set<string>();
@@ -16,6 +14,10 @@ let modelThumbJob: any = null;
 let modelThumbAwaitingDecisionKey = '';
 let modelThumbSeq = 0;
 let modelThumbInited = false;
+let modelThumbWorker: Worker | null = null;
+let modelThumbWorkerBlobUrl = '';
+let modelThumbWorkerStartupState: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
+let modelThumbWorkerStartupError = '';
 let modelThumbTextureTimer: ReturnType<typeof setTimeout> | 0 = 0;
 let modelThumbIdleTimer: ReturnType<typeof setTimeout> | 0 = 0;
 let modelThumbCancelGeneration = 0;
@@ -62,6 +64,8 @@ export function observeModelThumbs(root) {
       setModelThumbLoaded(el, loadedModelThumbs.get(key));
     } else if (missingModelThumbs.has(key)) {
       setModelThumbMissing(el, missingModelThumbReasons.get(key));
+    } else if (pendingModelThumbs.has(key)) {
+      el.classList.add('pending');
     } else if (isModelThumbActuallyVisible(el)) {
       requestModelThumb(el);
     } else {
@@ -83,8 +87,7 @@ export function isAssetBrowserModelKey(key) {
 }
 
 export function isAssetBrowserOpen() {
-  const ov = document.getElementById('ab-overlay');
-  return !!ov && !ov.hidden;
+  return assetBrowserUi.open;
 }
 
 export function rectsIntersect(a, b) {
@@ -97,7 +100,7 @@ export function isModelThumbActuallyVisible(el) {
   const rect = el.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return false;
   if (isAssetBrowserModelKey(key)) {
-    if (!isAssetBrowserOpen() || abActiveTab.peek() !== 'model') return false;
+    if (!isAssetBrowserOpen() || assetBrowserUi.activeTab !== 'model') return false;
     const grid = document.getElementById('ab-grid');
     if (!grid || !grid.contains(el)) return false;
     return rectsIntersect(rect, grid.getBoundingClientRect());
@@ -280,6 +283,7 @@ function modelThumbProfile(phase, detail = '') {
 }
 
 async function modelThumbJobBytes(job) {
+  if (job.modelBuffer) return job.modelBuffer;
   if (job.modelUri) {
     const response = await fetch(job.modelUri);
     if (!response.ok) throw new Error('fetch ' + response.status);
@@ -288,63 +292,110 @@ async function modelThumbJobBytes(job) {
   return mpvB64ToArrayBuffer(job.mdxBase64 || '');
 }
 
-export function modelThumbEnsureInit() {
-  const v = mpvViewer();
-  if (!v) return false;
-  if (modelThumbInited) return true;
-  const canvas = document.getElementById('model-thumb-canvas');
-  const viewport = document.getElementById('model-thumb-viewport');
-  if (!canvas || !viewport) return false;
-  const gizmo = document.createElement('canvas');
-  gizmo.width = 1; gizmo.height = 1;
-  window.__WAR3_MODEL_DEBUG = true;
-  v.init({
-    canvas3d: canvas,
-    gizmo: gizmo,
-    viewport: viewport,
-    vscodeApi: {
-      postMessage(msg) {
-        if (msg && msg.type === 'requestTextures') {
-          if (!modelThumbJob) return;
+function attachModelThumbWorker(worker: Worker) {
+  modelThumbWorker = worker;
+  worker.onmessage = event => {
+        const msg = event.data || {};
+        if (msg.type === 'requestTextures') {
+          if (!modelThumbJob || msg.key !== modelThumbJob.key) return;
           const paths = modelThumbTexturePaths(msg.paths || []);
           modelThumbJob.requestedTextures = new Set(paths);
-          modelThumbJob.pendingTextures = new Set(paths.filter(path => !modelThumbJob.receivedTextures || !modelThumbJob.receivedTextures.has(path)));
-          vscodeApi.postMessage(Object.assign({}, msg, { paths, thumbKey: modelThumbJob ? modelThumbJob.key : '' }));
-        } else {
-          vscodeApi.postMessage(msg);
+          modelThumbJob.pendingTextures = new Set(paths);
+          vscodeApi.postMessage({ type: 'requestTextures', paths, thumbKey: modelThumbJob.key });
+        } else if (msg.type === 'profile') {
+          if (!modelThumbJob || msg.key !== modelThumbJob.key) return;
+          const metrics = Object.assign({}, msg);
+          delete metrics.type;
+          delete metrics.key;
+          delete metrics.phase;
+          modelThumbProfile('worker-' + msg.phase, JSON.stringify(metrics));
+        } else if (msg.type === 'rendered') {
+          if (!modelThumbJob || msg.key !== modelThumbJob.key) return;
+          const dataUrl = 'data:image/webp;base64,' + msg.webpBase64;
+          vscodeApi.postMessage({
+            type: 'modelThumbRendered',
+            key: modelThumbJob.key,
+            cacheKey: modelThumbJob.cacheKey,
+            aliasKey: modelThumbJob.aliasKey,
+            webpBase64: msg.webpBase64,
+            avgLuma: msg.avgLuma,
+            textureFailures: msg.textureFailures,
+          });
+          finishModelThumb(true, '', dataUrl);
+        } else if (msg.type === 'failed') {
+          if (!modelThumbJob || msg.key !== modelThumbJob.key) return;
+          modelThumbProfile('worker-failed', JSON.stringify({ reason: msg.reason || 'failed' }));
+          finishModelThumb(false, msg.reason || 'worker-failed');
         }
-      },
-    },
-    callbacks: {
-      onModelLoaded(info) { modelThumbOnLoaded((info && info.sequences) || [], (info && info.texturePaths) || []); },
-      onFrameUpdate() {},
-      onDebug(msg) {
-        const text = String(msg || '');
-        if (/Uploading compressed texture|^texture(?: \(dds\)| \(rgba\))? ok:|^texture not found:|Missing HD |Rendering SD |SD material layer setup|Missing SD /i.test(text)) return;
-        modelThumbProfile('viewer-debug', text);
-      },
-      onError() { finishModelThumb(false); },
-    },
-  });
-  modelThumbInited = true;
-  resetMpvInited();
-  return true;
+      };
+  worker.onerror = event => {
+        modelThumbProfile('worker-error', event.message || 'worker error');
+        worker.terminate();
+        if (modelThumbWorker === worker) modelThumbWorker = null;
+        modelThumbWorker = null;
+        modelThumbInited = false;
+        modelThumbWorkerStartupState = 'failed';
+        modelThumbWorkerStartupError = event.message || 'worker error';
+        if (modelThumbJob) finishModelThumb(false, 'worker-error');
+      };
+}
+
+function startModelThumbWorker() {
+  if (modelThumbWorkerStartupState !== 'idle') return;
+  modelThumbWorkerStartupState = 'loading';
+  // VS Code webviews cannot construct a worker directly from a vscode-resource URL. Fetch the
+  // single-file webpack bundle and launch the resulting Blob URL, as required by the webview API.
+  void fetch(initial.thumbnailWorkerUri!)
+    .then(response => {
+      if (!response.ok) throw new Error('worker bundle fetch ' + response.status);
+      return response.text();
+    })
+    .then(source => {
+      modelThumbWorkerBlobUrl = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+      const worker = new Worker(modelThumbWorkerBlobUrl, { name: 'wurst-model-thumbnails' });
+      attachModelThumbWorker(worker);
+      modelThumbWorkerStartupState = 'ready';
+      modelThumbInited = true;
+      recordModelThumbEvent('worker-ready', '');
+    })
+    .catch(error => {
+      modelThumbWorkerStartupState = 'failed';
+      modelThumbWorkerStartupError = error instanceof Error ? error.message : String(error);
+      console.error('[wurst-model-thumb] worker startup failed', error);
+      recordModelThumbEvent('worker-startup-failed', '', { reason: modelThumbWorkerStartupError });
+    })
+    .finally(() => scheduleModelThumbQueues(0));
+}
+
+export function modelThumbEnsureInit() {
+  if (modelThumbInited) return true;
+  if (!initial.thumbnailWorkerUri || typeof Worker !== 'function') {
+    modelThumbWorkerStartupState = 'failed';
+    modelThumbWorkerStartupError = !initial.thumbnailWorkerUri
+      ? 'thumbnail worker bundle unavailable'
+      : 'Web Workers unavailable';
+    return false;
+  }
+  startModelThumbWorker();
+  return false;
 }
 
 export function resetModelThumbInited() {
+  modelThumbWorker?.terminate();
+  modelThumbWorker = null;
+  if (modelThumbWorkerBlobUrl) URL.revokeObjectURL(modelThumbWorkerBlobUrl);
+  modelThumbWorkerBlobUrl = '';
+  modelThumbWorkerStartupState = 'idle';
+  modelThumbWorkerStartupError = '';
   modelThumbInited = false;
 }
 
+export function getModelThumbWorkerState() {
+  return { state: modelThumbWorkerStartupState, error: modelThumbWorkerStartupError };
+}
+
 function modelThumbTexturePaths(texturePaths) {
-  return (texturePaths || []).filter(path => {
-    const lower = String(path || '').replace(/\\/g, '/').toLowerCase();
-    const name = lower.split('/').pop() || lower;
-    if (/(?:^|[_-])(?:normal|orm)(?:\.|_|-)/.test(name)) return false;
-    if (/(?:^|[_-])emissive(?:\.|_|-)/.test(name)) return false;
-    if (name === 'environmentmap.blp' || name === 'environmentmap.dds' || name === 'environmentmap.tga') return false;
-    if (/(?:^|[_-])corpse(?:[_-]|\.|$)/.test(name) || /(?:[_-])corpse(?:[_-])/.test(name)) return false;
-    return true;
-  });
+  return Array.from(new Set((texturePaths || []).filter(path => typeof path === 'string' && path)));
 }
 
 export function pickStandSequence(seqs) {
@@ -435,11 +486,17 @@ function captureModelThumb() {
       return;
     }
     if (quality.tooDark) {
-      // Some valid WC3 models render as very dark silhouettes in the thumbnail light/camera setup.
-      // Prefer caching a visible thumbnail over spending a render cycle and ending as a permanent "?".
-      modelThumbProfile('capture-dark-accepted', 'alpha=' + quality.alphaPixels + ' avg=' + Math.round(quality.avgLuma) + ' max=' + quality.maxLuma);
+      modelThumbProfile('capture-dark-rejected', 'alpha=' + quality.alphaPixels + ' avg=' + Math.round(quality.avgLuma) + ' max=' + quality.maxLuma);
+      if (!modelThumbJob.fullQualityRetry) {
+        retryModelThumbAtFullTextureQuality();
+      } else {
+        // Never persist a texture-load failure as a valid thumbnail. The next editor session can
+        // retry generation, while caching this frame would keep it black across restarts.
+        finishModelThumb(false, 'dark-frame');
+      }
+      return;
     }
-    const dataUrl = out.toDataURL('image/webp', 0.58);
+    const dataUrl = out.toDataURL('image/webp', 0.84);
     const marker = 'data:image/webp;base64,';
     if (!dataUrl || dataUrl.indexOf(marker) !== 0) { finishModelThumb(false, 'encode-failed'); return; }
     vscodeApi.postMessage({
@@ -454,6 +511,35 @@ function captureModelThumb() {
   } catch (e) {
     modelThumbProfile('capture-error', e instanceof Error ? e.message : String(e));
     finishModelThumb(false, 'capture-error');
+  }
+}
+
+function retryModelThumbAtFullTextureQuality() {
+  const job = modelThumbJob;
+  if (!job || !job.modelBuffer) {
+    finishModelThumb(false, 'dark-frame');
+    return;
+  }
+  job.fullQualityRetry = true;
+  job.receivedTextures = new Set();
+  job.requestedTextures = null;
+  job.pendingTextures = null;
+  job.textureFailures = 0;
+  const v = mpvViewer();
+  if (!v) {
+    finishModelThumb(false, 'viewer-missing');
+    return;
+  }
+  if (typeof v.clearTextureCache === 'function') v.clearTextureCache('thumbnail');
+  modelThumbProfile('reload-full-textures');
+  try {
+    v.loadModel(job.modelBuffer, job.fileName || '', job.format || 'mdx', {
+      autoplay: false,
+      freezeAnimation: true,
+      textureCacheKey: 'thumbnail',
+    });
+  } catch (e) {
+    finishModelThumb(false, 'full-quality-reload');
   }
 }
 
@@ -575,6 +661,7 @@ function cancelCurrentModelThumb(reason) {
   if (!modelThumbJob) return;
   const key = modelThumbJob.key;
   modelThumbProfile(reason || 'cancelled');
+  modelThumbWorker?.postMessage({ type: 'cancel', key });
   clearTimeout(modelThumbTextureTimer);
   pendingModelThumbs.delete(key);
   cancelQueuedModelThumbRequest(key);
@@ -619,8 +706,17 @@ function processModelThumbQueue() {
     return;
   }
   if (!modelThumbEnsureInit()) {
+    if (modelThumbWorkerStartupState === 'loading') {
+      modelThumbQueue.unshift(job);
+      return;
+    }
+    const reason = modelThumbWorkerStartupError
+      ? 'worker-startup: ' + modelThumbWorkerStartupError
+      : 'viewer-init-failed';
+    vscodeApi.postMessage({ type: 'modelThumbFailed', key: job.key, cacheKey: job.cacheKey, aliasKey: job.aliasKey, reason });
     cancelQueuedModelThumbRequest(job.key);
-    markModelThumbMissing(job.key, { reason: 'viewer-init-failed' });
+    markModelThumbMissing(job.key, { reason });
+    recordModelThumbEvent('failed', job.key, { reason });
     scheduleModelThumbQueues(0);
     return;
   }
@@ -636,9 +732,29 @@ function processModelThumbQueue() {
   modelThumbProfile('fetch-start', job.modelUri ? 'uri' : 'base64');
   modelThumbJobBytes(job).then(buffer => {
     if (!modelThumbJob || modelThumbJob !== job) return;
+    job.modelBuffer = buffer;
     modelThumbProfile('load-start', String(job.fileName || ''));
+    if (modelThumbWorker) {
+      modelThumbWorker.postMessage({
+        type: 'render',
+        job: {
+          key: job.key,
+          cacheKey: job.cacheKey,
+          aliasKey: job.aliasKey,
+          fileName: job.fileName || '',
+          format: job.format || 'mdx',
+          buffer,
+        },
+      }, [buffer]);
+      return;
+    }
     try {
-      mpvViewer().loadModel(buffer, job.fileName || '', job.format || 'mdx', { autoplay: false });
+      mpvViewer().loadModel(buffer, job.fileName || '', job.format || 'mdx', {
+        autoplay: false,
+        freezeAnimation: true,
+        textureCacheKey: 'thumbnail',
+        maxTextureDimension: 256,
+      });
     } catch (e) {
       finishModelThumb(false);
     }
@@ -665,6 +781,19 @@ export function applyMdxTexture(msg) {
 // Handles the 'mdxTexture' host message. Kept here (rather than inlined in the message listener)
 // because it reads/writes modelThumbJob internals directly — those aren't exposed outside this module.
 export function handleMdxTextureMessage(msg) {
+  if (modelThumbWorker && msg.thumbKey) {
+    if (!modelThumbJob || msg.thumbKey !== modelThumbJob.key) return;
+    if (msg.textureBytes) {
+      const source = msg.textureBytes instanceof Uint8Array
+        ? msg.textureBytes
+        : new Uint8Array(msg.textureBytes);
+      const buffer = source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength);
+      modelThumbWorker.postMessage(Object.assign({}, msg, { type: 'texture', textureBytes: buffer }), [buffer]);
+    } else {
+      modelThumbWorker.postMessage(Object.assign({}, msg, { type: 'texture' }));
+    }
+    return;
+  }
   if (modelThumbJob) {
     if (msg.thumbKey && msg.thumbKey !== modelThumbJob.key) return;
     if (!modelThumbJob.receivedTextures) modelThumbJob.receivedTextures = new Set();
@@ -683,4 +812,19 @@ export function handleMdxTextureMessage(msg) {
   }
   if (msg.thumbKey) return;
   applyMdxTexture(msg);
+}
+
+export function handleModelThumbTexturesComplete(msg) {
+  if (!modelThumbJob || !msg.thumbKey || msg.thumbKey !== modelThumbJob.key) return;
+  if (modelThumbWorker) {
+    modelThumbWorker.postMessage(Object.assign({}, msg, { type: 'texturesComplete' }));
+    return;
+  }
+  const remaining = modelThumbJob.pendingTextures ? modelThumbJob.pendingTextures.size : 0;
+  if (remaining > 0) {
+    modelThumbJob.textureFailures = (modelThumbJob.textureFailures || 0) + remaining;
+    modelThumbJob.pendingTextures.clear();
+  }
+  modelThumbProfile('textures-complete', 'unresolved=' + remaining + ' failures=' + (modelThumbJob.textureFailures || 0));
+  scheduleModelThumbCapture(0, 1);
 }

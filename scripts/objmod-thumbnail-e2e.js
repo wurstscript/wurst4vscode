@@ -484,6 +484,59 @@ async function assertObjmodEditorBasics(client, sessionId, contextId) {
         `spacious browse rows should be taller than compact ones, got ${density.cozyHeight} vs ${density.compactHeight}`,
     );
 
+    // Clearing the object search must leave the selected object on screen. Filtering the tree clamps
+    // its scrollTop to ~0, so restoring that value once the full tree is back used to dump the user at
+    // the top with their selection hundreds of rows below. Driven through the real search input.
+    const searchScroll = await evalInContext(client, sessionId, contextId, `(async function () {
+        var tree = document.getElementById('tree');
+        var search = document.getElementById('search');
+        if (!tree || !search) return { skipped: 'no tree/search element' };
+        var frame = function () { return new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(r); }); }); };
+        var setQuery = async function (value) {
+            search.value = value;
+            search.dispatchEvent(new Event('input', { bubbles: true }));
+            await frame();
+        };
+        await setQuery('');
+        var rows = tree.querySelectorAll('.object-row');
+        if (rows.length < 2) return { skipped: 'fixture has too few objects' };
+        // The bug needs a tree taller than its own viewport. The checked-in fixture is small enough to
+        // fit entirely on screen, so cap the viewport instead of requiring a huge map — the clamp-on-
+        // filter behaviour being tested is identical either way. Restored before returning.
+        var forcedHeight = tree.scrollHeight <= tree.clientHeight + 20;
+        if (forcedHeight) { tree.style.maxHeight = '60px'; await frame(); }
+        try {
+            if (tree.scrollHeight <= tree.clientHeight + 20) return { skipped: 'could not make the tree scroll' };
+            var last = rows[rows.length - 1];
+            last.click();
+            var nameEl = last.querySelector('.object-name');
+            var name = nameEl ? nameEl.textContent.trim() : '';
+            if (!name) return { skipped: 'last row has no name to search for' };
+            await setQuery(name);
+            await setQuery('');
+            var active = tree.querySelector('.object-row.active');
+            if (!active) return { skipped: 'selection did not survive the search' };
+            var a = active.getBoundingClientRect(), t = tree.getBoundingClientRect();
+            return {
+                visible: a.top >= t.top - 1 && a.bottom <= t.bottom + 1,
+                forcedHeight: forcedHeight,
+                rowOffset: Math.round(a.top - t.top),
+                treeHeight: Math.round(t.height),
+                scrollTop: Math.round(tree.scrollTop),
+            };
+        } finally {
+            if (forcedHeight) tree.style.maxHeight = '';
+        }
+    })()`);
+    if (searchScroll.skipped) {
+        console.log(`[objmod-thumb-e2e] search-scroll check skipped: ${searchScroll.skipped}`);
+    } else {
+        assert.ok(
+            searchScroll.visible,
+            `clearing the object search should keep the selected row in view, got ${JSON.stringify(searchScroll)}`,
+        );
+    }
+
     const state = await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.state()');
     if (generatedFixtureDir) {
         assert.equal(state.fileInfo && state.fileInfo.mainName, 'war3map.w3a', 'main sibling should be reported');

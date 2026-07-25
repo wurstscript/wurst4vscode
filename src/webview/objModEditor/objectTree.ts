@@ -298,6 +298,23 @@ export function setActiveRow(key) {
   return row;
 }
 
+// Scroll `row` into view, but only when it isn't already visible.
+//
+// The guard is what makes this usable while typing: filtering re-renders the tree on every keystroke,
+// and a row that's already on screen must not be nudged around. It's also why clearing a search works
+// at all — renderTree() carries the previous scrollTop forward, but a filtered tree is only a few rows
+// tall, so that value has already been clamped to ~0 by the browser. Restoring it once the full tree
+// is back therefore dumps the user at the top with their selection hundreds of rows below, which is
+// exactly the state this recovers from. Centred rather than 'nearest' for that case: after a jump this
+// large the surrounding rows are the context that tells you where you landed.
+export function revealRow(row) {
+  if (!row) return;
+  const rowRect = row.getBoundingClientRect();
+  const treeRect = tree.getBoundingClientRect();
+  if (rowRect.top >= treeRect.top && rowRect.bottom <= treeRect.bottom) return;
+  row.scrollIntoView({ block: 'center' });
+}
+
 export function selectObject(key) {
   if (!key) return;
   // Writing the signal is enough to drive the details panel — see the renderDetails effect wired in

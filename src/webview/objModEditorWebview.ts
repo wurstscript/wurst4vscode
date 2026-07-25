@@ -1,7 +1,7 @@
 import { effect } from './signals';
 import { objects, ui, vscodeApi, details, search } from './objModEditor/state';
 import { commitActiveEditor } from './objModEditor/fieldDisplay';
-import { matches, setActiveRow, setupTree } from './objModEditor/objectTree';
+import { matches, revealRow, setActiveRow, setupTree } from './objModEditor/objectTree';
 import { setupDetails } from './objModEditor/detailsPanel';
 import { setupAssetBrowser } from './objModEditor/assetBrowser';
 import { setupModelPreviewPanel } from './objModEditor/modelPreviewPanel';
@@ -27,7 +27,10 @@ function applySearch() {
   if (selected && !matches(selected)) {
     ui.selectedKey = (objects.find(matches) || objects[0] || {}).key || '';
   }
-  setActiveRow(ui.selectedKey);
+  // Follow the selection: narrowing the tree clamps its scroll position, so without this, clearing the
+  // query leaves the object still selected but scrolled off somewhere far below. revealRow() no-ops
+  // whenever the row is already on screen, so this costs nothing on the common keystroke path.
+  revealRow(setActiveRow(ui.selectedKey));
 }
 // Restore the last search query for this file (state.ts seeds ui.query from persisted vscodeApi
 // state) so the search box and its match-count/clear-button indicators don't visually reset to empty

@@ -1635,9 +1635,11 @@ async function buildHtml(
     const overrides = parsed.origObjs.reduce((sum, entry) => sum + entry.mods.length, 0) +
         parsed.customObjs.reduce((sum, entry) => sum + entry.mods.length, 0);
     const summary = `${objects.length} object${objects.length === 1 ? '' : 's'} - ${overrides} override${overrides === 1 ? '' : 's'}`;
-    const combinedMeta = combined?.skinName
-        ? ` - combined ${escapeHtml(combined.mainName)} + ${escapeHtml(combined.skinName)}`
-        : '';
+    const combinedMeta = combined?.skinName ? ` - combined ${combined.mainName} + ${combined.skinName}` : '';
+    // Single line, escaped once at the point of use (it doubles as the strip's own title attribute,
+    // since it ellipsizes rather than wrapping — see .md-meta).
+    const metaLine = `WC3 ${typeLabel} object data - v${parsed.version} - ${summary} - ${metadataSource}` +
+        `${parsed.extended ? ' - extended (level/dataPt)' : ''}${combinedMeta}`;
     const errorBanner = parsed.error
         ? `<div class="error">Parse error: ${escapeHtml(parsed.error)}</div>`
         : '';
@@ -1674,11 +1676,76 @@ async function buildHtml(
      across the text. */
   --wc3-tip-border-size: 9px;
   --model-bg: color-mix(in srgb, var(--bg) 72%, var(--fg) 28%);
-  /* Sticky category rows sit directly under the sticky table header (th: 5+5px padding + 1px border). */
+  /* Default browse-list width. Mirrored by LIST_W_DEFAULT in objModEditorWebview.ts (the splitter's
+     fallback when nothing is persisted yet) — keep the two in sync. */
+  --list-w: 220px;
+  /* Minimum width the field table needs before the details pane starts scrolling horizontally.
+     Technical mode (5-7 columns instead of 2) raises it — see table.technical below. */
+  --table-min-w: 300px;
+}
+
+/* ── Density ─────────────────────────────────────────────────────────────────────────────────────
+   Two spacing scales, selected by the #density-toggle button in the header and persisted per document
+   (see ui.density in state.ts). Compact is the default — this is a dense editor over files with
+   hundreds of objects and thousands of fields, so vertical space is the scarce resource — and
+   body.density-cozy restores the original roomier spacing for anyone who prefers it.
+   Every density-sensitive number lives here as a variable so the two modes stay one block of
+   overrides instead of two parallel stylesheets; only the handful of genuinely structural differences
+   (two-line browse rows, wrapped header meta) need their own body.density-cozy rules further down. */
+:root {
+  --pad-x: 10px;          /* header / banner horizontal padding */
+  --head-py: 4px;
+  --title-fs: 13px;       /* file name + object name */
+  --meta-fs: 11px;        /* meta strip, rawcode suffix */
+  --chip-fs: 11px;        /* toggle chips */
+  --input-h: 22px;        /* search boxes */
+  --details-icon: 26px;
+  --details-head-pad: 5px 9px 6px;
+  --search-pad: 5px 6px;
+  --tree-icon: 20px;
+  --tree-heading-py: 2px;
+  --tree-row-py: 1px;
+  /* Browse-tree indent ladder: Group > Race [> Melee|Campaign > Units/Buildings/Heroes/Special], with
+     object rows sitting one step past their own parent heading. */
+  --ind-group: 6px;
+  --ind-race: 16px;
+  --ind-camp: 26px;
+  --ind-kind: 36px;
+  --ind-row: 26px;
+  --ind-row-nested: 40px;
+  --th-pad: 3px 6px;
+  --td-pad: 1px 6px;
+  --cat-pad: 3px 6px 2px;
+  /* Sticky category rows sit directly under the sticky table header (th padding + 1px border). */
+  --table-header-h: 23px;
+  /* Row height for the field table's collapsed/edit cells, so toggling a cell into edit mode never
+     resizes its row. */
+  --cell-h: 20px;
+}
+body.density-cozy {
+  --pad-x: 16px;
+  --head-py: 7px;
+  --title-fs: 15px;
+  --meta-fs: 12px;
+  --chip-fs: 12px;
+  --input-h: 26px;
+  --details-icon: 32px;
+  --details-head-pad: 11px 16px 10px;
+  --search-pad: 8px;
+  --tree-icon: 24px;
+  --tree-heading-py: 3px;
+  --tree-row-py: 2px;
+  --ind-group: 10px;
+  --ind-race: 22px;
+  --ind-camp: 32px;
+  --ind-kind: 42px;
+  --ind-row: 34px;
+  --ind-row-nested: 46px;
+  --th-pad: 5px 8px;
+  --td-pad: 3px 8px;
+  --cat-pad: 5px 8px 4px;
   --table-header-h: 27px;
-  /* Row height for the field table's collapsed/edit cells — kept as a variable (rather than repeating
-     the number everywhere) so the whole table's density can be tuned in one place. */
-  --cell-h: 21px;
+  --cell-h: 24px;
 }
 .content {
   flex: 1;
@@ -1689,25 +1756,46 @@ async function buildHtml(
   flex-direction: column;
   overflow: hidden;
 }
+/* One line, not two: the file name, its meta summary and the save badge share a single strip so the
+   editor itself starts ~20px higher. The meta line is the part that gives (it ellipsizes, full text
+   in its title) — the name and the badge always stay legible. */
 .md-header {
-  padding: 8px 16px 7px;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  padding: var(--head-py) var(--pad-x);
   border-bottom: 1px solid var(--border);
   background: var(--sidebar);
   flex-shrink: 0;
 }
 .md-title {
+  flex: 0 1 auto;
   color: var(--vscode-textLink-foreground, var(--fg));
-  font-size: 15px;
+  font-size: var(--title-fs);
   font-weight: 600;
-  line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.md-meta { color: var(--muted); font-size: 12px; margin-top: 1px; }
+.md-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--meta-fs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Cozy keeps the original two-line header: the meta strip is ordered last and forced to a full row,
+   so it wraps below the (still single-line) name + save badge and can show its full text. */
+body.density-cozy .md-meta { order: 3; flex-basis: 100%; white-space: normal; }
+/* Without the meta strip to fill the first row, the badges need an explicit push to the right edge.
+   On the first badge only — both carry .editable-badge, and giving each an auto margin would split
+   the free space between them and strand one mid-header. */
+body.density-cozy #density-toggle { margin-left: auto; }
 .editable-badge {
-  display: inline-block;
-  margin-left: 8px;
+  flex: 0 0 auto;
   padding: 1px 5px;
   border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
   border-radius: 2px;
@@ -1727,26 +1815,23 @@ async function buildHtml(
   color: var(--vscode-editorWarning-foreground, #cca700);
 }
 .editable-badge.dirty:hover { background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 12%, transparent); }
-.error {
-  color: var(--vscode-errorForeground, #f14c4c);
-  border-bottom: 1px solid color-mix(in srgb, currentColor 65%, transparent);
-  padding: 7px 16px;
-  flex-shrink: 0;
+/* Same pill shape as the save badge, but a neutral (non-accent) affordance — it's a view preference,
+   not document state. */
+.density-toggle {
+  border-color: var(--border);
+  color: var(--muted);
 }
+.density-toggle:hover { background: var(--hover); color: var(--fg); }
+.error,
 .warning {
-  color: var(--vscode-editorWarning-foreground, #cca700);
-  border-bottom: 1px solid color-mix(in srgb, currentColor 50%, transparent);
-  padding: 7px 16px;
+  padding: calc(var(--head-py) + 1px) var(--pad-x);
+  border-bottom: 1px solid color-mix(in srgb, currentColor 55%, transparent);
   font-size: 12px;
   flex-shrink: 0;
 }
-.value-editor {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 8px;
-  align-items: stretch;
-}
-.value-editor.single { grid-template-columns: minmax(0, 1fr); }
+.error { color: var(--vscode-errorForeground, #f14c4c); }
+.warning { color: var(--vscode-editorWarning-foreground, #cca700); }
+.value-editor { display: grid; grid-template-columns: minmax(0, 1fr); }
 .edit-raw {
   width: 100%;
   box-sizing: border-box;
@@ -1759,7 +1844,7 @@ async function buildHtml(
   font-family: var(--mono);
 }
 /* Single-line inputs match the collapsed cell height exactly, so toggling edit never resizes the row. */
-input.edit-raw { height: var(--cell-h, 24px); }
+input.edit-raw { height: var(--cell-h); }
 textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize: vertical; }
 .edit-raw:focus { outline: 1px solid var(--vscode-focusBorder, var(--vscode-textLink-foreground)); }
 /* The in-game tooltip's fill texture + gold corner/edge tiles (see requestTooltipBackdrop/
@@ -1878,7 +1963,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   align-items: flex-start;
   gap: 6px;
   min-width: 0;
-  min-height: var(--cell-h, 24px);
+  min-height: var(--cell-h);
   cursor: text;
 }
 .tt-collapsed-box {
@@ -1949,9 +2034,9 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   gap: 4px 6px;
   width: 100%;
   min-width: 0;
-  min-height: var(--cell-h, 24px); /* same height as the single-line editor → no row resize on edit */
+  min-height: var(--cell-h); /* same height as the single-line editor → no row resize on edit */
   box-sizing: border-box;
-  padding: 1px 6px;
+  padding: 0 4px;
   border: 1px solid transparent;
   border-radius: 3px;
   cursor: text;
@@ -1965,7 +2050,10 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 }
 .cell-edit:hover .tt-edit-hint,
 .cell-edit:focus-visible .tt-edit-hint { opacity: 0.7; }
-.cell-edit-val { flex: 1; min-width: 0; font-family: var(--mono); word-break: break-word; white-space: pre-wrap; }
+/* Shrink-to-fit, not flex:1 — the "modified" badge, source pill and ✎ hint cluster right after the
+   value instead of being flung to the far edge of a wide value column. The click target is still the
+   full cell (.cell-edit stays width:100%). */
+.cell-edit-val { flex: 0 1 auto; min-width: 0; font-family: var(--mono); word-break: break-word; white-space: pre-wrap; }
 .value-display {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -2008,8 +2096,8 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 .resolved-chip.linked:hover { border-color: currentColor; background: var(--hover); }
 .resolved-chip .raw { color: var(--muted); font-family: var(--mono); font-size: 10px; }
 .asset-mini {
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   display: grid;
   place-items: center;
   border: 1px solid var(--border);
@@ -2024,14 +2112,13 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 .asset-mini img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .asset-mini.model-thumb {
   display: inline-block;
-  padding: 0;
   vertical-align: middle;
 }
 .asset-open {
   width: auto;
-  min-width: 22px;
-  padding: 0 5px;
-  height: 22px;
+  min-width: 20px;
+  padding: 0 4px;
+  height: 20px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -2042,9 +2129,11 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 }
 .mpv-box {
   position: fixed;
-  right: 14px;
-  bottom: 14px;
-  width: 220px;
+  right: 10px;
+  bottom: 10px;
+  /* Never wider than the pane it floats over — at ~300px the old fixed 220px box left almost nothing
+     of the field table visible behind it. */
+  width: min(220px, calc(100vw - 20px));
   z-index: 50;
   background: var(--sidebar, var(--bg));
   border: 1px solid var(--border);
@@ -2063,28 +2152,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   user-select: none;
 }
 .mpv-head.dragging { cursor: grabbing; }
-.mpv-ctl {
-  flex: 0 0 auto;
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 12px;
-  line-height: 1;
-  padding: 2px 4px;
-  border-radius: 2px;
-}
-.mpv-ctl:hover { background: var(--btn-hover, var(--hover)); color: var(--fg); }
-.mpv-help, #mpv-help { cursor: help; }
-.mpv-name {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+.mpv-ctl,
 .mpv-close {
   flex: 0 0 auto;
   border: none;
@@ -2096,7 +2164,18 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   padding: 2px 4px;
   border-radius: 2px;
 }
+.mpv-ctl:hover,
 .mpv-close:hover { background: var(--btn-hover, var(--hover)); color: var(--fg); }
+#mpv-help { cursor: help; }
+.mpv-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .mpv-anim {
   flex: 0 1 auto;
   max-width: 110px;
@@ -2108,7 +2187,8 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   border-radius: 2px;
   padding: 0 2px;
 }
-.mpv-viewport { position: relative; width: 220px; height: 220px; background: var(--model-bg); cursor: grab; }
+/* Square, but sized off the (now responsive) box width rather than a second hard-coded 220px. */
+.mpv-viewport { position: relative; width: 100%; aspect-ratio: 1; background: var(--model-bg); cursor: grab; }
 .mpv-viewport:active { cursor: grabbing; }
 .mpv-canvas { display: block; width: 100%; height: 100%; }
 .mpv-status {
@@ -2159,11 +2239,14 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   box-shadow: 0 8px 32px rgba(0,0,0,0.5);
   overflow: hidden;
 }
+/* Wraps rather than squeezing the search box to nothing once the modal is only as wide as a narrow
+   editor pane (min(820px, 92vw)). */
 .ab-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
+  flex-wrap: wrap;
+  gap: 5px 6px;
+  padding: 5px 7px;
   border-bottom: 1px solid var(--border);
   background: var(--sidebar, var(--bg));
 }
@@ -2182,9 +2265,9 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 .ab-tab.active { background: var(--btn-bg, var(--active)); color: var(--active-fg, var(--fg)); border-color: var(--vscode-focusBorder, var(--border)); }
 .ab-search {
   flex: 1;
-  min-width: 0;
-  height: 28px;
-  padding: 3px 8px;
+  min-width: 90px;
+  height: 24px;
+  padding: 2px 7px;
   color: var(--input-fg);
   background: var(--input-bg);
   border: 1px solid var(--input-border, var(--border));
@@ -2193,7 +2276,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 }
 .ab-source {
   flex: 0 0 auto;
-  height: 28px;
+  height: 24px;
   color: var(--input-fg);
   background: var(--input-bg);
   border: 1px solid var(--input-border, var(--border));
@@ -2217,17 +2300,17 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   flex: 1;
   overflow-y: auto;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
-  gap: 6px;
-  padding: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(66px, 1fr));
+  gap: 4px;
+  padding: 6px;
   align-content: start;
 }
 .ab-card {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
-  padding: 5px 3px;
+  gap: 2px;
+  padding: 4px 2px;
   border: 1px solid transparent;
   border-radius: 4px;
   cursor: pointer;
@@ -2271,13 +2354,13 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   opacity: 0;
 }
 .ab-card-label { font-size: 10px; line-height: 1.15; opacity: .75; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.ab-empty { color: var(--muted); font-style: italic; padding: 24px; grid-column: 1 / -1; text-align: center; }
+.ab-empty { color: var(--muted); font-style: italic; padding: 18px; grid-column: 1 / -1; text-align: center; }
 .ab-empty.ab-error { font-style: normal; }
 .ab-empty.ab-error .details-error-reason { margin-inline: auto; }
 .picker-note {
   color: var(--muted);
-  font-size: 11px;
-  margin-top: 3px;
+  font-size: 10px;
+  margin-top: 2px;
 }
 /* Number fields: text input (kept locale-independent, see webview NOTE) + integer/real steppers. */
 .num-editor { display: flex; align-items: stretch; max-width: 170px; }
@@ -2364,15 +2447,14 @@ tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--acce
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  row-gap: 4px;
-  gap: 8px;
-  margin-top: 6px;
+  gap: 3px 7px;
+  margin-top: 5px;
 }
 .field-search {
   flex: 1;
-  min-width: 0;
-  max-width: 320px;
-  height: 24px;
+  min-width: 80px;
+  max-width: 300px;
+  height: var(--input-h);
   background: var(--input-bg);
   color: var(--input-fg);
   border: 1px solid var(--input-border);
@@ -2443,13 +2525,17 @@ tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--acce
 }
 .cat-filter-actions button:hover { background: var(--hover); }
 tr.hidden { display: none; }
+/* Side-by-side is the layout that actually works, so it has to survive narrow panes: the browse list
+   never takes more than 46% of the editor (whatever width the splitter last saved), and the details
+   pane can shrink to 0 and scroll its own table. Stacking is a last resort below ~440px — see
+   .object-editor.narrow. */
 .object-editor {
   flex: 1;
   height: 100%;
   min-height: 0;
   min-width: 0;
   display: grid;
-  grid-template-columns: var(--list-w, 260px) 5px minmax(0, 1fr);
+  grid-template-columns: min(var(--list-w), 46%) 4px minmax(0, 1fr);
   overflow: hidden;
 }
 .splitter {
@@ -2473,28 +2559,28 @@ tr.hidden { display: none; }
   position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px;
+  gap: 4px;
+  padding: var(--search-pad);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 .search-input {
   flex: 1;
   min-width: 0;
-  height: 26px;
+  height: var(--input-h);
   background: var(--input-bg);
   color: var(--input-fg);
   border: 1px solid var(--input-border);
   border-radius: 2px;
-  padding: 3px 7px;
+  padding: 2px 6px;
   font: inherit;
 }
 .search-input:focus { outline: 1px solid var(--vscode-focusBorder, var(--vscode-textLink-foreground)); }
 .search-match { flex-shrink: 0; color: var(--muted); font-size: 11px; white-space: nowrap; }
 .search-clear {
   flex-shrink: 0;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   display: none;
   place-items: center;
   padding: 0;
@@ -2514,50 +2600,20 @@ tr.hidden { display: none; }
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 4px 0 8px;
+  padding: 2px 0 6px;
 }
-.group-heading {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 10px 3px;
-  color: var(--muted);
-  background: var(--sidebar);
-  border: 0;
-  font-size: 11px;
-  font-weight: 600;
-  text-align: left;
-  cursor: pointer;
-}
-.race-heading {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 10px 3px 22px;
-  color: var(--fg);
-  background: transparent;
-  border: 0;
-  font-size: 12px;
-  font-weight: 600;
-  text-align: left;
-  cursor: pointer;
-}
-/* World Editor-style Melee/Campaign and Units/Buildings/Heroes/Special sub-folders (units files only —
-   see the "kind" field set in buildObject). Condensed: same tight vertical rhythm as race-heading,
-   just indented further and a touch smaller/lighter so the hierarchy reads at a glance without eating
-   extra height. */
+/* Indent scale for the Group > Race [> Melee|Campaign > Units/Buildings/Heroes/Special] > object
+   hierarchy: 6px base, ~10px per level. A row sits one step past its parent heading's own indent, so
+   the nesting still reads at a glance while leaving room for actual names in a ~200px pane (the old
+   10/22/32/42/46px ladder spent a quarter of that width on whitespace alone). */
+.group-heading,
+.race-heading,
 .camp-heading,
 .kind-heading {
   width: 100%;
   display: flex;
   align-items: center;
   gap: 5px;
-  color: var(--muted);
   background: transparent;
   border: 0;
   font-size: 11px;
@@ -2565,8 +2621,21 @@ tr.hidden { display: none; }
   text-align: left;
   cursor: pointer;
 }
-.camp-heading { padding: 2px 10px 2px 32px; }
-.kind-heading { padding: 2px 10px 2px 42px; font-weight: 500; }
+.group-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--tree-heading-py) var(--ind-group);
+  color: var(--muted);
+  background: var(--sidebar);
+}
+.race-heading {
+  padding: var(--tree-heading-py) var(--ind-group) var(--tree-heading-py) var(--ind-race);
+  color: var(--fg);
+  font-size: 12px;
+}
+.camp-heading { padding: var(--tree-row-py) var(--ind-group) var(--tree-row-py) var(--ind-camp); color: var(--muted); }
+.kind-heading { padding: var(--tree-row-py) var(--ind-group) var(--tree-row-py) var(--ind-kind); color: var(--muted); font-weight: 500; }
 .group-heading:hover,
 .race-heading:hover,
 .camp-heading:hover,
@@ -2594,25 +2663,39 @@ tr.hidden { display: none; }
   font-size: 10px;
   font-weight: 400;
 }
+/* Compact puts each object on one line: icon, name (+ source pill), rawcode pinned right. The rawcode
+   used to sit on a second line, which nearly doubled every row's height — on a 600-object .w3a that's
+   the difference between seeing ~20 and ~35 objects at once. Long ids still win their space (the name
+   ellipsizes first); the full "base -> new" pair stays in the row's tooltip/aria-label. Cozy restores
+   the stacked two-line form below — same markup, different grid. */
 .object-row {
   width: 100%;
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr);
-  gap: 7px;
+  /* minmax(0, auto) rather than plain auto for the id: a 4-char rawcode is tiny, but the track must
+     still be allowed to shrink (and ellipsize) instead of squeezing the name track to nothing. */
+  grid-template-columns: var(--tree-icon) minmax(0, 1fr) minmax(0, auto);
+  gap: 6px;
   align-items: center;
-  padding: 2px 10px 2px 34px;
+  padding: var(--tree-row-py) var(--ind-group) var(--tree-row-py) var(--ind-row);
   color: var(--fg);
   background: transparent;
   border: 0;
   border-left: 2px solid transparent;
   text-align: left;
   font: inherit;
-  line-height: 1.25;
+  line-height: 1.3;
   cursor: pointer;
 }
 /* Nested one level deeper under a kind-heading (Units/Buildings/Heroes/Special) than a plain
    race-heading — matches kind-heading's own indent so rows still read as its children. */
-.object-row.nested { padding-left: 46px; }
+.object-row.nested { padding-left: var(--ind-row-nested); }
+body.density-cozy .object-row {
+  grid-template-columns: var(--tree-icon) minmax(0, 1fr);
+  gap: 0 7px;
+}
+body.density-cozy .object-row > .object-icon { grid-area: 1 / 1 / span 2 / 1; }
+body.density-cozy .object-name { grid-area: 1 / 2; }
+body.density-cozy .object-id { grid-area: 2 / 2; }
 .object-row:hover { background: var(--hover); }
 .object-row.active {
   background: var(--active);
@@ -2620,15 +2703,15 @@ tr.hidden { display: none; }
   border-left-color: var(--vscode-textLink-foreground, var(--fg));
 }
 .object-name {
-  display: block;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .object-id {
-  display: block;
-  margin-top: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
   font-family: var(--mono);
   font-size: 10px;
@@ -2638,8 +2721,8 @@ tr.hidden { display: none; }
   opacity: .75;
 }
 .object-icon {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   display: grid;
   place-items: center;
   border: 1px solid var(--border);
@@ -2647,6 +2730,9 @@ tr.hidden { display: none; }
   background: var(--input-bg);
   overflow: hidden;
 }
+/* Only the browse-tree thumbnails follow the density scale — the details header, field cells and
+   asset-browser cards each have their own deliberate size. */
+.object-row > .object-icon { width: var(--tree-icon); height: var(--tree-icon); }
 .object-icon img {
   width: 100%;
   height: 100%;
@@ -2654,12 +2740,14 @@ tr.hidden { display: none; }
   object-fit: cover;
 }
 .icon-spinner {
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   border: 2px solid color-mix(in srgb, var(--muted) 28%, transparent);
   border-top-color: var(--muted);
   border-radius: 50%;
-  animation: icon-spin .8s linear infinite;
+  /* Reuses the shared wv-spin keyframes from webviewShared.ts (same 360° rotation the model-thumb
+     spinner already used) instead of declaring a second identical @keyframes here. */
+  animation: wv-spin .8s linear infinite;
 }
 .object-icon.missing .icon-spinner {
   display: none;
@@ -2668,19 +2756,6 @@ tr.hidden { display: none; }
   content: '?';
   color: var(--muted);
   font-size: 11px;
-}
-.object-icon.model::before {
-  content: '3D';
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 600;
-}
-@keyframes icon-spin {
-  to { transform: rotate(360deg); }
-}
-.object-main {
-  min-width: 0;
 }
 .details {
   min-width: 0;
@@ -2691,39 +2766,39 @@ tr.hidden { display: none; }
   overflow: hidden;
 }
 .details-head {
-  padding: 12px 16px 10px;
+  padding: var(--details-head-pad);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 .details-title-row {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: var(--details-icon) minmax(0, 1fr);
+  gap: 8px;
   align-items: center;
 }
 .details-icon {
-  width: 32px;
-  height: 32px;
+  width: var(--details-icon);
+  height: var(--details-icon);
 }
 .details-title {
-  font-size: 15px;
+  font-size: var(--title-fs);
   font-weight: 600;
   color: var(--fg);
   overflow-wrap: anywhere;
 }
 .details-rawcode {
-  margin-left: 10px;
+  margin-left: 7px;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--meta-fs);
   font-weight: 400;
 }
 .toggle-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--chip-fs);
   cursor: pointer;
   user-select: none;
 }
@@ -2731,7 +2806,7 @@ tr.hidden { display: none; }
 .toggle-chip-group {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: 9px;
   margin-left: auto;
 }
 .table-wrap {
@@ -2743,23 +2818,37 @@ tr.hidden { display: none; }
 table {
   border-collapse: collapse;
   width: 100%;
-  min-width: 620px;
+  min-width: var(--table-min-w);
   font-size: 12px;
   table-layout: fixed; /* stable column widths so expanding an editor never reflows the table */
 }
-thead th:first-child { width: 34%; }
+/* Technical mode swaps the 2-column Field/Value layout for 5-7 narrow metadata columns, so it needs
+   more room before scrolling — the compact default must not pay for that. */
+table.technical { --table-min-w: 560px; }
+/* Explicit per-column widths (table-layout: fixed ignores cell min-widths, so this is the only lever).
+   Previously a blanket "thead th:first-child { width: 34% }" also hit technical mode, where the first
+   column is a 4-character field id — a third of the table for "unam". */
+/* Flat percentages only: a fixed-layout table silently drops a column width that contains min()/clamp()
+   with a percentage inside it (measured in Chromium — the column falls back to an equal share), so
+   there's no way to cap this proportional width without giving up the proportional part. */
+.col-field { width: 32%; }
+.col-id { width: 58px; }
+.col-label { width: 24%; }
+.col-group { width: 74px; }
+.col-type { width: 66px; }
+.col-lvl { width: 44px; }
 th {
   position: sticky;
   top: 0;
   z-index: 1;
   background: var(--vscode-editorGroupHeader-tabsBackground, var(--sidebar));
   text-align: left;
-  padding: 5px 8px;
+  padding: var(--th-pad);
   font-weight: 600;
   border-bottom: 1px solid var(--border);
 }
 td {
-  padding: 3px 8px;
+  padding: var(--td-pad);
   border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
   vertical-align: top;
 }
@@ -2773,22 +2862,14 @@ td.label { color: var(--fg); }
 td.type { color: var(--muted); font-size: 11px; }
 td.num { text-align: right; color: var(--muted); }
 td.value { word-break: break-word; white-space: pre-wrap; }
-td.field {
-  min-width: 180px;
-  color: var(--fg);
-}
-td.override,
-tr.overridden td.override,
-tr.overridden td.current {
-  font-family: var(--mono);
-}
+td.field { color: var(--fg); }
 tr.overridden td {
   background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 .override-badge {
   display: inline-block;
-  margin-left: 6px;
-  padding: 1px 5px;
+  margin-left: 5px;
+  padding: 0 4px;
   border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
   border-radius: 2px;
   color: var(--accent);
@@ -2800,7 +2881,7 @@ tr.overridden td {
   position: sticky;
   top: var(--table-header-h);
   z-index: 1;
-  padding: 5px 8px 4px;
+  padding: var(--cat-pad);
   background: var(--vscode-editorGroupHeader-tabsBackground, var(--sidebar));
   color: var(--muted);
   font-size: 11px;
@@ -2810,15 +2891,15 @@ tr.overridden td {
 }
 .source-pill {
   display: inline-block;
-  max-width: 170px;
-  margin-left: 6px;
+  max-width: 150px;
+  margin-left: 5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   vertical-align: -2px;
   border: 1px solid var(--border);
   border-radius: 2px;
-  padding: 1px 5px;
+  padding: 0 4px;
   background: color-mix(in srgb, var(--input-bg) 78%, transparent);
   color: var(--vscode-textLink-foreground, var(--muted));
   font-family: var(--mono);
@@ -2827,20 +2908,15 @@ tr.overridden td {
 .source-pill.missing {
   color: var(--vscode-errorForeground, #f14c4c);
 }
-.empty-state {
-  flex: 1;
-  display: grid;
-  place-items: center;
-  color: var(--muted);
-  padding: 24px;
-  text-align: center;
-}
+.empty-state,
 .details-loading {
   flex: 1;
   display: grid;
   place-items: center;
   color: var(--muted);
+  text-align: center;
 }
+.empty-state { padding: 18px; }
 .details-error { text-align: center; }
 .details-error-title { color: var(--fg); margin-bottom: 4px; }
 .details-error-reason {
@@ -2852,31 +2928,28 @@ tr.overridden td {
   word-break: break-word;
 }
 .details-error .browse-btn { padding: 4px 14px; }
+/* Stacked fallback, only below NARROW_LAYOUT_PX (see objModEditorWebview.ts) — the class is driven by
+   a ResizeObserver on the editor element itself, which is what actually matters here, so there is no
+   parallel @media (max-width) copy of these rules to keep in sync with that threshold. */
 .object-editor.narrow {
-  grid-template-columns: 1fr;
-  grid-template-rows: minmax(150px, 34%) minmax(260px, 1fr);
+  /* minmax(0, 1fr), not plain 1fr, matching the side-by-side rule above: an fr track's implicit
+     minimum is auto (its content's min-content), so a wide unbreakable child could push the single
+     column past the editor's own width. Pinned to 0 it can't, and this container's overflow: auto
+     scrolls instead. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(120px, 34%) minmax(240px, 1fr);
   overflow: auto;
 }
-.object-editor.narrow .object-list { border-right: 0; border-bottom: 1px solid var(--border); min-height: 150px; }
-.object-editor.narrow .details { min-height: 260px; }
-.object-editor.narrow table { min-width: 520px; }
+.object-editor.narrow .object-list { border-right: 0; border-bottom: 1px solid var(--border); min-height: 120px; }
+.object-editor.narrow .details { min-height: 240px; }
 .object-editor.narrow .splitter { display: none; }
-@media (max-width: 720px) {
-  .object-editor {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(150px, 34%) minmax(260px, 1fr);
-    overflow: auto;
-  }
-  .object-list { border-right: 0; border-bottom: 1px solid var(--border); min-height: 150px; }
-  .details { min-height: 260px; }
-  table { min-width: 520px; }
-  .splitter { display: none; }
-}
 `,
         body: `<div class="content">
 <div class="md-header">
-  <div class="md-title">${escapeHtml(fileName)}</div>
-  <div class="md-meta">WC3 ${escapeHtml(typeLabel)} object data - v${parsed.version} - ${escapeHtml(summary)} - ${escapeHtml(metadataSource)}${parsed.extended ? ' - extended (level/dataPt)' : ''}${combinedMeta}<button type="button" id="editable-badge" class="editable-badge" title="Existing overrides can be edited. Click or Ctrl+S to save.">editable</button></div>
+  <span class="md-title" title="${escapeHtml(fileName)}">${escapeHtml(fileName)}</span>
+  <span class="md-meta" title="${escapeHtml(metaLine)}">${escapeHtml(metaLine)}</span>
+  <button type="button" id="density-toggle" class="editable-badge density-toggle" aria-pressed="false" title="Switch between compact and spacious spacing">compact</button>
+  <button type="button" id="editable-badge" class="editable-badge" title="Existing overrides can be edited. Click or Ctrl+S to save.">editable</button>
 </div>
 ${errorBanner}
 ${warningBanner}

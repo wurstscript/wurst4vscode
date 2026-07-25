@@ -81,6 +81,10 @@ const treeScrollTopSignal = signal(typeof persisted.treeScrollTop === 'number' ?
 // switching objects afterward should reset to the top of the new object's fields, not inherit whatever
 // the previous object happened to be scrolled to.
 const detailsScrollTopSignal = signal(typeof persisted.detailsScrollTop === 'number' ? persisted.detailsScrollTop : 0);
+// 'compact' (default) or 'cozy' — the spacing scale applied document-wide as a body class (see the
+// density effect in objModEditorWebview.ts and the :root/body.density-cozy variable pair in
+// objModPreview.ts). Persisted like every other view preference.
+const densitySignal = signal(persisted.density === 'cozy' ? 'cozy' : 'compact');
 const e2eForcedNarrowLayoutSignal = signal(false);
 
 export const ui = {
@@ -101,6 +105,8 @@ export const ui = {
   set hideEmpty(v) { hideEmptySignal.value = v; },
   get hideUnmodified() { return hideUnmodifiedSignal.value; },
   set hideUnmodified(v) { hideUnmodifiedSignal.value = v; },
+  get density() { return densitySignal.value; },
+  set density(v) { densitySignal.value = v; },
   get treeScrollTop() { return treeScrollTopSignal.value; },
   set treeScrollTop(v) { treeScrollTopSignal.value = v; },
   get detailsScrollTop() { return detailsScrollTopSignal.value; },
@@ -144,6 +150,7 @@ effect(() => {
     showTechnical: ui.showTechnical,
     hideEmpty: ui.hideEmpty,
     hideUnmodified: ui.hideUnmodified,
+    density: ui.density,
     treeScrollTop: ui.treeScrollTop,
     detailsScrollTop: ui.detailsScrollTop,
     collapsedNodes: collapsed,

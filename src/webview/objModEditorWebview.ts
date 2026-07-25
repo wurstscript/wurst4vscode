@@ -1,3 +1,4 @@
+import { effect } from './signals';
 import { objects, ui, vscodeApi, details, search } from './objModEditor/state';
 import { commitActiveEditor } from './objModEditor/fieldDisplay';
 import { matches, setActiveRow, setupTree } from './objModEditor/objectTree';
@@ -51,27 +52,47 @@ if (searchClear) {
   });
 }
 
+// Side-by-side survives all the way down to a very narrow pane now (the browse list is capped at 46%
+// of the editor by CSS and the field table's compact 2-column mode no longer demands 620px), so this
+// is only the point below which even a ~130px list would leave nothing usable beside it. The stacked
+// layout it falls back to is much worse to work in, so it stays a genuine last resort.
+const NARROW_LAYOUT_PX = 440;
+const LIST_MIN_PX = 130;
+const LIST_W_DEFAULT = 220; // keep in sync with --list-w in objModPreview.ts
+// Matches the 46% cap in the .object-editor grid — dragging past it would detach the splitter from
+// the pointer, since CSS would keep clamping the column while --list-w kept growing.
+const LIST_MAX_RATIO = 0.46;
+
 function setupSplitter() {
   const editor = document.getElementById('object-editor');
   const splitter = document.getElementById('splitter');
   if (!editor || !splitter) return;
-  const isStacked = () => editor.classList.contains('narrow') || (window.matchMedia && window.matchMedia('(max-width: 720px)').matches);
+  const isStacked = () => editor.classList.contains('narrow');
   const applySavedWidth = () => {
     const saved = vscodeApi.getState() || {};
-    if (isStacked()) editor.style.removeProperty('--list-w');
-    else if (saved.listW) editor.style.setProperty('--list-w', saved.listW + 'px');
+    // Stacked: drop the override so the single-column grid isn't sized by a stale side-by-side width.
+    if (isStacked() || !saved.listW) editor.style.removeProperty('--list-w');
+    else editor.style.setProperty('--list-w', saved.listW + 'px');
   };
-  const saved = vscodeApi.getState() || {};
-  if (saved.listW && !isStacked()) editor.style.setProperty('--list-w', saved.listW + 'px');
-  window.addEventListener('resize', applySavedWidth);
+  // The ResizeObserver below measures the editor element itself and fires on its first observation,
+  // so it covers both the initial layout and every later resize — no separate window 'resize'
+  // listener (which could only ever fire alongside it) and no bootstrap call needed.
   if (typeof ResizeObserver === 'function') {
+    // Only re-read/apply the persisted width when the layout actually flips between side-by-side and
+    // stacked — otherwise this ran once per frame for the whole of a window drag-resize.
+    let stacked: boolean | null = null;
     const ro = new ResizeObserver(entries => {
       const rect = entries[0] && entries[0].contentRect;
       if (!rect) return;
-      editor.classList.toggle('narrow', ui.e2eForcedNarrowLayout || rect.width <= 720);
+      const next = ui.e2eForcedNarrowLayout || rect.width < NARROW_LAYOUT_PX;
+      if (next === stacked) return;
+      stacked = next;
+      editor.classList.toggle('narrow', next);
       applySavedWidth();
     });
     ro.observe(editor);
+  } else {
+    applySavedWidth();
   }
   let dragging = false;
   splitter.addEventListener('mousedown', e => {
@@ -85,8 +106,8 @@ function setupSplitter() {
   window.addEventListener('mousemove', e => {
     if (!dragging) return;
     const rect = editor.getBoundingClientRect();
-    const max = Math.max(170, rect.width - 260);
-    const w = Math.max(170, Math.min(max, e.clientX - rect.left));
+    const max = Math.max(LIST_MIN_PX, rect.width * LIST_MAX_RATIO);
+    const w = Math.max(LIST_MIN_PX, Math.min(max, e.clientX - rect.left));
     editor.style.setProperty('--list-w', w + 'px');
   });
   window.addEventListener('mouseup', () => {
@@ -95,7 +116,7 @@ function setupSplitter() {
     splitter.classList.remove('dragging');
     document.body.style.userSelect = '';
     document.body.style.cursor = '';
-    const cur = parseInt(editor.style.getPropertyValue('--list-w'), 10) || 260;
+    const cur = parseInt(editor.style.getPropertyValue('--list-w'), 10) || LIST_W_DEFAULT;
     vscodeApi.setState(Object.assign({}, vscodeApi.getState() || {}, { listW: cur }));
   });
 }
@@ -141,6 +162,23 @@ document.addEventListener('keydown', e => {
 // on its own gives no hint that clicking it does anything.
 const editableBadge = document.getElementById('editable-badge');
 if (editableBadge) editableBadge.addEventListener('click', saveNow);
+
+// Density is a document-wide spacing scale (tree, header, field table all retune at once), so it's a
+// single class on <body> driving the :root / body.density-cozy variable pair in objModPreview.ts —
+// nothing has to re-render. The effect runs immediately on creation, which is what applies a restored
+// 'cozy' preference on load.
+const densityToggle = document.getElementById('density-toggle');
+effect(() => {
+  const cozy = ui.density === 'cozy';
+  document.body.classList.toggle('density-cozy', cozy);
+  if (densityToggle) {
+    densityToggle.textContent = cozy ? 'spacious' : 'compact';
+    densityToggle.setAttribute('aria-pressed', String(cozy));
+  }
+}, 'objModEditor.density');
+if (densityToggle) {
+  densityToggle.addEventListener('click', () => { ui.density = ui.density === 'cozy' ? 'compact' : 'cozy'; });
+}
 
 // setupTree()/setupDetails() each wire a reactive effect that runs immediately on creation — that
 // first run *is* the tree/details panel's initial paint, so no separate bootstrap render() call is

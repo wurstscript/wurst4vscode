@@ -2,8 +2,8 @@ import { fuzzyMatch } from '../../features/preview/fuzzy';
 import { esc, renderWc3Colors } from '../objModWebviewUtils';
 import { batch, effect, untracked } from '../signals';
 import { details, detailCache, pendingDetails, failedDetails, ui, vscodeApi, iconLoader, initial, objects } from './state';
-import { categoryLabel, categoryKey, objectIconHtml, matches, selectObject } from './objectTree';
-import { sourcePill, valueCell, postEdit, setModValue, editorHtml, collapsedView, normalizeNumberValue, needsColorEditor, tooltipToolbarHtml } from './fieldDisplay';
+import { categoryLabel, categoryKey, objectIconHtml, detailsTitleHtml, matches, selectObject } from './objectTree';
+import { valueCell, postEdit, setModValue, editorHtml, collapsedView, normalizeNumberValue, needsColorEditor, tooltipToolbarHtml } from './fieldDisplay';
 import { observeModelThumbs } from './modelThumbnails';
 import { wireColorBar, setCaretEnd, richToWc3, forcePlainTextPaste, forceWc3ColorCopy, wrapColor, applyRichColor, updateColorSwatch, containsNode } from './richTextEditor';
 import { openAssetBrowser } from './assetBrowser';
@@ -80,9 +80,15 @@ export function renderDetails() {
     : (lastRenderedKey === obj.key && prevTable ? prevTable.scrollTop : 0);
   lastRenderedKey = obj.key;
   ui.selectedKey = obj.key;
+  // [label, column class]. The class drives an explicit width (see .col-* in objModPreview.ts) —
+  // `table-layout: fixed` ignores cell min-widths, so the header row is the only place widths can be
+  // stated, and technical mode's 4-character id column must not inherit the compact Field column's
+  // (far wider) proportional width.
   const headers = ui.showTechnical
-    ? (initial.extended ? ['Field', 'Label', 'Group', 'Type', 'Level', 'Data', 'Value'] : ['Field', 'Label', 'Group', 'Type', 'Value'])
-    : ['Field', 'Value'];
+    ? [['Field', 'col-id'], ['Label', 'col-label'], ['Group', 'col-group'], ['Type', 'col-type']]
+      .concat(initial.extended ? [['Level', 'col-lvl'], ['Data', 'col-lvl']] : [])
+      .concat([['Value', 'col-value']])
+    : [['Field', 'col-field'], ['Value', 'col-value']];
   const mods = detailCache.get(obj.key);
   // A failed load stays failed until the user asks to retry — auto-retrying every render would just
   // hammer whatever broke (missing game data, a thrown parser error) in a silent loop.
@@ -114,12 +120,9 @@ export function renderDetails() {
     '</tr>';
   }).join('');
 
-  const rawcode = obj.newId ? esc(obj.baseId) + ' → ' + esc(obj.newId) : esc(obj.baseId);
   details.innerHTML = '<div class="details-head">' +
     '<div class="details-title-row">' + objectIconHtml(obj, 'details-icon') +
-      '<div class="details-title">' + esc(obj.displayName) +
-        '<span class="details-rawcode">' + rawcode + '</span>' +
-        (obj.displaySource ? sourcePill({ source: obj.displaySource }) : '') + '</div>' +
+      '<div class="details-title">' + detailsTitleHtml(obj) + '</div>' +
     '</div>' +
     // hideEmpty/hideUnmodified/fieldQuery are read untracked here: they only seed these controls'
     // initial DOM state. Toggling them re-applies via the lighter filterFields() effect below instead
@@ -139,7 +142,8 @@ export function renderDetails() {
     '</div>' : '') +
   '</div>' +
   (mods
-    ? '<div class="table-wrap"><table><thead><tr>' + headers.map(h => '<th>' + esc(h) + '</th>').join('') + '</tr></thead>' +
+    ? '<div class="table-wrap"><table' + (ui.showTechnical ? ' class="technical"' : '') + '><thead><tr>' +
+        headers.map(h => '<th class="' + h[1] + '">' + esc(h[0]) + '</th>').join('') + '</tr></thead>' +
       '<tbody>' + (rows || '<tr><td colspan="' + headers.length + '" class="empty">no modifications</td></tr>') + '</tbody></table></div>'
     : hasFailed
       ? '<div class="details-loading details-error"><div>' +

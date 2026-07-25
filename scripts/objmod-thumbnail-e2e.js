@@ -429,6 +429,61 @@ async function assertObjmodEditorBasics(client, sessionId, contextId) {
 
     await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.forceNarrowLayout(false)');
 
+    // Side-by-side is the layout the editor is actually meant to be used in, so unforcing narrow has to
+    // put the browse list back beside (not above) the details pane.
+    const sideBySide = await waitForEval(
+        client,
+        sessionId,
+        contextId,
+        'window.__wurstModelThumbDebug.layout()',
+        (value) => value && value.listVisible && value.detailsVisible && !value.stacked,
+        'side-by-side objmod layout',
+        5000,
+    );
+    assert.ok(
+        sideBySide.list.right <= sideBySide.details.left + 8,
+        `browse list should sit left of the details pane, got ${JSON.stringify({ list: sideBySide.list, details: sideBySide.details })}`,
+    );
+    assert.ok(
+        sideBySide.list.width <= sideBySide.editor.width * 0.5,
+        `browse list should never take half the editor, got ${sideBySide.list.width} of ${sideBySide.editor.width}`,
+    );
+
+    // Density toggle: compact is the default, spacious is one click away and restores taller browse
+    // rows, and the whole thing is a <body> class (no re-render), so a live row node stays valid across
+    // the switch. Driven through the real header button rather than a debug-only hook.
+    const density = await evalInContext(client, sessionId, contextId, `(function () {
+        var row = document.querySelector('.object-row');
+        var btn = document.getElementById('density-toggle');
+        if (!row || !btn) return null;
+        var startedCozy = document.body.classList.contains('density-cozy');
+        var compactHeight = row.getBoundingClientRect().height;
+        btn.click();
+        var cozyHeight = row.getBoundingClientRect().height;
+        var cozy = document.body.classList.contains('density-cozy');
+        var cozyLabel = btn.textContent;
+        btn.click();
+        return {
+            startedCozy: startedCozy,
+            compactHeight: compactHeight,
+            cozyHeight: cozyHeight,
+            cozy: cozy,
+            cozyLabel: cozyLabel,
+            restored: document.body.classList.contains('density-cozy'),
+            restoredLabel: btn.textContent,
+        };
+    })()`);
+    assert.ok(density, 'objmod header should expose a density toggle beside the save badge');
+    assert.equal(density.startedCozy, false, 'compact should be the default density');
+    assert.equal(density.cozy, true, 'clicking the density toggle should switch to the spacious scale');
+    assert.equal(density.cozyLabel, 'spacious', 'the density toggle should name the mode it is currently in');
+    assert.equal(density.restored, false, 'clicking the density toggle again should return to compact');
+    assert.equal(density.restoredLabel, 'compact', 'the density toggle label should follow the mode back');
+    assert.ok(
+        density.cozyHeight > density.compactHeight,
+        `spacious browse rows should be taller than compact ones, got ${density.cozyHeight} vs ${density.compactHeight}`,
+    );
+
     const state = await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.state()');
     if (generatedFixtureDir) {
         assert.equal(state.fileInfo && state.fileInfo.mainName, 'war3map.w3a', 'main sibling should be reported');

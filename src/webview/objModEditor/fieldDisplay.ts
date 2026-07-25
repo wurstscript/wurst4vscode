@@ -105,7 +105,7 @@ export function pickerEditorHtml(mod, mi, v) {
   if (!mod.options || !mod.options.length) return '';
   if (mod.editorKind === 'select') {
     const hasValue = mod.options.some(opt => String(opt.value) === String(v));
-    return '<div class="value-editor single"><select class="edit-raw" data-mi="' + mi + '">' +
+    return '<div class="value-editor"><select class="edit-raw" data-mi="' + mi + '">' +
       (hasValue ? '' : '<option value="' + esc(v) + '" selected>' + esc(v || '(empty)') + '</option>') +
       optionsHtml(mod.options, v) +
       '</select></div>';
@@ -114,7 +114,7 @@ export function pickerEditorHtml(mod, mi, v) {
   const browse = mod.assetType
     ? '<button type="button" class="browse-btn" data-browse="' + mi + '" title="Browse game assets visually">Browse…</button>'
     : '';
-  return '<div class="value-editor single">' +
+  return '<div class="value-editor">' +
     '<div class="picker-row">' +
       '<input class="edit-raw" type="text" list="' + listId + '" data-mi="' + mi + '" spellcheck="false" aria-label="Choose from Warcraft III game data" value="' + esc(v) + '">' +
       browse +
@@ -290,7 +290,7 @@ function numberStepFor(varType) {
 // inputmode hints a numeric keypad on touch.
 function numberEditorHtml(mod, mi, v) {
   const step = numberStepFor(mod.varType);
-  return '<div class="value-editor single num-editor">' +
+  return '<div class="value-editor num-editor">' +
     '<input class="edit-raw num-input" type="text" inputmode="' + (mod.varType === 'int' ? 'numeric' : 'decimal') + '" data-mi="' + mi + '" data-num-type="' + mod.varType + '" data-num-step="' + step + '" spellcheck="false" value="' + esc(v) + '">' +
     '<span class="num-steppers">' +
       '<button type="button" class="num-step" data-mi="' + mi + '" data-dir="1" tabindex="-1" aria-label="Increase value">▲</button>' +
@@ -309,7 +309,7 @@ export function editorHtml(mod, mi) {
   if (picker) return picker;
   const numType = mod.varType === 'int' || mod.varType === 'real' || mod.varType === 'unreal';
   if (numType) return numberEditorHtml(mod, mi, v);
-  return '<div class="value-editor single"><input class="edit-raw" type="text" data-mi="' + mi + '" spellcheck="false" value="' + esc(v) + '"></div>';
+  return '<div class="value-editor"><input class="edit-raw" type="text" data-mi="' + mi + '" spellcheck="false" value="' + esc(v) + '"></div>';
 }
 
 // Compact, click-to-edit view shown by default for every editable cell (keeps the 700-row table light).

@@ -73,10 +73,23 @@ export function raceKeysMatchingQuery(query) {
 const KIND_LABELS = { unit: 'Units', building: 'Buildings', hero: 'Heroes', special: 'Special' };
 const KIND_ORDER = ['unit', 'building', 'hero', 'special'];
 
+// The id shown at the end of a browse row: for a custom object that's its *new* rawcode (the one the
+// map actually uses), not the base it was derived from — the row only has space for one, and the
+// "base -> new" pair stays available in the row's title/aria-label and in the details header.
 export function idLine(obj) {
-  return obj.newId
-    ? esc(obj.baseId) + ' -> ' + esc(obj.newId)
-    : esc(obj.baseId);
+  return esc(obj.newId || obj.baseId);
+}
+
+// Shared by the details header (renderDetails) and its in-place refresh (updateDetailsHeader), which
+// had drifted into rendering the same thing with two different arrows.
+export function rawcodeLine(obj) {
+  return obj.newId ? esc(obj.baseId) + ' → ' + esc(obj.newId) : esc(obj.baseId);
+}
+
+export function detailsTitleHtml(obj) {
+  return esc(obj.displayName) +
+    '<span class="details-rawcode">' + rawcodeLine(obj) + '</span>' +
+    (obj.displaySource ? sourcePill({ source: obj.displaySource }) : '');
 }
 
 export function objectIconHtml(obj, extraClass) {
@@ -239,12 +252,12 @@ export function objectRowReplacementHtml(obj) {
   // a kind-heading (Units/Buildings/Heroes/Special), whether in the grouped browse tree or a solo
   // row-refresh — so this can key off the object alone rather than needing render-context passed in.
   const nested = obj.kind !== undefined ? ' nested' : '';
-  const source = obj.displaySource ? ' <span class="source-pill">' + esc(obj.displaySource) + '</span>' : '';
+  const source = obj.displaySource ? sourcePill({ source: obj.displaySource }) : '';
   const label = obj.displayName + ' - ' + (obj.newId ? obj.baseId + ' to ' + obj.newId : obj.baseId);
-  return '<button class="object-row' + active + nested + '" type="button" data-key="' + esc(obj.key) + '" aria-label="' + esc(label) + '">' +
+  return '<button class="object-row' + active + nested + '" type="button" data-key="' + esc(obj.key) + '" aria-label="' + esc(label) + '" title="' + esc(label) + '">' +
     objectIconHtml(obj, '') +
-    '<span class="object-main"><span class="object-name" title="' + esc(obj.displayName) + '">' + esc(obj.displayName) + source + '</span>' +
-    '<span class="object-id">' + idLine(obj) + '</span></span>' +
+    '<span class="object-name">' + esc(obj.displayName) + source + '</span>' +
+    '<span class="object-id">' + idLine(obj) + '</span>' +
     '</button>';
 }
 
@@ -274,12 +287,7 @@ export function updateDetailsHeader(obj) {
     }
   }
   const title = head.querySelector('.details-title');
-  if (title) {
-    const rawcode = obj.newId ? esc(obj.baseId) + ' -> ' + esc(obj.newId) : esc(obj.baseId);
-    title.innerHTML = esc(obj.displayName) +
-      '<span class="details-rawcode">' + rawcode + '</span>' +
-      (obj.displaySource ? sourcePill({ source: obj.displaySource }) : '');
-  }
+  if (title) title.innerHTML = detailsTitleHtml(obj);
 }
 
 export function setActiveRow(key) {

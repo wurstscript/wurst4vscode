@@ -862,7 +862,7 @@
         "@types/node": "^22.19.17",
         "@types/vscode": "^1.109.0",
         "@types/webpack-env": "^1.18.8",
-        "@vscode/vsce": "^3.7.1",
+        "@vscode/vsce": "^3.9.2",
         "eslint": "^9.39.5",
         "eslint-plugin-sonarjs": "^4.2.0",
         "globals": "^15.15.0",
@@ -876,7 +876,7 @@
     "dependencies": {
         "casc-ts": "file:../casc-ts",
         "node-stream-zip": "^1.15.0",
-        "vscode-languageclient": "^9.0.1"
+        "vscode-languageclient": "^10.1.0"
     },
     "extensionPack": [
         "redhat.vscode-yaml",

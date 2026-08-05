@@ -5,16 +5,128 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { CascStorage, closeAllSegments } from 'casc-ts';
+import { CascStorage, MpqStorage, closeAllSegments } from 'casc-ts';
 
 const WURST_HOME = path.join(os.homedir(), '.wurst');
 
 let defaultWarcraftPathsCache: string[] | null = null;
-let cascDataRootCache: string | null | undefined;
+let gameDataRootCache: GameDataRoot | null | undefined;
 let loggedCascRootMessage = '';
 const cascTextureMissCache = new Set<string>();
 const cascAssetMissCache = new Set<string>();
 const MAX_CASC_MISS_CACHE = 4096;
+
+type GameStorageKind = 'casc' | 'mpq';
+
+interface GameDataRoot {
+    kind: GameStorageKind;
+    root: string;
+}
+
+interface GameStorage {
+    readonly kind: GameStorageKind;
+    readonly fileCount: number;
+    readFileAsync(filePath: string): Promise<Buffer>;
+    hasFileAsync(filePath: string): Promise<boolean>;
+    listFiles(): Promise<string[]>;
+    findPathByBasenameAsync(basename: string): Promise<string | null>;
+    close(): Promise<void>;
+}
+
+class CascGameStorage implements GameStorage {
+    readonly kind = 'casc' as const;
+
+    constructor(private readonly storage: CascStorage) {}
+
+    get fileCount(): number { return this.storage.fileCount; }
+    readFileAsync(filePath: string): Promise<Buffer> {
+        return this.storage.readFileAsync(normalizeCascAssetPath(filePath).replace(/\\/g, '/'));
+    }
+    hasFileAsync(filePath: string): Promise<boolean> {
+        return this.storage.hasFileAsync(normalizeCascAssetPath(filePath).replace(/\\/g, '/'));
+    }
+    listFiles(): Promise<string[]> {
+        return Promise.resolve(this.storage.listFiles().map(normalizeGameAssetSeparators));
+    }
+    findPathByBasenameAsync(basename: string): Promise<string | null> {
+        return this.storage.findPathByBasenameAsync(normalizeCascAssetPath(basename).replace(/\\/g, '/'));
+    }
+    async close(): Promise<void> { await closeAllSegments(); }
+}
+
+class MpqGameStorage implements GameStorage {
+    readonly kind = 'mpq' as const;
+    private constructor(private readonly archives: Array<{ name: string; storage: MpqStorage }>) {}
+
+    static async openAsync(root: string, log: (message: string) => void): Promise<MpqGameStorage> {
+        const entries = await fs.promises.readdir(root, { withFileTypes: true });
+        const files = new Map(entries.filter((entry) => entry.isFile()).map((entry) => [entry.name.toLowerCase(), entry.name]));
+        // Low priority first. The last archive containing a path wins, matching
+        // the classic client: base RoC -> TFT -> locale -> patch overlay.
+        const archiveNames = ['war3.mpq', 'war3local.mpq', 'war3x.mpq', 'war3xlocal.mpq', 'war3patch.mpq'];
+        const archives: Array<{ name: string; storage: MpqStorage }> = [];
+        for (const requestedName of archiveNames) {
+            const actualName = files.get(requestedName);
+            if (!actualName) continue;
+            const archivePath = path.join(root, actualName);
+            try {
+                const storage = await MpqStorage.openAsync(archivePath, log);
+                archives.push({ name: actualName, storage });
+            } catch (error) {
+                log(`MPQ open failed: ${archivePath}: ${String(error)}`);
+            }
+        }
+        if (!archives.length) throw new Error(`No readable WC3 MPQ archives found in ${root}`);
+        log(`MPQ game storage opened (${archives.length} archives, ${archives.map((archive) => archive.name).join(', ')})`);
+        return new MpqGameStorage(archives);
+    }
+
+    get fileCount(): number { return this.archives.reduce((sum, archive) => sum + archive.storage.fileCount, 0); }
+
+    async readFileAsync(filePath: string): Promise<Buffer> {
+        const normalized = normalizeCascAssetPath(filePath);
+        for (let i = this.archives.length - 1; i >= 0; i--) {
+            const archive = this.archives[i];
+            if (await archive.storage.hasFileAsync(normalized)) {
+                return archive.storage.readFileAsync(normalized);
+            }
+        }
+        throw new Error(`File not found in WC3 MPQ storage: ${filePath}`);
+    }
+
+    async hasFileAsync(filePath: string): Promise<boolean> {
+        const normalized = normalizeCascAssetPath(filePath);
+        for (let i = this.archives.length - 1; i >= 0; i--) {
+            if (await this.archives[i].storage.hasFileAsync(normalized)) return true;
+        }
+        return false;
+    }
+
+    async listFiles(): Promise<string[]> {
+        const paths = new Set<string>();
+        for (const archive of this.archives) {
+            for (const filePath of await archive.storage.listFilesAsync()) paths.add(normalizeGameAssetSeparators(filePath));
+        }
+        return [...paths];
+    }
+
+    async findPathByBasenameAsync(basename: string): Promise<string | null> {
+        const needle = normalizeCascAssetPath(basename);
+        for (let i = this.archives.length - 1; i >= 0; i--) {
+            const paths = await this.archives[i].storage.listFilesAsync();
+            const match = paths.find((filePath) => {
+                const normalized = normalizeCascAssetPath(filePath);
+                return normalized.endsWith(`\\${needle}`) || normalized === needle;
+            });
+            if (match) return match;
+        }
+        return null;
+    }
+
+    async close(): Promise<void> {
+        await Promise.all(this.archives.map((archive) => archive.storage.close()));
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Diagnostics: everything about "where did we look for the WC3 install and
@@ -158,6 +270,25 @@ function findCascDataRoot(startPath: string): string | null {
     return null;
 }
 
+function hasLegacyMpqArchive(dir: string): boolean {
+    try {
+        return fs.readdirSync(dir).some((entry) => /^(war3|war3x|war3patch|war3local|war3xlocal)\.mpq$/i.test(entry));
+    } catch {
+        return false;
+    }
+}
+
+function findMpqDataRoot(startPath: string): string | null {
+    let dir = startPath;
+    for (let i = 0; i < 5; i++) {
+        if (hasLegacyMpqArchive(dir)) return dir;
+        const parent = path.dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+    }
+    return null;
+}
+
 export function getCascCacheDir(): string {
     return path.join(WURST_HOME, 'casc_cache');
 }
@@ -173,7 +304,17 @@ function getCacheDir(): string {
 }
 
 export function normalizeCascAssetPath(assetPath: string): string {
-    return assetPath.replace(/\\\\/g, '\\').replace(/\//g, '\\').toLowerCase();
+    return normalizeGameAssetSeparators(assetPath).toLowerCase();
+}
+
+/** Normalize separators without changing display casing. Used for catalog paths and lookups. */
+export function normalizeGameAssetSeparators(assetPath: string): string {
+    return assetPath
+        .replace(/\0/g, '')
+        .replace(/^\uFEFF/, '')
+        .replace(/[\\/]+/g, '\\')
+        .replace(/^\\/, '')
+        .replace(/\\$/, '');
 }
 
 export const normalizeGameAssetPath = normalizeCascAssetPath;
@@ -182,6 +323,26 @@ function getCachedAssetPath(cacheDir: string, normalizedAssetPath: string): stri
     // CASC namespace paths contain ':' (e.g. "_hd.w3mod:replaceabletextures\..."), which is illegal
     // in Windows directory names → mkdir ENOENT. Map ':' to a safe char for the on-disk cache only.
     return path.join(cacheDir, ...normalizedAssetPath.replace(/:/g, '$').split('\\'));
+}
+
+function getSourceCachePath(kind: GameStorageKind, normalizedAssetPath: string): string {
+    return getCachedAssetPath(path.join(getCacheDir(), kind), normalizedAssetPath);
+}
+
+export async function findCachedGameAsset(assetPath: string): Promise<string | undefined> {
+    const normalized = normalizeCascAssetPath(assetPath);
+    const candidates = [
+        gameDataRootCache?.kind ? getSourceCachePath(gameDataRootCache.kind, normalized) : '',
+        // Preserve assets extracted by older extension versions when CASC is active.
+        gameDataRootCache?.kind === 'casc' ? getCachedAssetPath(getCacheDir(), normalized) : '',
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+        try {
+            await fs.promises.access(candidate, fs.constants.F_OK);
+            return candidate;
+        } catch {}
+    }
+    return undefined;
 }
 
 function rememberMiss(cache: Set<string>, key: string): void {
@@ -218,17 +379,23 @@ function textureBasePath(assetPath: string): string {
     return normalizeCascAssetPath(assetPath).replace(/\.[^\\.]+$/, '');
 }
 
-function getCascDataRoot(log: (msg: string) => void): string | null {
-    if (cascDataRootCache !== undefined) {
-        return cascDataRootCache;
+function getGameDataRoot(log: (msg: string) => void): GameDataRoot | null {
+    if (gameDataRootCache !== undefined) {
+        return gameDataRootCache;
     }
     const wc3path = vscode.workspace.getConfiguration('wurst').get<string>('wc3path', '');
     if (wc3path) {
         const dataRoot = findCascDataRoot(wc3path);
         if (dataRoot) {
             if (dataRoot !== wc3path) logCascRootOnce(`CASC root: ${dataRoot} (from ${wc3path})`, log);
-            cascDataRootCache = dataRoot;
-            return dataRoot;
+            gameDataRootCache = { kind: 'casc', root: dataRoot };
+            return gameDataRootCache;
+        }
+        const mpqRoot = findMpqDataRoot(wc3path);
+        if (mpqRoot) {
+            logCascRootOnce(`Legacy MPQ root: ${mpqRoot} (from ${wc3path})`, log);
+            gameDataRootCache = { kind: 'mpq', root: mpqRoot };
+            return gameDataRootCache;
         }
         log(`CASC wurst.wc3path "${wc3path}" has no WC3 CASC root — falling back to default paths`);
         channelLog(`wurst.wc3path "${wc3path}" has no WC3 CASC root (looked for Data/ + .build.info|.build.db) — falling back to default paths`);
@@ -238,14 +405,20 @@ function getCascDataRoot(log: (msg: string) => void): string | null {
         const dataRoot = findCascDataRoot(p);
         if (dataRoot) {
             logCascRootOnce(`CASC root: ${dataRoot}`, log);
-            cascDataRootCache = dataRoot;
-            return dataRoot;
+            gameDataRootCache = { kind: 'casc', root: dataRoot };
+            return gameDataRootCache;
+        }
+        const mpqRoot = findMpqDataRoot(p);
+        if (mpqRoot) {
+            logCascRootOnce(`Legacy MPQ root: ${mpqRoot}`, log);
+            gameDataRootCache = { kind: 'mpq', root: mpqRoot };
+            return gameDataRootCache;
         }
     }
     logCascRootOnce(`CASC skip: no WC3 install found (${defaultPaths.length} default paths checked)`, log);
     channelLog('Checked paths:\n' + defaultPaths.map((p) => '  - ' + p).join('\n'));
     channelLog('If Warcraft III is installed somewhere else, set the "wurst.wc3path" setting to its folder.');
-    cascDataRootCache = null;
+    gameDataRootCache = null;
     return null;
 }
 
@@ -288,24 +461,56 @@ async function getCascStorageInstance(wc3Root: string, log: (msg: string) => voi
     return cascStorageOpening;
 }
 
+let mpqStorageInstance: MpqGameStorage | null = null;
+let mpqStorageRoot: string | null = null;
+let mpqStorageOpening: Promise<MpqGameStorage | null> | null = null;
+
+async function getGameStorageInstance(root: GameDataRoot, log: (msg: string) => void): Promise<GameStorage | null> {
+    if (root.kind === 'casc') {
+        const storage = await getCascStorageInstance(root.root, log);
+        return storage ? new CascGameStorage(storage) : null;
+    }
+    if (mpqStorageInstance && mpqStorageRoot === root.root) return mpqStorageInstance;
+    if (mpqStorageOpening && mpqStorageRoot === root.root) return mpqStorageOpening;
+    mpqStorageInstance = null;
+    mpqStorageRoot = root.root;
+    mpqStorageOpening = (async () => {
+        try {
+            mpqStorageInstance = await MpqGameStorage.openAsync(root.root, log);
+            return mpqStorageInstance;
+        } catch (error) {
+            log(`MPQ game storage open failed: ${String(error)}`);
+            mpqStorageRoot = null;
+            return null;
+        } finally {
+            mpqStorageOpening = null;
+        }
+    })();
+    return mpqStorageOpening;
+}
+
 /** Reset the singleton (e.g. when wc3path setting changes). */
 export function resetCascStorage(): void {
+    void mpqStorageInstance?.close();
     closeAllSegments();
     cascStorageInstance = null;
     cascStorageRoot = null;
     cascStorageOpening = null;
-    cascDataRootCache = undefined;
+    mpqStorageInstance = null;
+    mpqStorageRoot = null;
+    mpqStorageOpening = null;
+    gameDataRootCache = undefined;
     loggedCascRootMessage = '';
     cascTextureMissCache.clear();
     cascAssetMissCache.clear();
 }
 
-/** Read one file directly from the in-process CascStorage. No child process, no disk cache write. */
-async function cascReadDirect(wc3Root: string, cascPath: string, log: (msg: string) => void): Promise<Buffer | null> {
-    const storage = await getCascStorageInstance(wc3Root, log);
+/** Read one file from the active game storage. No disk cache write. */
+async function gameReadDirect(root: GameDataRoot, gamePath: string, log: (msg: string) => void): Promise<Buffer | null> {
+    const storage = await getGameStorageInstance(root, log);
     if (!storage) return null;
     try {
-        const buf = await storage.readFileAsync(cascPath);
+        const buf = await storage.readFileAsync(gamePath);
         if (!buf || buf.length === 0) return null;
         return buf;
     } catch {
@@ -319,6 +524,8 @@ type TextureExt = 'dds' | 'blp' | 'tga';
 // eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 export async function findCascTexture(texPath: string, log: (msg: string) => void): Promise<{ buf: Buffer; ext: TextureExt } | null> {
     const cacheDir = getCacheDir();
+    const gameRoot = getGameDataRoot(log);
+    const cacheKind = gameRoot?.kind ?? 'casc';
     // CASC paths are lowercase with backslash separators
     const basePath = textureBasePath(texPath);
     const ddsPath = `${basePath}.dds`;
@@ -342,40 +549,44 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
     if (fallbackBlpPath) cacheCandidates.push([fallbackBlpPath, 'blp']);
     if (fallbackTgaPath) cacheCandidates.push([fallbackTgaPath, 'tga']);
     for (const [rel, ext] of cacheCandidates) {
-        const cachePath = getCachedAssetPath(cacheDir, rel);
-        try {
-            const buf = await fs.promises.readFile(cachePath);
-            return { buf, ext };
-        } catch {}
+        const cachePaths = [getSourceCachePath(cacheKind, rel)];
+        if (cacheKind === 'casc') cachePaths.push(getCachedAssetPath(cacheDir, rel));
+        for (const cachePath of cachePaths) {
+            try {
+                const buf = await fs.promises.readFile(cachePath);
+                return { buf, ext };
+            } catch {}
+        }
     }
 
     if (cascTextureMissCache.has(missKey)) {
         return null;
     }
 
-    const wc3Root = getCascDataRoot(log);
-    if (!wc3Root) return null;
+    if (!gameRoot) return null;
 
-    const candidates: Array<[string, 'dds' | 'blp' | 'tga']> = [
-        [`war3.w3mod:${ddsPath}`, 'dds'],
-        [`war3.w3mod:_hd.w3mod:${ddsPath}`, 'dds'],
-        [`war3.w3mod:${blpPath}`, 'blp'],
-        [`war3.w3mod:${tgaPath}`, 'tga'],
-        [`war3.w3mod:_hd.w3mod:${tgaPath}`, 'tga'],
-    ];
+    const candidates: Array<[string, 'dds' | 'blp' | 'tga']> = gameRoot!.kind === 'mpq'
+        ? [[blpPath, 'blp'], [tgaPath, 'tga'], [ddsPath, 'dds']]
+        : [
+            [`war3.w3mod:${ddsPath}`, 'dds'],
+            [`war3.w3mod:_hd.w3mod:${ddsPath}`, 'dds'],
+            [`war3.w3mod:${blpPath}`, 'blp'],
+            [`war3.w3mod:${tgaPath}`, 'tga'],
+            [`war3.w3mod:_hd.w3mod:${tgaPath}`, 'tga'],
+        ];
     if (fallbackDdsPath) {
-        candidates.push([`war3.w3mod:${fallbackDdsPath}`, 'dds']);
-        candidates.push([`war3.w3mod:_hd.w3mod:${fallbackDdsPath}`, 'dds']);
+        candidates.push([gameRoot!.kind === 'mpq' ? fallbackDdsPath : `war3.w3mod:${fallbackDdsPath}`, 'dds']);
+        if (gameRoot!.kind === 'casc') candidates.push([`war3.w3mod:_hd.w3mod:${fallbackDdsPath}`, 'dds']);
     }
-    if (fallbackBlpPath) candidates.push([`war3.w3mod:${fallbackBlpPath}`, 'blp']);
-    if (fallbackTgaPath) candidates.push([`war3.w3mod:${fallbackTgaPath}`, 'tga']);
+    if (fallbackBlpPath) candidates.push([gameRoot!.kind === 'mpq' ? fallbackBlpPath : `war3.w3mod:${fallbackBlpPath}`, 'blp']);
+    if (fallbackTgaPath) candidates.push([gameRoot!.kind === 'mpq' ? fallbackTgaPath : `war3.w3mod:${fallbackTgaPath}`, 'tga']);
 
-    for (const [cascPath, ext] of candidates) {
+    for (const [gamePath, ext] of candidates) {
         const rel = pathForExt(ext);
-        const cachePath = getCachedAssetPath(cacheDir, rel);
-        const buf = await cascReadDirect(wc3Root, cascPath, log);
+        const cachePath = getSourceCachePath(gameRoot!.kind, rel);
+        const buf = await gameReadDirect(gameRoot!, gamePath, log);
         if (buf) {
-            log(`CASC extracted: ${cascPath} (${buf.length} bytes) → ${cachePath}`);
+            log(`${gameRoot!.kind.toUpperCase()} extracted: ${gamePath} (${buf.length} bytes) -> ${cachePath}`);
             await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
             await fs.promises.writeFile(cachePath, buf);
             return { buf, ext };
@@ -383,17 +594,17 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
     }
 
     // Last resort: texture path drifted — find by basename (try both .dds and .blp endings).
-    const storage = await getCascStorageInstance(wc3Root, log);
+    const storage = await getGameStorageInstance(gameRoot!, log);
     if (storage) {
         const baseNoExt = basePath.split('\\').pop() ?? '';
         for (const ext of ['dds', 'blp', 'tga'] as const) {
             const found = await storage.findPathByBasenameAsync(`${baseNoExt}.${ext}`);
             if (!found) continue;
-            const buf = await cascReadDirect(wc3Root, found, log);
+            const buf = await gameReadDirect(gameRoot!, found, log);
             if (!buf) continue;
             const rel = pathForExt(ext);
-            const cachePath = getCachedAssetPath(cacheDir, rel);
-            log(`CASC basename-resolved texture: ${baseNoExt}.${ext} → ${found} (${buf.length} bytes)`);
+            const cachePath = getSourceCachePath(gameRoot!.kind, rel);
+            log(`${gameRoot!.kind.toUpperCase()} basename-resolved texture: ${baseNoExt}.${ext} -> ${found} (${buf.length} bytes)`);
             await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
             await fs.promises.writeFile(cachePath, buf);
             return { buf, ext };
@@ -405,23 +616,21 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
 
 export const findGameTexture = findCascTexture;
 
-export async function findCascAsset(assetPath: string, log: (msg: string) => void): Promise<Buffer | null> {
-    const cacheDir = getCacheDir();
+async function readCachedGameBuffer(assetPath: string, root: GameDataRoot | null): Promise<Buffer | null> {
     const normalized = normalizeCascAssetPath(assetPath);
-    const cachePath = getCachedAssetPath(cacheDir, normalized);
-    try {
-        const cached = await fs.promises.readFile(cachePath);
-        return cached;
-    } catch {}
-
-    if (cascAssetMissCache.has(normalized)) {
-        return null;
+    const cachePaths = [getSourceCachePath(root?.kind ?? 'casc', normalized)];
+    if (root?.kind === 'casc') cachePaths.push(getCachedAssetPath(getCacheDir(), normalized));
+    for (const cachePath of cachePaths) {
+        try {
+            return await fs.promises.readFile(cachePath);
+        } catch {}
     }
+    return null;
+}
 
-    const wc3Root = getCascDataRoot(log);
-    if (!wc3Root) return null;
-
-    const candidates = [
+function gameAssetCandidates(root: GameDataRoot, normalized: string): string[] {
+    if (root.kind === 'mpq') return [normalized];
+    return [
         `war3.w3mod:${normalized}`,
         `war3.w3mod:_hd.w3mod:${normalized}`,
         `war3.w3mod:enus.w3mod:${normalized}`,
@@ -445,13 +654,33 @@ export async function findCascAsset(assetPath: string, log: (msg: string) => voi
         `war3.w3mod:zhtw.w3mod:${normalized}`,
         `war3.w3mod:_locales\\zhtw.w3mod:${normalized}`,
     ];
+}
 
-    for (const cascPath of candidates) {
-        const buf = await cascReadDirect(wc3Root, cascPath, log);
+async function writeGameCache(root: GameDataRoot, assetPath: string, data: Buffer): Promise<string> {
+    const cachePath = getSourceCachePath(root.kind, assetPath);
+    await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
+    await fs.promises.writeFile(cachePath, data);
+    return cachePath;
+}
+
+export async function findCascAsset(assetPath: string, log: (msg: string) => void): Promise<Buffer | null> {
+    const normalized = normalizeCascAssetPath(assetPath);
+    const gameRoot = getGameDataRoot(log);
+    const cached = await readCachedGameBuffer(normalized, gameRoot);
+    if (cached) return cached;
+
+    if (cascAssetMissCache.has(normalized)) {
+        return null;
+    }
+
+    if (!gameRoot) return null;
+
+    const candidates = gameAssetCandidates(gameRoot, normalized);
+    for (const gamePath of candidates) {
+        const buf = await gameReadDirect(gameRoot, gamePath, log);
         if (buf) {
-            log(`CASC extracted: ${cascPath} (${buf.length} bytes) → ${cachePath}`);
-            await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
-            await fs.promises.writeFile(cachePath, buf);
+            const cachePath = await writeGameCache(gameRoot, normalized, buf);
+            log(`${gameRoot.kind.toUpperCase()} extracted: ${gamePath} (${buf.length} bytes) -> ${cachePath}`);
             return buf;
         }
     }
@@ -460,14 +689,13 @@ export async function findCascAsset(assetPath: string, log: (msg: string) => voi
     // (common with skin-file model/texture paths). Find it by basename instead.
     const basename = normalized.split('\\').pop() ?? '';
     if (basename) {
-        const storage = await getCascStorageInstance(wc3Root, log);
+        const storage = await getGameStorageInstance(gameRoot, log);
         const found = storage ? await storage.findPathByBasenameAsync(basename) : null;
         if (found) {
-            const buf = await cascReadDirect(wc3Root, found, log);
+            const buf = await gameReadDirect(gameRoot, found, log);
             if (buf) {
-                log(`CASC basename-resolved: ${basename} → ${found} (${buf.length} bytes)`);
-                await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
-                await fs.promises.writeFile(cachePath, buf);
+                log(`${gameRoot.kind.toUpperCase()} basename-resolved: ${basename} -> ${found} (${buf.length} bytes)`);
+                await writeGameCache(gameRoot, normalized, buf);
                 return buf;
             }
         }
@@ -483,29 +711,31 @@ export async function listGameAssetPaths(
     predicate: (assetPath: string) => boolean,
     log: (msg: string) => void = defaultCascLog,
 ): Promise<string[]> {
-    const wc3Root = getCascDataRoot(log);
-    if (!wc3Root) return [];
-    const storage = await getCascStorageInstance(wc3Root, log);
+    const gameRoot = getGameDataRoot(log);
+    if (!gameRoot) return [];
+    const storage = await getGameStorageInstance(gameRoot, log);
     if (!storage) return [];
 
     // Expand the main containers before listing; CascStorage discovers sub-TVFS contents lazily.
-    try { await storage.findPathByBasenameAsync('__wurst_no_such_asset__'); } catch {}
+    if (gameRoot.kind === 'casc') {
+        try { await storage.findPathByBasenameAsync('__wurst_no_such_asset__'); } catch {}
+    }
 
     const out: string[] = [];
     const seen = new Set<string>();
-    for (const cascPath of storage.listFiles()) {
+    for (const cascPath of await storage.listFiles()) {
         const assetPath = stripCascContainerPrefix(cascPath);
         if (!assetPath || !predicate(assetPath)) continue;
         const normalized = normalizeCascAssetPath(assetPath);
         if (seen.has(normalized)) continue;
         seen.add(normalized);
-        out.push(assetPath.replace(/\//g, '\\'));
+        out.push(normalizeGameAssetSeparators(assetPath));
     }
     return out.sort((a, b) => a.localeCompare(b));
 }
 
 function stripCascContainerPrefix(cascPath: string): string | undefined {
-    const normalized = cascPath.replace(/\//g, '\\');
+    const normalized = normalizeGameAssetSeparators(cascPath);
     const parts = normalized.split(':');
     for (let i = parts.length - 1; i >= 0; i--) {
         if (/\.w3mod$/i.test(parts[i])) {
@@ -557,9 +787,9 @@ export function findLocalTexture(texPath: string, mdxFsPath: string): { buf: Buf
 export async function ensureCascCached(assetPath: string): Promise<string | undefined> {
     const result = await findCascTexture(assetPath, defaultCascLog);
     if (!result) return undefined;
-    const cacheDir = getCacheDir();
     const rel = `${textureBasePath(assetPath)}.${result.ext}`;
-    return getCachedAssetPath(cacheDir, rel);
+    const kind = getGameDataRoot(defaultCascLog)?.kind ?? 'casc';
+    return getSourceCachePath(kind, rel);
 }
 
 export const ensureGameTextureCached = ensureCascCached;
@@ -567,7 +797,8 @@ export const ensureGameTextureCached = ensureCascCached;
 export async function ensureCascAssetCached(assetPath: string): Promise<string | undefined> {
     const result = await findCascAsset(assetPath, defaultCascLog);
     if (!result) return undefined;
-    return getCachedAssetPath(getCacheDir(), normalizeCascAssetPath(assetPath));
+    const kind = getGameDataRoot(defaultCascLog)?.kind ?? 'casc';
+    return getSourceCachePath(kind, normalizeCascAssetPath(assetPath));
 }
 
 export const ensureGameAssetCached = ensureCascAssetCached;
@@ -575,7 +806,7 @@ export const ensureGameAssetCached = ensureCascAssetCached;
 export function registerCascDiagnosticsCommand(): vscode.Disposable {
     return vscode.commands.registerCommand('wurst.showWc3DataLog', () => {
         // Touch it once so the log has *something* in it even before any preview has loaded.
-        getCascDataRoot(defaultCascLog);
+        getGameDataRoot(defaultCascLog);
         getCascOutputChannel().show();
     });
 }

@@ -1,4 +1,5 @@
 import { decodeBLP, getBLPImageData, ModelRenderer, parseMDL, parseMDX } from 'war3-model';
+import { normalizeAssetPath } from './assetPathUtils';
 
 const scope: any = self;
 const RENDER_SIZE = 128;
@@ -46,7 +47,7 @@ function profile(phase: string, detail: Record<string, unknown> = {}): void {
 }
 
 function normalizePath(value: string): string {
-    return String(value || '').replace(/\//g, '\\').toLowerCase();
+    return normalizeAssetPath(value);
 }
 
 function ensureSequence(model: ParsedModel): void {

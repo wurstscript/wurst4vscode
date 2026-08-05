@@ -1,4 +1,5 @@
 import { parseMDL, parseMDX, ModelRenderer, decodeBLP, getBLPImageData } from 'war3-model';
+import { normalizeAssetPath } from './assetPathUtils';
 
 // ─── types ──────────────────────────────────────────────────────────────────
 
@@ -124,7 +125,7 @@ function downscaleTextureImageData(imageData: ImageData): ImageData {
 }
 
 function normalizedTexturePath(texturePath: string): string {
-    return texturePath.replace(/\//g, '\\').toLowerCase();
+    return normalizeAssetPath(texturePath);
 }
 
 function currentDecodedTextureCache(): Map<string, CachedThumbnailTexture> | undefined {

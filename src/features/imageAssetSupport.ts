@@ -8,7 +8,12 @@ import * as vscode from 'vscode';
 import * as zlib from 'zlib';
 
 import { decodeRasterPreview, ensureGameAssetCached } from './blpPreview';
-import { getGameAssetCacheDir, ensureGameTextureCached } from './preview/cascStorage';
+import {
+    findCachedGameAsset,
+    getGameAssetCacheDir,
+    ensureGameTextureCached,
+    normalizeGameAssetSeparators,
+} from './preview/cascStorage';
 
 export const IMAGE_EXTS = new Set(['blp', 'dds', 'tga', 'png', 'jpg', 'jpeg']);
 export const SOUND_EXTS = new Set(['mp3', 'wav', 'ogg', 'flac']);
@@ -364,7 +369,7 @@ async function resolveAssetPathByClass(assetPath: string, roots: readonly string
     const allowedExts = lookupExtsForKind(kind, ext);
     if (!allowedExts.length) return undefined;
 
-    const normalized = stripKnownAssetExt(assetPath.replace(/\\\\/g, '\\').replace(/[/\\]/g, path.sep), kind);
+    const normalized = stripKnownAssetExt(normalizeAssetPathForFs(assetPath), kind);
     const relDir = path.dirname(normalized);
     const requestedStem = path.basename(normalized).toLowerCase();
     const allowed = new Set(allowedExts);
@@ -394,7 +399,7 @@ async function resolveAssetPathByClass(assetPath: string, roots: readonly string
 
 // eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 export async function resolveAssetPath(assetPath: string, roots: readonly string[], kind: AssetKind = 'any'): Promise<string | undefined> {
-    const normalized = assetPath.replace(/\\\\/g, '\\').replace(/[/\\]/g, path.sep);
+    const normalized = normalizeAssetPathForFs(assetPath);
     const lower = normalized.toLowerCase();
     const lowerDds = lower.replace(/\.blp$/, '.dds');
 
@@ -440,13 +445,14 @@ export async function resolveAssetPath(assetPath: string, roots: readonly string
  * same-named texture and then mis-feed it to the MDX parser. `'any'` infers from the ext.
  */
 export function assetPathVariants(assetPath: string, kind: AssetKind = 'any'): string[] {
-    const ext = assetExt(assetPath);
+    const canonical = normalizeGameAssetSeparators(assetPath);
+    const ext = assetExt(canonical);
     const exts = lookupExtsForKind(kind, ext);
-    if (!exts.length) return [assetPath];
+    if (!exts.length) return [canonical];
 
-    const base = stripKnownAssetExt(assetPath, kind);
+    const base = stripKnownAssetExt(canonical, kind);
     const variants: string[] = [];
-    if (MODEL_EXTS.includes(ext) || TEXTURE_EXTS.includes(ext) || AUDIO_EXTS.includes(ext)) variants.push(assetPath);
+    if (MODEL_EXTS.includes(ext) || TEXTURE_EXTS.includes(ext) || AUDIO_EXTS.includes(ext)) variants.push(canonical);
     for (const e of exts) {
         const v = `${base}.${e}`;
         if (!variants.includes(v)) variants.push(v);
@@ -454,10 +460,12 @@ export function assetPathVariants(assetPath: string, kind: AssetKind = 'any'): s
     return variants;
 }
 
+function normalizeAssetPathForFs(assetPath: string): string {
+    return normalizeGameAssetSeparators(assetPath).replace(/\\/g, path.sep);
+}
+
 async function resolveCachedGameAsset(variant: string): Promise<string | undefined> {
-    const normalized = variant.replace(/\\\\/g, '\\').replace(/[/\\]/g, path.sep).toLowerCase();
-    const candidate = path.join(getGameAssetCacheDir(), normalized);
-    return await pathExists(candidate) ? candidate : undefined;
+    return findCachedGameAsset(variant);
 }
 
 /**

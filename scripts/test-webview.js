@@ -70,6 +70,12 @@ function loadTsModuleWithMocks(relPath, mocks) {
     return load(relPath);
 }
 
+function testAssetPathNormalization() {
+    const { normalizeAssetPath } = loadTsModule('src/webview/assetPathUtils.ts');
+    assert.strictEqual(normalizeAssetPath('\uFEFF\\Textures//HeroLich.blp\\'), 'textures\\herolich.blp');
+    assert.strictEqual(normalizeAssetPath('Textures/ HERO//HeroLich.blp'), 'textures\\ hero\\herolich.blp');
+}
+
 function testSignals() {
     const { signal, effect, batch, computed, untracked } = loadTsModule('src/webview/signals.ts');
 
@@ -491,8 +497,10 @@ async function testFolderModeMapAssetResolution() {
             ensureGameAssetCached: async () => undefined,
         },
         './preview/cascStorage': {
+            findCachedGameAsset: async () => undefined,
             getGameAssetCacheDir: () => path.join(tmpRoot, 'game-cache'),
             ensureGameTextureCached: async () => undefined,
+            normalizeGameAssetSeparators: (value) => String(value ?? '').replace(/[\\/]+/g, '\\').replace(/^\\/, '').replace(/\\$/, ''),
         },
     });
 
@@ -916,6 +924,7 @@ function testObjModEditorTypeAndRecoveryGuards() {
 }
 
 async function main() {
+    testAssetPathNormalization();
     testSignals();
     testObjModTreeSelectionStaysUntracked();
     testObjModDetailsRebuildVsFilterEffectSplit();

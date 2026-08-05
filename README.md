@@ -57,9 +57,9 @@ The `.w3i` editor exposes supported map-information fields while preserving the 
 
 The experimental **Wurst: Preview Map Terrain** command renders terrain, cliffs, water, doodads, units, and start locations from an exploded map.
 
-## CASC-backed assets
+## Installed-game assets
 
-The extension reads stock Warcraft III data directly from the installed game's CASC storage. Asset browsers and previews can resolve:
+The extension reads stock Warcraft III data directly from either Reforged CASC storage or legacy MPQ archives. Asset browsers and previews can resolve:
 
 - World Editor names, metadata, rawcodes, and localized `WESTRING` labels
 - Unit, item, ability, destructable, doodad, buff, and upgrade icons

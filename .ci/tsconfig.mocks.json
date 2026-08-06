@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "..",
+    "paths": {
+      "casc-ts": ["mocks/casc-ts/dist/index.d.ts"],
+      "casc-ts/formats": ["mocks/casc-ts/dist/formats/index.d.ts"],
+      "war3-model": ["mocks/war3-model/dist/war3-model.d.ts"]
+    }
+  }
+}

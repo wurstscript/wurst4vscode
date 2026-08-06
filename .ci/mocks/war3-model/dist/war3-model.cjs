@@ -2,12 +2,23 @@
 
 class ModelRenderer {}
 
+function emptyModel() {
+    return {
+        Info: {
+            MinimumExtent: new Float32Array([0, 0, 0]),
+            MaximumExtent: new Float32Array([0, 0, 0]),
+            BoundsRadius: 0,
+        },
+        Sequences: [],
+    };
+}
+
 function parseMDX() {
-    return { Sequences: [] };
+    return emptyModel();
 }
 
 function parseMDL() {
-    return { Sequences: [] };
+    return emptyModel();
 }
 
 function decodeBLP() {

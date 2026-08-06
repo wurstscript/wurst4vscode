@@ -20,7 +20,11 @@ function extensionVersion(): string {
 
 function resourceName(resource?: vscode.Uri): string {
     if (!resource) return '(not provided)';
-    return path.basename(resource.fsPath || resource.path) || '(unknown)';
+    const rawPath = resource.fsPath || resource.path;
+    // VS Code may expose Windows-style fsPath values even when the extension is
+    // running on Linux/macOS (for example in imported map metadata). Do not let
+    // the host platform's path parser leak the local directory into reports.
+    return path.basename(rawPath.replace(/\\/g, '/')) || '(unknown)';
 }
 
 function diagnostics(issue: ExtensionIssue): string {

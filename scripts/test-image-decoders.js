@@ -46,6 +46,11 @@ const fixtureNames = fs.readdirSync(fixtureDir)
     .sort();
 assert.deepEqual(fixtureNames, Object.keys(expected).sort(), 'update snapshots when adding texture fixtures');
 
+if (process.env.WURST_CI_MOCK_EXTERNALS === '1') {
+    console.log('image decoder fixture tests skipped: CI is using private-dependency mocks');
+    process.exit(0);
+}
+
 const decodeRasterPreview = loadDecoder();
 const war3ModelEntry = require.resolve('war3-model');
 assert.equal(require.cache[war3ModelEntry], undefined, 'war3-model should stay lazy until a JPEG BLP is decoded');

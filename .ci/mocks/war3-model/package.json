@@ -1,0 +1,6 @@
+{
+  "name": "war3-model",
+  "version": "4.0.1",
+  "main": "dist/war3-model.cjs",
+  "types": "dist/war3-model.d.ts"
+}

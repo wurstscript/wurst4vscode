@@ -774,6 +774,7 @@ function testThumbnailLifecycleGuards() {
     assert.ok(objmod.includes('new Worker(modelThumbWorkerBlobUrl'), 'objmod thumbnail rendering should run in a webview-compatible Blob worker');
     assert.ok(objmod.includes('fetch(initial.thumbnailWorkerUri'), 'the worker bundle must be fetched before creating its Blob URL');
     assert.ok(!objmod.includes('new Worker(initial.thumbnailWorkerUri)'), 'VS Code resource URLs cannot be passed directly to the Worker constructor');
+    assert.ok(assetBrowser.includes('modelThumbEnsureInit()'), 'opening or selecting the model asset browser should prewarm the thumbnail worker');
     const ensureInit = /export function modelThumbEnsureInit\(\) \{([\s\S]*?)\n\}/.exec(objmod)?.[1] || '';
     assert.ok(!ensureInit.includes('mpvViewer()'), 'worker startup failure must not fall back to rendering on the objmod UI thread');
     assert.ok(webpack.includes("mdxThumbnailWorker: './src/webview/mdxThumbnailWorker.ts'"), 'the isolated thumbnail worker must be bundled');

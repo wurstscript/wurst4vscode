@@ -2,7 +2,7 @@ import { fuzzyMatch } from '../../features/preview/fuzzy';
 import { esc } from '../objModWebviewUtils';
 import { effect, signal } from '../signals';
 import { detailCache, details, ui, vscodeApi, iconLoader, assetBrowserUi } from './state';
-import { observeModelThumbs, requestVisibleModelThumbs, isAssetBrowserOpen, cancelAssetBrowserModelThumbs, noteModelThumbUserActivity } from './modelThumbnails';
+import { observeModelThumbs, requestVisibleModelThumbs, isAssetBrowserOpen, cancelAssetBrowserModelThumbs, noteModelThumbUserActivity, modelThumbEnsureInit } from './modelThumbnails';
 import { setModValue, postEdit } from './fieldDisplay';
 import { markModified, collapseCell } from './detailsPanel';
 import type { AssetCatalog, AssetOption } from './types';
@@ -52,6 +52,7 @@ export function openAssetBrowser(mi) {
   const ov = document.getElementById('ab-overlay');
   if (ov) ov.hidden = false;
   assetBrowserUi.open = true;
+  if (assetBrowserUi.activeTab === 'model') modelThumbEnsureInit();
   if (!abCatalog.peek()) requestAssetCatalog();
   if (search) search.focus();
 }
@@ -66,6 +67,7 @@ export function openModelAssetBrowserForE2e() {
   const ov = document.getElementById('ab-overlay');
   if (ov) ov.hidden = false;
   assetBrowserUi.open = true;
+  modelThumbEnsureInit();
   if (!abCatalog.peek()) requestAssetCatalog();
 }
 
@@ -175,6 +177,7 @@ export function setupAssetBrowser() {
     if (!tab) return;
     if (assetBrowserUi.activeTab === 'model' && tab.getAttribute('data-tab') !== 'model') cancelAssetBrowserModelThumbs();
     assetBrowserUi.activeTab = tab.getAttribute('data-tab');
+    if (assetBrowserUi.activeTab === 'model') modelThumbEnsureInit();
   });
   if (grid) grid.addEventListener('click', e => {
     if (e.target.closest('#ab-catalog-retry')) { requestAssetCatalog(); return; }

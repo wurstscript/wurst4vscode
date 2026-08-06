@@ -1,0 +1,65 @@
+name: Build and test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # The extension intentionally consumes these repositories through file:../...
+      # dependencies. The real repositories are private local development sources,
+      # so CI installs committed API/fixture mocks at the same sibling paths.
+      - name: Check out extension
+        uses: actions/checkout@v4
+        with:
+          path: wurst4vscode
+
+      - name: Prepare private dependency mocks
+        working-directory: wurst4vscode
+        run: |
+          cp -R .ci/mocks/casc-ts ../casc-ts
+          cp -R .ci/mocks/war3-model ../war3-model
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: wurst4vscode/package-lock.json
+
+      - name: Install extension dependencies
+        working-directory: wurst4vscode
+        run: npm ci --ignore-scripts
+
+      - name: Lint
+        working-directory: wurst4vscode
+        run: npm run lint
+
+      - name: Typecheck
+        working-directory: wurst4vscode
+        run: npx tsc -p . --noEmit
+
+      - name: Test
+        working-directory: wurst4vscode
+        run: npm test
+        env:
+          WURST_CI_MOCK_EXTERNALS: '1'
+
+      - name: Bundle extension
+        working-directory: wurst4vscode
+        run: npm run package-web
+
+      - name: Verify VSIX contents
+        working-directory: wurst4vscode
+        run: npm run test:vsix-contents

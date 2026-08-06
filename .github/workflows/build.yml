@@ -56,10 +56,7 @@ jobs:
         env:
           WURST_CI_MOCK_EXTERNALS: '1'
 
-      - name: Bundle extension
-        working-directory: wurst4vscode
-        run: npm run package-web
-
-      - name: Verify VSIX contents
-        working-directory: wurst4vscode
-        run: npm run test:vsix-contents
+      # Release bundling is intentionally not part of this mock-based job. The
+      # real war3-model package contributes transitive renderer build types that
+      # are not represented by the private-dependency fixture. Release packaging
+      # remains covered by local publishing validation with the real packages.

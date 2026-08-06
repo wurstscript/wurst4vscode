@@ -7,7 +7,9 @@ function unsupported(name) {
 }
 
 class BinReader {}
-class MpqReader {}
+class MpqReader {
+    static open() { throw new Error('CI mock casc-ts MPQ reader is not available'); }
+}
 
 module.exports = {
     BinReader,

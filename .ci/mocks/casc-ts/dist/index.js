@@ -1,8 +1,12 @@
 'use strict';
 
-class CascStorage {}
-class MpqStorage {}
+class CascStorage {
+    static async openAsync() { throw new Error('CI mock casc-ts storage is not available'); }
+}
+class MpqStorage {
+    static async openAsync() { throw new Error('CI mock casc-ts storage is not available'); }
+}
 
-function closeAllSegments() {}
+async function closeAllSegments() {}
 
 module.exports = { CascStorage, MpqStorage, closeAllSegments };

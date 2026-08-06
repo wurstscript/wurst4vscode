@@ -48,7 +48,7 @@ jobs:
 
       - name: Typecheck
         working-directory: wurst4vscode
-        run: npx tsc -p . --noEmit
+        run: npx tsc -p .ci/tsconfig.mocks.json --noEmit
 
       - name: Test
         working-directory: wurst4vscode

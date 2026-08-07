@@ -253,7 +253,7 @@ export function setupAssetBrowser() {
     if (!modal) return;
     const focusable = Array.from(modal.querySelectorAll<HTMLElement>(
       'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    )).filter(el => !el.hidden && el.offsetParent !== null);
+    )).filter(el => !el.hidden && el.offsetParent !== null && el.tabIndex >= 0);
     if (!focusable.length) {
       e.preventDefault();
       modal.focus();

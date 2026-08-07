@@ -322,6 +322,12 @@ function buildHtml(webview: vscode.Webview, archiveName: string, scriptUri: vsco
 }
 .row:hover { background: var(--hover); }
 .row:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px; }
+.row-select {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px;
+  padding: 0; border: 0; background: transparent; color: inherit; font: inherit;
+  text-align: left; cursor: pointer; user-select: none;
+}
+.row-select:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px; }
 .row.selected { background: var(--active); color: var(--active-fg); }
 .row.selected .size, .row.selected .folder-meta { color: var(--active-fg); opacity: 0.75; }
 .row.hidden,

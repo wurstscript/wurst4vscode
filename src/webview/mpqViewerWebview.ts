@@ -221,9 +221,6 @@ function renderFile(node: TreeNode, indent: number, container: HTMLElement): voi
 
     const row = document.createElement('div');
     row.className = 'row';
-    row.setAttribute('role', 'button');
-    row.tabIndex = 0;
-    row.setAttribute('aria-label', description ? `${node.fullPath} - ${description}` : node.fullPath);
     row.style.paddingLeft = (indent * 16 + 22) + 'px';
     row.dataset['type'] = 'file';
     row.dataset['fullpath'] = node.fullPath;
@@ -256,6 +253,12 @@ function renderFile(node: TreeNode, indent: number, container: HTMLElement): voi
     size.className = 'size';
     size.textContent = fmtSize(node.entry!.normalSize);
 
+    const selectBtn = document.createElement('button');
+    selectBtn.className = 'row-select';
+    selectBtn.type = 'button';
+    selectBtn.setAttribute('aria-label', description ? `${node.fullPath} - ${description}` : node.fullPath);
+    selectBtn.setAttribute('aria-pressed', 'false');
+
     // Action button — only visible on hover/selection
     const openBtn = document.createElement('button');
     openBtn.className = 'row-action';
@@ -267,31 +270,29 @@ function renderFile(node: TreeNode, indent: number, container: HTMLElement): voi
         vscode.postMessage({ type: 'openFile', name: node.fullPath });
     });
 
-    row.appendChild(badge);
-    row.appendChild(fileMain);
+    selectBtn.appendChild(badge);
+    selectBtn.appendChild(fileMain);
+    selectBtn.appendChild(size);
+    row.appendChild(selectBtn);
     row.appendChild(openBtn);
-    row.appendChild(size);
 
     // Click selects the row (does NOT immediately open)
     const selectRow = () => {
         if (selectedRow) selectedRow.classList.remove('selected');
-        if (selectedRow) selectedRow.setAttribute('aria-pressed', 'false');
+        if (selectedRow) selectedRow.querySelector<HTMLButtonElement>('.row-select')?.setAttribute('aria-pressed', 'false');
         row.classList.add('selected');
-        row.setAttribute('aria-pressed', 'true');
+        selectBtn.setAttribute('aria-pressed', 'true');
         selectedRow = row;
     };
-    row.setAttribute('aria-pressed', 'false');
-    row.addEventListener('click', selectRow);
+    selectBtn.addEventListener('click', selectRow);
 
     // Double-click opens
     const openFile = () => {
         if (busy) return;
         vscode.postMessage({ type: 'openFile', name: node.fullPath });
     };
-    row.addEventListener('dblclick', openFile);
-    row.addEventListener('keydown', e => {
-        // Keep the nested Open button's native keyboard activation intact.
-        if (e.target !== row) return;
+    selectBtn.addEventListener('dblclick', openFile);
+    selectBtn.addEventListener('keydown', e => {
         if (e.key === 'Enter') {
             e.preventDefault();
             openFile();

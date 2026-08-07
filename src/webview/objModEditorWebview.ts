@@ -105,7 +105,10 @@ function setupSplitter() {
       const rect = entries[0] && entries[0].contentRect;
       if (!rect) return;
       const next = ui.e2eForcedNarrowLayout || rect.width < NARROW_LAYOUT_PX;
-      if (next === stacked) return;
+      if (next === stacked) {
+        updateSplitterAria();
+        return;
+      }
       stacked = next;
       editor.classList.toggle('narrow', next);
       applySavedWidth();
@@ -140,9 +143,10 @@ function setupSplitter() {
   });
   splitter.addEventListener('keydown', e => {
     if (isStacked()) return;
-    const current = parseInt(editor.style.getPropertyValue('--list-w'), 10) || LIST_W_DEFAULT;
     const rect = editor.getBoundingClientRect();
     const max = Math.max(LIST_MIN_PX, rect.width * LIST_MAX_RATIO);
+    const saved = parseInt(editor.style.getPropertyValue('--list-w'), 10) || LIST_W_DEFAULT;
+    const current = Math.max(LIST_MIN_PX, Math.min(max, saved));
     let next: number | undefined;
     if (e.key === 'ArrowLeft') next = current - 16;
     else if (e.key === 'ArrowRight') next = current + 16;

@@ -149,7 +149,7 @@ export function renderAssetGrid() {
   }
 }
 
-export function closeAssetBrowser() {
+export function closeAssetBrowser(restoreFocus = true) {
   assetBrowserUi.open = false;
   const ov = document.getElementById('ab-overlay');
   if (ov) ov.hidden = true;
@@ -157,15 +157,19 @@ export function closeAssetBrowser() {
   abMi = -1; // keep abCatalog cached for next time
   const returnFocus = assetBrowserReturnFocus;
   assetBrowserReturnFocus = null;
-  if (returnFocus && returnFocus.isConnected) returnFocus.focus({ preventScroll: true });
+  if (restoreFocus && returnFocus && returnFocus.isConnected) returnFocus.focus({ preventScroll: true });
+  return returnFocus;
 }
 
 export function pickAsset(value) {
   const mods = detailCache.get(ui.selectedKey) || [];
   const mi = abMi;
   const mod = mods[mi];
-  closeAssetBrowser();
-  if (!mod) return;
+  const returnFocus = closeAssetBrowser(false);
+  if (!mod) {
+    if (returnFocus && returnFocus.isConnected) returnFocus.focus({ preventScroll: true });
+    return;
+  }
   setModValue(mod, value);
   const anchor = details.querySelector('[data-mi="' + mi + '"]');
   if (anchor) markModified(anchor, mod);
@@ -174,6 +178,9 @@ export function pickAsset(value) {
   // the new pick. updateFieldCell only patches an open input's value, leaving the badge/preview stale.
   const cell = anchor ? anchor.closest('td') : null;
   if (cell) { cell._refocusOnCollapse = false; collapseCell(cell, mi); }
+  const replacement = cell?.querySelector<HTMLElement>('.tt-collapsed, .cell-edit');
+  if (replacement) replacement.focus({ preventScroll: true });
+  else if (returnFocus && returnFocus.isConnected) returnFocus.focus({ preventScroll: true });
 }
 
 export function setupAssetBrowser() {
@@ -183,7 +190,7 @@ export function setupAssetBrowser() {
   const grid = document.getElementById('ab-grid');
   const tabs = document.getElementById('ab-tabs');
   let abSearchRaf = 0;
-  if (close) close.addEventListener('click', closeAssetBrowser);
+  if (close) close.addEventListener('click', () => closeAssetBrowser());
   if (ov) ov.addEventListener('mousedown', e => { if (e.target === ov) closeAssetBrowser(); });
   if (search) search.addEventListener('input', () => {
     noteModelThumbUserActivity();

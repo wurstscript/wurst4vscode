@@ -290,6 +290,8 @@ function renderFile(node: TreeNode, indent: number, container: HTMLElement): voi
     };
     row.addEventListener('dblclick', openFile);
     row.addEventListener('keydown', e => {
+        // Keep the nested Open button's native keyboard activation intact.
+        if (e.target !== row) return;
         if (e.key === 'Enter') {
             e.preventDefault();
             openFile();

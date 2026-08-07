@@ -321,6 +321,13 @@ function buildHtml(webview: vscode.Webview, archiveName: string, scriptUri: vsco
   position: relative;
 }
 .row:hover { background: var(--hover); }
+.row:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px; }
+.row-select {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px;
+  padding: 0; border: 0; background: transparent; color: inherit; font: inherit;
+  text-align: left; cursor: pointer; user-select: none;
+}
+.row-select:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px; }
 .row.selected { background: var(--active); color: var(--active-fg); }
 .row.selected .size, .row.selected .folder-meta { color: var(--active-fg); opacity: 0.75; }
 .row.hidden,
@@ -403,7 +410,8 @@ function buildHtml(webview: vscode.Webview, archiveName: string, scriptUri: vsco
 .row-action svg { width: 13px; height: 13px; fill: currentColor; }
 .row-action span { line-height: 1; }
 .row:hover .row-action,
-.row.selected .row-action {
+.row.selected .row-action,
+.row:focus-within .row-action {
   opacity: 0.92;
   pointer-events: auto;
 }
@@ -470,11 +478,11 @@ body.extracting .tree-wrap { cursor: progress; }
   <svg class="search-icon" width="14" height="14" viewBox="0 0 16 16" fill="var(--icon-fg)">
     <path d="M6.5 1a5.5 5.5 0 0 1 4.38 8.82l3.15 3.15-.71.71-3.15-3.15A5.5 5.5 0 1 1 6.5 1zm0 1a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9z"/>
   </svg>
-  <input class="search-input" id="searchInput" type="text" placeholder="Filter files\u2026" autocomplete="off" spellcheck="false">
+  <input class="search-input" id="searchInput" type="search" placeholder="Filter files\u2026" aria-label="Filter archive files" autocomplete="off" spellcheck="false">
   <span class="match-count" id="matchCount"></span>
 </div>
 
-<div class="tree-wrap" id="treeWrap">
+<div class="tree-wrap" id="treeWrap" role="group" aria-label="Archive contents">
   <div class="wv-state"><span>Loading archive\u2026</span></div>
 </div>
 

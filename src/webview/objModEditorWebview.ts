@@ -71,11 +71,28 @@ function setupSplitter() {
   const splitter = document.getElementById('splitter');
   if (!editor || !splitter) return;
   const isStacked = () => editor.classList.contains('narrow');
+  const updateSplitterAria = () => {
+    const rect = editor.getBoundingClientRect();
+    const max = Math.max(LIST_MIN_PX, rect.width * LIST_MAX_RATIO);
+    const current = parseInt(editor.style.getPropertyValue('--list-w'), 10) || LIST_W_DEFAULT;
+    splitter.setAttribute('aria-valuemin', String(LIST_MIN_PX));
+    splitter.setAttribute('aria-valuemax', String(Math.round(max)));
+    splitter.setAttribute('aria-valuenow', String(Math.round(Math.max(LIST_MIN_PX, Math.min(max, current)))));
+  };
+  const setListWidth = (width: number) => {
+    const rect = editor.getBoundingClientRect();
+    const max = Math.max(LIST_MIN_PX, rect.width * LIST_MAX_RATIO);
+    const clamped = Math.max(LIST_MIN_PX, Math.min(max, width));
+    editor.style.setProperty('--list-w', clamped + 'px');
+    updateSplitterAria();
+    return clamped;
+  };
   const applySavedWidth = () => {
     const saved = vscodeApi.getState() || {};
     // Stacked: drop the override so the single-column grid isn't sized by a stale side-by-side width.
     if (isStacked() || !saved.listW) editor.style.removeProperty('--list-w');
     else editor.style.setProperty('--list-w', saved.listW + 'px');
+    updateSplitterAria();
   };
   // The ResizeObserver below measures the editor element itself and fires on its first observation,
   // so it covers both the initial layout and every later resize — no separate window 'resize'
@@ -88,7 +105,10 @@ function setupSplitter() {
       const rect = entries[0] && entries[0].contentRect;
       if (!rect) return;
       const next = ui.e2eForcedNarrowLayout || rect.width < NARROW_LAYOUT_PX;
-      if (next === stacked) return;
+      if (next === stacked) {
+        updateSplitterAria();
+        return;
+      }
       stacked = next;
       editor.classList.toggle('narrow', next);
       applySavedWidth();
@@ -109,9 +129,7 @@ function setupSplitter() {
   window.addEventListener('mousemove', e => {
     if (!dragging) return;
     const rect = editor.getBoundingClientRect();
-    const max = Math.max(LIST_MIN_PX, rect.width * LIST_MAX_RATIO);
-    const w = Math.max(LIST_MIN_PX, Math.min(max, e.clientX - rect.left));
-    editor.style.setProperty('--list-w', w + 'px');
+    setListWidth(e.clientX - rect.left);
   });
   window.addEventListener('mouseup', () => {
     if (!dragging) return;
@@ -121,6 +139,23 @@ function setupSplitter() {
     document.body.style.cursor = '';
     const cur = parseInt(editor.style.getPropertyValue('--list-w'), 10) || LIST_W_DEFAULT;
     vscodeApi.setState(Object.assign({}, vscodeApi.getState() || {}, { listW: cur }));
+    updateSplitterAria();
+  });
+  splitter.addEventListener('keydown', e => {
+    if (isStacked()) return;
+    const rect = editor.getBoundingClientRect();
+    const max = Math.max(LIST_MIN_PX, rect.width * LIST_MAX_RATIO);
+    const saved = parseInt(editor.style.getPropertyValue('--list-w'), 10) || LIST_W_DEFAULT;
+    const current = Math.max(LIST_MIN_PX, Math.min(max, saved));
+    let next: number | undefined;
+    if (e.key === 'ArrowLeft') next = current - 16;
+    else if (e.key === 'ArrowRight') next = current + 16;
+    else if (e.key === 'Home') next = LIST_MIN_PX;
+    else if (e.key === 'End') next = max;
+    if (next === undefined) return;
+    e.preventDefault();
+    const width = setListWidth(next);
+    vscodeApi.setState(Object.assign({}, vscodeApi.getState() || {}, { listW: Math.round(width) }));
   });
 }
 setupSplitter();

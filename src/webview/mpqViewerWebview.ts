@@ -163,6 +163,7 @@ const ICON_FOLDER  = '<svg viewBox="0 0 16 16"><path d="M1 4.5A1.5 1.5 0 0 1 2.5
 const ICON_OPEN    = '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M8.5 1a.5.5 0 0 0-1 0v6.793L5.354 5.646a.5.5 0 1 0-.708.708l3 3a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 7.793V1zM3 10.5a.5.5 0 0 0-1 0v3a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-1 0V13H3v-2.5z"/></svg>';
 
 let selectedRow: HTMLElement | null = null;
+let filteredFolderState: Map<string, boolean> | null = null;
 
 function renderNode(node: TreeNode, indent: number, container: HTMLElement): void {
     if (node.type === 'folder') renderFolder(node, indent, container);
@@ -173,9 +174,14 @@ function renderFolder(node: TreeNode, indent: number, container: HTMLElement): v
     const wrapper = document.createElement('div');
     wrapper.dataset['type'] = 'folder';
     wrapper.dataset['name'] = node.name.toLowerCase();
+    wrapper.dataset['path'] = node.fullPath;
 
     const row = document.createElement('div');
     row.className = 'row';
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    row.setAttribute('aria-expanded', 'false');
+    row.setAttribute('aria-label', 'Expand folder ' + node.name);
     row.style.paddingLeft = (indent * 16 + 6) + 'px';
     row.innerHTML =
         '<span class="chevron">' + ICON_CHEVRON + '</span>' +
@@ -188,9 +194,17 @@ function renderFolder(node: TreeNode, indent: number, container: HTMLElement): v
 
     for (const child of node.children) renderNode(child, indent + 1, children);
 
-    row.addEventListener('click', () => {
+    const toggleFolder = () => {
         const collapsed = wrapper.classList.toggle('collapsed');
         children.classList.toggle('collapsed', collapsed);
+        row.setAttribute('aria-expanded', String(!collapsed));
+        row.setAttribute('aria-label', (collapsed ? 'Expand' : 'Collapse') + ' folder ' + node.name);
+    };
+    row.addEventListener('click', toggleFolder);
+    row.addEventListener('keydown', e => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        toggleFolder();
     });
 
     wrapper.appendChild(row);
@@ -239,6 +253,12 @@ function renderFile(node: TreeNode, indent: number, container: HTMLElement): voi
     size.className = 'size';
     size.textContent = fmtSize(node.entry!.normalSize);
 
+    const selectBtn = document.createElement('button');
+    selectBtn.className = 'row-select';
+    selectBtn.type = 'button';
+    selectBtn.setAttribute('aria-label', description ? `${node.fullPath} - ${description}` : node.fullPath);
+    selectBtn.setAttribute('aria-pressed', 'false');
+
     // Action button — only visible on hover/selection
     const openBtn = document.createElement('button');
     openBtn.className = 'row-action';
@@ -250,22 +270,36 @@ function renderFile(node: TreeNode, indent: number, container: HTMLElement): voi
         vscode.postMessage({ type: 'openFile', name: node.fullPath });
     });
 
-    row.appendChild(badge);
-    row.appendChild(fileMain);
+    selectBtn.appendChild(badge);
+    selectBtn.appendChild(fileMain);
+    selectBtn.appendChild(size);
+    row.appendChild(selectBtn);
     row.appendChild(openBtn);
-    row.appendChild(size);
 
     // Click selects the row (does NOT immediately open)
-    row.addEventListener('click', () => {
+    const selectRow = () => {
         if (selectedRow) selectedRow.classList.remove('selected');
+        if (selectedRow) selectedRow.querySelector<HTMLButtonElement>('.row-select')?.setAttribute('aria-pressed', 'false');
         row.classList.add('selected');
+        selectBtn.setAttribute('aria-pressed', 'true');
         selectedRow = row;
-    });
+    };
+    selectBtn.addEventListener('click', selectRow);
 
     // Double-click opens
-    row.addEventListener('dblclick', () => {
+    const openFile = () => {
         if (busy) return;
         vscode.postMessage({ type: 'openFile', name: node.fullPath });
+    };
+    selectBtn.addEventListener('dblclick', openFile);
+    selectBtn.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            openFile();
+        } else if (e.key === ' ') {
+            e.preventDefault();
+            selectRow();
+        }
     });
 
     container.appendChild(row);
@@ -278,11 +312,28 @@ function applyFilter(query: string): void {
     const allFiles = treeWrap.querySelectorAll<HTMLElement>('[data-type="file"]');
     let shown = 0;
 
+    if (q && !filteredFolderState) {
+        filteredFolderState = new Map<string, boolean>();
+        treeWrap.querySelectorAll<HTMLElement>('[data-type="folder"]').forEach(folder => {
+            filteredFolderState!.set(folder.dataset['path'] ?? '', !folder.classList.contains('collapsed'));
+        });
+    }
+
     if (!q) {
         allFiles.forEach(r => r.classList.remove('hidden'));
         treeWrap.querySelectorAll<HTMLElement>('[data-type="folder"]').forEach(f => f.classList.remove('hidden'));
-        treeWrap.querySelectorAll<HTMLElement>('.children').forEach(c => c.classList.add('collapsed'));
-        treeWrap.querySelectorAll<HTMLElement>('[data-type="folder"]').forEach(f => f.classList.add('collapsed'));
+        treeWrap.querySelectorAll<HTMLElement>('[data-type="folder"]').forEach(f => {
+            const expanded = filteredFolderState?.get(f.dataset['path'] ?? '') ?? false;
+            f.classList.toggle('collapsed', !expanded);
+            const children = f.querySelector<HTMLElement>(':scope > .children');
+            if (children) children.classList.toggle('collapsed', !expanded);
+            const row = f.querySelector<HTMLElement>(':scope > .row');
+            if (row) {
+                row.setAttribute('aria-expanded', String(expanded));
+                row.setAttribute('aria-label', (expanded ? 'Collapse' : 'Expand') + ' folder ' + (f.dataset['name'] ?? ''));
+            }
+        });
+        filteredFolderState = null;
         matchCount.textContent = '';
         return;
     }
@@ -301,6 +352,11 @@ function applyFilter(query: string): void {
             el.classList.remove('collapsed');
             const childrenEl = el.querySelector('.children');
             if (childrenEl) childrenEl.classList.remove('collapsed');
+            const row = el.querySelector<HTMLElement>(':scope > .row');
+            if (row) {
+                row.setAttribute('aria-expanded', 'true');
+                row.setAttribute('aria-label', 'Collapse folder ' + (el.dataset['name'] ?? ''));
+            }
         }
     }
 
@@ -355,7 +411,7 @@ window.addEventListener('message', (e: MessageEvent) => {
     }
 
     if (msg.type === 'error') {
-        treeWrap.innerHTML = '<div class="state"><span>Failed to read archive</span><span class="err">' + esc(msg.message ?? '') + '</span></div>';
+        treeWrap.innerHTML = '<div class="state" role="alert"><span>Failed to read archive</span><span class="err">' + esc(msg.message ?? '') + '</span></div>';
         btnExtractAll.setAttribute('disabled', '');
         btnExportFolder.setAttribute('disabled', '');
         return;

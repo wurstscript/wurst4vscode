@@ -84,7 +84,7 @@ main {
   opacity: 1;
 }`,
         body: `<main>
-  <div class="wv-loading-overlay visible">
+  <div class="wv-loading-overlay visible" role="status" aria-live="polite" aria-busy="true">
     <div>
       <div class="wv-spinner"></div>
       <div class="wv-loading-text">Loading ${escapeHtml(fileName)}...</div>
@@ -98,7 +98,7 @@ function buildErrorHtml(fileName: string, message: string): string {
     return buildPage({
         csp: "default-src 'none'; style-src 'unsafe-inline';",
         title: escapeHtml(fileName),
-        body: `<div class="wv-state">
+        body: `<div class="wv-state" role="alert">
   <span>Failed to load ${escapeHtml(fileName)}</span>
   <span class="err">${escapeHtml(message)}</span>
 </div>`,

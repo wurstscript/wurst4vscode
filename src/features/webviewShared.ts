@@ -321,7 +321,7 @@ export function sep(): string {
  */
 export function spinnerOverlay(textId: string, initiallyVisible = true): string {
     const cls = initiallyVisible ? 'wv-loading-overlay visible' : 'wv-loading-overlay';
-    return `<div class="${cls}">
+    return `<div class="${cls}" role="status" aria-live="polite" aria-busy="${initiallyVisible}">
   <div class="wv-spinner"></div>
   <div id="${textId}" class="wv-loading-text">Loading...</div>
 </div>`;

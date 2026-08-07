@@ -10,6 +10,18 @@ import type { AssetCatalog, AssetOption } from './types';
 // ── Asset browser (rich visual picker over WC3 game data, by category) ────────
 let abMi = -1;
 const abCatalog = signal<AssetCatalog | null>(null);
+let assetBrowserReturnFocus: HTMLElement | null = null;
+
+function rememberAssetBrowserFocus() {
+  if (assetBrowserUi.open) return;
+  const active = document.activeElement;
+  assetBrowserReturnFocus = active instanceof HTMLElement ? active : null;
+}
+
+function focusAssetBrowserSearch() {
+  const search = document.getElementById('ab-search') as HTMLInputElement | null;
+  if (search) search.focus();
+}
 
 export function setAssetCatalog(catalog) {
   abCatalog.value = catalog;
@@ -31,7 +43,7 @@ export function handleAssetCatalogFailed(reason) {
   if (!isAssetBrowserOpen()) return;
   const grid = document.getElementById('ab-grid');
   if (!grid) return;
-  grid.innerHTML = '<div class="ab-empty ab-error">' +
+  grid.innerHTML = '<div class="ab-empty ab-error" role="alert">' +
     '<div>Couldn\'t load game assets.</div>' +
     (reason ? '<div class="details-error-reason">' + esc(reason) + '</div>' : '') +
     '<button type="button" id="ab-catalog-retry" class="browse-btn">Retry</button>' +
@@ -42,6 +54,7 @@ export function openAssetBrowser(mi) {
   const mods = detailCache.get(ui.selectedKey) || [];
   const mod = mods[mi];
   if (!mod) return;
+  rememberAssetBrowserFocus();
   abMi = mi;
   // A model field defaults to Models; only icon/pathing fields default elsewhere — never offer the
   // wrong asset class by default.
@@ -58,6 +71,7 @@ export function openAssetBrowser(mi) {
 }
 
 export function openModelAssetBrowserForE2e() {
+  rememberAssetBrowserFocus();
   abMi = 0;
   assetBrowserUi.activeTab = 'model';
   assetBrowserUi.searchQuery = '';
@@ -69,6 +83,7 @@ export function openModelAssetBrowserForE2e() {
   assetBrowserUi.open = true;
   modelThumbEnsureInit();
   if (!abCatalog.peek()) requestAssetCatalog();
+  focusAssetBrowserSearch();
 }
 
 export function searchModelAssetBrowserForE2e(value) {
@@ -87,7 +102,12 @@ export function forceNarrowLayoutForE2e(on) {
 export function updateAbTabs() {
   const tabs = document.getElementById('ab-tabs');
   if (!tabs) return;
-  for (const b of tabs.querySelectorAll('.ab-tab')) b.classList.toggle('active', b.getAttribute('data-tab') === assetBrowserUi.activeTab);
+  for (const b of tabs.querySelectorAll<HTMLButtonElement>('.ab-tab')) {
+    const active = b.getAttribute('data-tab') === assetBrowserUi.activeTab;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-selected', String(active));
+    b.tabIndex = active ? 0 : -1;
+  }
 }
 
 export function renderAssetGrid() {
@@ -119,8 +139,8 @@ export function renderAssetGrid() {
         ? '<span class="object-icon" data-key="ab:' + esc(o.value) + '" data-icon="' + esc(o.iconPath) + '"></span>'
         : '<span class="object-icon missing"></span>');
     const previewHint = activeTab === 'model' ? ' — Ctrl+click to open full preview' : '';
-    return '<div class="ab-card" data-value="' + esc(o.value) + '" title="' + esc(o.label + ' — ' + o.value + previewHint) + '">' +
-      icon + '<span class="ab-card-label">' + esc(o.label) + '</span></div>';
+    return '<button type="button" class="ab-card" data-value="' + esc(o.value) + '" aria-label="' + esc(o.label + ' — ' + o.value) + '" title="' + esc(o.label + ' — ' + o.value + previewHint) + '">' +
+      icon + '<span class="ab-card-label">' + esc(o.label) + '</span></button>';
   }).join('');
   iconLoader.observe(grid);
   if (activeTab === 'model') {
@@ -129,20 +149,27 @@ export function renderAssetGrid() {
   }
 }
 
-export function closeAssetBrowser() {
+export function closeAssetBrowser(restoreFocus = true) {
   assetBrowserUi.open = false;
   const ov = document.getElementById('ab-overlay');
   if (ov) ov.hidden = true;
   cancelAssetBrowserModelThumbs();
   abMi = -1; // keep abCatalog cached for next time
+  const returnFocus = assetBrowserReturnFocus;
+  assetBrowserReturnFocus = null;
+  if (restoreFocus && returnFocus && returnFocus.isConnected) returnFocus.focus({ preventScroll: true });
+  return returnFocus;
 }
 
 export function pickAsset(value) {
   const mods = detailCache.get(ui.selectedKey) || [];
   const mi = abMi;
   const mod = mods[mi];
-  closeAssetBrowser();
-  if (!mod) return;
+  const returnFocus = closeAssetBrowser(false);
+  if (!mod) {
+    if (returnFocus && returnFocus.isConnected) returnFocus.focus({ preventScroll: true });
+    return;
+  }
   setModValue(mod, value);
   const anchor = details.querySelector('[data-mi="' + mi + '"]');
   if (anchor) markModified(anchor, mod);
@@ -151,6 +178,9 @@ export function pickAsset(value) {
   // the new pick. updateFieldCell only patches an open input's value, leaving the badge/preview stale.
   const cell = anchor ? anchor.closest('td') : null;
   if (cell) { cell._refocusOnCollapse = false; collapseCell(cell, mi); }
+  const replacement = cell?.querySelector<HTMLElement>('.tt-collapsed, .cell-edit');
+  if (replacement) replacement.focus({ preventScroll: true });
+  else if (returnFocus && returnFocus.isConnected) returnFocus.focus({ preventScroll: true });
 }
 
 export function setupAssetBrowser() {
@@ -160,7 +190,7 @@ export function setupAssetBrowser() {
   const grid = document.getElementById('ab-grid');
   const tabs = document.getElementById('ab-tabs');
   let abSearchRaf = 0;
-  if (close) close.addEventListener('click', closeAssetBrowser);
+  if (close) close.addEventListener('click', () => closeAssetBrowser());
   if (ov) ov.addEventListener('mousedown', e => { if (e.target === ov) closeAssetBrowser(); });
   if (search) search.addEventListener('input', () => {
     noteModelThumbUserActivity();
@@ -178,6 +208,18 @@ export function setupAssetBrowser() {
     if (assetBrowserUi.activeTab === 'model' && tab.getAttribute('data-tab') !== 'model') cancelAssetBrowserModelThumbs();
     assetBrowserUi.activeTab = tab.getAttribute('data-tab');
     if (assetBrowserUi.activeTab === 'model') modelThumbEnsureInit();
+  });
+  if (tabs) tabs.addEventListener('keydown', e => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+    const tabList = Array.from(tabs.querySelectorAll<HTMLButtonElement>('.ab-tab'));
+    const current = tabList.indexOf(document.activeElement as HTMLButtonElement);
+    if (current < 0 || !tabList.length) return;
+    const next = e.key === 'Home' ? 0
+      : e.key === 'End' ? tabList.length - 1
+      : (current + (e.key === 'ArrowRight' ? 1 : -1) + tabList.length) % tabList.length;
+    e.preventDefault();
+    tabList[next].focus();
+    tabList[next].click();
   });
   if (grid) grid.addEventListener('click', e => {
     if (e.target.closest('#ab-catalog-retry')) { requestAssetCatalog(); return; }
@@ -200,7 +242,36 @@ export function setupAssetBrowser() {
   document.addEventListener('scroll', noteModelThumbUserActivity, { passive: true, capture: true });
   document.addEventListener('wheel', noteModelThumbUserActivity, { passive: true });
   document.addEventListener('keydown', noteModelThumbUserActivity, { passive: true });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && ov && !ov.hidden) closeAssetBrowser(); });
+  document.addEventListener('keydown', e => {
+    if (!ov || ov.hidden) return;
+    if (e.key === 'Escape') {
+      closeAssetBrowser();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    const modal = ov.querySelector<HTMLElement>('.ab-modal');
+    if (!modal) return;
+    const focusable = Array.from(modal.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )).filter(el => !el.hidden && el.offsetParent !== null && el.tabIndex >= 0);
+    if (!focusable.length) {
+      e.preventDefault();
+      modal.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (!modal.contains(document.activeElement)) {
+      e.preventDefault();
+      first.focus();
+    } else if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  });
   effect(() => {
     assetBrowserUi.activeTab;
     assetBrowserUi.searchQuery;

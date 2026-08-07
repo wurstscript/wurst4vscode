@@ -1596,7 +1596,7 @@ function buildObjLoadingHtml(fileName: string): string {
     return buildPage({
         csp: "default-src 'none'; style-src 'unsafe-inline';",
         title: escapeHtml(fileName),
-        body: `<div class="wv-state"><div class="wv-spinner"></div><div class="wv-loading-text">Loading ${escapeHtml(fileName)}…</div></div>`,
+        body: `<div class="wv-state" role="status" aria-live="polite" aria-busy="true"><div class="wv-spinner"></div><div class="wv-loading-text">Loading ${escapeHtml(fileName)}…</div></div>`,
     });
 }
 
@@ -1641,7 +1641,7 @@ async function buildHtml(
     const metaLine = `WC3 ${typeLabel} object data - v${parsed.version} - ${summary} - ${metadataSource}` +
         `${parsed.extended ? ' - extended (level/dataPt)' : ''}${combinedMeta}`;
     const errorBanner = parsed.error
-        ? `<div class="error">Parse error: ${escapeHtml(parsed.error)}</div>`
+        ? `<div class="error" role="alert">Parse error: ${escapeHtml(parsed.error)}</div>`
         : '';
     const warningBanner = wtsWarning
         ? `<div class="warning">${escapeHtml(wtsWarning)}</div>`
@@ -2228,6 +2228,10 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   background: rgba(0,0,0,0.5);
 }
 .ab-overlay[hidden] { display: none; }
+.ab-sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
 .ab-modal {
   display: flex;
   flex-direction: column;
@@ -2315,8 +2319,13 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   border-radius: 4px;
   cursor: pointer;
   text-align: center;
+  width: 100%;
+  font: inherit;
+  color: var(--fg);
+  background: transparent;
 }
 .ab-card:hover { border-color: var(--vscode-focusBorder, #007fd4); background: var(--hover); }
+.ab-card:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px; }
 .ab-card .object-icon { width: 48px; height: 48px; }
 .model-thumb,
 .object-icon.model-thumb { background: var(--model-bg); }
@@ -2546,6 +2555,7 @@ tr.hidden { display: none; }
 }
 .splitter:hover,
 .splitter.dragging { opacity: 1; background: var(--vscode-textLink-foreground, var(--fg)); }
+.splitter:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px; opacity: 1; }
 .object-list {
   min-width: 0;
   min-height: 0;
@@ -2963,16 +2973,16 @@ ${gameDataBanner}
     </div>
     <div id="tree" class="tree"></div>
   </aside>
-  <div class="splitter" id="splitter" title="Drag to resize"></div>
+  <div class="splitter" id="splitter" role="separator" aria-orientation="vertical" aria-label="Resize object list" tabindex="0" title="Drag to resize; use arrow keys to adjust"></div>
   <main id="details" class="details"></main>
 </div>
-<div id="mpv-box" class="mpv-box" hidden>
+<div id="mpv-box" class="mpv-box" role="dialog" aria-labelledby="mpv-name" hidden>
   <div class="mpv-head" id="mpv-head">
     <span id="mpv-name" class="mpv-name">Model</span>
     <select id="mpv-anim" class="mpv-anim" title="Animation" hidden></select>
     <button id="mpv-play" class="mpv-ctl" type="button" title="Pause" aria-label="Play/pause">⏸</button>
     <button id="mpv-restart" class="mpv-ctl" type="button" title="Restart animation" aria-label="Restart">⟲</button>
-    <button id="mpv-help" class="mpv-ctl" type="button" tabindex="-1" aria-label="Controls help" title="Drag header to move · drag model to orbit · scroll to zoom · dropdown switches animation · ⟲ replays from start">?</button>
+    <button id="mpv-help" class="mpv-ctl" type="button" aria-label="Controls help" title="Drag header to move · drag model to orbit · scroll to zoom · dropdown switches animation · ⟲ replays from start">?</button>
     <button id="mpv-close" class="mpv-close" type="button" title="Close preview" aria-label="Close preview">✕</button>
   </div>
   <div id="mpv-viewport" class="mpv-viewport">
@@ -2984,21 +2994,22 @@ ${gameDataBanner}
 <canvas id="model-thumb-canvas" class="thumb-render-canvas" width="96" height="96" aria-hidden="true"></canvas>
 <div id="model-thumb-viewport" class="thumb-render-canvas" aria-hidden="true"></div>
 <div id="ab-overlay" class="ab-overlay" hidden>
-  <div class="ab-modal" role="dialog" aria-label="Asset browser">
+  <div class="ab-modal" role="dialog" aria-modal="true" aria-labelledby="ab-title">
+    <h2 id="ab-title" class="ab-sr-only">Asset browser</h2>
     <div class="ab-head">
-      <div class="ab-tabs" id="ab-tabs">
-        <button class="ab-tab" type="button" data-tab="model">Models</button>
-        <button class="ab-tab" type="button" data-tab="icon">Icons</button>
-        <button class="ab-tab" type="button" data-tab="sound">Sounds</button>
-        <button class="ab-tab" type="button" data-tab="pathing">Pathing</button>
+      <div class="ab-tabs" id="ab-tabs" role="tablist" aria-label="Asset type">
+        <button class="ab-tab" type="button" role="tab" data-tab="model" aria-controls="ab-grid" aria-selected="false">Models</button>
+        <button class="ab-tab" type="button" role="tab" data-tab="icon" aria-controls="ab-grid" aria-selected="false">Icons</button>
+        <button class="ab-tab" type="button" role="tab" data-tab="sound" aria-controls="ab-grid" aria-selected="false">Sounds</button>
+        <button class="ab-tab" type="button" role="tab" data-tab="pathing" aria-controls="ab-grid" aria-selected="false">Pathing</button>
       </div>
-      <input id="ab-search" class="ab-search" placeholder="Search game assets…" aria-label="Search assets">
+      <input id="ab-search" class="ab-search" type="search" placeholder="Search game assets…" aria-label="Search assets">
       <select id="ab-source" class="ab-source" title="Filter by source" aria-label="Filter by source">
         <option value="all">All</option>
         <option value="wc3">WC3</option>
         <option value="import">Imports</option>
       </select>
-      <span id="ab-count" class="ab-count"></span>
+      <span id="ab-count" class="ab-count" role="status" aria-live="polite"></span>
       <button id="ab-close" class="ab-close" type="button" title="Close (Esc)" aria-label="Close">✕</button>
     </div>
     <div id="ab-grid" class="ab-grid"></div>

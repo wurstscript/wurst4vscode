@@ -583,7 +583,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
           <canvas id="canvas3d" class="stage-canvas" width="1" height="1" style="display:none;"></canvas>
         </div>
         <canvas id="gizmo" class="gizmo" width="80" height="80"></canvas>
-        <div id="loadingOverlay" class="wv-loading-overlay visible">
+        <div id="loadingOverlay" class="wv-loading-overlay visible" role="status" aria-live="polite" aria-busy="true">
           <div class="wv-spinner"></div>
           <div id="loadingText" class="wv-loading-text">Loading...</div>
         </div>
@@ -644,10 +644,12 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       if (text) loadingText.textContent = text;
       if (isLoading) {
         overlay.classList.add('visible');
+        overlay.setAttribute('aria-busy', 'true');
         stage.classList.add('loading-stage');
         debug('loading on: ' + (text || ''));
       } else {
         overlay.classList.remove('visible');
+        overlay.setAttribute('aria-busy', 'false');
         stage.classList.remove('loading-stage');
         debug('loading off');
       }

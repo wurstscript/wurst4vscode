@@ -904,6 +904,22 @@ function testObjModSaveCommitsFocusedEditor() {
     assert.ok(host.includes('doc.wtsEdits.clear()'), 'objmod host should clear staged WTS edits after a successful write');
 }
 
+function testObjModTooltipFontWiring() {
+    const host = fs.readFileSync(path.join(root, 'src/features/objModPreview.ts'), 'utf8');
+    const packageJson = fs.readFileSync(path.join(root, 'package.json'), 'utf8');
+    const packageData = JSON.parse(packageJson);
+
+    assert.ok(host.includes("get<string>(TOOLTIP_FONT_SETTING, '')"), 'objmod should support an explicit tooltip font setting');
+    assert.ok(!host.includes("'**/*.ttf'"), 'objmod must not auto-discover arbitrary workspace fonts');
+    assert.ok(host.includes('isWithinDirectory(root, configuredPath)'), 'configured tooltip fonts must stay inside the workspace');
+    assert.ok(host.includes('webview.asWebviewUri(fontUri)'), 'project fonts must be converted to webview resource URIs');
+    assert.ok(host.includes('font-src ${context.webview.cspSource}'), 'objmod CSP must permit the project font resource');
+    assert.ok(host.includes('@font-face'), 'objmod should declare the project font for tooltip previews');
+    assert.ok(host.includes(".tt-collapsed-box,\n.tt-preview"), 'the custom font should be scoped to tooltip previews');
+    assert.ok(packageJson.includes('wurst.objModTooltipFont'), 'the tooltip font setting should be contributed by the extension');
+    assert.equal(packageData.contributes.configuration.properties['wurst.objModTooltipFont'].default, '', 'the tooltip font setting must default to disabled');
+}
+
 function testObjModEditorTypeAndRecoveryGuards() {
     const host = fs.readFileSync(path.join(root, 'src/features/objModPreview.ts'), 'utf8');
     const webviewFiles = [
@@ -946,6 +962,7 @@ async function main() {
     testStaticMdxWithoutSequences();
     await testIssueReportingPrivacyAndDeduplication();
     testObjModSaveCommitsFocusedEditor();
+    testObjModTooltipFontWiring();
     console.log('webview harness tests passed');
 }
 

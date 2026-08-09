@@ -46,6 +46,9 @@ const TYPE_LABELS: Record<string, string> = {
     w3q: 'Upgrade',
 };
 
+const TOOLTIP_FONT_SETTING = 'objModTooltipFont';
+const TOOLTIP_FONT_FAMILY = 'WurstProjectTooltip';
+
 // Inline string fields in objmod files are length-capped by the World Editor; longer
 // values must be externalized into war3map.wts as a TRIGSTR_ reference. The exact cap
 // isn't authoritatively documented (community reports ~512–1024 bytes); 1024 is a safe
@@ -1600,6 +1603,43 @@ function buildObjLoadingHtml(fileName: string): string {
     });
 }
 
+function isWithinDirectory(root: string, target: string): boolean {
+    const relative = path.relative(path.resolve(root), path.resolve(target));
+    return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
+}
+
+async function existingTtfUri(uri: vscode.Uri): Promise<vscode.Uri | undefined> {
+    if (path.extname(uri.fsPath).toLowerCase() !== '.ttf') return undefined;
+    try {
+        const stat = await vscode.workspace.fs.stat(uri);
+        return stat.type === vscode.FileType.File ? uri : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+/** Resolve the project font used by tooltip previews, without exposing arbitrary filesystem paths. */
+async function resolveTooltipFontUri(documentUri: vscode.Uri, webview: vscode.Webview): Promise<string | undefined> {
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(documentUri);
+    if (!workspaceFolder) return undefined;
+    const root = workspaceFolder.uri.fsPath;
+    const configured = vscode.workspace.getConfiguration('wurst', documentUri)
+        .get<string>(TOOLTIP_FONT_SETTING, '').trim();
+    if (!configured) return undefined;
+
+    const configuredPath = path.resolve(root, configured);
+    if (!isWithinDirectory(root, configuredPath)) {
+        console.warn(`[wurst-objmod] ${TOOLTIP_FONT_SETTING} must point inside the workspace: ${configured}`);
+        return undefined;
+    }
+    const fontUri = await existingTtfUri(vscode.Uri.file(configuredPath));
+    if (!fontUri) {
+        console.warn(`[wurst-objmod] tooltip font not found or not a .ttf file: ${configured}`);
+        return undefined;
+    }
+    return webview.asWebviewUri(fontUri).toString();
+}
+
 async function buildHtml(
     parsed: ObjModFile,
     fileName: string,
@@ -1654,8 +1694,19 @@ async function buildHtml(
         ? `<div class="warning">Warcraft III game data not found — showing raw field ids only (no icons, categories, or friendly labels). Checked the default install locations${registrySuffix}; if Warcraft III is installed somewhere unusual, set the "wurst.wc3path" setting to its folder and reopen this file. Run "Wurst: Show WC3 Data Log" from the Command Palette to see exactly what was checked.</div>`
         : '';
 
+    const tooltipFontUri = await resolveTooltipFontUri(context.uri, context.webview);
+    const tooltipFontCss = tooltipFontUri ? `
+@font-face {
+  font-family: '${TOOLTIP_FONT_FAMILY}';
+  src: url(${JSON.stringify(tooltipFontUri)}) format('truetype');
+  font-display: swap;
+}
+.tt-collapsed-box,
+.tt-preview { font-family: '${TOOLTIP_FONT_FAMILY}', var(--vscode-font-family, sans-serif); }
+` : '';
+
     return buildPage({
-        csp: `default-src 'none'; img-src ${context.webview.cspSource} data:; connect-src ${context.webview.cspSource}; style-src 'unsafe-inline'; script-src 'unsafe-inline' ${context.webview.cspSource}; worker-src blob:;`,
+        csp: `default-src 'none'; img-src ${context.webview.cspSource} data:; font-src ${context.webview.cspSource}; connect-src ${context.webview.cspSource}; style-src 'unsafe-inline'; script-src 'unsafe-inline' ${context.webview.cspSource}; worker-src blob:;`,
         title: escapeHtml(fileName),
         extraCss: `
 :root {
@@ -2953,6 +3004,7 @@ tr.overridden td {
 .object-editor.narrow .object-list { border-right: 0; border-bottom: 1px solid var(--border); min-height: 120px; }
 .object-editor.narrow .details { min-height: 240px; }
 .object-editor.narrow .splitter { display: none; }
+${tooltipFontCss}
 `,
         body: `<div class="content">
 <div class="md-header">

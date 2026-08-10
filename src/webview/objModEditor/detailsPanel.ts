@@ -414,6 +414,7 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
   }
 
   const original = mod.editValue == null ? '' : String(mod.editValue);
+  const hiddenPrefixLength = original.length - tooltipPreviewText(original).length;
   // An empty field's collapsed body holds a "(empty)" placeholder (see collapsedView) — clear it before
   // editing so typing doesn't start by appending to that literal text. No real content existed to click
   // into, so the captured range (if any) is meaningless here too.
@@ -487,7 +488,7 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
   rawArea.addEventListener('keydown', onEscapeOrSubmit);
 
   body.focus({ preventScroll: true });
-  if (caretOffset !== null) setCaretAtTextOffset(body, caretOffset);
+  if (caretOffset !== null) setCaretAtTextOffset(body, caretOffset + hiddenPrefixLength);
   else setCaretEnd(body);
 
   const bar = toolbar.querySelector('.tt-bar');

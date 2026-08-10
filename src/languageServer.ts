@@ -50,8 +50,9 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
         if (typeof anyClient.onReady === 'function') await anyClient.onReady();
     } catch (error) {
         clientRef = null;
-        const message = formatDiagnosticError(error);
-        appendDiagnostic('VS Code extension', `Wurst language server failed to start: ${message}`);
+        const detail = formatDiagnosticError(error);
+        const message = error instanceof Error ? error.message : String(error);
+        appendDiagnostic('VS Code extension', `Wurst language server failed to start: ${detail}`);
         vscode.window.showErrorMessage(`Wurst language server failed to start: ${message}`);
         throw error;
     }

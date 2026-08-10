@@ -5,7 +5,7 @@ import { details, detailCache, pendingDetails, failedDetails, ui, vscodeApi, ico
 import { categoryLabel, categoryKey, objectIconHtml, detailsTitleHtml, matches, selectObject } from './objectTree';
 import { valueCell, postEdit, setModValue, editorHtml, collapsedView, normalizeNumberValue, needsColorEditor, tooltipToolbarHtml, tooltipPreviewText } from './fieldDisplay';
 import { observeModelThumbs } from './modelThumbnails';
-import { wireColorBar, setCaretEnd, richToWc3, forcePlainTextPaste, forceWc3ColorCopy, wrapColor, applyRichColor, updateColorSwatch, containsNode } from './richTextEditor';
+import { wireColorBar, setCaretEnd, setCaretAtTextOffset, textOffsetAtRange, richToWc3, forcePlainTextPaste, forceWc3ColorCopy, wrapColor, applyRichColor, updateColorSwatch, containsNode } from './richTextEditor';
 import { openAssetBrowser } from './assetBrowser';
 import { showModelPreview } from './modelPreviewPanel';
 
@@ -407,17 +407,17 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
 
   // Same node before and after — the click's caret position is already valid for the body once it's
   // made editable, no coordinate remapping needed.
-  let range: Range | null = null;
+  let caretOffset: number | null = null;
   if (clickEvent && typeof document.caretRangeFromPoint === 'function') {
     const r = document.caretRangeFromPoint(clickEvent.clientX, clickEvent.clientY);
-    if (r && body.contains(r.startContainer)) range = r;
+    if (r && body.contains(r.startContainer)) caretOffset = textOffsetAtRange(body, r);
   }
 
   const original = mod.editValue == null ? '' : String(mod.editValue);
   // An empty field's collapsed body holds a "(empty)" placeholder (see collapsedView) — clear it before
   // editing so typing doesn't start by appending to that literal text. No real content existed to click
   // into, so the captured range (if any) is meaningless here too.
-  if (!original) { body.innerHTML = ''; range = null; }
+  if (!original) { body.innerHTML = ''; caretOffset = null; }
   else body.innerHTML = renderWc3Colors(original);
   body.contentEditable = 'true';
   body.spellcheck = false;
@@ -487,7 +487,7 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
   rawArea.addEventListener('keydown', onEscapeOrSubmit);
 
   body.focus({ preventScroll: true });
-  if (range) { const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range); }
+  if (caretOffset !== null) setCaretAtTextOffset(body, caretOffset);
   else setCaretEnd(body);
 
   const bar = toolbar.querySelector('.tt-bar');

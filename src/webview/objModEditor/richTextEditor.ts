@@ -82,6 +82,35 @@ export function setCaretEnd(el) {
   sel.addRange(range);
 }
 
+export function textOffsetAtRange(root, range) {
+  const before = range.cloneRange();
+  before.selectNodeContents(root);
+  before.setEnd(range.startContainer, range.startOffset);
+  return before.toString().length;
+}
+
+export function setCaretAtTextOffset(root, offset) {
+  const target = Math.max(0, Number(offset) || 0);
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let remaining = target;
+  let node;
+  while ((node = walker.nextNode())) {
+    const length = node.nodeValue ? node.nodeValue.length : 0;
+    if (remaining <= length) {
+      const range = document.createRange();
+      range.setStart(node, remaining);
+      range.collapse(true);
+      const sel = window.getSelection();
+      if (!sel) return;
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return;
+    }
+    remaining -= length;
+  }
+  setCaretEnd(root);
+}
+
 export function containsNode(parent, node) {
   while (node) {
     if (node === parent) return true;

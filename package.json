@@ -790,6 +790,14 @@
                     "scope": "resource",
                     "description": "Optional path to a .ttf font, relative to the workspace root, for custom glyphs in WC3 object-editor tooltip previews. Leave empty to use the default VS Code font."
                 },
+                "wurst.objModTooltipWidth": {
+                    "type": "number",
+                    "default": 280,
+                    "minimum": 160,
+                    "maximum": 1200,
+                    "scope": "resource",
+                    "description": "Maximum width in CSS pixels of WC3 object-editor tooltip preview boxes. This can be set independently per workspace or workspace folder."
+                },
                 "wurst.gameExePath": {
                     "type": "string",
                     "default": "",

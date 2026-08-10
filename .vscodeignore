@@ -7,6 +7,7 @@ node_modules/**
 scripts/**
 e2e/**
 wc3data/**
+resources/wc3-knowledge-base.json
 test/**
 tests/**
 __tests__/**

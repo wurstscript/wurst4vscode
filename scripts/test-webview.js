@@ -915,9 +915,34 @@ function testObjModTooltipFontWiring() {
     assert.ok(host.includes('webview.asWebviewUri(fontUri)'), 'project fonts must be converted to webview resource URIs');
     assert.ok(host.includes('font-src ${context.webview.cspSource}'), 'objmod CSP must permit the project font resource');
     assert.ok(host.includes('@font-face'), 'objmod should declare the project font for tooltip previews');
-    assert.ok(host.includes(".tt-collapsed-box,\n.tt-preview"), 'the custom font should be scoped to tooltip previews');
+    assert.ok(!host.includes("Buffer.from(bytes).toString('base64')"), 'project fonts should not be embedded as large data URLs');
+    assert.ok(host.includes(".tt-collapsed-box,\n.tt-preview {"), 'the custom font should be assigned only to tooltip boxes');
+    assert.ok(!host.includes('.tt-collapsed-box *'), 'the custom font should not use descendant-wide override selectors');
     assert.ok(packageJson.includes('wurst.objModTooltipFont'), 'the tooltip font setting should be contributed by the extension');
     assert.equal(packageData.contributes.configuration.properties['wurst.objModTooltipFont'].default, '', 'the tooltip font setting must default to disabled');
+}
+
+function testObjModTooltipWidthWiring() {
+    const host = fs.readFileSync(path.join(root, 'src/features/objModPreview.ts'), 'utf8');
+    const packageData = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    const setting = packageData.contributes.configuration.properties['wurst.objModTooltipWidth'];
+
+    assert.equal(setting.default, 280, 'tooltip width should preserve the existing default');
+    assert.equal(setting.minimum, 160, 'tooltip width should reject unusably narrow values');
+    assert.equal(setting.maximum, 1200, 'tooltip width should have a sensible upper bound');
+    assert.equal(setting.scope, 'resource', 'tooltip width should be remembered per workspace folder');
+    assert.ok(host.includes("get<number>(TOOLTIP_WIDTH_SETTING, DEFAULT_TOOLTIP_WIDTH_PX)"), 'objmod should read the configured tooltip width for the document resource');
+    assert.ok(host.includes('--wc3-tip-width: ${tooltipWidthPx}px;'), 'objmod should apply the configured width to tooltip preview CSS');
+    assert.ok(!host.includes('--wc3-tip-width: 280px;'), 'tooltip preview width should not remain hard-coded');
+}
+
+function testObjModTooltipPreviewHeaders() {
+    const fieldDisplay = fs.readFileSync(path.join(root, 'src/webview/objModEditor/fieldDisplay.ts'), 'utf8');
+    const detailsPanel = fs.readFileSync(path.join(root, 'src/webview/objModEditor/detailsPanel.ts'), 'utf8');
+
+    assert.ok(fieldDisplay.includes("replace(/^(?:unit|building)\\s*\\/\\s*/i, '')"), 'unit and building tooltip markers should be hidden in previews');
+    assert.ok(detailsPanel.includes('renderWc3Colors(original)'), 'tooltip editing should restore the unmodified raw value');
+    assert.ok(detailsPanel.includes('renderWc3Colors(tooltipPreviewText(value, isTooltipTemplateField(mod)))'), 'tooltip collapse should restore the cleaned preview only for tooltip fields');
 }
 
 function testObjModEditorTypeAndRecoveryGuards() {
@@ -963,6 +988,8 @@ async function main() {
     await testIssueReportingPrivacyAndDeduplication();
     testObjModSaveCommitsFocusedEditor();
     testObjModTooltipFontWiring();
+    testObjModTooltipWidthWiring();
+    testObjModTooltipPreviewHeaders();
     console.log('webview harness tests passed');
 }
 

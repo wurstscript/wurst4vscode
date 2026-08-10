@@ -34,9 +34,13 @@ const forbidden = [
 const leaked = files.filter((file) => forbidden.some((pattern) => pattern.test(file)));
 assert.deepStrictEqual(leaked, [], `Test/development files would be packaged:\n${leaked.join('\n')}`);
 
-for (const required of ['package.json', 'README.md', 'dist/extension.js', 'resources/wc3-knowledge-base.json']) {
+for (const required of ['package.json', 'README.md', 'dist/extension.js']) {
     assert(files.includes(required), `Required release file is missing: ${required}`);
 }
+assert(
+    !files.includes('resources/wc3-knowledge-base.json'),
+    'Compiler knowledge-base JSON must not be bundled in the extension',
+);
 
 const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
 const readmeImages = [...readme.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)].map((match) => match[1]);

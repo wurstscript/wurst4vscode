@@ -13,6 +13,19 @@ export function hasColorMarkup(v) {
   return s.indexOf('|c') !== -1 || s.indexOf('|n') !== -1 || s.indexOf('|r') !== -1 || s.indexOf(String.fromCharCode(10)) !== -1;
 }
 
+// The game-facing unit/building tooltip templates often prefix their first line with a redundant
+// object-kind marker (for example, "Unit / Spawn rate: 23s"). Keep the raw value intact, but omit
+// that marker from the visual preview so the object's name and tree category provide the context.
+export function isTooltipTemplateField(mod) {
+  const label = String(mod?.label || '').toLowerCase();
+  return label.indexOf('tooltip') !== -1 || label.indexOf('tip') !== -1;
+}
+
+export function tooltipPreviewText(v, stripTemplatePrefix = true) {
+  const text = String(v == null ? '' : v);
+  return stripTemplatePrefix ? text.replace(/^(?:unit|building)\s*\/\s*/i, '') : text;
+}
+
 // Only genuine display-text fields get the color tools: tooltips/descriptions/tips, or any value
 // that already uses WC3 color codes / newlines. Short codes (hotkeys), names, comma rawcode lists
 // etc. get a plain input — no color bloat.
@@ -321,7 +334,7 @@ export function editorHtml(mod, mi) {
 export function collapsedView(mod, mi) {
   const dv = mod.editValue == null ? (mod.currentValue == null ? '' : String(mod.currentValue)) : String(mod.editValue);
   if (needsColorEditor(mod)) {
-    const body = dv ? renderWc3Colors(dv) : '<span class="tt-empty">(empty)</span>';
+    const body = dv ? renderWc3Colors(tooltipPreviewText(dv, isTooltipTemplateField(mod))) : '<span class="tt-empty">(empty)</span>';
     return '<div class="tt-collapsed" data-mi="' + mi + '" tabindex="0" role="button" title="Click or press Enter to edit">' +
       '<div class="tt-collapsed-box"><div class="tt-collapsed-body" data-mi="' + mi + '">' + body + '</div></div>' +
       (mod.source ? sourcePill(mod) : '') + '<span class="tt-edit-hint">✎</span></div>';
@@ -340,7 +353,7 @@ export function valueCell(mod, mi) {
   if (mod.missingWts) extra += ' <span class="readonly-trigstr">(externalized – war3map.wts missing)</span>';
   const ro = mod.currentValue == null ? '' : String(mod.currentValue);
   if (hasColorMarkup(ro)) {
-    return '<div class="tt-preview tt-readonly">' + renderWc3Colors(ro) + '</div>' + extra;
+    return '<div class="tt-preview tt-readonly">' + renderWc3Colors(tooltipPreviewText(ro, isTooltipTemplateField(mod))) + '</div>' + extra;
   }
   return decoratedValueHtml(mod, mi, ro) + extra;
 }

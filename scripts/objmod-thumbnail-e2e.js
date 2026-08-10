@@ -15,6 +15,7 @@
  *   WURST_OBJMOD_E2E_SEARCH     optional model-catalog search query
  *   WURST_OBJMOD_E2E_MAX_MS     max warm per-thumbnail lifecycle, default 200ms
  *   WURST_OBJMOD_E2E_TIMEOUT_MS total wait timeout, default 90000
+ *   WURST_OBJMOD_E2E_FONT_ONLY  stop after verifying a configured tooltip font
  */
 
 const assert = require('assert');
@@ -50,6 +51,7 @@ const maxThumbnailMs = Number(process.env.WURST_OBJMOD_E2E_MAX_MS || 200);
 // wait up to 30 seconds before creating their first renderer. Leave enough time after that for
 // extension activation, CASC catalog loading, and the uncached worker renders.
 const timeoutMs = Number(process.env.WURST_OBJMOD_E2E_TIMEOUT_MS || 90000);
+const fontOnly = process.env.WURST_OBJMOD_E2E_FONT_ONLY === '1';
 
 function writeGeneratedObjmodFixture() {
     const { serializeObjMod } = require('casc-ts/formats');
@@ -289,6 +291,14 @@ class CdpClient {
         this.nextId = 1;
         this.pending = new Map();
         this.listeners = new Map();
+        this.browserDiagnostics = [];
+        this.on('Log.entryAdded', ({ entry }) => {
+            if (entry?.text) this.browserDiagnostics.push(entry.text);
+        });
+        this.on('Runtime.consoleAPICalled', ({ type, args }) => {
+            const message = (args || []).map((arg) => arg.value ?? arg.description ?? '').join(' ');
+            if (message) this.browserDiagnostics.push(`${type}: ${message}`);
+        });
     }
 
     async connect() {
@@ -369,6 +379,7 @@ async function waitForWebviewContext(client) {
                 if (attached?.sessionId) {
                     attachedTargets.add(target.targetId);
                     await client.send('Runtime.enable', {}, attached.sessionId);
+                    await client.send('Log.enable', {}, attached.sessionId).catch(() => undefined);
                 }
             } catch {
                 attachedTargets.add(target.targetId);
@@ -411,6 +422,70 @@ async function waitForEval(client, sessionId, contextId, expression, predicate, 
         await new Promise((resolve) => setTimeout(resolve, 100));
     }
     throw new Error(`Timed out waiting for ${label}. Last value: ${JSON.stringify(last)}`);
+}
+
+async function assertTooltipFont(client, sessionId, contextId) {
+    const status = await evalInContext(client, sessionId, contextId, `(async function () {
+        var family = 'WurstProjectTooltip';
+        var face = Array.from(document.fonts).find(function (candidate) { return candidate.family === family; });
+        if (!face) return { configured: false };
+        var resource = {};
+        try {
+            var rules = Array.from(document.styleSheets).flatMap(function (sheet) { return Array.from(sheet.cssRules || []); });
+            var fontRule = rules.find(function (rule) { return rule.cssText && rule.cssText.indexOf(family) >= 0 && rule.style && rule.style.src; });
+            resource.src = fontRule ? fontRule.style.src : '';
+            var match = resource.src.match(/url\\(["']?([^"')]+)["']?\\)/);
+            if (match) {
+                var response = await fetch(match[1]);
+                var bytes = await response.arrayBuffer();
+                resource.ok = response.ok;
+                resource.status = response.status;
+                resource.type = response.type;
+                resource.bytes = bytes.byteLength;
+                resource.magic = Array.from(new Uint8Array(bytes.slice(0, 4)));
+            }
+        } catch (error) {
+            resource.error = String(error);
+        }
+        try {
+            var loadedFaces = await document.fonts.load('16px "WurstProjectTooltip"');
+            var target = document.querySelector('.tt-collapsed-box, .tt-preview');
+            var computed = target ? getComputedStyle(target).fontFamily : '';
+            var outside = Array.from(document.querySelectorAll('td.id, td.num, td.value, td.label, .cell-edit-val'))
+                .filter(function (candidate) { return !candidate.closest('.tt-collapsed-box, .tt-preview'); })
+                .slice(0, 50)
+                .map(function (candidate) {
+                    return {
+                        selector: candidate.tagName.toLowerCase() + '.' + candidate.className,
+                        font: getComputedStyle(candidate).fontFamily,
+                        text: String(candidate.textContent || '').trim().slice(0, 40),
+                    };
+                });
+            return {
+                configured: true,
+                loaded: loadedFaces.some(function (candidate) { return candidate.family === family; }),
+                status: face.status,
+                computed: computed,
+                applied: target ? computed.indexOf(family) >= 0 : null,
+                editorFont: getComputedStyle(document.documentElement).getPropertyValue('--vscode-editor-font-family').trim(),
+                outsideUsingTooltipFont: outside.filter(function (candidate) { return candidate.font.indexOf(family) >= 0; }),
+                resource: resource,
+            };
+        } catch (error) {
+            return { configured: true, loaded: false, status: face.status, error: String(error), resource: resource };
+        }
+    })()`);
+    if (!status.configured) {
+        log('tooltip font not configured; font assertion skipped');
+        return;
+    }
+    status.diagnostics = client.browserDiagnostics.filter((message) => /font|ots/i.test(message)).slice(-20);
+    assert.equal(status.error, undefined, `configured tooltip font failed to load: ${JSON.stringify(status)}`);
+    assert.equal(status.loaded, true, `configured tooltip font did not produce a loaded face: ${JSON.stringify(status)}`);
+    assert.equal(status.status, 'loaded', `configured tooltip font has unexpected status: ${JSON.stringify(status)}`);
+    assert.equal(status.applied, true, `configured tooltip font is not applied to the tooltip box: ${JSON.stringify(status)}`);
+    assert.deepEqual(status.outsideUsingTooltipFont, [], `configured tooltip font leaked outside tooltip boxes: ${JSON.stringify(status)}`);
+    log(`tooltip font loaded and scoped (${status.computed}); editor font=${status.editorFont || '(default)'}`);
 }
 
 async function assertObjmodEditorBasics(client, sessionId, contextId) {
@@ -574,6 +649,17 @@ async function assertObjmodEditorBasics(client, sessionId, contextId) {
         assert.ok(customRows.some((row) => String(row.fieldId).toLowerCase() === 'anam' && row.overridden), 'custom object should keep modified fields');
     }
 
+    await waitForEval(
+        client,
+        sessionId,
+        contextId,
+        '!!document.querySelector(".tt-collapsed-box, .tt-preview")',
+        (value) => value === true,
+        'rendered tooltip box',
+        15000,
+    );
+    await assertTooltipFont(client, sessionId, contextId);
+
     await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.openModelAssetBrowser()');
     await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.searchModelAssetBrowser("LordaeronTree")');
     const assetState = await waitForEval(
@@ -692,6 +778,11 @@ async function main() {
         const { sessionId, contextId } = await waitForWebviewContext(client);
         log('asserting objmod editor basics');
         await assertObjmodEditorBasics(client, sessionId, contextId);
+        if (fontOnly) {
+            log('font-only check passed');
+            passed = true;
+            return;
+        }
         log('asserting model thumbnails');
         await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.openModelAssetBrowser()');
         if (searchQuery) {

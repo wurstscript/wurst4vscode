@@ -6,6 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { CascStorage, MpqStorage, closeAllSegments } from 'casc-ts';
+import { appendDiagnostic, formatDiagnosticError } from '../diagnostics';
 
 const WURST_HOME = path.join(os.homedir(), '.wurst');
 
@@ -61,6 +62,10 @@ class MpqGameStorage implements GameStorage {
     static async openAsync(root: string, log: (message: string) => void): Promise<MpqGameStorage> {
         const entries = await fs.promises.readdir(root, { withFileTypes: true });
         const files = new Map(entries.filter((entry) => entry.isFile()).map((entry) => [entry.name.toLowerCase(), entry.name]));
+        const record = (message: string): void => {
+            log(message);
+            channelLog(message);
+        };
         // Low priority first. The last archive containing a path wins, matching
         // the classic client: base RoC -> TFT -> locale -> patch overlay.
         const archiveNames = ['war3.mpq', 'war3local.mpq', 'war3x.mpq', 'war3xlocal.mpq', 'war3patch.mpq'];
@@ -70,10 +75,10 @@ class MpqGameStorage implements GameStorage {
             if (!actualName) continue;
             const archivePath = path.join(root, actualName);
             try {
-                const storage = await MpqStorage.openAsync(archivePath, log);
+                const storage = await MpqStorage.openAsync(archivePath, record);
                 archives.push({ name: actualName, storage });
             } catch (error) {
-                log(`MPQ open failed: ${archivePath}: ${String(error)}`);
+                record(`MPQ open failed: ${archivePath}: ${formatDiagnosticError(error)}`);
             }
         }
         if (!archives.length) throw new Error(`No readable WC3 MPQ archives found in ${root}`);
@@ -88,7 +93,16 @@ class MpqGameStorage implements GameStorage {
         for (let i = this.archives.length - 1; i >= 0; i--) {
             const archive = this.archives[i];
             if (await archive.storage.hasFileAsync(normalized)) {
-                return archive.storage.readFileAsync(normalized);
+                try {
+                    return await archive.storage.readFileAsync(normalized);
+                } catch (error) {
+                    const detail = formatDiagnosticError(error);
+                    const wrapped = new Error(`MPQ ${archive.name} failed to read ${normalized}: ${detail}`);
+                    if (wrapped.stack && detail.includes('\n')) {
+                        wrapped.stack += `\nCaused by:\n${detail}`;
+                    }
+                    throw wrapped;
+                }
             }
         }
         throw new Error(`File not found in WC3 MPQ storage: ${filePath}`);
@@ -144,7 +158,9 @@ export function getCascOutputChannel(): vscode.OutputChannel {
 
 function channelLog(message: string): void {
     const iso = new Date().toISOString();
-    getCascOutputChannel().appendLine(`[${iso.slice(11, 23)}] ${message}`);
+    const line = `[${iso.slice(11, 23)}] ${message}`;
+    appendDiagnostic('WC3 data', line);
+    getCascOutputChannel().appendLine(line);
 }
 
 function normalizeWindowsDriveRoot(value: string | undefined): string | null {
@@ -450,8 +466,9 @@ async function getCascStorageInstance(wc3Root: string, log: (msg: string) => voi
             channelLog(`storage opened (${cascStorageInstance.fileCount} files)`);
             return cascStorageInstance;
         } catch (e) {
-            log(`CASC open failed: ${String(e)}`);
-            channelLog(`storage open failed: ${String(e)}`);
+            const detail = formatDiagnosticError(e);
+            log(`CASC open failed: ${detail}`);
+            channelLog(`storage open failed: ${detail}`);
             cascStorageRoot = null;
             return null;
         } finally {
@@ -479,7 +496,9 @@ async function getGameStorageInstance(root: GameDataRoot, log: (msg: string) => 
             mpqStorageInstance = await MpqGameStorage.openAsync(root.root, log);
             return mpqStorageInstance;
         } catch (error) {
-            log(`MPQ game storage open failed: ${String(error)}`);
+            const detail = formatDiagnosticError(error);
+            log(`MPQ game storage open failed: ${detail}`);
+            channelLog(`game storage open failed: ${detail}`);
             mpqStorageRoot = null;
             return null;
         } finally {
@@ -510,10 +529,23 @@ async function gameReadDirect(root: GameDataRoot, gamePath: string, log: (msg: s
     const storage = await getGameStorageInstance(root, log);
     if (!storage) return null;
     try {
+        if (!await storage.hasFileAsync(gamePath)) return null;
+    } catch (error) {
+        const detail = formatDiagnosticError(error);
+        const message = `${root.kind.toUpperCase()} lookup failed: ${gamePath}: ${detail}`;
+        log(message);
+        channelLog(message);
+        return null;
+    }
+    try {
         const buf = await storage.readFileAsync(gamePath);
         if (!buf || buf.length === 0) return null;
         return buf;
-    } catch {
+    } catch (error) {
+        const detail = formatDiagnosticError(error);
+        const message = `${root.kind.toUpperCase()} read failed: ${gamePath}: ${detail}`;
+        log(message);
+        channelLog(message);
         return null;
     }
 }
@@ -611,6 +643,7 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
         }
     }
     rememberMiss(cascTextureMissCache, missKey);
+    log(`${gameRoot!.kind.toUpperCase()} texture not found after ${candidates.length} candidates: ${texPath}`);
     return null;
 }
 
@@ -702,6 +735,7 @@ export async function findCascAsset(assetPath: string, log: (msg: string) => voi
     }
 
     rememberMiss(cascAssetMissCache, normalized);
+    log(`${gameRoot.kind.toUpperCase()} asset not found after ${candidates.length} candidates: ${assetPath}`);
     return null;
 }
 
@@ -746,9 +780,15 @@ function stripCascContainerPrefix(cascPath: string): string | undefined {
 }
 
 function defaultCascLog(message: string): void {
+    channelLog(message);
     if (process.env.WURST_CASC_DEBUG === '1') {
         console.log(`[wurst-casc] ${message}`);
     }
+}
+
+/** Shared logger for game-data consumers that do not have a feature-specific output channel. */
+export function logGameData(message: string): void {
+    defaultCascLog(message);
 }
 
 /** Try to read a texture file from the local filesystem relative to the MDX file.

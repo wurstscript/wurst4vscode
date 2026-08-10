@@ -8,12 +8,17 @@ import { RUNTIME_DIR, COMPILER_JAR } from './paths';
 import { getBundledJava, checkCustomJavaVersion, getInstalledVersionString, ensureInstalledOrOfferMigration, maybeOfferUpdate } from './install/installer';
 import { registerCommands } from './features/commands';
 import { registerFileCreation } from './features/fileCreation';
+import { appendDiagnostic, formatDiagnosticError } from './features/diagnostics';
 
 let clientRef: LanguageClient | null = null;
 
 export async function stopLanguageServerIfRunning(): Promise<boolean> {
     if (!clientRef) return false;
-    try { await clientRef.stop(); } catch {}
+    try {
+        await clientRef.stop();
+    } catch (error) {
+        appendDiagnostic('VS Code extension', `Language server stop failed: ${formatDiagnosticError(error)}`);
+    }
     clientRef = null;
     return true;
 }
@@ -45,24 +50,19 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
         if (typeof anyClient.onReady === 'function') await anyClient.onReady();
     } catch (error) {
         clientRef = null;
+        const detail = formatDiagnosticError(error);
         const message = error instanceof Error ? error.message : String(error);
+        appendDiagnostic('VS Code extension', `Wurst language server failed to start: ${detail}`);
         vscode.window.showErrorMessage(`Wurst language server failed to start: ${message}`);
         throw error;
     }
 
     const sb = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     sb.text = '$(check) WurstScript';
-    sb.tooltip = ['WurstScript language server is running.', 'Version: detecting...', 'Click to open logs.'].join('\n');
-    sb.command = 'wurst.showLogs';
+    sb.tooltip = ['WurstScript language server is running.', 'Version: detecting...', 'Click for diagnostics actions.'].join('\n');
+    sb.command = 'wurst.showDiagnosticsActions';
     sb.show();
     context.subscriptions.push(sb);
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('wurst.showLogs', () => {
-            try { client.outputChannel.show(); }
-            catch { vscode.commands.executeCommand('workbench.action.output.toggleOutput'); }
-        })
-    );
 
     client.onNotification('wurst/updateGamePath', (params) => {
         workspace.getConfiguration().update('wurst.wc3path', params);

@@ -3,9 +3,9 @@ import { esc, renderWc3Colors } from '../objModWebviewUtils';
 import { batch, effect, untracked } from '../signals';
 import { details, detailCache, pendingDetails, failedDetails, ui, vscodeApi, iconLoader, initial, objects } from './state';
 import { categoryLabel, categoryKey, objectIconHtml, detailsTitleHtml, matches, selectObject } from './objectTree';
-import { valueCell, postEdit, setModValue, editorHtml, collapsedView, normalizeNumberValue, needsColorEditor, tooltipToolbarHtml } from './fieldDisplay';
+import { valueCell, postEdit, setModValue, editorHtml, collapsedView, normalizeNumberValue, needsColorEditor, tooltipToolbarHtml, tooltipPreviewText, isTooltipTemplateField } from './fieldDisplay';
 import { observeModelThumbs } from './modelThumbnails';
-import { wireColorBar, setCaretEnd, richToWc3, forcePlainTextPaste, forceWc3ColorCopy, wrapColor, applyRichColor, updateColorSwatch, containsNode } from './richTextEditor';
+import { wireColorBar, setCaretEnd, setCaretAtTextOffset, textOffsetAtRange, textRangePrefersNext, richToWc3, forcePlainTextPaste, forceWc3ColorCopy, wrapColor, applyRichColor, updateColorSwatch, containsNode } from './richTextEditor';
 import { openAssetBrowser } from './assetBrowser';
 import { showModelPreview } from './modelPreviewPanel';
 
@@ -407,17 +407,24 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
 
   // Same node before and after — the click's caret position is already valid for the body once it's
   // made editable, no coordinate remapping needed.
-  let range: Range | null = null;
+  let caretOffset: number | null = null;
+  let caretPrefersNext = false;
   if (clickEvent && typeof document.caretRangeFromPoint === 'function') {
     const r = document.caretRangeFromPoint(clickEvent.clientX, clickEvent.clientY);
-    if (r && body.contains(r.startContainer)) range = r;
+    if (r && body.contains(r.startContainer)) {
+      caretOffset = textOffsetAtRange(body, r);
+      caretPrefersNext = textRangePrefersNext(r);
+    }
   }
 
   const original = mod.editValue == null ? '' : String(mod.editValue);
+  const stripTemplatePrefix = isTooltipTemplateField(mod);
+  const hiddenPrefixLength = stripTemplatePrefix ? original.length - tooltipPreviewText(original).length : 0;
   // An empty field's collapsed body holds a "(empty)" placeholder (see collapsedView) — clear it before
   // editing so typing doesn't start by appending to that literal text. No real content existed to click
   // into, so the captured range (if any) is meaningless here too.
-  if (!original) { body.innerHTML = ''; range = null; }
+  if (!original) { body.innerHTML = ''; caretOffset = null; }
+  else body.innerHTML = renderWc3Colors(original);
   body.contentEditable = 'true';
   body.spellcheck = false;
   body.classList.add('edit-rich'); // reused by Ctrl+S / undo-vs-native-undo detection elsewhere
@@ -486,7 +493,7 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
   rawArea.addEventListener('keydown', onEscapeOrSubmit);
 
   body.focus({ preventScroll: true });
-  if (range) { const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range); }
+  if (caretOffset !== null) setCaretAtTextOffset(body, caretOffset + hiddenPrefixLength, caretPrefersNext);
   else setCaretEnd(body);
 
   const bar = toolbar.querySelector('.tt-bar');
@@ -607,7 +614,7 @@ export function exitTooltipEdit(commit) {
   const mods = detailCache.get(ui.selectedKey) || [];
   const mod = mods[mi];
   const value = mod && mod.editValue != null ? String(mod.editValue) : '';
-  body.innerHTML = value ? renderWc3Colors(value) : '<span class="tt-empty">(empty)</span>';
+  body.innerHTML = value ? renderWc3Colors(tooltipPreviewText(value, isTooltipTemplateField(mod))) : '<span class="tt-empty">(empty)</span>';
 }
 
 export function markModified(el, mod) {
@@ -748,7 +755,7 @@ export function updateFieldCell(mods, mod) {
     const rich = details.querySelector('.edit-rich[data-mi="' + mi + '"]');
     if (rich) rich.innerHTML = renderWc3Colors(el.value);
     const pv = details.querySelector('.tt-preview[data-preview-for="' + mi + '"]');
-    if (pv) pv.innerHTML = renderWc3Colors(el.value);
+    if (pv) pv.innerHTML = renderWc3Colors(tooltipPreviewText(el.value, isTooltipTemplateField(mod)));
     return;
   }
   const rich = details.querySelector('.edit-rich[data-mi="' + mi + '"]');

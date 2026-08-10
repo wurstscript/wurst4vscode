@@ -48,6 +48,10 @@ const TYPE_LABELS: Record<string, string> = {
 
 const TOOLTIP_FONT_SETTING = 'objModTooltipFont';
 const TOOLTIP_FONT_FAMILY = 'WurstProjectTooltip';
+const TOOLTIP_WIDTH_SETTING = 'objModTooltipWidth';
+const DEFAULT_TOOLTIP_WIDTH_PX = 280;
+const MIN_TOOLTIP_WIDTH_PX = 160;
+const MAX_TOOLTIP_WIDTH_PX = 1200;
 
 // Inline string fields in objmod files are length-capped by the World Editor; longer
 // values must be externalized into war3map.wts as a TRIGSTR_ reference. The exact cap
@@ -1618,8 +1622,11 @@ async function existingTtfUri(uri: vscode.Uri): Promise<vscode.Uri | undefined> 
     }
 }
 
-/** Resolve the project font used by tooltip previews, without exposing arbitrary filesystem paths. */
-async function resolveTooltipFontUri(documentUri: vscode.Uri, webview: vscode.Webview): Promise<string | undefined> {
+/** Resolve the configured project font through VS Code's supported webview resource pipeline. */
+async function resolveTooltipFontUri(
+    documentUri: vscode.Uri,
+    webview: vscode.Webview,
+): Promise<string | undefined> {
     const workspaceFolder = vscode.workspace.getWorkspaceFolder(documentUri);
     if (!workspaceFolder) return undefined;
     const root = workspaceFolder.uri.fsPath;
@@ -1637,6 +1644,7 @@ async function resolveTooltipFontUri(documentUri: vscode.Uri, webview: vscode.We
         console.warn(`[wurst-objmod] tooltip font not found or not a .ttf file: ${configured}`);
         return undefined;
     }
+    console.info(`[wurst-objmod] using tooltip font: ${configuredPath}`);
     return webview.asWebviewUri(fontUri).toString();
 }
 
@@ -1653,6 +1661,12 @@ async function buildHtml(
     const typeLabel = TYPE_LABELS[parsed.ext.slice(1)] ?? parsed.ext.slice(1).toUpperCase();
     const triggerStrings = loadTriggerStringsForUri(context.uri);
     const { objects, metadataSource } = await buildModel(parsed, triggerStrings);
+    const tooltipFontUri = await resolveTooltipFontUri(context.uri, context.webview);
+    const configuredTooltipWidth = vscode.workspace.getConfiguration('wurst', context.uri)
+        .get<number>(TOOLTIP_WIDTH_SETTING, DEFAULT_TOOLTIP_WIDTH_PX);
+    const tooltipWidthPx = Number.isFinite(configuredTooltipWidth)
+        ? Math.min(MAX_TOOLTIP_WIDTH_PX, Math.max(MIN_TOOLTIP_WIDTH_PX, Math.round(configuredTooltipWidth)))
+        : DEFAULT_TOOLTIP_WIDTH_PX;
     // A cross-reference jump (see locateObjectAcrossSiblings) stashes the object to land on here before
     // opening/revealing this file — consumed once so a later plain reopen falls back to the first object.
     // `isPendingJump` tells the webview this really is a deliberate navigation (state.ts uses it to
@@ -1694,15 +1708,17 @@ async function buildHtml(
         ? `<div class="warning">Warcraft III game data not found — showing raw field ids only (no icons, categories, or friendly labels). Checked the default install locations${registrySuffix}; if Warcraft III is installed somewhere unusual, set the "wurst.wc3path" setting to its folder and reopen this file. Run "Wurst: Show WC3 Data Log" from the Command Palette to see exactly what was checked.</div>`
         : '';
 
-    const tooltipFontUri = await resolveTooltipFontUri(context.uri, context.webview);
     const tooltipFontCss = tooltipFontUri ? `
 @font-face {
   font-family: '${TOOLTIP_FONT_FAMILY}';
   src: url(${JSON.stringify(tooltipFontUri)}) format('truetype');
-  font-display: swap;
+  font-style: normal;
+  font-weight: normal;
 }
 .tt-collapsed-box,
-.tt-preview { font-family: '${TOOLTIP_FONT_FAMILY}', var(--vscode-font-family, sans-serif); }
+.tt-preview {
+  font-family: '${TOOLTIP_FONT_FAMILY}', var(--vscode-font-family, sans-serif);
+}
 ` : '';
 
     return buildPage({
@@ -1717,11 +1733,9 @@ async function buildHtml(
      preview is intentionally dark in every theme — using --input-bg would hide light text in light themes. */
   --wc3-tip-bg: #000;
   --wc3-tip-fg: #fff;
-  /* Approximate in-game unit-tooltip width, so text wraps roughly where it would in Warcraft III
-     itself instead of stretching to fill whatever the details column happens to be. This is a best
-     effort figure (the game's actual wrap width also shifts a little with the player's UI console
-     scale) rather than a verified exact pixel match. */
-  --wc3-tip-width: 280px;
+  /* The game's effective wrap width varies with UI scale and custom font metrics, so this maximum is
+     configurable per workspace/folder through wurst.objModTooltipWidth. */
+  --wc3-tip-width: ${tooltipWidthPx}px;
   /* Rendered size of each gold corner/edge border tile (see the .tt-collapsed-box, .tt-preview rule) —
      the box's own padding is set to clear this, so the frame sits flush at the edge instead of cutting
      across the text. */

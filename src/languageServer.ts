@@ -4,11 +4,11 @@ import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { workspace, ExtensionContext } from 'vscode';
 import { LanguageClient, LanguageClientOptions, ServerOptions, Executable } from 'vscode-languageclient/node';
-import { RUNTIME_DIR, COMPILER_JAR, WURST_HOME } from './paths';
+import { RUNTIME_DIR, COMPILER_JAR } from './paths';
 import { getBundledJava, checkCustomJavaVersion, getInstalledVersionString, ensureInstalledOrOfferMigration, maybeOfferUpdate } from './install/installer';
 import { registerCommands } from './features/commands';
 import { registerFileCreation } from './features/fileCreation';
-import { appendDiagnostic, buildDiagnosticsText, formatDiagnosticError } from './diagnostics';
+import { appendDiagnostic, formatDiagnosticError } from './features/diagnostics';
 
 let clientRef: LanguageClient | null = null;
 
@@ -21,56 +21,6 @@ export async function stopLanguageServerIfRunning(): Promise<boolean> {
     }
     clientRef = null;
     return true;
-}
-
-function showLanguageServerOutput(): void {
-    try {
-        if (clientRef) {
-            clientRef.outputChannel.show();
-            return;
-        }
-        void vscode.commands.executeCommand('workbench.action.output.toggleOutput');
-    } catch (error) {
-        appendDiagnostic('VS Code extension', `Could not show language server output: ${formatDiagnosticError(error)}`);
-        void vscode.commands.executeCommand('workbench.action.output.toggleOutput');
-    }
-}
-
-async function copyDiagnostics(): Promise<void> {
-    try {
-        await vscode.env.clipboard.writeText(buildDiagnosticsText(WURST_HOME));
-        void vscode.window.showInformationMessage('Copied Wurst diagnostics to the clipboard.');
-    } catch (error) {
-        const detail = formatDiagnosticError(error);
-        appendDiagnostic('VS Code extension', `Could not copy diagnostics: ${detail}`);
-        void vscode.window.showErrorMessage(`Could not copy Wurst diagnostics: ${detail}`);
-    }
-}
-
-async function openWurstHome(): Promise<void> {
-    try {
-        await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(WURST_HOME));
-    } catch (error) {
-        const detail = formatDiagnosticError(error);
-        appendDiagnostic('VS Code extension', `Could not open Wurst home: ${detail}`);
-        void vscode.window.showErrorMessage(`Could not open Wurst home: ${detail}`);
-    }
-}
-
-export function registerWurstDiagnosticsCommands(context: ExtensionContext): void {
-    context.subscriptions.push(
-        vscode.commands.registerCommand('wurst.openWurstHome', () => openWurstHome()),
-        vscode.commands.registerCommand('wurst.copyDiagnostics', () => copyDiagnostics()),
-        vscode.commands.registerCommand('wurst.showLogs', () => showLanguageServerOutput()),
-        vscode.commands.registerCommand('wurst.showDiagnosticsActions', async () => {
-            const choice = await vscode.window.showQuickPick([
-                { label: '$(folder-opened) Open Wurst home', command: 'wurst.openWurstHome' },
-                { label: '$(copy) Copy diagnostics', command: 'wurst.copyDiagnostics' },
-                { label: '$(output) Open Wurst output', command: 'wurst.showLogs' },
-            ], { placeHolder: 'Wurst diagnostics' });
-            if (choice) await vscode.commands.executeCommand(choice.command);
-        })
-    );
 }
 
 export async function startLanguageClient(context: ExtensionContext): Promise<void> {

@@ -22,7 +22,7 @@ import {
     scaleDown,
 } from './imageAssetSupport';
 import { AssetIndex, getAssetIndex, invalidateAssetIndex } from '../utils/assetIndex';
-import { appendDiagnostic, formatDiagnosticError } from '../diagnostics';
+import { appendDiagnostic, formatDiagnosticError } from './diagnostics';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 

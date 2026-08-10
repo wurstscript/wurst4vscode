@@ -7,7 +7,7 @@ const path = require('path');
 const ts = require('typescript');
 
 const root = path.resolve(__dirname, '..');
-const source = fs.readFileSync(path.join(root, 'src', 'diagnostics.ts'), 'utf8');
+const source = fs.readFileSync(path.join(root, 'src', 'features', 'diagnostics.ts'), 'utf8');
 const js = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
 }).outputText;

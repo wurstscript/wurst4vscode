@@ -6,7 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { CascStorage, MpqStorage, closeAllSegments } from 'casc-ts';
-import { appendDiagnostic, formatDiagnosticError } from '../../diagnostics';
+import { appendDiagnostic, formatDiagnosticError } from '../diagnostics';
 
 const WURST_HOME = path.join(os.homedir(), '.wurst');
 
@@ -529,6 +529,15 @@ async function gameReadDirect(root: GameDataRoot, gamePath: string, log: (msg: s
     const storage = await getGameStorageInstance(root, log);
     if (!storage) return null;
     try {
+        if (!await storage.hasFileAsync(gamePath)) return null;
+    } catch (error) {
+        const detail = formatDiagnosticError(error);
+        const message = `${root.kind.toUpperCase()} lookup failed: ${gamePath}: ${detail}`;
+        log(message);
+        channelLog(message);
+        return null;
+    }
+    try {
         const buf = await storage.readFileAsync(gamePath);
         if (!buf || buf.length === 0) return null;
         return buf;
@@ -634,6 +643,7 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
         }
     }
     rememberMiss(cascTextureMissCache, missKey);
+    log(`${gameRoot!.kind.toUpperCase()} texture not found after ${candidates.length} candidates: ${texPath}`);
     return null;
 }
 
@@ -725,6 +735,7 @@ export async function findCascAsset(assetPath: string, log: (msg: string) => voi
     }
 
     rememberMiss(cascAssetMissCache, normalized);
+    log(`${gameRoot.kind.toUpperCase()} asset not found after ${candidates.length} candidates: ${assetPath}`);
     return null;
 }
 

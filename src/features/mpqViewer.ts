@@ -1,7 +1,7 @@
 'use strict';
 
 import * as vscode from 'vscode';
-import { appendDiagnostic, formatDiagnosticError } from '../diagnostics';
+import { appendDiagnostic, formatDiagnosticError } from './diagnostics';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
@@ -199,8 +199,9 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
                     }
                 } catch (e) {
                     log(`ERROR extracting ${name}: ${formatDiagnosticError(e)}`);
+                    const message = e instanceof Error ? e.message : String(e);
                     void vscode.window.showErrorMessage(
-                        `Failed to extract ${name}: ${formatDiagnosticError(e)}`
+                        `Failed to extract ${name}: ${message}`
                     );
                 }
                 return;

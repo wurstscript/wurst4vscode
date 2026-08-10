@@ -2,7 +2,7 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { appendDiagnostic } from '../diagnostics';
+import { appendDiagnostic } from './diagnostics';
 
 const ISSUE_URL = 'https://github.com/wurstscript/wurst4vscode/issues/new';
 const seenFailures = new Set<string>();

@@ -30,10 +30,21 @@ export function formatDiagnosticError(error: unknown): string {
 
 function readTail(filePath: string): string[] {
     try {
-        const text = fs.readFileSync(filePath, 'utf8');
-        const lines = text.split(/\r?\n/);
-        while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-        return lines.slice(-MAX_DIAGNOSTIC_LINES);
+        const stat = fs.statSync(filePath);
+        const bytesPerLine = 256;
+        const maxBytes = MAX_DIAGNOSTIC_LINES * bytesPerLine;
+        const start = Math.max(0, stat.size - maxBytes);
+        const fd = fs.openSync(filePath, 'r');
+        try {
+            const buffer = Buffer.alloc(stat.size - start);
+            fs.readSync(fd, buffer, 0, buffer.length, start);
+            const lines = buffer.toString('utf8').split(/\r?\n/);
+            while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+            if (start > 0 && lines.length > 0) lines.shift();
+            return lines.slice(-MAX_DIAGNOSTIC_LINES);
+        } finally {
+            fs.closeSync(fd);
+        }
     } catch (error) {
         return [`[unavailable: ${formatDiagnosticError(error)}]`];
     }

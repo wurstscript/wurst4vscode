@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import { workspace, ExtensionContext } from 'vscode';
 import { initPathManager } from './install/pathManager';
 import { installWithRetry } from './install/installer';
-import { registerWurstDiagnosticsCommands, startLanguageClient, stopLanguageServerIfRunning } from './languageServer';
+import { startLanguageClient, stopLanguageServerIfRunning } from './languageServer';
 import {
     findConflictingWurstProcesses,
     forceStopWurstProcesses,
@@ -25,9 +25,10 @@ import { registerTriggerPreview } from './features/triggerPreview';
 import { registerMapDataPreview } from './features/mapDataPreview';
 import { registerMapPreview } from './features/mapPreview';
 import { registerAgentsGuideOffer } from './features/agentsGuide';
+import { registerWurstDiagnosticsCommands } from './features/commands';
 import { openIssueReport } from './features/issueReporting';
 import { registerCascDiagnosticsCommand } from './features/preview/cascStorage';
-import { appendDiagnostic, formatDiagnosticError } from './diagnostics';
+import { appendDiagnostic, formatDiagnosticError } from './features/diagnostics';
 
 export async function activate(context: ExtensionContext) {
     console.log('Wurst extension activated!');

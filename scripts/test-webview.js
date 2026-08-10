@@ -942,7 +942,7 @@ function testObjModTooltipPreviewHeaders() {
 
     assert.ok(fieldDisplay.includes("replace(/^(?:unit|building)\\s*\\/\\s*/i, '')"), 'unit and building tooltip markers should be hidden in previews');
     assert.ok(detailsPanel.includes('renderWc3Colors(original)'), 'tooltip editing should restore the unmodified raw value');
-    assert.ok(detailsPanel.includes('renderWc3Colors(tooltipPreviewText(value))'), 'tooltip collapse should restore the cleaned preview');
+    assert.ok(detailsPanel.includes('renderWc3Colors(tooltipPreviewText(value, isTooltipTemplateField(mod)))'), 'tooltip collapse should restore the cleaned preview only for tooltip fields');
 }
 
 function testObjModEditorTypeAndRecoveryGuards() {

@@ -89,14 +89,14 @@ export function textOffsetAtRange(root, range) {
   return before.toString().length;
 }
 
-export function setCaretAtTextOffset(root, offset) {
+export function setCaretAtTextOffset(root, offset, preferNext) {
   const target = Math.max(0, Number(offset) || 0);
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let remaining = target;
   let node;
   while ((node = walker.nextNode())) {
     const length = node.nodeValue ? node.nodeValue.length : 0;
-    if (remaining <= length) {
+    if (remaining < length || (!preferNext && remaining === length)) {
       const range = document.createRange();
       range.setStart(node, remaining);
       range.collapse(true);
@@ -109,6 +109,14 @@ export function setCaretAtTextOffset(root, offset) {
     remaining -= length;
   }
   setCaretEnd(root);
+}
+
+export function textRangePrefersNext(range) {
+  const container = range.startContainer;
+  if (container.nodeType === Node.TEXT_NODE) {
+    return range.startOffset >= (container.nodeValue ? container.nodeValue.length : 0);
+  }
+  return !!container.childNodes?.[range.startOffset];
 }
 
 export function containsNode(parent, node) {

@@ -9,7 +9,7 @@
  * string tables (WorldEditStrings etc.).
  */
 
-import { findGameAsset } from './cascStorage';
+import { findGameAsset, logGameData } from './cascStorage';
 
 export interface SlkTable {
     rows: Map<string, Record<string, string>>;
@@ -77,7 +77,7 @@ export const DESTRUCTABLE_PROFILE_PATHS = ['Units\\DestructableSkin.txt'];
 export const DOODAD_PROFILE_PATHS = ['Doodads\\DoodadSkins.txt'];
 
 export async function readGameData(assetPath: string): Promise<Buffer | null> {
-    return findGameAsset(assetPath, (msg) => console.log(`[wurst-wc3-data] ${msg}`));
+    return findGameAsset(assetPath, (msg) => logGameData(`[wurst-wc3-data] ${msg}`));
 }
 
 const DEFAULT_WATER_LEVEL_UNITS = 89.6;

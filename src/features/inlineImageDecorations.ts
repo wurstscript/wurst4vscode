@@ -22,6 +22,7 @@ import {
     scaleDown,
 } from './imageAssetSupport';
 import { AssetIndex, getAssetIndex, invalidateAssetIndex } from '../utils/assetIndex';
+import { appendDiagnostic, formatDiagnosticError } from '../diagnostics';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -85,8 +86,10 @@ function log(message: string): void {
     if (logEpoch === 0) logEpoch = Date.now();
     const ms = Date.now() - logEpoch;
     const ts = `+${ms}ms`;
+    const line = `[inline-icons] ${ts} ${message}`;
+    appendDiagnostic('Inline icons', line);
     try {
-        output.appendLine(`[inline-icons] ${ts} ${message}`);
+        output.appendLine(line);
     } catch {
         return;
     }
@@ -177,7 +180,7 @@ async function getThumbnailUri(fsPath: string): Promise<vscode.Uri | undefined> 
         log(`thumb generated: ${path.basename(fsPath)} -> ${previewPath}`);
         return vscode.Uri.file(previewPath);
     } catch (error) {
-        log(`thumb failed: ${fsPath} :: ${error instanceof Error ? error.message : String(error)}`);
+        log(`thumb failed: ${fsPath} :: ${formatDiagnosticError(error)}`);
         return undefined;
     }
 }
@@ -584,7 +587,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
                 clearMissingRanges(active, assetPath);
                 safeSetDecorations(active, getMdxFoundType(), [...mdxFoundRangesByPath.values()].flat());
             } catch (error) {
-                log(`casc model error: ${assetPath} :: ${error instanceof Error ? error.message : String(error)}`);
+                log(`casc model error: ${assetPath} :: ${formatDiagnosticError(error)}`);
             } finally {
                 extracting.delete(assetPath);
             }
@@ -648,7 +651,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
                     });
                 }
             } catch (error) {
-                log(`casc error: ${assetPath} :: ${error instanceof Error ? error.message : String(error)}`);
+                log(`casc error: ${assetPath} :: ${formatDiagnosticError(error)}`);
             } finally {
                 extracting.delete(assetPath);
             }

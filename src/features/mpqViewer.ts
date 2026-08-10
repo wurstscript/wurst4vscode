@@ -1,6 +1,7 @@
 'use strict';
 
 import * as vscode from 'vscode';
+import { appendDiagnostic, formatDiagnosticError } from '../diagnostics';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
@@ -18,6 +19,7 @@ function getOut(): vscode.OutputChannel {
 }
 function log(msg: string): void {
     console.log('[MpqViewer] ' + msg);
+    appendDiagnostic('MPQ', msg);
     getOut().appendLine(msg);
 }
 
@@ -72,7 +74,7 @@ async function extractTriggerStringsSidecar(
         fs.mkdirSync(path.dirname(outPath), { recursive: true });
         fs.writeFileSync(outPath, data);
     } catch (e) {
-        log(`Could not extract ${wtsEntry.name} sidecar: ${e instanceof Error ? e.message : String(e)}`);
+        log(`Could not extract ${wtsEntry.name} sidecar: ${formatDiagnosticError(e)}`);
     }
 }
 
@@ -148,7 +150,7 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
                 log(`MPQ opened: ${document.entries.length} files, ${document.archiveSize} bytes`);
             } catch (e) {
                 document.parseError = e instanceof Error ? e.message : String(e);
-                log(`ERROR loading MPQ: ${document.parseError}`);
+                log(`ERROR loading MPQ: ${formatDiagnosticError(e)}`);
                 offerIssueReport({
                     area: 'MPQ map viewer',
                     message: document.parseError,
@@ -196,8 +198,9 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
                         void vscode.commands.executeCommand('vscode.open', uri, { preview: false, preserveFocus: false });
                     }
                 } catch (e) {
+                    log(`ERROR extracting ${name}: ${formatDiagnosticError(e)}`);
                     void vscode.window.showErrorMessage(
-                        `Failed to extract ${name}: ${e instanceof Error ? e.message : String(e)}`
+                        `Failed to extract ${name}: ${formatDiagnosticError(e)}`
                     );
                 }
                 return;
@@ -252,7 +255,8 @@ async function extractAllFiles(
                 }
                 fs.mkdirSync(path.dirname(outPath), { recursive: true });
                 fs.writeFileSync(outPath, data);
-            } catch {
+            } catch (error) {
+                log(`ERROR extracting ${entry.name}: ${formatDiagnosticError(error)}`);
                 failed++;
             }
         }
@@ -266,9 +270,8 @@ async function extractAllFiles(
         }
     } catch (e) {
         onComplete?.();
-        void vscode.window.showErrorMessage(
-            `Extraction failed: ${e instanceof Error ? e.message : String(e)}`
-        );
+        log(`ERROR during extraction: ${formatDiagnosticError(e)}`);
+        void vscode.window.showErrorMessage(`Extraction failed: ${formatDiagnosticError(e)}`);
     }
 }
 

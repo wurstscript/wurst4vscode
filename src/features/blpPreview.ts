@@ -93,7 +93,11 @@ export function registerBlpPreview(context: vscode.ExtensionContext): vscode.Dis
         if (failed === 0) {
             vscode.window.showInformationMessage(`CASC smoketest OK: ${passed} passed`);
         } else {
-            vscode.window.showWarningMessage(`CASC smoketest: ${passed} passed, ${failed} failed. See output for details.`);
+            const choice = await vscode.window.showWarningMessage(
+                `CASC smoketest: ${passed} passed, ${failed} failed. See output for details.`,
+                'View Logs',
+            );
+            if (choice === 'View Logs') output.show(true);
         }
     });
 

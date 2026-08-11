@@ -7,6 +7,7 @@ import { execFile } from 'child_process';
 import * as vscode from 'vscode';
 import { COMPILER_JAR, RUNTIME_DIR } from '../paths';
 import { sleep } from './fsUtils';
+import { showErrorWithLogs } from '../features/diagnostics';
 
 export interface WurstProcess {
     pid: number;
@@ -159,11 +160,9 @@ export async function ensureConflictingWurstProcessesStopped(): Promise<void> {
             if ((await findConflictingWurstProcesses()).length === 0) return;
             continue;
         }
-        await vscode.window.showErrorMessage(
-            `Could not stop Wurst process${remaining.length === 1 ? '' : 'es'} ${remaining.map((item) => item.pid).join(', ')}. ` +
-            'Close the corresponding VS Code windows and try again.',
-            { modal: true },
-        );
+        const message = `Could not stop Wurst process${remaining.length === 1 ? '' : 'es'} ${remaining.map((item) => item.pid).join(', ')}. ` +
+            'Close the corresponding VS Code windows and try again.';
+        await showErrorWithLogs(message, new Error(message));
     }
 }
 

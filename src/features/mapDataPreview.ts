@@ -14,6 +14,7 @@ import {
 import { getCandidateRoots, resolveAssetPathWithCasc } from './imageAssetSupport';
 import { buildPage } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
+import { showErrorWithLogs, showWarningWithLogs } from './diagnostics';
 
 type MapDataFile =
     | { kind: 'imp'; version: number; imports: ImpEntry[]; error?: string }
@@ -1424,7 +1425,7 @@ class W3iEditorProvider implements vscode.CustomEditorProvider<W3iDocument> {
             doc.savedDepth = doc.editDepth;
             this.postDirtyState(doc);
         } catch (err) {
-            void vscode.window.showErrorMessage(`Map info not saved: ${err instanceof Error ? err.message : String(err)}`);
+            void showErrorWithLogs(`Map info not saved: ${err instanceof Error ? err.message : String(err)}`, err);
             throw err;
         }
     }
@@ -1486,7 +1487,7 @@ function serializeValidatedW3i(file: W3iFile, name: string): Buffer {
 async function openW3iAsset(assetPath: string, uri: vscode.Uri): Promise<void> {
     const resolved = await resolveAssetPathWithCasc(assetPath, await getCandidateRoots(uri.fsPath));
     if (!resolved) {
-        void vscode.window.showWarningMessage(`Could not resolve asset: ${assetPath}`);
+        void showWarningWithLogs(`Could not resolve asset: ${assetPath}`, new Error(`Asset resolution failed for ${assetPath}`));
         return;
     }
     const target = vscode.Uri.file(resolved);

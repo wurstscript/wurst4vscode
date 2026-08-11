@@ -30,6 +30,7 @@ import {
     ITEM_PROFILE_PATHS, DESTRUCTABLE_PROFILE_PATHS, DOODAD_PROFILE_PATHS,
 } from './preview/wc3Data';
 import { getGameAssetCacheDir, listGameAssetPaths } from './preview/cascStorage';
+import { showErrorWithLogs, showWarningWithLogs } from './diagnostics';
 import {
     loadCompilerKnowledgeBase, compilerLowercaseObjectView, compilerProfileView,
     CompilerFieldSchema, CompilerObjectKind, CompilerObjectRecord,
@@ -3095,7 +3096,7 @@ async function openObjModAsset(assetPath: string, uri: vscode.Uri): Promise<void
     const roots = await getCandidateRoots(uri.fsPath);
     const resolved = await resolveAssetPathWithCasc(assetPath, roots);
     if (!resolved) {
-        vscode.window.showWarningMessage(`Could not resolve asset: ${assetPath}`);
+        void showWarningWithLogs(`Could not resolve asset: ${assetPath}`, new Error(`Asset resolution failed for ${assetPath}`));
         return;
     }
     const target = vscode.Uri.file(resolved);
@@ -3599,7 +3600,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             await this.handleMessageUnsafe(message, webview, doc);
         } catch (err) {
             console.error('[wurst-objmod] unhandled webview message error', err);
-            void vscode.window.showErrorMessage(`Wurst object editor: ${err instanceof Error ? err.message : String(err)}`);
+            void showErrorWithLogs(`Wurst object editor: ${err instanceof Error ? err.message : String(err)}`, err);
         }
     }
 
@@ -3781,7 +3782,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         } catch (err) {
             // Surface the failure and rethrow so VS Code keeps the document dirty. Preflight failures happen
             // before any write; an actual filesystem failure may still have written an earlier sibling.
-            void vscode.window.showErrorMessage(`Object data not saved: ${err instanceof Error ? err.message : String(err)}`);
+            void showErrorWithLogs(`Object data not saved: ${err instanceof Error ? err.message : String(err)}`, err);
             throw err;
         }
     }

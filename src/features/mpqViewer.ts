@@ -1,7 +1,7 @@
 'use strict';
 
 import * as vscode from 'vscode';
-import { appendDiagnostic, formatDiagnosticError } from './diagnostics';
+import { appendDiagnostic, formatDiagnosticError, showErrorWithLogs } from './diagnostics';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
@@ -200,9 +200,7 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
                 } catch (e) {
                     log(`ERROR extracting ${name}: ${formatDiagnosticError(e)}`);
                     const message = e instanceof Error ? e.message : String(e);
-                    void vscode.window.showErrorMessage(
-                        `Failed to extract ${name}: ${message}`
-                    );
+                    void showErrorWithLogs(`Failed to extract ${name}: ${message}`, e, 'MPQ');
                 }
                 return;
             }
@@ -265,14 +263,16 @@ async function extractAllFiles(
         const msg = failed > 0
             ? `${successMessage}\n\n${failed} file(s) could not be extracted.`
             : successMessage;
-        const btn = await vscode.window.showInformationMessage(msg, 'Open Folder');
+        const btn = await vscode.window.showInformationMessage(msg, 'Open Folder', ...(failed > 0 ? ['View Logs'] : []));
         if (btn === 'Open Folder') {
             void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(destDir));
+        } else if (btn === 'View Logs') {
+            getOut().show(true);
         }
     } catch (e) {
         onComplete?.();
         log(`ERROR during extraction: ${formatDiagnosticError(e)}`);
-        void vscode.window.showErrorMessage(`Extraction failed: ${formatDiagnosticError(e)}`);
+        void showErrorWithLogs(`Extraction failed: ${e instanceof Error ? e.message : String(e)}`, e, 'MPQ');
     }
 }
 

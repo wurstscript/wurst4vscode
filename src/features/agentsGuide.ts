@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as https from 'https';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { showErrorWithLogs } from './diagnostics';
 
 const PROMPT_STATE_PREFIX = 'wurst.agentsGuidePromptDismissed:';
 const UPDATE_PROMPT_STATE_PREFIX = 'wurst.agentsGuideUpdatePromptDismissed:';
@@ -82,7 +83,7 @@ async function offerAgentsGuide(context: vscode.ExtensionContext): Promise<void>
                 await context.workspaceState.update(stateKey, true);
                 await vscode.window.showInformationMessage('This Wurst project already has an AGENTS.md.');
             } else {
-                vscode.window.showErrorMessage(`Failed to create AGENTS.md: ${err?.message ?? String(err)}`);
+                void showErrorWithLogs(`Failed to create AGENTS.md: ${err?.message ?? String(err)}`, err);
             }
         }
         return;

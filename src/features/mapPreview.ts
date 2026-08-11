@@ -19,6 +19,7 @@ import { decodeToRgba } from './preview/imageDecoders';
 import { encodePng, scaleDown } from './imageAssetSupport';
 import { getObjectCatalog } from './preview/objectCatalog';
 import { offerIssueReport } from './issueReporting';
+import { showErrorWithLogs } from './diagnostics';
 
 const TILE = 128;
 const GROUND_CENTER = 0x2000;
@@ -1171,7 +1172,7 @@ export function registerMapPreview(_context: vscode.ExtensionContext): vscode.Di
             terrain = await parseW3eTerrain(fs.readFileSync(w3ePath));
         } catch (e) {
             const message = e instanceof Error ? e.message : String(e);
-            vscode.window.showErrorMessage(`Map preview: failed to parse terrain - ${message}`);
+            void showErrorWithLogs(`Map preview: failed to parse terrain - ${message}`, e);
             offerIssueReport({
                 area: 'map terrain preview',
                 message,

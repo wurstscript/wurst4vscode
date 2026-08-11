@@ -2,23 +2,64 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import type * as vscode from 'vscode';
 
 export const MAX_DIAGNOSTIC_LINES = 100;
 
 export type DiagnosticSource = 'WC3 data' | 'MPQ' | 'Inline icons' | 'VS Code extension';
 
 const recentLines = new Map<DiagnosticSource, string[]>();
+let outputChannel: vscode.OutputChannel | undefined;
+
+function getOutputChannel(): vscode.OutputChannel {
+    if (!outputChannel) {
+        outputChannel = getVsCode().window.createOutputChannel('WurstScript Extension');
+        for (const [source, lines] of recentLines) {
+            for (const line of lines) outputChannel.appendLine(`[${source}] ${line}`);
+        }
+    }
+    return outputChannel;
+}
+
+function getVsCode(): typeof vscode {
+    return require('vscode') as typeof vscode;
+}
 
 /** Keep extension-side diagnostics available even though VS Code output channels are write-only. */
 export function appendDiagnostic(source: DiagnosticSource, message: string): void {
     const lines = recentLines.get(source) ?? [];
     for (const line of String(message).split(/\r?\n/)) {
         lines.push(line);
+        outputChannel?.appendLine(`[${source}] ${line}`);
     }
     if (lines.length > MAX_DIAGNOSTIC_LINES) {
         lines.splice(0, lines.length - MAX_DIAGNOSTIC_LINES);
     }
     recentLines.set(source, lines);
+}
+
+export function showDiagnosticOutput(): void {
+    getOutputChannel().show(true);
+}
+
+export async function showErrorWithLogs(
+    message: string,
+    error: unknown,
+    source: DiagnosticSource = 'VS Code extension',
+): Promise<void> {
+    appendDiagnostic(source, `${message}\n${formatDiagnosticError(error)}`);
+    const choice = await getVsCode().window.showErrorMessage(message, 'View Logs');
+    if (choice === 'View Logs') showDiagnosticOutput();
+}
+
+export async function showWarningWithLogs(
+    message: string,
+    error: unknown,
+    source: DiagnosticSource = 'VS Code extension',
+): Promise<void> {
+    appendDiagnostic(source, `${message}\n${formatDiagnosticError(error)}`);
+    const choice = await getVsCode().window.showWarningMessage(message, 'View Logs');
+    if (choice === 'View Logs') showDiagnosticOutput();
 }
 
 export function formatDiagnosticError(error: unknown): string {

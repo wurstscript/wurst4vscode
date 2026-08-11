@@ -28,7 +28,7 @@ import { registerAgentsGuideOffer } from './features/agentsGuide';
 import { registerWurstDiagnosticsCommands } from './features/commands';
 import { openIssueReport } from './features/issueReporting';
 import { registerCascDiagnosticsCommand } from './features/preview/cascStorage';
-import { appendDiagnostic, formatDiagnosticError } from './features/diagnostics';
+import { formatDiagnosticError, showErrorWithLogs, showWarningWithLogs } from './features/diagnostics';
 
 export async function activate(context: ExtensionContext) {
     console.log('Wurst extension activated!');
@@ -92,8 +92,7 @@ function registerBasicCommands(context: ExtensionContext) {
                 await vscode.commands.executeCommand('workbench.action.reloadWindow');
             } catch (e: any) {
                 if (e instanceof InstallCoordinationCancelledError) return;
-                appendDiagnostic('VS Code extension', `Install/update failed: ${formatDiagnosticError(e)}`);
-                vscode.window.showErrorMessage(`Install/Update failed: ${e?.message || e}`);
+                void showErrorWithLogs(`Install/Update failed: ${e?.message || e}`, e);
             }
         }),
         vscode.commands.registerCommand('wurst.stopAllProcesses', async () => {
@@ -118,10 +117,8 @@ function registerBasicCommands(context: ExtensionContext) {
             await stopLanguageServerIfRunning();
             const remaining = await forceStopWurstProcesses(await findConflictingWurstProcesses());
             if (remaining.length > 0) {
-                vscode.window.showErrorMessage(
-                    `Could not stop Wurst process${remaining.length === 1 ? '' : 'es'} ${remaining.map((item) => item.pid).join(', ')}.`,
-                    { modal: true },
-                );
+                const message = `Could not stop Wurst process${remaining.length === 1 ? '' : 'es'} ${remaining.map((item) => item.pid).join(', ')}.`;
+                void showErrorWithLogs(message, new Error(message));
                 return;
             }
             vscode.window.showInformationMessage('Stopped all detected WurstScript processes.');
@@ -130,8 +127,7 @@ function registerBasicCommands(context: ExtensionContext) {
             try {
                 await createNewWurstProject();
             } catch (e: any) {
-                appendDiagnostic('VS Code extension', `New project creation failed: ${formatDiagnosticError(e)}`);
-                vscode.window.showErrorMessage(`Failed to create Wurst project: ${e?.message ?? String(e)}`);
+                void showErrorWithLogs(`Failed to create Wurst project: ${e?.message ?? String(e)}`, e);
             }
         }),
         vscode.commands.registerCommand('wurst.reportIssue', () => openIssueReport())
@@ -153,8 +149,7 @@ async function startLanguageClientWhenWorkspaceIsOpen(context: ExtensionContext)
     try {
         await startLanguageClient(context);
     } catch (err) {
-        appendDiagnostic('VS Code extension', `Failed to start language client: ${formatDiagnosticError(err)}`);
         console.error('Failed to start language client:', formatDiagnosticError(err));
-        vscode.window.showWarningMessage(`Wurst language features disabled: ${err}`);
+        void showWarningWithLogs(`Wurst language features disabled: ${err}`, err);
     }
 }

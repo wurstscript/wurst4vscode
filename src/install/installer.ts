@@ -23,6 +23,7 @@ import {
     InstallCoordinationCancelledError,
     withWurstInstallLock,
 } from './installCoordination';
+import { appendDiagnostic, formatDiagnosticError, showDiagnosticOutput } from '../features/diagnostics';
 
 type InstallOptions = {
     offerPostInstallActions?: boolean;
@@ -269,6 +270,7 @@ async function runInstallWithRetry(options: InstallOptions): Promise<void> {
                     try { await repairInstallationLayout(); continue; } catch {}
                 }
                 const message = error instanceof Error ? error.message : String(error);
+                appendDiagnostic('VS Code extension', `Installation failed: ${formatDiagnosticError(error)}`);
                 const detail = [
                     prepared ? 'Retry and Repair will reuse the already downloaded installer files.' : undefined,
                     isRecoverableInstallError(error)
@@ -276,8 +278,12 @@ async function runInstallWithRetry(options: InstallOptions): Promise<void> {
                         : undefined,
                 ].filter(Boolean).join('\n\n') || undefined;
                 const choice = await vscode.window.showErrorMessage(
-                    `Installation failed: ${message}`, { modal: true, detail }, 'Retry', 'Repair'
+                    `Installation failed: ${message}`, { modal: true, detail }, 'Retry', 'Repair', 'View Logs'
                 );
+                if (choice === 'View Logs') {
+                    showDiagnosticOutput();
+                    throw error;
+                }
                 if (choice === 'Repair') { await repairInstallationLayout(); continue; }
                 if (choice !== 'Retry') throw error;
             }

@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import { LanguageClient, ExecuteCommandParams, ExecuteCommandRequest } from 'vscode-languageclient/node';
 import { workspace, window } from 'vscode';
 import { WURST_HOME } from '../paths';
-import { appendDiagnostic, buildDiagnosticsText, formatDiagnosticError } from './diagnostics';
+import { appendDiagnostic, buildDiagnosticsText, formatDiagnosticError, showDiagnosticOutput, showErrorWithLogs } from './diagnostics';
 
 let diagnosticsClient: LanguageClient | null = null;
 
@@ -27,9 +27,7 @@ async function copyDiagnostics(): Promise<void> {
         await vscode.env.clipboard.writeText(buildDiagnosticsText(WURST_HOME));
         void vscode.window.showInformationMessage('Copied Wurst diagnostics to the clipboard.');
     } catch (error) {
-        const detail = formatDiagnosticError(error);
-        appendDiagnostic('VS Code extension', `Could not copy diagnostics: ${detail}`);
-        void vscode.window.showErrorMessage(`Could not copy Wurst diagnostics: ${detail}`);
+        void showErrorWithLogs('Could not copy Wurst diagnostics.', error);
     }
 }
 
@@ -37,9 +35,7 @@ async function openWurstHome(): Promise<void> {
     try {
         await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(WURST_HOME));
     } catch (error) {
-        const detail = formatDiagnosticError(error);
-        appendDiagnostic('VS Code extension', `Could not open Wurst home: ${detail}`);
-        void vscode.window.showErrorMessage(`Could not open Wurst home: ${detail}`);
+        void showErrorWithLogs('Could not open Wurst home.', error);
     }
 }
 
@@ -48,12 +44,14 @@ export function registerWurstDiagnosticsCommands(context: vscode.ExtensionContex
         vscode.commands.registerCommand('wurst.openWurstHome', () => openWurstHome()),
         vscode.commands.registerCommand('wurst.copyDiagnostics', () => copyDiagnostics()),
         vscode.commands.registerCommand('wurst.showLogs', () => showLanguageServerOutput()),
+        vscode.commands.registerCommand('wurst.showExtensionLogs', () => showDiagnosticOutput()),
         vscode.commands.registerCommand('wurst.showDiagnosticsActions', async () => {
             const choice = await vscode.window.showQuickPick([
                 { label: '$(cloud-download) Install/update WurstScript', command: 'wurst.installOrUpdate' },
                 { label: '$(folder-opened) Open Wurst home', command: 'wurst.openWurstHome' },
                 { label: '$(copy) Copy diagnostics', command: 'wurst.copyDiagnostics' },
                 { label: '$(output) Open Wurst output', command: 'wurst.showLogs' },
+                { label: '$(output) Open extension error logs', command: 'wurst.showExtensionLogs' },
             ], { placeHolder: 'WurstScript actions' });
             if (choice) await vscode.commands.executeCommand(choice.command);
         }),
@@ -251,7 +249,10 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
             },
             (err) => {
                 (client as any).outputChannel?.show();
-                vscode.window.showErrorMessage('Wurst tests failed. See "WurstScript" output for details.');
+                appendDiagnostic('VS Code extension', `Wurst tests failed: ${formatDiagnosticError(err)}`);
+                vscode.window.showErrorMessage('Wurst tests failed. See "WurstScript" output for details.', 'View Logs').then((btn) => {
+                    if (btn === 'View Logs') (client as any).outputChannel?.show();
+                });
                 throw err;
             }
         );

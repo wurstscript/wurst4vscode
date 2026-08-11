@@ -8,6 +8,7 @@ import { cacheModelThumbnail, markModelThumbnailBad, postTexturesToWebview, requ
 import { isSoundAssetPath, playSoundInline } from './soundPreview';
 import { buildPage, ICON_INLINE_CSS, PREVIEW_ICON_CSP } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
+import { showWarningWithLogs } from './diagnostics';
 
 // Asset file extensions we want to linkify inside string literals
 const ASSET_EXTS = new Set([
@@ -158,7 +159,7 @@ async function replaceAssetString(target: BrowseAssetTarget, assetPath: string):
     edit.replace(target.uri, target.range, escapeWurstStringAssetPath(assetPath));
     const ok = await vscode.workspace.applyEdit(edit);
     if (!ok) {
-        void vscode.window.showWarningMessage(`Could not replace asset path: ${assetPath}`);
+        void showWarningWithLogs(`Could not replace asset path: ${assetPath}`, new Error('VS Code rejected the workspace edit.'));
         return;
     }
     const doc = await vscode.workspace.openTextDocument(target.uri);
@@ -769,7 +770,7 @@ export function registerAssetLinks(context: vscode.ExtensionContext): vscode.Dis
         );
         const target = resolved ? vscode.Uri.file(resolved) : undefined;
         if (!target) {
-            vscode.window.showWarningMessage(`Could not resolve asset: ${assetPath}`);
+            void showWarningWithLogs(`Could not resolve asset: ${assetPath}`, new Error(`Asset resolution failed for ${assetPath}`));
             return;
         }
         const resolvedExt = path.extname(target.fsPath).toLowerCase();

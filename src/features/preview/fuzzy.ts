@@ -44,3 +44,33 @@ export function fuzzyMatch(query: string, text: string): boolean {
     for (let j = 0; j <= m; j++) if (prev[j] < min) min = prev[j];
     return min <= max;
 }
+
+/**
+ * Relevance score for asset-picker entries. Lower is better; Infinity means no match.
+ *
+ * Keep this dependency-free and reference only `fuzzyMatch`: the code-asset picker ships both
+ * functions into its webview with `.toString()`. Search individual fields instead of one joined
+ * haystack so a query cannot be assembled from unrelated letters across a label, path, and detail.
+ */
+export function assetSearchScore(query: string, label: string, value: string, detail = ''): number {
+    const q = String(query === null || query === undefined ? '' : query).toLowerCase().trim();
+    if (!q) return 0;
+
+    const rawLabel = String(label === null || label === undefined ? '' : label);
+    const normalizedValue = String(value === null || value === undefined ? '' : value).replace(/\\/g, '/');
+    const basename = normalizedValue.slice(normalizedValue.lastIndexOf('/') + 1).toLowerCase();
+    const stem = basename.replace(/\.[^.]+$/, '');
+    const normalizedLabel = rawLabel.toLowerCase().trim();
+    const labelStem = normalizedLabel.replace(/\.[^.]+$/, '');
+    const labelWords = rawLabel.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
+    const valueWords = normalizedValue.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
+
+    if (labelStem === q || stem === q) return 0;
+    if (labelStem.startsWith(q) || stem.startsWith(q)) return 10;
+    if (normalizedLabel.includes(q) || basename.includes(q)) return 20;
+    if (labelWords.includes(q)) return 30;
+    if (valueWords.includes(q)) return 40;
+    if (String(detail === null || detail === undefined ? '' : detail).toLowerCase().includes(q)) return 50;
+    if (fuzzyMatch(q, labelStem) || fuzzyMatch(q, stem)) return 80;
+    return Number.POSITIVE_INFINITY;
+}

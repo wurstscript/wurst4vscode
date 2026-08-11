@@ -509,6 +509,11 @@ async function testFolderModeMapAssetResolution() {
         roots.some((candidate) => path.resolve(candidate) === path.resolve(imported)),
         'folder-mode map import directory should be a candidate root'
     );
+    const gathered = await mod.gatherImportedAssets(docPath);
+    assert.equal(gathered.icon.length, 1, 'the same imported texture reached through nested candidate roots must appear once');
+    assert.equal(gathered.icon[0].value, 'BrutalLord.blp', 'the most specific asset root should provide the useful WC3-relative path');
+    assert.equal(gathered.model.length, 1, 'the same imported model reached through nested candidate roots must appear once');
+    assert.equal(gathered.model[0].value, 'BrutalLord.mdx');
     const resolved = await mod.resolveAssetPathWithCasc('BrutalLord.blp', roots, 'texture');
     assert.equal(path.resolve(resolved), path.resolve(texturePath));
     const resolvedFromWrongTextureExt = await mod.resolveAssetPathWithCasc('BrutalLord.tif', roots, 'texture');
@@ -717,10 +722,13 @@ function testAssetBrowserForwardsModelTextures() {
     const src = fs.readFileSync(path.join(root, 'src/features/assetLinks.ts'), 'utf8');
     const match = src.match(/<script>\r?\n([\s\S]*?)\r?\n<\/script>`/);
     assert.ok(match, 'asset browser inline script should be present');
-    const script = match[1].replace(
-        'var initial = ${initialJson};',
-        "var initial = { activeTab: 'model', tabs: { icon: [], model: [] }, currentValue: '' };"
-    );
+    const script = match[1]
+        .replace(
+            'var initial = ${initialJson};',
+            "var initial = { activeTab: 'model', tabs: { icon: [], model: [] }, currentValue: '' };"
+        )
+        .replace('${fuzzyMatch.toString()}', 'function fuzzyMatch() { return false; }')
+        .replace('${assetSearchScore.toString()}', 'function assetSearchScore() { return Number.POSITIVE_INFINITY; }');
     // eslint-disable-next-line sonarjs/constructor-for-side-effects -- constructed only to validate the extracted inline script parses (throws SyntaxError otherwise); the instance itself is unused on purpose.
     new vm.Script(script);
     assert.ok(
@@ -742,6 +750,14 @@ function testAssetBrowserForwardsModelTextures() {
     assert.ok(
         !/type === 'requestTextures'\)\s*return/.test(script),
         'asset browser must not silently drop model texture requests'
+    );
+    assert.ok(
+        script.includes('assetSearchScore(query, item.label, item.value, item.detail)'),
+        'code and object-data asset pickers should share the relevance scorer'
+    );
+    assert.ok(
+        !script.includes('text.indexOf(q[i], pos)'),
+        'asset search must not regress to scattered-letter subsequence matching'
     );
 }
 
@@ -778,6 +794,7 @@ function testThumbnailLifecycleGuards() {
     assert.ok(objmod.includes('fetch(initial.thumbnailWorkerUri'), 'the worker bundle must be fetched before creating its Blob URL');
     assert.ok(!objmod.includes('new Worker(initial.thumbnailWorkerUri)'), 'VS Code resource URLs cannot be passed directly to the Worker constructor');
     assert.ok(assetBrowser.includes('modelThumbEnsureInit()'), 'opening or selecting the model asset browser should prewarm the thumbnail worker');
+    assert.ok(assetBrowser.includes("import { assetSearchScore } from '../../features/preview/fuzzy'"), 'objmod asset search should use the shared relevance scorer');
     const ensureInit = /export function modelThumbEnsureInit\(\) \{([\s\S]*?)\n\}/.exec(objmod)?.[1] || '';
     assert.ok(!ensureInit.includes('mpvViewer()'), 'worker startup failure must not fall back to rendering on the objmod UI thread');
     assert.ok(webpack.includes("mdxThumbnailWorker: './src/webview/mdxThumbnailWorker.ts'"), 'the isolated thumbnail worker must be bundled');
@@ -921,6 +938,9 @@ function testObjModTooltipFontWiring() {
     assert.ok(!host.includes("Buffer.from(bytes).toString('base64')"), 'project fonts should not be embedded as large data URLs');
     assert.ok(host.includes(".tt-collapsed-box,\n.tt-preview {"), 'the custom font should be assigned only to tooltip boxes');
     assert.ok(!host.includes('.tt-collapsed-box *'), 'the custom font should not use descendant-wide override selectors');
+    assert.ok(host.includes('td.value { font-family: var(--font); }'), 'ordinary field values should use the VS Code UI font');
+    assert.ok(host.includes('.tt-empty { color: var(--muted); font-style: normal; }'), 'ordinary empty values should not be italicized');
+    assert.ok(host.includes('.tt-collapsed-box .tt-empty,'), 'only framed WC3 text may retain the italic empty placeholder');
     assert.ok(packageJson.includes('wurst.objModTooltipFont'), 'the tooltip font setting should be contributed by the extension');
     assert.equal(packageData.contributes.configuration.properties['wurst.objModTooltipFont'].default, '', 'the tooltip font setting must default to disabled');
 }
@@ -944,8 +964,32 @@ function testObjModTooltipPreviewHeaders() {
     const detailsPanel = fs.readFileSync(path.join(root, 'src/webview/objModEditor/detailsPanel.ts'), 'utf8');
 
     assert.ok(fieldDisplay.includes("replace(/^(?:unit|building)\\s*\\/\\s*/i, '')"), 'unit and building tooltip markers should be hidden in previews');
+    assert.ok(fieldDisplay.includes("label === 'name' || /\\bnames?$/"), 'player-facing name fields should use the framed WC3 text editor');
     assert.ok(detailsPanel.includes('renderWc3Colors(original)'), 'tooltip editing should restore the unmodified raw value');
     assert.ok(detailsPanel.includes('renderWc3Colors(tooltipPreviewText(value, isTooltipTemplateField(mod)))'), 'tooltip collapse should restore the cleaned preview only for tooltip fields');
+}
+
+function testObjModDensityAndTreeStyling() {
+    const host = fs.readFileSync(path.join(root, 'src/features/objModPreview.ts'), 'utf8');
+    const webview = fs.readFileSync(path.join(root, 'src/webview/objModEditorWebview.ts'), 'utf8');
+
+    assert.ok(host.includes('id="density-toggle" class="density-toggle" role="switch"'), 'density must render as an obvious switch control');
+    assert.ok(host.includes('aria-label="Spacious density"'), 'density switch should have an unambiguous accessible name');
+    assert.ok(host.includes('class="density-track"'), 'density switch should expose an animated visual track');
+    assert.ok(host.includes('body.density-cozy .density-thumb { transform: translateX(14px)'), 'density switch thumb should animate between states');
+    assert.ok(host.includes('@media (prefers-reduced-motion: reduce)'), 'density animation should respect reduced-motion preferences');
+    assert.ok(webview.includes("setAttribute('aria-checked', String(cozy))"), 'density switch must expose its current state accessibly');
+    assert.ok(host.includes('font-size: 11px;\n  font-weight: 500;\n  color: var(--muted);'), 'nested tree headings should share one typography baseline');
+    assert.ok(!host.includes('.race-heading {\n  padding: var(--tree-heading-py) var(--ind-group) var(--tree-heading-py) var(--ind-race);\n  color: var(--fg);\n  font-size: 12px;'), 'race headings should not introduce a third font treatment');
+}
+
+function testImportedAssetDedupeSafety() {
+    const host = fs.readFileSync(path.join(root, 'src/features/objModPreview.ts'), 'utf8');
+    const support = fs.readFileSync(path.join(root, 'src/features/imageAssetSupport.ts'), 'utf8');
+
+    assert.ok(!support.includes('hashImportedAsset'), 'asset dedupe must not mistake size+mtime metadata for a content hash');
+    assert.ok(!host.includes('opt.hash'), 'distinct imported files must not collapse through metadata collisions');
+    assert.ok(host.includes("if (opt.source === 'import')"), 'imports in different folders should remain separate after exact-path dedupe');
 }
 
 function testObjModEditorTypeAndRecoveryGuards() {
@@ -993,6 +1037,8 @@ async function main() {
     testObjModTooltipFontWiring();
     testObjModTooltipWidthWiring();
     testObjModTooltipPreviewHeaders();
+    testObjModDensityAndTreeStyling();
+    testImportedAssetDedupeSafety();
     console.log('webview harness tests passed');
 }
 

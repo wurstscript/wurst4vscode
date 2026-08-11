@@ -16,6 +16,7 @@
  *   WURST_OBJMOD_E2E_MAX_MS     max warm per-thumbnail lifecycle, default 200ms
  *   WURST_OBJMOD_E2E_TIMEOUT_MS total wait timeout, default 90000
  *   WURST_OBJMOD_E2E_FONT_ONLY  stop after verifying a configured tooltip font
+ *   WURST_OBJMOD_E2E_FONT       optional local .ttf copied into the generated fixture and configured
  */
 
 const assert = require('assert');
@@ -57,6 +58,20 @@ function writeGeneratedObjmodFixture() {
     const { serializeObjMod } = require('casc-ts/formats');
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wurst-objmod-fixture-'));
     fs.writeFileSync(path.join(dir, 'wurst.build'), 'projectName = objmod-e2e\n');
+    const importedModelsDir = path.join(dir, 'imports', 'units');
+    fs.mkdirSync(importedModelsDir, { recursive: true });
+    for (const name of ['Footman.mdx', 'FootmanPortrait.mdx', 'CaptainFootman.mdx', 'confirmation.mdx', 'AltarOfKings.mdx']) {
+        fs.writeFileSync(path.join(importedModelsDir, name), 'objmod search fixture');
+    }
+    const localFont = process.env.WURST_OBJMOD_E2E_FONT;
+    if (localFont) {
+        assert.ok(fs.existsSync(localFont), `WURST_OBJMOD_E2E_FONT does not exist: ${localFont}`);
+        const fontName = 'tooltip-e2e.ttf';
+        fs.copyFileSync(localFont, path.join(dir, fontName));
+        const settingsDir = path.join(dir, '.vscode');
+        fs.mkdirSync(settingsDir);
+        fs.writeFileSync(path.join(settingsDir, 'settings.json'), JSON.stringify({ 'wurst.objModTooltipFont': fontName }));
+    }
     const main = {
         version: 3,
         ext: '.w3a',
@@ -536,24 +551,30 @@ async function assertObjmodEditorBasics(client, sessionId, contextId) {
         btn.click();
         var cozyHeight = row.getBoundingClientRect().height;
         var cozy = document.body.classList.contains('density-cozy');
-        var cozyLabel = btn.textContent;
+        var cozyChecked = btn.getAttribute('aria-checked');
+        var role = btn.getAttribute('role');
+        var label = btn.getAttribute('aria-label');
         btn.click();
         return {
             startedCozy: startedCozy,
             compactHeight: compactHeight,
             cozyHeight: cozyHeight,
             cozy: cozy,
-            cozyLabel: cozyLabel,
+            cozyChecked: cozyChecked,
+            role: role,
+            label: label,
             restored: document.body.classList.contains('density-cozy'),
-            restoredLabel: btn.textContent,
+            restoredChecked: btn.getAttribute('aria-checked'),
         };
     })()`);
     assert.ok(density, 'objmod header should expose a density toggle beside the save badge');
     assert.equal(density.startedCozy, false, 'compact should be the default density');
     assert.equal(density.cozy, true, 'clicking the density toggle should switch to the spacious scale');
-    assert.equal(density.cozyLabel, 'spacious', 'the density toggle should name the mode it is currently in');
+    assert.equal(density.role, 'switch', 'the density control should expose itself as a switch');
+    assert.equal(density.label, 'Spacious density', 'the density switch should have a clear accessible name');
+    assert.equal(density.cozyChecked, 'true', 'the density switch should expose spacious as checked');
     assert.equal(density.restored, false, 'clicking the density toggle again should return to compact');
-    assert.equal(density.restoredLabel, 'compact', 'the density toggle label should follow the mode back');
+    assert.equal(density.restoredChecked, 'false', 'the density switch should expose compact as unchecked');
     assert.ok(
         density.cozyHeight > density.compactHeight,
         `spacious browse rows should be taller than compact ones, got ${density.cozyHeight} vs ${density.compactHeight}`,
@@ -672,6 +693,38 @@ async function assertObjmodEditorBasics(client, sessionId, contextId) {
         15000,
     );
     assert.ok(assetState.visible.some((slot) => /LordaeronTree/i.test(slot.model)), 'LordaeronTree should appear as a model thumbnail slot');
+
+    await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.searchModelAssetBrowser("footman")');
+    const searchState = await waitForEval(
+        client,
+        sessionId,
+        contextId,
+        'window.__wurstModelThumbDebug.state()',
+        (value) => value && Array.isArray(value.assetBrowserResults) && value.assetBrowserResults.some((entry) => /footman/i.test(entry.label)),
+        'ranked footman asset search results',
+        15000,
+    );
+    const searchResults = searchState.assetBrowserResults;
+    assert.ok(searchResults.length > 0, 'footman search should return useful model results');
+    assert.ok(
+        searchResults.every((entry) => /footm[ae]n/i.test(`${entry.label} ${entry.value}`)),
+        `footman search should not contain unrelated fuzzy noise: ${JSON.stringify(searchResults)}`,
+    );
+    for (let i = 1; i < searchResults.length; i++) {
+        assert.ok(
+            searchResults[i - 1].score <= searchResults[i].score,
+            `asset search scores should be sorted by relevance: ${JSON.stringify(searchResults)}`,
+        );
+    }
+    if (generatedFixtureDir) {
+        const fixtureScore = (name) => searchResults.find((entry) => entry.label.toLowerCase() === name.toLowerCase())?.score;
+        assert.equal(fixtureScore('Footman.mdx'), 0, 'exact filename search result should rank first');
+        assert.equal(fixtureScore('FootmanPortrait.mdx'), 10, 'filename prefix search result should rank after exact matches');
+        assert.equal(fixtureScore('CaptainFootman.mdx'), 20, 'filename substring search result should rank after prefix matches');
+        assert.equal(fixtureScore('confirmation.mdx'), undefined, 'scattered letters in confirmation.mdx must not match footman');
+        assert.equal(fixtureScore('AltarOfKings.mdx'), undefined, 'unrelated model names must not match footman');
+    }
+    log(`footman search returned ${searchResults.length} relevance-sorted results`);
     await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.searchModelAssetBrowser("")');
 }
 

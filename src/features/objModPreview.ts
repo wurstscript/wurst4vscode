@@ -197,7 +197,6 @@ export interface ValueOption {
     iconPath?: string;
     objectKey?: string;
     source?: 'import';
-    hash?: string;
 }
 
 interface ObjEditorData {
@@ -1458,15 +1457,22 @@ function resolveProfileDisplayName(row: Record<string, string>, worldStrings: Ma
     return value ? resolveWorldEditString(value, worldStrings) : undefined;
 }
 
-/** Collapse options whose file basename (sans extension/folder) is identical — e.g. SD/HD/.blp/.dds
- *  variants of the same icon. Keeps the first occurrence (imports are prepended, so they win). */
-function dedupeByHashOrBasename(options: ValueOption[]): ValueOption[] {
+/** Collapse exact path duplicates, plus WC3 catalog entries whose basename (sans extension/folder)
+ *  is identical (for example SD/HD/.blp/.dds variants). Imported files in separate folders stay. */
+function dedupeByPathOrCatalogBasename(options: ValueOption[]): ValueOption[] {
     const seen = new Set<string>();
+    const seenValues = new Set<string>();
     const out: ValueOption[] = [];
     for (const opt of options) {
+        const value = opt.value.replace(/\//g, '\\').toLowerCase();
+        if (seenValues.has(value)) continue;
+        seenValues.add(value);
+        if (opt.source === 'import') {
+            out.push(opt);
+            continue;
+        }
         const base = (opt.value.split(/[\\/]/).pop() ?? opt.value).replace(/\.[^.]+$/, '').toLowerCase();
-        const source = opt.source === 'import' ? 'import' : 'wc3';
-        const key = opt.hash ? `${source}:hash:${opt.hash}` : `${source}:base:${base}`;
+        const key = `wc3:base:${base}`;
         if (seen.has(key)) continue;
         seen.add(key);
         out.push(opt);
@@ -1884,10 +1890,56 @@ body.density-cozy #density-toggle { margin-left: auto; }
 /* Same pill shape as the save badge, but a neutral (non-accent) affordance — it's a view preference,
    not document state. */
 .density-toggle {
-  border-color: var(--border);
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--input-bg);
   color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+  transition: color .16s, border-color .16s, background-color .16s;
 }
-.density-toggle:hover { background: var(--hover); color: var(--fg); }
+.density-toggle:hover { background: var(--hover); color: var(--fg); border-color: var(--vscode-focusBorder, var(--border)); }
+.density-toggle:focus-visible { outline: 2px solid var(--vscode-focusBorder, #007fd4); outline-offset: 1px; }
+.density-option { transition: color .16s, opacity .16s; }
+.density-option-compact { color: var(--fg); font-weight: 600; }
+.density-track {
+  position: relative;
+  width: 28px;
+  height: 14px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--muted) 65%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  transition: background-color .2s, border-color .2s;
+}
+.density-thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--fg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
+  transform: translateX(0);
+  transition: transform .22s cubic-bezier(.2, .8, .2, 1), background-color .2s;
+}
+body.density-cozy .density-option-compact { color: var(--muted); font-weight: 400; }
+body.density-cozy .density-option-cozy { color: var(--fg); font-weight: 600; }
+body.density-cozy .density-track { background: color-mix(in srgb, var(--accent) 42%, transparent); border-color: var(--accent); }
+body.density-cozy .density-thumb { transform: translateX(14px); background: var(--accent); }
+@media (prefers-reduced-motion: reduce) {
+  .density-toggle,
+  .density-option,
+  .density-track,
+  .density-thumb { transition: none; }
+}
 .error,
 .warning {
   padding: calc(var(--head-py) + 1px) var(--pad-x);
@@ -1907,7 +1959,7 @@ body.density-cozy #density-toggle { margin-left: auto; }
   border-radius: 2px;
   padding: 2px 6px;
   font: inherit;
-  font-family: var(--mono);
+  font-family: var(--font);
 }
 /* Single-line inputs match the collapsed cell height exactly, so toggling edit never resizes the row. */
 input.edit-raw { height: var(--cell-h); }
@@ -2055,7 +2107,9 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 .tt-collapsed:focus-visible { outline: none; }
 .tt-collapsed-body { min-width: 0; }
 .tt-collapsed-body[contenteditable="true"] { outline: none; cursor: text; }
-.tt-empty { color: var(--muted); font-style: italic; }
+.tt-empty { color: var(--muted); font-style: normal; }
+.tt-collapsed-box .tt-empty,
+.tt-preview .tt-empty { font-style: italic; }
 .tt-edit-hint {
   flex-shrink: 0;
   color: var(--muted);
@@ -2119,7 +2173,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 /* Shrink-to-fit, not flex:1 — the "modified" badge, source pill and ✎ hint cluster right after the
    value instead of being flung to the far edge of a wide value column. The click target is still the
    full cell (.cell-edit stays width:100%). */
-.cell-edit-val { flex: 0 1 auto; min-width: 0; font-family: var(--mono); word-break: break-word; white-space: pre-wrap; }
+.cell-edit-val { flex: 0 1 auto; min-width: 0; font-family: var(--font); word-break: break-word; white-space: pre-wrap; }
 .value-display {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -2140,7 +2194,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   grid-column: 2;
   min-width: 0;
   color: var(--muted);
-  font-family: var(--mono);
+  font-family: var(--font);
   font-size: 10px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2693,7 +2747,8 @@ tr.hidden { display: none; }
   background: transparent;
   border: 0;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 500;
+  color: var(--muted);
   text-align: left;
   cursor: pointer;
 }
@@ -2702,16 +2757,15 @@ tr.hidden { display: none; }
   top: 0;
   z-index: 1;
   padding: var(--tree-heading-py) var(--ind-group);
-  color: var(--muted);
+  color: var(--fg);
+  font-weight: 600;
   background: var(--sidebar);
 }
 .race-heading {
   padding: var(--tree-heading-py) var(--ind-group) var(--tree-heading-py) var(--ind-race);
-  color: var(--fg);
-  font-size: 12px;
 }
-.camp-heading { padding: var(--tree-row-py) var(--ind-group) var(--tree-row-py) var(--ind-camp); color: var(--muted); }
-.kind-heading { padding: var(--tree-row-py) var(--ind-group) var(--tree-row-py) var(--ind-kind); color: var(--muted); font-weight: 500; }
+.camp-heading { padding: var(--tree-row-py) var(--ind-group) var(--tree-row-py) var(--ind-camp); }
+.kind-heading { padding: var(--tree-row-py) var(--ind-group) var(--tree-row-py) var(--ind-kind); }
 .group-heading:hover,
 .race-heading:hover,
 .camp-heading:hover,
@@ -2930,10 +2984,10 @@ td {
 }
 tbody tr:hover td { background: color-mix(in srgb, var(--hover) 55%, transparent); }
 td.id,
-td.num,
-td.value {
+td.num {
   font-family: var(--mono);
 }
+td.value { font-family: var(--font); }
 td.label { color: var(--fg); }
 td.type { color: var(--muted); font-size: 11px; }
 td.num { text-align: right; color: var(--muted); }
@@ -3025,7 +3079,11 @@ ${tooltipFontCss}
 <div class="md-header">
   <span class="md-title" title="${escapeHtml(fileName)}">${escapeHtml(fileName)}</span>
   <span class="md-meta" title="${escapeHtml(metaLine)}">${escapeHtml(metaLine)}</span>
-  <button type="button" id="density-toggle" class="editable-badge density-toggle" aria-pressed="false" title="Switch between compact and spacious spacing">compact</button>
+  <button type="button" id="density-toggle" class="density-toggle" role="switch" aria-checked="false" aria-label="Spacious density" title="Use spacious density">
+    <span class="density-option density-option-compact">Compact</span>
+    <span class="density-track" aria-hidden="true"><span class="density-thumb"></span></span>
+    <span class="density-option density-option-cozy">Spacious</span>
+  </button>
   <button type="button" id="editable-badge" class="editable-badge" title="Existing overrides can be edited. Click or Ctrl+S to save.">editable</button>
 </div>
 ${errorBanner}
@@ -3676,10 +3734,10 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
                 ]);
                 void webview.postMessage({
                     type: 'assetCatalog',
-                    models: dedupeByHashOrBasename([...cat.models, ...imp.model]),
+                    models: dedupeByPathOrCatalogBasename([...imp.model, ...cat.models]),
                     // Icons repeat across SD/HD and .blp/.dds/.tga variants — collapse same-named ones.
-                    icons: dedupeByHashOrBasename([...cat.icons, ...imp.icon]),
-                    sounds: dedupeByHashOrBasename([...cat.sounds, ...imp.sound]),
+                    icons: dedupeByPathOrCatalogBasename([...imp.icon, ...cat.icons]),
+                    sounds: dedupeByPathOrCatalogBasename([...imp.sound, ...cat.sounds]),
                     pathing: cat.pathing,
                 });
             } catch (err) {

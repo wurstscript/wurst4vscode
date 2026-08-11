@@ -16,8 +16,9 @@ const src = fs.readFileSync(srcPath, 'utf8');
 const js = ts.transpileModule(src, { compilerOptions: { module: 'commonjs', target: 'es2020' } }).outputText;
 const mod = { exports: {} };
 new Function('exports', 'module', js)(mod.exports, mod);
-const { fuzzyMatch } = mod.exports;
+const { fuzzyMatch, assetSearchScore } = mod.exports;
 assert.strictEqual(typeof fuzzyMatch, 'function', 'fuzzyMatch should be exported');
+assert.strictEqual(typeof assetSearchScore, 'function', 'assetSearchScore should be exported');
 
 let passed = 0;
 function ok(query, text, expected, msg) {
@@ -56,5 +57,29 @@ ok('xyzqq', 'Graveyard', false);
 
 // threshold stays low — not loose
 ok('catapult', 'Graveyard', false, 'too many edits');
+
+const footmanCandidates = [
+    { label: 'confirmation.mdx', value: 'imports\\other\\ui\\confirmation.mdx' },
+    { label: 'FirePandarenBrewmaster.mdx', value: 'imports\\hero\\FirePandarenBrewmaster.mdx' },
+    { label: 'CaptainFootman.mdx', value: 'imports\\units\\CaptainFootman.mdx' },
+    { label: 'FootmanPortrait.mdx', value: 'imports\\units\\FootmanPortrait.mdx' },
+    { label: 'Footman.mdx', value: 'imports\\units\\Footman.mdx' },
+    { label: 'AltarOfKings - altarofkings', value: 'buildings\\human\\AltarOfKings\\AltarOfKings.mdx' },
+];
+const footmanResults = footmanCandidates
+    .map((item, index) => ({ ...item, index, score: assetSearchScore('footman', item.label, item.value) }))
+    .filter((item) => Number.isFinite(item.score))
+    .sort((a, b) => a.score - b.score || a.index - b.index);
+assert.deepStrictEqual(
+    footmanResults.map((item) => item.label),
+    ['Footman.mdx', 'FootmanPortrait.mdx', 'CaptainFootman.mdx'],
+    'asset search should exclude scattered-letter noise and rank exact, prefix, then substring matches',
+);
+assert.deepStrictEqual(
+    footmanResults.map((item) => item.score),
+    [0, 10, 20],
+    'asset relevance scores should be deterministic',
+);
+passed += 2;
 
 console.log(`fuzzy unit tests passed (${passed} assertions)`);

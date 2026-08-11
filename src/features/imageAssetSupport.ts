@@ -227,19 +227,9 @@ async function getCandidateRootsUncached(documentFsPath: string): Promise<string
     return roots;
 }
 
-export interface ImportedAsset { value: string; label: string; iconPath?: string; source: 'import'; hash?: string; }
+export interface ImportedAsset { value: string; label: string; iconPath?: string; source: 'import'; }
 
 const IMPORT_SKIP_DIRS = new Set(['node_modules', '.git', '.svn', 'dist', 'out', 'build', '_build', 'target', '.wurst', 'wurst', '.idea', '.vscode']);
-
-async function hashImportedAsset(fullPath: string): Promise<string | undefined> {
-    try {
-        const stat = await fs.promises.stat(fullPath);
-        if (!stat.isFile()) return undefined;
-        return `${stat.size}:${Math.floor(stat.mtimeMs)}`;
-    } catch {
-        return undefined;
-    }
-}
 
 /**
  * Enumerate user-imported asset files (models + textures + sounds) under the project's local roots, so the
@@ -248,11 +238,16 @@ async function hashImportedAsset(fullPath: string): Promise<string | undefined> 
  */
 export async function gatherImportedAssets(documentFsPath: string): Promise<{ model: ImportedAsset[]; icon: ImportedAsset[]; sound: ImportedAsset[] }> {
     const cacheDir = getGameAssetCacheDir();
-    const roots = (await getCandidateRoots(documentFsPath)).filter((r) => r !== cacheDir);
+    // Prefer the most specific root. A file under `imports\btn` is reachable both from the workspace
+    // root (`imports\btn\x.blp`) and the dedicated imports root (`btn\x.blp`); the latter is the useful
+    // WC3 asset path. Walking child roots first also lets the physical-path guard below keep that form.
+    const roots = (await getCandidateRoots(documentFsPath))
+        .filter((r) => r !== cacheDir)
+        .sort((a, b) => path.resolve(b).split(path.sep).length - path.resolve(a).split(path.sep).length);
     const model: ImportedAsset[] = [];
     const icon: ImportedAsset[] = [];
     const sound: ImportedAsset[] = [];
-    const seenValue = new Set<string>();
+    const seenFile = new Set<string>();
     let budget = 4000;
 
     // eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
@@ -274,12 +269,12 @@ export async function gatherImportedAssets(documentFsPath: string): Promise<{ mo
             const isTex = ext === 'blp' || ext === 'dds' || ext === 'tga';
             const isSound = SOUND_EXTS.has(ext);
             if (!isModel && !isTex && !isSound) continue;
+            const resolved = path.resolve(full);
+            const fileKey = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+            if (seenFile.has(fileKey)) continue;
+            seenFile.add(fileKey);
             const rel = path.relative(root, full).replace(/\//g, '\\');
-            const key = rel.toLowerCase();
-            if (seenValue.has(key)) continue;
-            seenValue.add(key);
-            const hash = await hashImportedAsset(full);
-            const opt: ImportedAsset = { value: rel, label: entry.name, source: 'import', hash };
+            const opt: ImportedAsset = { value: rel, label: entry.name, source: 'import' };
             if (isTex) { opt.iconPath = rel; icon.push(opt); }
             else if (isSound) { sound.push(opt); }
             else { model.push(opt); }

@@ -210,8 +210,8 @@ effect(() => {
   const cozy = ui.density === 'cozy';
   document.body.classList.toggle('density-cozy', cozy);
   if (densityToggle) {
-    densityToggle.textContent = cozy ? 'spacious' : 'compact';
-    densityToggle.setAttribute('aria-pressed', String(cozy));
+    densityToggle.setAttribute('aria-checked', String(cozy));
+    densityToggle.setAttribute('title', cozy ? 'Use compact density' : 'Use spacious density');
   }
 }, 'objModEditor.density');
 if (densityToggle) {

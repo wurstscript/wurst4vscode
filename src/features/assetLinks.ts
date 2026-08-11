@@ -9,6 +9,7 @@ import { isSoundAssetPath, playSoundInline } from './soundPreview';
 import { buildPage, ICON_INLINE_CSS, PREVIEW_ICON_CSP } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
 import { showWarningWithLogs } from './diagnostics';
+import { assetSearchScore, fuzzyMatch } from './preview/fuzzy';
 
 // Asset file extensions we want to linkify inside string literals
 const ASSET_EXTS = new Set([
@@ -224,7 +225,7 @@ function dedupeAssetOptions(options: readonly ValueOption[]): ValueOption[] {
     const seen = new Set<string>();
     const out: ValueOption[] = [];
     for (const option of options) {
-        const key = option.value.toLowerCase();
+        const key = option.value.replace(/\//g, '\\').toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
         out.push(option);
@@ -292,22 +293,20 @@ ${ICON_INLINE_CSS}
   var modelJob = null;
   var modelInited = false;
   function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
-  function fuzzy(q, text) {
-    q = String(q || '').toLowerCase().trim();
-    if (!q) return true;
-    text = String(text || '').toLowerCase();
-    var pos = 0;
-    for (var i = 0; i < q.length; i++) {
-      pos = text.indexOf(q[i], pos);
-      if (pos < 0) return false;
-      pos++;
-    }
-    return true;
-  }
+  var fuzzyMatch = ${fuzzyMatch.toString()};
+  var assetSearchScore = ${assetSearchScore.toString()};
   function list() {
     var items = (initial.tabs[activeTab] || []);
     if (!query) return items.slice(0, 500);
-    return items.filter(function (item) { return fuzzy(query, item.label + ' ' + item.detail + ' ' + item.value); }).slice(0, 500);
+    return items.map(function (item, index) {
+      return { item: item, index: index, score: assetSearchScore(query, item.label, item.value, item.detail) };
+    }).filter(function (entry) {
+      return Number.isFinite(entry.score);
+    }).sort(function (a, b) {
+      return a.score - b.score || a.index - b.index;
+    }).slice(0, 500).map(function (entry) {
+      return entry.item;
+    });
   }
   function render() {
     document.querySelectorAll('.tab').forEach(function (btn) { btn.classList.toggle('active', btn.getAttribute('data-tab') === activeTab); });

@@ -26,15 +26,16 @@ export function tooltipPreviewText(v, stripTemplatePrefix = true) {
   return stripTemplatePrefix ? text.replace(/^(?:unit|building)\s*\/\s*/i, '') : text;
 }
 
-// Only genuine display-text fields get the color tools: tooltips/descriptions/tips, or any value
-// that already uses WC3 color codes / newlines. Short codes (hotkeys), names, comma rawcode lists
-// etc. get a plain input — no color bloat.
+// Only genuine player-facing display-text fields get the framed editor: tooltips, descriptions, tips,
+// names, or any value that already uses WC3 color codes/newlines. Technical name variants such as the
+// World Editor suffix, short codes (hotkeys), and comma rawcode lists stay plain.
 export function needsColorEditor(mod) {
   if (!mod.editable || mod.varType !== 'string') return false;
   const v = mod.editValue == null ? '' : String(mod.editValue);
   if (hasColorMarkup(v)) return true;
   const label = String(mod.label || '').toLowerCase();
-  return label.indexOf('tooltip') !== -1 || label.indexOf('description') !== -1 || label.indexOf('tip') !== -1;
+  const isName = !label.includes('editor suffix') && (label === 'name' || /\bnames?$/.test(label));
+  return isName || label.indexOf('tooltip') !== -1 || label.indexOf('description') !== -1 || label.indexOf('tip') !== -1;
 }
 
 // WC3 palette (RRGGBB) for the quick swatches inside the color popup.

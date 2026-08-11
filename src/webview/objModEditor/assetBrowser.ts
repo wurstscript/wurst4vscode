@@ -1,4 +1,4 @@
-import { fuzzyMatch } from '../../features/preview/fuzzy';
+import { assetSearchScore } from '../../features/preview/fuzzy';
 import { esc } from '../objModWebviewUtils';
 import { effect, signal } from '../signals';
 import { detailCache, details, ui, vscodeApi, iconLoader, assetBrowserUi } from './state';
@@ -118,19 +118,21 @@ export function renderAssetGrid() {
   const opts = (catalog && catalog[activeTab]) || [];
   const sourceFilter = assetBrowserUi.sourceFilter;
   const query = assetBrowserUi.searchQuery.trim();
-  const matches: AssetOption[] = [];
-  let matchedCount = 0;
-  for (const o of opts) {
+  const ranked: Array<{ option: AssetOption; score: number; index: number }> = [];
+  for (let index = 0; index < opts.length; index++) {
+    const o = opts[index];
     if (sourceFilter === 'import' && o.source !== 'import') continue;
     if (sourceFilter === 'wc3' && o.source === 'import') continue;
-    if (query && !fuzzyMatch(query, o.label + ' ' + o.value + ' ' + (o.detail || ''))) continue;
-    matchedCount++;
-    if (matches.length < 600) matches.push(o);
+    const score = assetSearchScore(query, o.label, o.value, o.detail || '');
+    if (!Number.isFinite(score)) continue;
+    ranked.push({ option: o, score, index });
   }
+  if (query) ranked.sort((a, b) => a.score - b.score || a.index - b.index);
+  const matches = ranked.slice(0, 600);
   const count = document.getElementById('ab-count');
-  if (count) count.textContent = matches.length + (matchedCount > 600 ? '+' : '') + ' / ' + opts.length;
+  if (count) count.textContent = matches.length + (ranked.length > 600 ? '+' : '') + ' / ' + opts.length;
   if (!matches.length) { grid.innerHTML = '<div class="ab-empty">No matching assets</div>'; return; }
-  grid.innerHTML = matches.map(o => {
+  grid.innerHTML = matches.map(({ option: o, score }) => {
     const icon = activeTab === 'model'
       ? '<span class="object-icon model-thumb" data-key="ab-model:' + esc(o.value) + '" data-model="' + esc(o.value) + '"></span>'
       : activeTab === 'sound'
@@ -139,7 +141,7 @@ export function renderAssetGrid() {
         ? '<span class="object-icon" data-key="ab:' + esc(o.value) + '" data-icon="' + esc(o.iconPath) + '"></span>'
         : '<span class="object-icon missing"></span>');
     const previewHint = activeTab === 'model' ? ' — Ctrl+click to open full preview' : '';
-    return '<button type="button" class="ab-card" data-value="' + esc(o.value) + '" aria-label="' + esc(o.label + ' — ' + o.value) + '" title="' + esc(o.label + ' — ' + o.value + previewHint) + '">' +
+    return '<button type="button" class="ab-card" data-value="' + esc(o.value) + '" data-search-score="' + score + '" aria-label="' + esc(o.label + ' — ' + o.value) + '" title="' + esc(o.label + ' — ' + o.value + previewHint) + '">' +
       icon + '<span class="ab-card-label">' + esc(o.label) + '</span></button>';
   }).join('');
   iconLoader.observe(grid);

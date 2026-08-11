@@ -164,12 +164,21 @@ export function installDebugApi() {
           visible: isModelThumbActuallyVisible(el),
         };
       });
+      const assetBrowserResults = Array.prototype.slice.call(document.querySelectorAll('#ab-grid .ab-card')).map(function (el, index) {
+        return {
+          index: index,
+          label: el.querySelector('.ab-card-label')?.textContent || '',
+          value: el.getAttribute('data-value') || '',
+          score: Number(el.getAttribute('data-search-score')),
+        };
+      });
       return {
         fileInfo: initial.fileInfo || null,
         selectedKey: ui.selectedKey,
         selectedObject: objects.find(function (candidate) { return candidate.key === ui.selectedKey; }) || null,
         assetBrowserOpen: isAssetBrowserOpen(),
         assetBrowserCount: document.querySelectorAll('#ab-grid .ab-card').length,
+        assetBrowserResults: assetBrowserResults,
         assetCatalogLoaded: !!getAssetCatalog(),
         assetCatalogCounts: getAssetCatalog() ? {
           models: (getAssetCatalog().model || []).length,

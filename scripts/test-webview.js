@@ -936,7 +936,7 @@ function testObjModTooltipFontWiring() {
     assert.ok(host.includes('font-src ${context.webview.cspSource}'), 'objmod CSP must permit the project font resource');
     assert.ok(host.includes('@font-face'), 'objmod should declare the project font for tooltip previews');
     assert.ok(!host.includes("Buffer.from(bytes).toString('base64')"), 'project fonts should not be embedded as large data URLs');
-    assert.ok(host.includes(".tt-collapsed-box,\n.tt-preview {"), 'the custom font should be assigned only to tooltip boxes');
+    assert.ok(/\.tt-collapsed-box,\r?\n\.tt-preview \{/.test(host), 'the custom font should be assigned only to tooltip boxes');
     assert.ok(!host.includes('.tt-collapsed-box *'), 'the custom font should not use descendant-wide override selectors');
     assert.ok(host.includes('td.value { font-family: var(--font); }'), 'ordinary field values should use the VS Code UI font');
     assert.ok(host.includes('.tt-empty { color: var(--muted); font-style: normal; }'), 'ordinary empty values should not be italicized');
@@ -979,8 +979,8 @@ function testObjModDensityAndTreeStyling() {
     assert.ok(host.includes('body.density-cozy .density-thumb { transform: translateX(14px)'), 'density switch thumb should animate between states');
     assert.ok(host.includes('@media (prefers-reduced-motion: reduce)'), 'density animation should respect reduced-motion preferences');
     assert.ok(webview.includes("setAttribute('aria-checked', String(cozy))"), 'density switch must expose its current state accessibly');
-    assert.ok(host.includes('font-size: 11px;\n  font-weight: 500;\n  color: var(--muted);'), 'nested tree headings should share one typography baseline');
-    assert.ok(!host.includes('.race-heading {\n  padding: var(--tree-heading-py) var(--ind-group) var(--tree-heading-py) var(--ind-race);\n  color: var(--fg);\n  font-size: 12px;'), 'race headings should not introduce a third font treatment');
+    assert.ok(/font-size: 11px;\r?\n {2}font-weight: 500;\r?\n {2}color: var\(--muted\);/.test(host), 'nested tree headings should share one typography baseline');
+    assert.ok(!/\.race-heading \{\r?\n {2}padding: var\(--tree-heading-py\) var\(--ind-group\) var\(--tree-heading-py\) var\(--ind-race\);\r?\n {2}color: var\(--fg\);\r?\n {2}font-size: 12px;/.test(host), 'race headings should not introduce a third font treatment');
 }
 
 function testImportedAssetDedupeSafety() {

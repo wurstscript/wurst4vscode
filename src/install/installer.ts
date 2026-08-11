@@ -34,6 +34,11 @@ type PreparedNightlyInstall = {
     grillJar: string;
 };
 
+export type UpdateAvailable = {
+    installedSha: string | null;
+    latestSha: string;
+};
+
 // Snooze state lives in a file under ~/.wurst rather than ExtensionContext.globalState so a "Later"
 // choice sticks across separate VS Code profiles/user-data-dirs (e.g. Extension Development Host runs,
 // --user-data-dir test profiles) on the same machine, not just the one profile that showed the dialog.
@@ -412,24 +417,26 @@ async function installPreparedNightly(prepared: PreparedNightlyInstall, options:
     );
 }
 
-export async function maybeOfferUpdate(): Promise<void> {
+export async function maybeOfferUpdate(onUpdateAvailable?: (update: UpdateAvailable) => void): Promise<void> {
     try {
         if (!hasNewLayout() || !fs.existsSync(COMPILER_JAR)) return;
-        if (readUpdateSnoozedUntil() > Date.now()) return;
 
         const installed = await getInstalledVersionString();
         const installedSha = installed ? extractGitSha(installed) : null;
         const latestSha = await fetchNightlyCommitSha();
         if (installedSha && gitShasMatch(installedSha, latestSha)) return;
 
-        const detail = [
+        onUpdateAvailable?.({ installedSha, latestSha });
+        if (readUpdateSnoozedUntil() > Date.now()) return;
+
+        const versions = [
             installedSha ? `Installed: ${displayGitSha(installedSha)}` : 'Installed: unknown',
             `Latest: ${displayGitSha(latestSha)}`,
-        ].join('\n');
+        ].join(' · ');
 
         const choice = await vscode.window.showInformationMessage(
-            'A newer WurstScript version is available.',
-            { modal: true, detail }, 'Update', 'Later'
+            `A newer WurstScript version is available. ${versions}`,
+            'Update', 'Later'
         );
         if (choice === 'Update') {
             writeUpdateSnoozedUntil(undefined);

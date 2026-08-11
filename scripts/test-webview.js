@@ -622,7 +622,10 @@ function testNonBlockingStartupAndForcedReinstallWiring() {
     assert.ok(extension.includes("workbench.action.reloadWindow"), 'forced reinstall must reload the stopped language server');
     assert.ok(!extension.includes('ensureInstalledOrOfferMigration(true)'), 'manual install/update must not use the no-op ensure path');
     assert.ok(!languageServer.includes('await maybeOfferUpdate(context)'), 'update checks must not delay language-client startup');
-    assert.ok(languageServer.includes('void maybeOfferUpdate()'), 'update checks should still run in the background');
+    assert.ok(languageServer.includes('void maybeOfferUpdate((update) =>'), 'update checks should still run in the background and update the status item');
+    assert.ok(languageServer.includes("'$(cloud-download) WurstScript Update'"), 'the status item must indicate when an update is available');
+    assert.ok(!installer.includes("{ modal: true, detail }, 'Update', 'Later'"), 'the automatic update notification must not be modal');
+    assert.ok(installer.includes("'Update', 'Later'"), 'the non-modal update notification must retain its actions');
     assert.ok(installer.includes("execFile(java, ['-jar', COMPILER_JAR, '--version']"), 'version detection must use an asynchronous child process');
     assert.ok(!manifest.activationEvents.includes('workspaceContains:**/*.wurst'), 'activation must not recursively scan for loose Wurst files');
     assert.ok(manifest.activationEvents.includes('onLanguage:wurst'), 'opening a Wurst document must activate the extension');
@@ -942,7 +945,7 @@ function testObjModTooltipPreviewHeaders() {
 
     assert.ok(fieldDisplay.includes("replace(/^(?:unit|building)\\s*\\/\\s*/i, '')"), 'unit and building tooltip markers should be hidden in previews');
     assert.ok(detailsPanel.includes('renderWc3Colors(original)'), 'tooltip editing should restore the unmodified raw value');
-    assert.ok(detailsPanel.includes('renderWc3Colors(tooltipPreviewText(value))'), 'tooltip collapse should restore the cleaned preview');
+    assert.ok(detailsPanel.includes('renderWc3Colors(tooltipPreviewText(value, isTooltipTemplateField(mod)))'), 'tooltip collapse should restore the cleaned preview only for tooltip fields');
 }
 
 function testObjModEditorTypeAndRecoveryGuards() {

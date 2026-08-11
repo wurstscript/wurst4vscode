@@ -6,14 +6,20 @@ import { workspace, ExtensionContext } from 'vscode';
 import { LanguageClient, LanguageClientOptions, ServerOptions, Executable } from 'vscode-languageclient/node';
 import { RUNTIME_DIR, COMPILER_JAR } from './paths';
 import { getBundledJava, checkCustomJavaVersion, getInstalledVersionString, ensureInstalledOrOfferMigration, maybeOfferUpdate } from './install/installer';
+import type { UpdateAvailable } from './install/installer';
 import { registerCommands } from './features/commands';
 import { registerFileCreation } from './features/fileCreation';
+import { appendDiagnostic, formatDiagnosticError } from './features/diagnostics';
 
 let clientRef: LanguageClient | null = null;
 
 export async function stopLanguageServerIfRunning(): Promise<boolean> {
     if (!clientRef) return false;
-    try { await clientRef.stop(); } catch {}
+    try {
+        await clientRef.stop();
+    } catch (error) {
+        appendDiagnostic('VS Code extension', `Language server stop failed: ${formatDiagnosticError(error)}`);
+    }
     clientRef = null;
     return true;
 }
@@ -45,24 +51,29 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
         if (typeof anyClient.onReady === 'function') await anyClient.onReady();
     } catch (error) {
         clientRef = null;
+        const detail = formatDiagnosticError(error);
         const message = error instanceof Error ? error.message : String(error);
+        appendDiagnostic('VS Code extension', `Wurst language server failed to start: ${detail}`);
         vscode.window.showErrorMessage(`Wurst language server failed to start: ${message}`);
         throw error;
     }
 
     const sb = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    sb.text = '$(check) WurstScript';
-    sb.tooltip = ['WurstScript language server is running.', 'Version: detecting...', 'Click to open logs.'].join('\n');
-    sb.command = 'wurst.showLogs';
+    let installedVersion = 'detecting...';
+    let availableUpdate: UpdateAvailable | undefined;
+    const updateStatusBar = () => {
+        sb.text = availableUpdate ? '$(cloud-download) WurstScript Update' : '$(check) WurstScript';
+        sb.tooltip = [
+            availableUpdate ? 'A newer WurstScript version is available.' : 'WurstScript language server is running.',
+            `Version: ${installedVersion}`,
+            availableUpdate ? `Latest: ${availableUpdate.latestSha.slice(0, 7)}` : undefined,
+            'Click for WurstScript actions.',
+        ].filter(Boolean).join('\n');
+    };
+    updateStatusBar();
+    sb.command = 'wurst.showDiagnosticsActions';
     sb.show();
     context.subscriptions.push(sb);
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('wurst.showLogs', () => {
-            try { client.outputChannel.show(); }
-            catch { vscode.commands.executeCommand('workbench.action.output.toggleOutput'); }
-        })
-    );
 
     client.onNotification('wurst/updateGamePath', (params) => {
         workspace.getConfiguration().update('wurst.wc3path', params);
@@ -76,14 +87,16 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
     // Neither should delay language features or block the extension host.
     void getInstalledVersionString().then((version) => {
         try {
-            sb.tooltip = [
-                'WurstScript language server is running.',
-                `Version: ${version ?? 'unknown'}`,
-                'Click to open logs.',
-            ].join('\n');
+            installedVersion = version ?? 'unknown';
+            updateStatusBar();
         } catch { /* status item was disposed during shutdown */ }
     });
-    void maybeOfferUpdate();
+    void maybeOfferUpdate((update) => {
+        try {
+            availableUpdate = update;
+            updateStatusBar();
+        } catch { /* status item was disposed during shutdown */ }
+    });
 }
 
 export function registerFileChanges(client: LanguageClient): vscode.FileSystemWatcher {

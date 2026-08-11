@@ -2,6 +2,7 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { appendDiagnostic } from './diagnostics';
 
 const ISSUE_URL = 'https://github.com/wurstscript/wurst4vscode/issues/new';
 const seenFailures = new Set<string>();
@@ -96,6 +97,14 @@ function failureKey(issue: ExtensionIssue): string {
 
 /** Offer a non-modal, privacy-preserving report action once per failure shape and session. */
 export function offerIssueReport(issue: ExtensionIssue): void {
+    const resourceSuffix = issue.resource ? ` resource=${resourceName(issue.resource)}` : '';
+    appendDiagnostic(
+        'VS Code extension',
+        [
+            `Preview failure [${issue.area}]${resourceSuffix}: ${issue.message}`,
+            issue.details ?? '',
+        ].filter(Boolean).join('\n'),
+    );
     const enabled = vscode.workspace.getConfiguration('wurst').get<boolean>('issueReportingHints', true);
     const key = failureKey(issue);
     if (!enabled || promptActive || seenFailures.has(key)) return;

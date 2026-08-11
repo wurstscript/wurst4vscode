@@ -27,7 +27,11 @@
         "onCustomEditor:wurst.objModPreview",
         "onCustomEditor:wurst.soundPreview",
         "onCommand:wurst.previewMap",
-        "onCommand:wurst.reportIssue"
+        "onCommand:wurst.reportIssue",
+        "onCommand:wurst.showDiagnosticsActions",
+        "onCommand:wurst.openWurstHome",
+        "onCommand:wurst.copyDiagnostics",
+        "onCommand:wurst.showLogs"
     ],
     "main": "./dist/extension",
     "browser": "./dist/web/extension.js",
@@ -694,7 +698,22 @@
             },
             {
                 "command": "wurst.showLogs",
-                "title": "Open VSCode output panel for Wurst logs",
+                "title": "Open Wurst output",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.showDiagnosticsActions",
+                "title": "Wurst: Show diagnostics actions",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.openWurstHome",
+                "title": "Wurst: Open Wurst home",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.copyDiagnostics",
+                "title": "Wurst: Copy diagnostics",
                 "category": "wurst"
             },
             {
@@ -858,8 +877,9 @@
         "lint": "eslint .",
         "compile-web": "webpack",
         "watch-web": "webpack --watch",
-        "test": "npm run test:fuzzy && npm run test:image-decoders && npm run test:webview",
+        "test": "npm run test:fuzzy && npm run test:image-decoders && npm run test:diagnostics && npm run test:webview",
         "test:image-decoders": "node ./scripts/test-image-decoders.js",
+        "test:diagnostics": "node ./scripts/test-diagnostics.js",
         "test:vsix-contents": "node ./scripts/test-vsix-contents.js",
         "sync:wc3-knowledge-base": "node ./scripts/sync-wc3-knowledge-base.js",
         "test:webview": "node ./scripts/test-webview.js",

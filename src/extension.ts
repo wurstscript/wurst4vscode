@@ -25,8 +25,10 @@ import { registerTriggerPreview } from './features/triggerPreview';
 import { registerMapDataPreview } from './features/mapDataPreview';
 import { registerMapPreview } from './features/mapPreview';
 import { registerAgentsGuideOffer } from './features/agentsGuide';
+import { registerWurstDiagnosticsCommands } from './features/commands';
 import { openIssueReport } from './features/issueReporting';
 import { registerCascDiagnosticsCommand } from './features/preview/cascStorage';
+import { appendDiagnostic, formatDiagnosticError } from './features/diagnostics';
 
 export async function activate(context: ExtensionContext) {
     console.log('Wurst extension activated!');
@@ -47,6 +49,7 @@ export async function activate(context: ExtensionContext) {
     context.subscriptions.push(registerMapPreview(context));
     context.subscriptions.push(registerAgentsGuideOffer(context));
     context.subscriptions.push(registerCascDiagnosticsCommand());
+    registerWurstDiagnosticsCommands(context);
 
     registerBasicCommands(context);
     openObjModE2eFixture();
@@ -89,6 +92,7 @@ function registerBasicCommands(context: ExtensionContext) {
                 await vscode.commands.executeCommand('workbench.action.reloadWindow');
             } catch (e: any) {
                 if (e instanceof InstallCoordinationCancelledError) return;
+                appendDiagnostic('VS Code extension', `Install/update failed: ${formatDiagnosticError(e)}`);
                 vscode.window.showErrorMessage(`Install/Update failed: ${e?.message || e}`);
             }
         }),
@@ -126,6 +130,7 @@ function registerBasicCommands(context: ExtensionContext) {
             try {
                 await createNewWurstProject();
             } catch (e: any) {
+                appendDiagnostic('VS Code extension', `New project creation failed: ${formatDiagnosticError(e)}`);
                 vscode.window.showErrorMessage(`Failed to create Wurst project: ${e?.message ?? String(e)}`);
             }
         }),
@@ -148,7 +153,8 @@ async function startLanguageClientWhenWorkspaceIsOpen(context: ExtensionContext)
     try {
         await startLanguageClient(context);
     } catch (err) {
-        console.error('Failed to start language client:', err);
+        appendDiagnostic('VS Code extension', `Failed to start language client: ${formatDiagnosticError(err)}`);
+        console.error('Failed to start language client:', formatDiagnosticError(err));
         vscode.window.showWarningMessage(`Wurst language features disabled: ${err}`);
     }
 }

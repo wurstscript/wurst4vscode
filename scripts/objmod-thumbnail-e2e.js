@@ -60,8 +60,10 @@ function writeGeneratedObjmodFixture() {
     fs.writeFileSync(path.join(dir, 'wurst.build'), 'projectName = objmod-e2e\n');
     const importedModelsDir = path.join(dir, 'imports', 'units');
     fs.mkdirSync(importedModelsDir, { recursive: true });
+    const validModelFixture = path.join(root, 'wc3data', 'melon.mdx');
+    assert.ok(fs.existsSync(validModelFixture), `Missing valid model fixture: ${validModelFixture}`);
     for (const name of ['Footman.mdx', 'FootmanPortrait.mdx', 'CaptainFootman.mdx', 'confirmation.mdx', 'AltarOfKings.mdx']) {
-        fs.writeFileSync(path.join(importedModelsDir, name), 'objmod search fixture');
+        fs.copyFileSync(validModelFixture, path.join(importedModelsDir, name));
     }
     const localFont = process.env.WURST_OBJMOD_E2E_FONT;
     if (localFont) {
@@ -724,7 +726,7 @@ async function assertObjmodEditorBasics(client, sessionId, contextId) {
         assert.equal(fixtureScore('confirmation.mdx'), undefined, 'scattered letters in confirmation.mdx must not match footman');
         assert.equal(fixtureScore('AltarOfKings.mdx'), undefined, 'unrelated model names must not match footman');
     }
-    log(`footman search returned ${searchResults.length} relevance-sorted results`);
+    log(`footman search returned ${searchResults.length} relevance-sorted results; restoring the unfiltered catalog`);
     await evalInContext(client, sessionId, contextId, 'window.__wurstModelThumbDebug.searchModelAssetBrowser("")');
 }
 

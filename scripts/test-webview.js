@@ -986,10 +986,17 @@ function testObjModDensityAndTreeStyling() {
 function testImportedAssetDedupeSafety() {
     const host = fs.readFileSync(path.join(root, 'src/features/objModPreview.ts'), 'utf8');
     const support = fs.readFileSync(path.join(root, 'src/features/imageAssetSupport.ts'), 'utf8');
+    const e2e = fs.readFileSync(path.join(root, 'scripts/objmod-thumbnail-e2e.js'), 'utf8');
 
     assert.ok(!support.includes('hashImportedAsset'), 'asset dedupe must not mistake size+mtime metadata for a content hash');
     assert.ok(!host.includes('opt.hash'), 'distinct imported files must not collapse through metadata collisions');
     assert.ok(host.includes("if (opt.source === 'import')"), 'imports in different folders should remain separate after exact-path dedupe');
+    assert.ok(
+        support.indexOf('if (seenFile.has(fileKey)) continue;') < support.indexOf('budget--;'),
+        'duplicate physical assets must not consume the imported-asset scan budget',
+    );
+    assert.ok(e2e.includes("path.join(root, 'wc3data', 'melon.mdx')"), 'generated thumbnail search controls should copy a valid model fixture');
+    assert.ok(!e2e.includes("'objmod search fixture'"), 'generated thumbnail fixtures must not contain fake text model bytes');
 }
 
 function testObjModEditorTypeAndRecoveryGuards() {

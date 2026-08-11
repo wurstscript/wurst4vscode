@@ -263,15 +263,17 @@ export async function gatherImportedAssets(documentFsPath: string): Promise<{ mo
                 await walk(root, full, depth + 1);
                 continue;
             }
+            const resolved = path.resolve(full);
+            const fileKey = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+            // Overlapping candidate roots can reach the same asset more than once. Do not let those
+            // duplicate visits consume the bounded scan budget and hide later unique assets.
+            if (seenFile.has(fileKey)) continue;
             budget--;
             const ext = path.extname(entry.name).slice(1).toLowerCase();
             const isModel = ext === 'mdx' || ext === 'mdl';
             const isTex = ext === 'blp' || ext === 'dds' || ext === 'tga';
             const isSound = SOUND_EXTS.has(ext);
             if (!isModel && !isTex && !isSound) continue;
-            const resolved = path.resolve(full);
-            const fileKey = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-            if (seenFile.has(fileKey)) continue;
             seenFile.add(fileKey);
             const rel = path.relative(root, full).replace(/\//g, '\\');
             const opt: ImportedAsset = { value: rel, label: entry.name, source: 'import' };

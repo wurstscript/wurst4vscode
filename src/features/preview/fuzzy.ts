@@ -48,11 +48,19 @@ export function fuzzyMatch(query: string, text: string): boolean {
 /**
  * Relevance score for asset-picker entries. Lower is better; Infinity means no match.
  *
- * Keep this dependency-free and reference only `fuzzyMatch`: the code-asset picker ships both
- * functions into its webview with `.toString()`. Search individual fields instead of one joined
- * haystack so a query cannot be assembled from unrelated letters across a label, path, and detail.
+ * Keep this dependency-free: the code-asset picker ships this function into its webview with
+ * `.toString()`. Its fuzzy matcher is an explicit argument because a bundled function's source
+ * cannot safely refer back to another symbol in the extension module. Search individual fields
+ * instead of one joined haystack so a query cannot be assembled from unrelated letters across a
+ * label, path, and detail.
  */
-export function assetSearchScore(query: string, label: string, value: string, detail = ''): number {
+export function assetSearchScore(
+    query: string,
+    label: string,
+    value: string,
+    detail: string,
+    matchesFuzzy: (needle: string, haystack: string) => boolean,
+): number {
     const q = String(query === null || query === undefined ? '' : query).toLowerCase().trim();
     if (!q) return 0;
 
@@ -71,6 +79,6 @@ export function assetSearchScore(query: string, label: string, value: string, de
     if (labelWords.includes(q)) return 30;
     if (valueWords.includes(q)) return 40;
     if (String(detail === null || detail === undefined ? '' : detail).toLowerCase().includes(q)) return 50;
-    if (fuzzyMatch(q, labelStem) || fuzzyMatch(q, stem)) return 80;
+    if (matchesFuzzy(q, labelStem) || matchesFuzzy(q, stem)) return 80;
     return Number.POSITIVE_INFINITY;
 }

@@ -1,4 +1,4 @@
-import { assetSearchScore } from '../../features/preview/fuzzy';
+import { assetSearchScore, fuzzyMatch } from '../../features/preview/fuzzy';
 import { esc } from '../objModWebviewUtils';
 import { effect, signal } from '../signals';
 import { detailCache, details, ui, vscodeApi, iconLoader, assetBrowserUi } from './state';
@@ -123,7 +123,7 @@ export function renderAssetGrid() {
     const o = opts[index];
     if (sourceFilter === 'import' && o.source !== 'import') continue;
     if (sourceFilter === 'wc3' && o.source === 'import') continue;
-    const score = assetSearchScore(query, o.label, o.value, o.detail || '');
+    const score = assetSearchScore(query, o.label, o.value, o.detail || '', fuzzyMatch);
     if (!Number.isFinite(score)) continue;
     ranked.push({ option: o, score, index });
   }

@@ -13,7 +13,7 @@
         "type": "git",
         "url": "https://github.com/wurstscript/wurst4vscode.git"
     },
-    "version": "0.12.14",
+    "version": "0.12.15",
     "publisher": "peterzeller",
     "engines": {
         "vscode": "^1.109.0"
@@ -491,7 +491,7 @@
             },
             {
                 "viewType": "wurst.wpmPreview",
-                "displayName": "WC3 Pathing Map",
+                "displayName": "WC3 Pathing Map (editable)",
                 "selector": [
                     {
                         "filenamePattern": "*.wpm"
@@ -891,6 +891,7 @@
         "test:webview": "node ./scripts/test-webview.js",
         "test:e2e:models:local": "node ./scripts/model-thumbnail-e2e.js",
         "test:e2e:objmod-thumbs:local": "node ./scripts/objmod-thumbnail-e2e.js",
+        "test:e2e:asset-browser-code:local": "node ./scripts/objmod-thumbnail-e2e.js --code-only",
         "test:e2e:objmod-clipboard:local": "node ./scripts/objmod-clipboard-e2e.js",
         "test:wc3-previews": "node ./scripts/wc3-preview-smoke.js",
         "test:fuzzy": "node ./scripts/test-fuzzy.js",

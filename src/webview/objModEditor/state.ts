@@ -51,11 +51,10 @@ export const search = document.getElementById('search') as HTMLInputElement;
 
 // A cross-file rawcode jump (see locateObjectAcrossSiblings in objModPreview.ts) always wins over a
 // restored selection — the user just asked to look at a specific object, so honor that over whatever
-// was open last time. Otherwise prefer the restored key, falling back to it only if that object still
-// exists in this file (it may have been deleted by an edit made elsewhere since).
-const restoredSelectedKey = typeof persisted.selectedKey === 'string' && objects.some(obj => obj.key === persisted.selectedKey)
-  ? persisted.selectedKey
-  : '';
+// was open last time. Otherwise resolve the stable rawcode identity to this parse's transient array
+// key, falling back only if that object was deleted by an edit made elsewhere.
+const restoredSelectedIdentity = typeof persisted.selectedIdentity === 'string' ? persisted.selectedIdentity : '';
+const restoredSelectedKey = objects.find(obj => obj.identity === restoredSelectedIdentity)?.key || '';
 const initialSelectedKey = initial.isPendingJump ? initial.selectedKey : (restoredSelectedKey || initial.selectedKey || '');
 
 // Cross-cutting state that's reassigned (not just mutated) from more than one module. Real ES module
@@ -139,12 +138,14 @@ export const assetBrowserUi = {
 // free. Merges onto whatever's already persisted (e.g. the splitter width in objModEditorWebview.ts)
 // rather than replacing it outright.
 effect(() => {
+  const selectedIdentity = objects.find(obj => obj.key === ui.selectedKey)?.identity || '';
   const collapsed = Array.from(collapsedNodes);
   const hiddenCategories = Array.from(ui.hiddenCategories);
   collapsedNodes.version; // tracked: re-persist when a tree branch is collapsed/expanded
   ui.hiddenCategories.version; // tracked: re-persist when the category filter changes
   vscodeApi.setState(Object.assign({}, vscodeApi.getState() || {}, {
     selectedKey: ui.selectedKey,
+    selectedIdentity,
     query: ui.query,
     fieldQuery: ui.fieldQuery,
     showTechnical: ui.showTechnical,
@@ -157,3 +158,10 @@ effect(() => {
     hiddenCategories: hiddenCategories,
   }));
 }, 'state.persistUi');
+
+// The host stores only this stable identity, keyed by the document's workspace-relative path. That
+// survives closing/reopening the editor and still resolves after Git reorders object arrays.
+effect(() => {
+  const identity = objects.find(obj => obj.key === ui.selectedKey)?.identity;
+  if (identity) vscodeApi.postMessage({ type: 'selectionChanged', identity });
+}, 'state.rememberSelection');

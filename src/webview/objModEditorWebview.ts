@@ -201,6 +201,12 @@ document.addEventListener('keydown', e => {
 const editableBadge = document.getElementById('editable-badge');
 if (editableBadge) editableBadge.addEventListener('click', saveNow);
 
+const refreshEditor = document.getElementById('refresh-editor');
+if (refreshEditor) refreshEditor.addEventListener('click', () => {
+  commitActiveEditor();
+  vscodeApi.postMessage({ type: 'refresh' });
+});
+
 // Density is a document-wide spacing scale (tree, header, field table all retune at once), so it's a
 // single class on <body> driving the :root / body.density-cozy variable pair in objModPreview.ts —
 // nothing has to re-render. The effect runs immediately on creation, which is what applies a restored

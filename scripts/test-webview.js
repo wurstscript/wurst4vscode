@@ -943,7 +943,8 @@ function testObjModTooltipFontWiring() {
     assert.ok(host.includes("get<string>(TOOLTIP_FONT_SETTING, '')"), 'objmod should support an explicit tooltip font setting');
     assert.ok(!host.includes("'**/*.ttf'"), 'objmod must not auto-discover arbitrary workspace fonts');
     assert.ok(host.includes('isWithinDirectory(root, configuredPath)'), 'configured tooltip fonts must stay inside the workspace');
-    assert.ok(host.includes('webview.asWebviewUri(fontUri)'), 'project fonts must be converted to webview resource URIs');
+    assert.ok(host.includes('webview.asWebviewUri(compatibleUri)'), 'project fonts must be converted to webview resource URIs');
+    assert.ok(host.includes('repairTooltipTrueTypeFont(source)'), 'project fonts must repair glyph flags rejected by Chromium');
     assert.ok(host.includes('font-src ${context.webview.cspSource}'), 'objmod CSP must permit the project font resource');
     assert.ok(host.includes('@font-face'), 'objmod should declare the project font for tooltip previews');
     assert.ok(!host.includes("Buffer.from(bytes).toString('base64')"), 'project fonts should not be embedded as large data URLs');
@@ -954,6 +955,48 @@ function testObjModTooltipFontWiring() {
     assert.ok(host.includes('.tt-collapsed-box .tt-empty,'), 'only framed WC3 text may retain the italic empty placeholder');
     assert.ok(packageJson.includes('wurst.objModTooltipFont'), 'the tooltip font setting should be contributed by the extension');
     assert.equal(packageData.contributes.configuration.properties['wurst.objModTooltipFont'].default, '', 'the tooltip font setting must default to disabled');
+}
+
+function testTooltipFontRepairsChromiumRejectedGlyphFlags() {
+    const { repairTooltipTrueTypeFont } = loadTsModule('src/features/preview/tooltipFont.ts');
+    const font = Buffer.alloc(168);
+    font.writeUInt32BE(0x00010000, 0);
+    font.writeUInt16BE(4, 4);
+    const writeTable = (index, tag, offset, length) => {
+        const record = 12 + index * 16;
+        font.write(tag, record, 4, 'ascii');
+        font.writeUInt32BE(offset, record + 8);
+        font.writeUInt32BE(length, record + 12);
+    };
+    writeTable(0, 'head', 76, 54);
+    writeTable(1, 'maxp', 132, 6);
+    writeTable(2, 'loca', 140, 8);
+    writeTable(3, 'glyf', 148, 17);
+    font.writeUInt32BE(0x00010000, 76);
+    font.writeUInt32BE(0x5f0f3cf5, 88);
+    font.writeInt16BE(1, 126);
+    font.writeUInt32BE(0x00010000, 132);
+    font.writeUInt16BE(1, 136);
+    font.writeUInt32BE(17, 144);
+    font.writeInt16BE(1, 148);
+    font.writeUInt16BE(0, 158);
+    font.writeUInt16BE(0, 160);
+    font[162] = 0x96; // Valid point encoding plus reserved bit 7: rejected by Chromium OTS.
+    font[163] = 1;
+    font[164] = 1;
+
+    const repaired = repairTooltipTrueTypeFont(font);
+    assert.equal(repaired.repairedFlags, 1, 'the malformed glyph flag must be detected');
+    assert.equal(repaired.bytes[162], 0x16, 'reserved glyph bits must be cleared without changing point encoding');
+    const repairedBuffer = Buffer.from(repaired.bytes);
+    let checksum = 0;
+    for (let i = 0; i < repaired.bytes.length; i += 4) {
+        checksum = (checksum + repairedBuffer.readUInt32BE(i)) >>> 0;
+    }
+    assert.equal(checksum, 0xb1b0afba, 'the repaired TrueType checksum must remain valid');
+    const secondPass = repairTooltipTrueTypeFont(repaired.bytes);
+    assert.equal(secondPass.repairedFlags, 0, 'repair must be idempotent');
+    assert.deepEqual(Buffer.from(secondPass.bytes), Buffer.from(repaired.bytes));
 }
 
 function testObjModTooltipWidthWiring() {
@@ -1075,6 +1118,7 @@ async function main() {
     await testIssueReportingPrivacyAndDeduplication();
     testObjModSaveCommitsFocusedEditor();
     testObjModTooltipFontWiring();
+    testTooltipFontRepairsChromiumRejectedGlyphFlags();
     testObjModTooltipWidthWiring();
     testObjModTooltipPreviewHeaders();
     testObjModDensityAndTreeStyling();

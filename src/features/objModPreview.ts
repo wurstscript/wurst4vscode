@@ -4,6 +4,7 @@
 
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { parseObjMod, serializeObjMod, ObjModFile, ObjModEntry, ObjModMod, ObjModVarType } from 'casc-ts/formats';
 import { ParsedPreviewContext } from './preview/framework';
 import { requestPreviewIcon, requestTooltipBackdrop, requestTooltipBorder, getCandidateRoots, resolveAssetPathWithCasc, gatherImportedAssets } from './imageAssetSupport';
@@ -31,6 +32,7 @@ import {
 } from './preview/wc3Data';
 import { getGameAssetCacheDir, listGameAssetPaths } from './preview/cascStorage';
 import { showErrorWithLogs, showWarningWithLogs } from './diagnostics';
+import { repairTooltipTrueTypeFont } from './preview/tooltipFont';
 import {
     loadCompilerKnowledgeBase, compilerLowercaseObjectView, compilerProfileView,
     CompilerFieldSchema, CompilerObjectKind, CompilerObjectRecord,
@@ -1640,6 +1642,24 @@ async function existingTtfUri(uri: vscode.Uri): Promise<vscode.Uri | undefined> 
     }
 }
 
+async function chromiumCompatibleTooltipFont(fontUri: vscode.Uri): Promise<vscode.Uri> {
+    const source = await vscode.workspace.fs.readFile(fontUri);
+    const repaired = repairTooltipTrueTypeFont(source);
+    if (repaired.repairedFlags === 0) return fontUri;
+
+    const cacheDir = vscode.Uri.file(path.join(getGameAssetCacheDir(), 'tooltip-fonts'));
+    const digest = crypto.createHash('sha1').update(repaired.bytes).digest('hex');
+    const cachedUri = vscode.Uri.joinPath(cacheDir, `${digest}.ttf`);
+    await vscode.workspace.fs.createDirectory(cacheDir);
+    try {
+        await vscode.workspace.fs.stat(cachedUri);
+    } catch {
+        await vscode.workspace.fs.writeFile(cachedUri, repaired.bytes);
+    }
+    console.warn(`[wurst-objmod] repaired ${repaired.repairedFlags} reserved TrueType glyph flag(s) for Chromium compatibility`);
+    return cachedUri;
+}
+
 /** Resolve the configured project font through VS Code's supported webview resource pipeline. */
 async function resolveTooltipFontUri(
     documentUri: vscode.Uri,
@@ -1662,8 +1682,9 @@ async function resolveTooltipFontUri(
         console.warn(`[wurst-objmod] tooltip font not found or not a .ttf file: ${configured}`);
         return undefined;
     }
+    const compatibleUri = await chromiumCompatibleTooltipFont(fontUri);
     console.info(`[wurst-objmod] using tooltip font: ${configuredPath}`);
-    return webview.asWebviewUri(fontUri).toString();
+    return webview.asWebviewUri(compatibleUri).toString();
 }
 
 async function buildHtml(

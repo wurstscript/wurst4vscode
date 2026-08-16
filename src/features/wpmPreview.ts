@@ -3,15 +3,15 @@
 /** VS Code preview for WC3 war3map.wpm (pathing). Parser lives in `casc-ts/formats`. */
 
 import * as vscode from 'vscode';
-import { parseWpm, WpmFile } from 'casc-ts/formats';
-import { registerParsedPreviewer } from './preview/framework';
+import { parseWpm, serializeWpm, WpmFile } from 'casc-ts/formats';
+import { showErrorWithLogs } from './diagnostics';
 import { buildPage } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
 export { WpmFile } from 'casc-ts/formats';
 
 // ── HTML Rendering ────────────────────────────────────────────────────────────
 
-function buildWpmHtml(wpm: WpmFile, fileName: string): string {
+function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string {
     const dataBase64 = wpm.data.toString('base64');
 
     // Color formula — must stay in sync with the ImageData loop in the <script>.
@@ -97,6 +97,9 @@ function buildWpmHtml(wpm: WpmFile, fileName: string): string {
     padding: 3px 8px; border-radius: 3px; cursor: pointer; font-size: 12px;
   }
   button:hover { background: color-mix(in srgb, var(--btn-bg) 55%, transparent); color: var(--text); }
+  button.active { background: var(--btn-bg); color: var(--btn-fg); }
+  button:focus-visible, input:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+  .dirty { color: var(--vscode-charts-orange); font-size: 11px; }
   #zoomLabel { min-width: 56px; text-align: center; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
   #viewport {
     flex: 1; overflow: hidden; position: relative;
@@ -114,6 +117,13 @@ function buildWpmHtml(wpm: WpmFile, fileName: string): string {
     padding: 8px 12px 10px; border-top: 1px solid var(--border);
     background: var(--panel); flex-shrink: 0;
   }
+  .editbar { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 10px; margin-bottom: 9px; }
+  .editbar .tools { display: flex; gap: 2px; }
+  .brush-flags { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 10px; }
+  .brush-flags label { display: flex; align-items: center; gap: 4px; white-space: nowrap; font-size: 11px; }
+  .brush-flags input { margin: 0; }
+  #brushValue { color: var(--muted); font: 11px var(--vscode-editor-font-family); min-width: 38px; }
+  .edit-hint { color: var(--muted); font-size: 10px; margin-left: auto; }
   .legend-section { margin-bottom: 6px; }
   .legend-heading { font-size: 10px; color: var(--muted); margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.05em; }
   .legend-note { font-size: 10px; color: var(--muted); text-transform: none; letter-spacing: 0; opacity: 0.75; }
@@ -126,6 +136,7 @@ function buildWpmHtml(wpm: WpmFile, fileName: string): string {
   <header>
     <span class="title">${escapeHtml(fileName)}</span>
     <span class="meta">${wpm.width} × ${wpm.height} &nbsp;·&nbsp; v${wpm.version}</span>
+    <span id="dirtyBadge" class="dirty"${isDirty ? '' : ' hidden'}>Modified</span>
     <div class="toolbar">
       <button id="btnZoomOut" title="Zoom out">−</button>
       <span id="zoomLabel">–</span>
@@ -141,10 +152,31 @@ function buildWpmHtml(wpm: WpmFile, fileName: string): string {
   <div id="tooltip"></div>
 
   <footer>
+    <div class="editbar">
+      <div class="tools">
+        <button type="button" data-tool="pan" class="active" title="Drag to move around the map">Pan</button>
+        <button type="button" data-tool="paint" title="Add or replace pathing flags">Paint</button>
+        <button type="button" data-tool="erase" title="Delete pathing flags from cells">Erase</button>
+      </div>
+      <div class="sep"></div>
+      <div class="brush-flags" title="Flags written by the Paint tool">
+        <label title="Reserved bit 0x01"><input type="checkbox" data-brush-bit="1"> 0x01</label>
+        <label><input type="checkbox" data-brush-bit="2" checked> No Walk</label>
+        <label><input type="checkbox" data-brush-bit="4"> No Fly</label>
+        <label><input type="checkbox" data-brush-bit="8" checked> No Build</label>
+        <label title="Reserved bit 0x10"><input type="checkbox" data-brush-bit="16"> 0x10</label>
+        <label><input type="checkbox" data-brush-bit="32"> Blight</label>
+        <label><input type="checkbox" data-brush-bit="64"> No Water</label>
+        <label><input type="checkbox" data-brush-bit="128"> Unknown</label>
+        <span id="brushValue">0x0A</span>
+      </div>
+      <span class="edit-hint">Each drag is one undo step · Alt+click picks a cell</span>
+    </div>
     ${legendHtml}
   </footer>
 
   <script>
+    const api = acquireVsCodeApi();
     const W = ${wpm.width};
     const H = ${wpm.height};
     const raw = atob("${dataBase64}");
@@ -156,20 +188,19 @@ function buildWpmHtml(wpm: WpmFile, fileName: string): string {
     const viewport  = document.getElementById('viewport');
     const zoomLabel = document.getElementById('zoomLabel');
 
-    // ── Render map into offscreen ImageData once ───────────────────────────────
-    // Direct pixel writes — vastly faster than fillRect per cell.
-    // After this, the offscreen canvas is treated as a static image.
+    // ── Render map into offscreen ImageData ────────────────────────────────────
     const offscreen = document.createElement('canvas');
     offscreen.width = W; offscreen.height = H;
     const offCtx = offscreen.getContext('2d');
     const img = offCtx.createImageData(W, H);
     const px  = img.data;
-    for (let dataY = 0; dataY < H; dataY++) {
-      const dispY = H - 1 - dataY; // WC3 row 0 = bottom of map, flip for screen
-      for (let x = 0; x < W; x++) {
-        const flag = data[dataY * W + x];
+    function writePixel(index) {
+        const dataY = Math.floor(index / W);
+        const x = index % W;
+        const dispY = H - 1 - dataY; // WC3 row 0 = bottom of map, flip for screen
+        const flag = data[index];
         const i = (dispY * W + x) * 4;
-        if (flag === 0) { px[i+3] = 0; continue; }
+        if (flag === 0) { px[i] = 0; px[i+1] = 0; px[i+2] = 0; px[i+3] = 0; return; }
         let r = (flag & 0x02) ? 255 : 0;   // No Walk  → red
         let g = (flag & 0x04) ? 255 : 0;   // No Fly   → green
         let b = (flag & 0x08) ? 255 : 0;   // No Build → blue
@@ -177,15 +208,21 @@ function buildWpmHtml(wpm: WpmFile, fileName: string): string {
         if (flag & 0x40) { r =  r      >>1; g = (g+140)>>1; b = (b+220)>>1; } // No Water → teal blend
         if (flag & 0x80) { r = (r+110)>>1; g = (g+110)>>1; b = (b+110)>>1; } // Unknown  → gray blend
         px[i]=r; px[i+1]=g; px[i+2]=b; px[i+3]=230;
-      }
     }
+    for (let index = 0; index < data.length; index++) writePixel(index);
     offCtx.putImageData(img, 0, 0);
 
     // ── Camera state ───────────────────────────────────────────────────────────
     // camX/camY: which offscreen pixel is at the screen centre (float)
     // zoom: screen pixels per map cell (float, stepless)
-    let camX = W / 2, camY = H / 2, zoom = 1;
+    const savedState = api.getState() || {};
+    let camX = Number.isFinite(savedState.camX) ? savedState.camX : W / 2;
+    let camY = Number.isFinite(savedState.camY) ? savedState.camY : H / 2;
+    let zoom = Number.isFinite(savedState.zoom) ? savedState.zoom : 1;
+    let tool = ['pan', 'paint', 'erase'].includes(savedState.tool) ? savedState.tool : 'pan';
     const MIN_ZOOM = 0.05, MAX_ZOOM = 64;
+
+    function persistView() { api.setState({ camX, camY, zoom, tool }); }
 
     function clampCam() {
       const vw = canvas.width, vh = canvas.height;
@@ -239,6 +276,13 @@ function buildWpmHtml(wpm: WpmFile, fileName: string): string {
         : (zoom * 100).toFixed(0) + '%';
     }
 
+    function refreshCell(index) {
+      writePixel(index);
+      const dataY = Math.floor(index / W);
+      const dispY = H - 1 - dataY;
+      offCtx.putImageData(img, 0, 0, index % W, dispY, 1, 1);
+    }
+
     let rafId = null;
     function scheduleDraw() {
       if (rafId) return;
@@ -272,12 +316,85 @@ function buildWpmHtml(wpm: WpmFile, fileName: string): string {
       camX = mapX - (sx - vw / 2) / zoom;
       camY = mapY - (sy - vh / 2) / zoom;
       clampCam();
+      persistView();
       scheduleDraw();
     }, { passive: false });
 
-    // ── Drag to pan ────────────────────────────────────────────────────────────
-    let dragging = false, dragSX = 0, dragSY = 0, dragCamX = 0, dragCamY = 0;
+    // ── Pan and cell editing ───────────────────────────────────────────────────
+    let dragging = false, editing = false, dragSX = 0, dragSY = 0, dragCamX = 0, dragCamY = 0;
+    let gestureChanges = new Map(), lastEditX = -1, lastEditY = -1;
+
+    function eventCell(e) {
+      const rect = viewport.getBoundingClientRect();
+      const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+      const offX = Math.floor(camX + (sx - canvas.width / 2) / zoom);
+      const offY = Math.floor(camY + (sy - canvas.height / 2) / zoom);
+      const dataY = H - 1 - offY;
+      if (offX < 0 || offX >= W || dataY < 0 || dataY >= H) return null;
+      return { x: offX, y: dataY, index: dataY * W + offX };
+    }
+
+    function brushValue() {
+      let value = 0;
+      document.querySelectorAll('[data-brush-bit]:checked').forEach((input) => { value |= Number(input.dataset.brushBit); });
+      return value;
+    }
+
+    function updateBrushValue() {
+      document.getElementById('brushValue').textContent = '0x' + brushValue().toString(16).padStart(2, '0').toUpperCase();
+    }
+
+    function pickBrush(value) {
+      document.querySelectorAll('[data-brush-bit]').forEach((input) => { input.checked = (value & Number(input.dataset.brushBit)) !== 0; });
+      updateBrushValue();
+      setTool('paint');
+    }
+
+    function editCell(x, y) {
+      if (x < 0 || x >= W || y < 0 || y >= H) return;
+      const index = y * W + x;
+      const next = tool === 'erase' ? 0 : brushValue();
+      if (!gestureChanges.has(index)) gestureChanges.set(index, data[index]);
+      data[index] = next;
+      refreshCell(index);
+    }
+
+    function editLine(fromX, fromY, toX, toY) {
+      const dx = Math.abs(toX - fromX), sx = fromX < toX ? 1 : -1;
+      const dy = -Math.abs(toY - fromY), sy = fromY < toY ? 1 : -1;
+      let x = fromX, y = fromY, err = dx + dy;
+      while (true) {
+        editCell(x, y);
+        if (x === toX && y === toY) break;
+        const twice = 2 * err;
+        if (twice >= dy) { err += dy; x += sx; }
+        if (twice <= dx) { err += dx; y += sy; }
+      }
+      scheduleDraw();
+    }
+
+    function finishEdit() {
+      if (!editing) return;
+      editing = false;
+      const changes = [];
+      gestureChanges.forEach((before, index) => {
+        const value = data[index];
+        if (value !== before) changes.push({ index, value });
+      });
+      gestureChanges = new Map();
+      if (changes.length) api.postMessage({ type: 'editCells', changes });
+    }
+
     viewport.addEventListener('pointerdown', (e) => {
+      const cell = eventCell(e);
+      if (e.button === 0 && e.altKey && cell) { pickBrush(data[cell.index]); return; }
+      if (tool !== 'pan' && e.button === 0 && cell) {
+        editing = true; gestureChanges = new Map(); lastEditX = cell.x; lastEditY = cell.y;
+        viewport.setPointerCapture(e.pointerId);
+        editCell(cell.x, cell.y); scheduleDraw();
+        return;
+      }
+      if (e.button !== 0 && e.button !== 1) return;
       dragging = true;
       dragSX = e.clientX; dragSY = e.clientY;
       dragCamX = camX;    dragCamY = camY;
@@ -285,26 +402,43 @@ function buildWpmHtml(wpm: WpmFile, fileName: string): string {
       viewport.style.cursor = 'grabbing';
     });
     viewport.addEventListener('pointermove', (e) => {
+      if (editing) {
+        const cell = eventCell(e);
+        if (cell && (cell.x !== lastEditX || cell.y !== lastEditY)) {
+          editLine(lastEditX, lastEditY, cell.x, cell.y);
+          lastEditX = cell.x; lastEditY = cell.y;
+        }
+        return;
+      }
       if (!dragging) return;
       camX = dragCamX - (e.clientX - dragSX) / zoom;
       camY = dragCamY - (e.clientY - dragSY) / zoom;
       clampCam();
       scheduleDraw();
     });
-    const endDrag = () => { dragging = false; viewport.style.cursor = 'crosshair'; };
+    const endDrag = () => { finishEdit(); dragging = false; persistView(); viewport.style.cursor = tool === 'pan' ? 'grab' : 'crosshair'; };
     viewport.addEventListener('pointerup',     endDrag);
     viewport.addEventListener('pointercancel', endDrag);
 
     // ── Toolbar buttons ────────────────────────────────────────────────────────
     document.getElementById('btnZoomIn').addEventListener('click', () => {
-      zoom = Math.min(MAX_ZOOM, zoom * 1.5); scheduleDraw();
+      zoom = Math.min(MAX_ZOOM, zoom * 1.5); persistView(); scheduleDraw();
     });
     document.getElementById('btnZoomOut').addEventListener('click', () => {
-      zoom = Math.max(MIN_ZOOM, zoom / 1.5); scheduleDraw();
+      zoom = Math.max(MIN_ZOOM, zoom / 1.5); persistView(); scheduleDraw();
     });
     document.getElementById('btnZoomFit').addEventListener('click', () => {
-      fitToView(); scheduleDraw();
+      fitToView(); persistView(); scheduleDraw();
     });
+
+    function setTool(next) {
+      tool = next;
+      document.querySelectorAll('[data-tool]').forEach((button) => button.classList.toggle('active', button.dataset.tool === tool));
+      viewport.style.cursor = tool === 'pan' ? 'grab' : 'crosshair';
+      persistView();
+    }
+    document.querySelectorAll('[data-tool]').forEach((button) => button.addEventListener('click', () => setTool(button.dataset.tool)));
+    document.querySelectorAll('[data-brush-bit]').forEach((input) => input.addEventListener('change', updateBrushValue));
 
     // ── Tooltip ────────────────────────────────────────────────────────────────
     const tooltip = document.getElementById('tooltip');
@@ -337,34 +471,201 @@ function buildWpmHtml(wpm: WpmFile, fileName: string): string {
     });
     viewport.addEventListener('mouseleave', () => tooltip.style.display = 'none');
 
+    window.addEventListener('message', (event) => {
+      const message = event.data || {};
+      if (message.type === 'applyCells' && Array.isArray(message.changes)) {
+        message.changes.forEach((change) => {
+          if (Number.isInteger(change.index) && change.index >= 0 && change.index < data.length) {
+            data[change.index] = change.value & 0xff;
+            refreshCell(change.index);
+          }
+        });
+        scheduleDraw();
+      } else if (message.type === 'dirtyStateChanged') {
+        document.getElementById('dirtyBadge').hidden = !message.isDirty;
+      }
+    });
+
     // Init: size canvas then fit map
     resizeCanvas();
-    fitToView();
+    if (!Number.isFinite(savedState.zoom)) fitToView();
+    setTool(tool);
+    updateBrushValue();
     draw();
   </script>
 </body>
 </html>`;
 }
 
+// ── Editable document ─────────────────────────────────────────────────────────
+
+class WpmDocument implements vscode.CustomDocument {
+    currentRevision = 0;
+    savedRevision = 0;
+    nextRevision = 1;
+    webview?: vscode.Webview;
+
+    constructor(readonly uri: vscode.Uri, public file: WpmFile) {}
+
+    dispose(): void {}
+}
+
+interface WpmCellChange {
+    index: number;
+    before: number;
+    after: number;
+}
+
+class WpmEditorProvider implements vscode.CustomEditorProvider<WpmDocument> {
+    private readonly _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<WpmDocument>>();
+    readonly onDidChangeCustomDocument = this._onDidChange.event;
+
+    async openCustomDocument(uri: vscode.Uri, openContext: vscode.CustomDocumentOpenContext): Promise<WpmDocument> {
+        const source = openContext.backupId ? vscode.Uri.parse(openContext.backupId) : uri;
+        const doc = new WpmDocument(uri, parseWpm(Buffer.from(await vscode.workspace.fs.readFile(source))));
+        if (openContext.backupId) {
+            doc.currentRevision = 1;
+            doc.nextRevision = 2;
+        }
+        return doc;
+    }
+
+    async resolveCustomEditor(doc: WpmDocument, panel: vscode.WebviewPanel): Promise<void> {
+        panel.webview.options = { enableScripts: true, localResourceRoots: [] };
+        doc.webview = panel.webview;
+        panel.onDidDispose(() => { if (doc.webview === panel.webview) doc.webview = undefined; });
+        panel.webview.onDidReceiveMessage((message) => this.handleMessage(message, doc));
+        this.render(doc, panel.webview);
+    }
+
+    private render(doc: WpmDocument, webview: vscode.Webview): void {
+        const fileName = doc.uri.path.slice(doc.uri.path.lastIndexOf('/') + 1);
+        webview.html = doc.file.error
+            ? buildPage({
+                csp: "default-src 'none'; style-src 'unsafe-inline';",
+                title: escapeHtml(fileName),
+                body: `<div class="wv-state">
+  <span>Failed to parse WPM</span>
+  <span class="err">${escapeHtml(doc.file.error)}</span>
+</div>`,
+            })
+            : buildWpmHtml(doc.file, fileName, doc.currentRevision !== doc.savedRevision);
+    }
+
+    private handleMessage(message: unknown, doc: WpmDocument): void {
+        if (!message || typeof message !== 'object') return;
+        const msg = message as { type?: string; changes?: Array<{ index?: number; value?: number }> };
+        if (msg.type !== 'editCells' || !Array.isArray(msg.changes)) return;
+
+        const requested = new Map<number, number>();
+        for (const change of msg.changes) {
+            if (Number.isInteger(change.index) && Number.isInteger(change.value) &&
+                (change.index as number) >= 0 && (change.index as number) < doc.file.data.length &&
+                (change.value as number) >= 0 && (change.value as number) <= 0xff) {
+                requested.set(change.index as number, change.value as number);
+            }
+        }
+        const changes: WpmCellChange[] = [];
+        requested.forEach((after, index) => {
+            const before = doc.file.data[index];
+            if (after !== before) changes.push({ index, before, after });
+        });
+        if (!changes.length) return;
+
+        const beforeRevision = doc.currentRevision;
+        const afterRevision = doc.nextRevision++;
+        this.applyCells(doc, changes, false);
+        doc.currentRevision = afterRevision;
+        this.postDirtyState(doc);
+        this._onDidChange.fire({
+            document: doc,
+            label: `${changes.every((change) => change.after === 0) ? 'Erase' : 'Paint'} ${changes.length} pathing cell${changes.length === 1 ? '' : 's'}`,
+            undo: () => {
+                this.applyCells(doc, changes, true);
+                doc.currentRevision = beforeRevision;
+                this.postDirtyState(doc);
+            },
+            redo: () => {
+                this.applyCells(doc, changes, false);
+                doc.currentRevision = afterRevision;
+                this.postDirtyState(doc);
+            },
+        });
+    }
+
+    private applyCells(doc: WpmDocument, changes: WpmCellChange[], useBefore: boolean): void {
+        const patches = changes.map((change) => {
+            const value = useBefore ? change.before : change.after;
+            doc.file.data[change.index] = value;
+            return { index: change.index, value };
+        });
+        void doc.webview?.postMessage({ type: 'applyCells', changes: patches });
+    }
+
+    private postDirtyState(doc: WpmDocument): void {
+        void doc.webview?.postMessage({ type: 'dirtyStateChanged', isDirty: doc.currentRevision !== doc.savedRevision });
+    }
+
+    async saveCustomDocument(doc: WpmDocument): Promise<void> {
+        try {
+            await this.writeWpm(doc, doc.uri);
+            doc.savedRevision = doc.currentRevision;
+            this.postDirtyState(doc);
+        } catch (err) {
+            void showErrorWithLogs(`Pathing map not saved: ${err instanceof Error ? err.message : String(err)}`, err);
+            throw err;
+        }
+    }
+
+    async saveCustomDocumentAs(doc: WpmDocument, target: vscode.Uri): Promise<void> {
+        await vscode.workspace.fs.writeFile(target, serializeValidatedWpm(doc.file, target.path));
+    }
+
+    private async writeWpm(doc: WpmDocument, uri: vscode.Uri): Promise<void> {
+        const bytes = serializeValidatedWpm(doc.file, uri.path);
+        try {
+            const existing = Buffer.from(await vscode.workspace.fs.readFile(uri));
+            if (existing.equals(bytes)) return;
+        } catch { /* missing → write */ }
+        await vscode.workspace.fs.writeFile(uri, bytes);
+    }
+
+    async revertCustomDocument(doc: WpmDocument): Promise<void> {
+        doc.file = parseWpm(Buffer.from(await vscode.workspace.fs.readFile(doc.uri)));
+        doc.currentRevision = 0;
+        doc.savedRevision = 0;
+        doc.nextRevision = 1;
+        if (doc.webview) this.render(doc, doc.webview);
+    }
+
+    async backupCustomDocument(doc: WpmDocument, context: vscode.CustomDocumentBackupContext): Promise<vscode.CustomDocumentBackup> {
+        await vscode.workspace.fs.writeFile(context.destination, serializeValidatedWpm(doc.file, doc.uri.path));
+        return {
+            id: context.destination.toString(),
+            delete: () => vscode.workspace.fs.delete(context.destination).then(() => undefined, () => undefined),
+        };
+    }
+}
+
+/** Safety gate: never write a WPM that does not reproduce the complete edited grid. */
+function serializeValidatedWpm(file: WpmFile, name: string): Buffer {
+    if (file.error) throw new Error(`Refusing to save ${name}: the source file did not parse (${file.error}).`);
+    const bytes = serializeWpm(file);
+    const reparsed = parseWpm(bytes);
+    if (reparsed.error) throw new Error(`Refusing to save ${name}: serialized data did not re-parse (${reparsed.error}).`);
+    if (reparsed.version !== file.version || reparsed.width !== file.width || reparsed.height !== file.height ||
+        !reparsed.data.equals(file.data) || !reparsed.tail?.equals(file.tail ?? Buffer.alloc(0))) {
+        throw new Error(`Refusing to save ${name}: round-trip verification failed.`);
+    }
+    return bytes;
+}
+
 // ── Registration ──────────────────────────────────────────────────────────────
 
 export function registerWpmPreview(_context: vscode.ExtensionContext): vscode.Disposable[] {
-    return [
-        registerParsedPreviewer<WpmFile>({
-            viewType: 'wurst.wpmPreview',
-            parse:  (data) => parseWpm(data),
-            render: (parsed, fileName) => parsed.error
-                ? buildPage({
-                    csp: "default-src 'none'; style-src 'unsafe-inline';",
-                    title: escapeHtml(fileName),
-                    body: `<div class="wv-state">
-  <span>Failed to parse WPM</span>
-  <span class="err">${escapeHtml(parsed.error)}</span>
-</div>`,
-                })
-                : buildWpmHtml(parsed, fileName),
-            webviewOptions: { enableScripts: true, localResourceRoots: [] },
-            panelOptions:   { retainContextWhenHidden: true },
-        }),
-    ];
+    return [vscode.window.registerCustomEditorProvider(
+        'wurst.wpmPreview',
+        new WpmEditorProvider(),
+        { supportsMultipleEditorsPerDocument: false, webviewOptions: { retainContextWhenHidden: true } },
+    )];
 }

@@ -59,7 +59,8 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
     let installedVersion = 'detecting...';
     let availableUpdate: UpdateAvailable | undefined;
     const updateStatusBar = () => {
-        sb.text = availableUpdate ? '$(cloud-download) WurstScript Update' : '$(check) WurstScript';
+        sb.text = availableUpdate ? '$(circle-filled) WurstScript Update' : '$(check) WurstScript';
+        sb.color = availableUpdate ? '#3794ff' : undefined;
         sb.tooltip = [
             availableUpdate ? 'A newer WurstScript version is available.' : 'WurstScript language server is running.',
             `Version: ${installedVersion}`,

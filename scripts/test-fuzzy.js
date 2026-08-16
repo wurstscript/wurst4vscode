@@ -20,6 +20,16 @@ const { fuzzyMatch, assetSearchScore } = mod.exports;
 assert.strictEqual(typeof fuzzyMatch, 'function', 'fuzzyMatch should be exported');
 assert.strictEqual(typeof assetSearchScore, 'function', 'assetSearchScore should be exported');
 
+// The code-launched asset picker serializes both functions into an isolated webview. This must not
+// leave the scorer reaching back into its original CommonJS/webpack module closure.
+const isolatedFuzzyMatch = new Function(`return (${fuzzyMatch.toString()});`)();
+const isolatedAssetSearchScore = new Function(`return (${assetSearchScore.toString()});`)();
+assert.equal(
+    isolatedAssetSearchScore('footman', 'Footman.mdx', 'units\\human\\Footman.mdx', '', isolatedFuzzyMatch),
+    0,
+    'serialized asset scorer should run with only its explicit fuzzy matcher dependency',
+);
+
 let passed = 0;
 function ok(query, text, expected, msg) {
     const got = fuzzyMatch(query, text);
@@ -67,7 +77,7 @@ const footmanCandidates = [
     { label: 'AltarOfKings - altarofkings', value: 'buildings\\human\\AltarOfKings\\AltarOfKings.mdx' },
 ];
 const footmanResults = footmanCandidates
-    .map((item, index) => ({ ...item, index, score: assetSearchScore('footman', item.label, item.value) }))
+    .map((item, index) => ({ ...item, index, score: assetSearchScore('footman', item.label, item.value, '', fuzzyMatch) }))
     .filter((item) => Number.isFinite(item.score))
     .sort((a, b) => a.score - b.score || a.index - b.index);
 assert.deepStrictEqual(
@@ -80,6 +90,6 @@ assert.deepStrictEqual(
     [0, 10, 20],
     'asset relevance scores should be deterministic',
 );
-passed += 2;
+passed += 3;
 
 console.log(`fuzzy unit tests passed (${passed} assertions)`);

@@ -1,5 +1,6 @@
 export interface ObjModObject {
   key: string;
+  identity: string;
   baseId: string;
   newId?: string;
   displayName: string;

@@ -1,15 +1,17 @@
 'use strict';
 
 /**
- * Local-only VS Code extension e2e for objmod asset-browser thumbnails.
+ * Local-only VS Code extension e2e for objmod thumbnails and both asset-browser variants.
  *
  * Enable explicitly, never in CI:
  *   $env:WURST_OBJMOD_E2E='1'
  *   npm run test:e2e:objmod-thumbs:local
+ *   npm run test:e2e:asset-browser-code:local
  *
  * Optional knobs:
  *   WURST_OBJMOD_E2E_PROJECT    defaults to ./e2e
  *   WURST_OBJMOD_E2E_FILE       defaults to ./e2e/war3map.w3u
+ *   WURST_OBJMOD_E2E_CODE_FILE  optional .wurst file used for the code-launched asset-browser check
  *   WURST_OBJMOD_E2E_CODE       Code.exe path, if it cannot be found
  *   WURST_OBJMOD_E2E_COUNT      max visible thumbnails to assert, default all visible
  *   WURST_OBJMOD_E2E_SEARCH     optional model-catalog search query
@@ -29,6 +31,7 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const enabled = process.env.WURST_OBJMOD_E2E === '1' || process.env.WURST_LOCAL_E2E === '1';
+const codeOnly = process.argv.includes('--code-only');
 
 if (!enabled) {
     console.log('local objmod thumbnail e2e skipped (set WURST_OBJMOD_E2E=1 to enable)');
@@ -43,6 +46,7 @@ const defaultProjectPath = path.join(root, 'e2e');
 const defaultObjmodFile = path.join(defaultProjectPath, 'war3map.w3u');
 let projectPath = process.env.WURST_OBJMOD_E2E_PROJECT || defaultProjectPath;
 let objmodFile = process.env.WURST_OBJMOD_E2E_FILE || defaultObjmodFile;
+let codeAssetFile = process.env.WURST_OBJMOD_E2E_CODE_FILE || '';
 const sampleCountRaw = process.env.WURST_OBJMOD_E2E_COUNT;
 const sampleCount = sampleCountRaw ? Number(sampleCountRaw) : 0;
 const sampleLimit = Number.isFinite(sampleCount) && sampleCount > 0 ? sampleCount : Number.POSITIVE_INFINITY;
@@ -108,7 +112,9 @@ function writeGeneratedObjmodFixture() {
     };
     fs.writeFileSync(path.join(dir, 'war3map.w3a'), serializeObjMod(main));
     fs.writeFileSync(path.join(dir, 'war3mapSkin.w3a'), serializeObjMod(skin));
-    return { dir, file: path.join(dir, 'war3map.w3a') };
+    const codeFile = path.join(dir, 'AssetBrowserE2e.wurst');
+    fs.writeFileSync(codeFile, 'package AssetBrowserE2e\n\nconstant TEST_MODEL = "imports\\\\units\\\\Footman.mdx"\n');
+    return { dir, file: path.join(dir, 'war3map.w3a'), codeFile };
 }
 
 let generatedFixtureDir = '';
@@ -117,10 +123,13 @@ if (!process.env.WURST_OBJMOD_E2E_PROJECT && !process.env.WURST_OBJMOD_E2E_FILE)
     generatedFixtureDir = generated.dir;
     projectPath = generated.dir;
     objmodFile = generated.file;
+    codeAssetFile = generated.codeFile;
 }
 
 assert.ok(projectPath && fs.existsSync(projectPath), 'Set WURST_OBJMOD_E2E_PROJECT to a real Wurst project folder, or keep ./e2e present.');
 assert.ok(objmodFile && fs.existsSync(objmodFile), 'Set WURST_OBJMOD_E2E_FILE to a real .w3u/.w3a/... file, or keep ./e2e/war3map.w3u present.');
+if (codeAssetFile) assert.ok(fs.existsSync(codeAssetFile), `WURST_OBJMOD_E2E_CODE_FILE does not exist: ${codeAssetFile}`);
+if (codeOnly) assert.ok(codeAssetFile, 'The code-only e2e needs the generated fixture or WURST_OBJMOD_E2E_CODE_FILE.');
 
 function log(message) {
     console.log(`[objmod-thumb-e2e] ${message}`);
@@ -188,6 +197,19 @@ function waitForExit(child, timeoutMs = 5000) {
             resolve();
         });
     });
+}
+
+function bringVsCodeWindowToForeground(userDataDir) {
+    if (process.platform !== 'win32') return;
+    const result = childProcess.spawnSync('powershell.exe', [
+        '-NoProfile',
+        '-File', path.join(__dirname, 'bring-to-foreground.ps1'),
+        '-Needle', userDataDir,
+    ], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+    if (process.env.WURST_E2E_VERBOSE === '1') {
+        const stderrSuffix = result.stderr ? ' stderr=' + result.stderr.trim() : '';
+        console.log(`[verbose] bringVsCodeWindowToForeground: ${(result.stdout || '').trim() || '(no matching window)'}${stderrSuffix}`);
+    }
 }
 
 function windowsCodePidsForUserDataDir(userDataDir) {
@@ -379,9 +401,11 @@ class CdpClient {
 }
 
 // eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
-async function waitForWebviewContext(client) {
+async function waitForWebviewContext(client, requireObjmod = true) {
     const contexts = new Map();
     const attachedTargets = new Set();
+    const sessionByTargetId = new Map();
+    let pageSessionId = '';
     client.on('Runtime.executionContextCreated', ({ context }, sessionId) => {
         if (context && context.id && sessionId) contexts.set(`${sessionId}:${context.id}`, { sessionId, context });
     });
@@ -395,6 +419,7 @@ async function waitForWebviewContext(client) {
                 const attached = await client.send('Target.attachToTarget', { targetId: target.targetId, flatten: true });
                 if (attached?.sessionId) {
                     attachedTargets.add(target.targetId);
+                    sessionByTargetId.set(target.targetId, attached.sessionId);
                     await client.send('Runtime.enable', {}, attached.sessionId);
                     await client.send('Log.enable', {}, attached.sessionId).catch(() => undefined);
                 }
@@ -402,19 +427,30 @@ async function waitForWebviewContext(client) {
                 attachedTargets.add(target.targetId);
             }
         }
+        for (const target of targets?.targetInfos || []) {
+            if (target.type === 'page' && sessionByTargetId.has(target.targetId)) {
+                pageSessionId = sessionByTargetId.get(target.targetId);
+            }
+        }
+        if (!requireObjmod && pageSessionId) {
+            return { pageSessionId, contexts, attachedTargets, sessionByTargetId };
+        }
         for (const { sessionId, context } of contexts.values()) {
             const result = await client.send('Runtime.evaluate', {
                 contextId: context.id,
                 expression: '!!window.__wurstModelThumbDebug',
                 returnByValue: true,
             }, sessionId).catch(() => undefined);
-            if (result?.result?.value) return { sessionId, contextId: context.id };
+            if (result?.result?.value) {
+                return { sessionId, contextId: context.id, pageSessionId, contexts, attachedTargets, sessionByTargetId };
+            }
         }
         await new Promise((resolve) => setTimeout(resolve, 100));
     }
     const targets = await client.send('Target.getTargets').catch(() => undefined);
     const summary = (targets?.targetInfos || []).map((target) => `${target.type}:${target.title || target.url || target.targetId}`).join(' | ');
-    throw new Error(`Timed out waiting for objmod webview debug hook. Targets: ${summary}`);
+    const wanted = requireObjmod ? 'objmod webview debug hook' : 'extension-host workbench';
+    throw new Error(`Timed out waiting for ${wanted}. Targets: ${summary}`);
 }
 
 async function evalInContext(client, sessionId, contextId, expression) {
@@ -439,6 +475,156 @@ async function waitForEval(client, sessionId, contextId, expression, predicate, 
         await new Promise((resolve) => setTimeout(resolve, 100));
     }
     throw new Error(`Timed out waiting for ${label}. Last value: ${JSON.stringify(last)}`);
+}
+
+async function pressKeyCombo(client, sessionId, keys) {
+    for (const key of keys) {
+        await client.send('Input.dispatchKeyEvent', {
+            type: 'rawKeyDown',
+            modifiers: key.modifiers || 0,
+            key: key.key,
+            code: key.code,
+            windowsVirtualKeyCode: key.vk,
+            nativeVirtualKeyCode: key.vk,
+        }, sessionId);
+    }
+    for (const key of [...keys].reverse()) {
+        await client.send('Input.dispatchKeyEvent', {
+            type: 'keyUp',
+            modifiers: 0,
+            key: key.key,
+            code: key.code,
+            windowsVirtualKeyCode: key.vk,
+            nativeVirtualKeyCode: key.vk,
+        }, sessionId);
+    }
+}
+
+async function typeText(client, sessionId, value) {
+    for (const ch of value) {
+        await client.send('Input.dispatchKeyEvent', { type: 'char', text: ch, key: ch, unmodifiedText: ch }, sessionId);
+        await new Promise((resolve) => setTimeout(resolve, 15));
+    }
+}
+
+async function pressEnter(client, sessionId) {
+    await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }, sessionId);
+    await client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }, sessionId);
+}
+
+async function evalInSession(client, sessionId, expression) {
+    const result = await client.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sessionId);
+    if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || 'workbench evaluation failed');
+    return result.result.value;
+}
+
+async function waitForSessionEval(client, sessionId, expression, predicate, label, waitMs = timeoutMs) {
+    const deadline = Date.now() + waitMs;
+    let last;
+    while (Date.now() < deadline) {
+        last = await evalInSession(client, sessionId, expression);
+        if (predicate(last)) return last;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(`Timed out waiting for ${label}. Last value: ${JSON.stringify(last)}`);
+}
+
+async function attachUntrackedTargets(client, tracking) {
+    const targets = await client.send('Target.getTargets').catch(() => undefined);
+    for (const target of targets?.targetInfos || []) {
+        if (!target.targetId || tracking.attachedTargets.has(target.targetId)) continue;
+        if (!['page', 'iframe', 'webview'].includes(target.type)) continue;
+        try {
+            const attached = await client.send('Target.attachToTarget', { targetId: target.targetId, flatten: true });
+            if (!attached?.sessionId) continue;
+            tracking.attachedTargets.add(target.targetId);
+            tracking.sessionByTargetId.set(target.targetId, attached.sessionId);
+            await client.send('Runtime.enable', {}, attached.sessionId);
+            await client.send('Log.enable', {}, attached.sessionId).catch(() => undefined);
+        } catch {
+            tracking.attachedTargets.add(target.targetId);
+        }
+    }
+}
+
+async function waitForCodeAssetBrowserContext(client, tracking, waitMs = timeoutMs) {
+    const deadline = Date.now() + waitMs;
+    while (Date.now() < deadline) {
+        await attachUntrackedTargets(client, tracking);
+        for (const { sessionId, context } of tracking.contexts.values()) {
+            const result = await client.send('Runtime.evaluate', {
+                contextId: context.id,
+                expression: '!!window.__wurstCodeAssetBrowserDebug',
+                returnByValue: true,
+            }, sessionId).catch(() => undefined);
+            if (result?.result?.value) return { sessionId, contextId: context.id };
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error('Timed out waiting for the code-launched asset browser webview.');
+}
+
+async function assertCodeAssetBrowserSearch(client, pageSessionId, tracking, userDataDir) {
+    if (!codeAssetFile) {
+        log('code-launched asset-browser check skipped (set WURST_OBJMOD_E2E_CODE_FILE for custom fixtures)');
+        return;
+    }
+    assert.ok(pageSessionId, 'extension-host workbench target should be attached');
+    log('opening code-launched asset browser from a real Wurst CodeLens');
+    await client.send('Page.bringToFront', {}, pageSessionId).catch(() => undefined);
+    bringVsCodeWindowToForeground(userDataDir);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const CTRL = 2;
+    await pressKeyCombo(client, pageSessionId, [
+        { key: 'Control', code: 'ControlLeft', vk: 17, modifiers: CTRL },
+        { key: 'p', code: 'KeyP', vk: 80, modifiers: CTRL },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await typeText(client, pageSessionId, path.basename(codeAssetFile));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await pressEnter(client, pageSessionId);
+
+    const codeLensExpression = `(function () {
+        return Array.from(document.querySelectorAll('.codelens-decoration, .codelens-decoration a'))
+            .some(function (node) { return String(node.textContent || '').indexOf('Browse model') >= 0; });
+    })()`;
+    await waitForSessionEval(client, pageSessionId, codeLensExpression, (value) => value === true, 'Browse model CodeLens', 15000);
+    const clicked = await evalInSession(client, pageSessionId, `(function () {
+        var node = Array.from(document.querySelectorAll('.codelens-decoration a, .codelens-decoration'))
+            .find(function (candidate) { return String(candidate.textContent || '').indexOf('Browse model') >= 0; });
+        if (!node) return false;
+        node.click();
+        return true;
+    })()`);
+    assert.equal(clicked, true, 'Browse model CodeLens should be clickable');
+
+    const codeBrowser = await waitForCodeAssetBrowserContext(client, tracking, 30000);
+    await evalInContext(client, codeBrowser.sessionId, codeBrowser.contextId, 'window.__wurstCodeAssetBrowserDebug.search("footman")');
+    const state = await waitForEval(
+        client,
+        codeBrowser.sessionId,
+        codeBrowser.contextId,
+        'window.__wurstCodeAssetBrowserDebug.state()',
+        (value) => value && value.query === 'footman' && Array.isArray(value.results) && value.results.length > 0,
+        'code-launched footman asset search results',
+        15000,
+    );
+    assert.equal(state.activeTab, 'model', 'model string CodeLens should open the Models tab');
+    assert.ok(
+        state.results.some((entry) => /footman/i.test(`${entry.label} ${entry.value}`)),
+        `code-launched asset search should return Footman: ${JSON.stringify(state.results)}`,
+    );
+    assert.ok(
+        state.results.every((entry) => /footm[ae]n/i.test(`${entry.label} ${entry.value}`)),
+        `code-launched asset search should not contain unrelated fuzzy noise: ${JSON.stringify(state.results)}`,
+    );
+    for (let i = 1; i < state.results.length; i++) {
+        assert.ok(
+            state.results[i - 1].score <= state.results[i].score,
+            `code-launched asset search scores should be sorted: ${JSON.stringify(state.results)}`,
+        );
+    }
+    log(`code-launched footman search returned ${state.results.length} relevance-sorted results`);
 }
 
 async function assertTooltipFont(client, sessionId, contextId) {
@@ -787,13 +973,14 @@ async function main() {
         WURST_OBJMOD_E2E_PROJECT: projectPath,
         WURST_OBJMOD_E2E_FILE: objmodFile,
     };
+    if (codeOnly) delete childEnv.WURST_OBJMOD_E2E_FILE;
     delete childEnv.ELECTRON_RUN_AS_NODE;
     log(`code=${code}`);
     log(`project=${projectPath}`);
     log(`file=${objmodFile}`);
     log(`devtoolsPort=${devtoolsPort}`);
 
-    const child = spawnCode(code, [
+    const launchArgs = [
         '--new-window',
         '--skip-welcome',
         '--skip-release-notes',
@@ -804,8 +991,9 @@ async function main() {
         `--extensions-dir=${extensionsDir}`,
         `--extensionDevelopmentPath=${root}`,
         projectPath,
-        objmodFile,
-    ], childEnv);
+        codeOnly ? codeAssetFile : objmodFile,
+    ];
+    const child = spawnCode(code, launchArgs, childEnv);
 
     let stderr = '';
     let passed = false;
@@ -829,8 +1017,14 @@ async function main() {
         log('connecting DevTools WebSocket');
         client = new CdpClient(version.webSocketDebuggerUrl);
         await client.connect();
-        log('waiting for objmod webview');
-        const { sessionId, contextId } = await waitForWebviewContext(client);
+        log(codeOnly ? 'waiting for extension-host workbench' : 'waiting for objmod webview');
+        const tracking = await waitForWebviewContext(client, !codeOnly);
+        if (codeOnly) {
+            await assertCodeAssetBrowserSearch(client, tracking.pageSessionId, tracking, userDataDir);
+            passed = true;
+            return;
+        }
+        const { sessionId, contextId, pageSessionId } = tracking;
         log('asserting objmod editor basics');
         await assertObjmodEditorBasics(client, sessionId, contextId);
         if (fontOnly) {
@@ -931,6 +1125,7 @@ async function main() {
                     assert.equal(failures.length, 0, failures.join('\n'));
                     const maxObserved = numbers.length ? `${Math.max(...numbers)}ms` : 'n/a';
                     log(`passed ${initialKeys.length} completed thumbnails, max observed=${maxObserved}`);
+                    await assertCodeAssetBrowserSearch(client, pageSessionId, tracking, userDataDir);
                     passed = true;
                     return;
                 }

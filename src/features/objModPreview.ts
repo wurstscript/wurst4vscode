@@ -144,6 +144,8 @@ const OBJ_EDITOR_CONFIG: Record<string, { metaPath: string; profilePaths: string
 
 interface PreviewObject {
     key: string;
+    /** Stable across file rewrites/reordering; unlike key, this does not contain an array index. */
+    identity: string;
     group: 'Original' | 'Custom';
     baseId: string;
     newId: string | null;
@@ -258,6 +260,14 @@ const openObjModDocuments = new Map<string, ObjModDocument>();
 /** Object key to select once a given uri's editor finishes loading — set right before
  *  `vscode.openWith` opens (or reveals) that file for a cross-reference jump. */
 const pendingObjectSelection = new Map<string, string>();
+const OBJMOD_SELECTIONS_STATE_KEY = 'wurst.objModSelectionsByRelativePath.v1';
+
+function objModSelectionPathKey(uri: vscode.Uri): string {
+    const folder = vscode.workspace.getWorkspaceFolder(uri);
+    if (!folder || uri.scheme !== 'file') return uri.toString();
+    const relative = path.relative(folder.uri.fsPath, uri.fsPath).replace(/\\/g, '/');
+    return `${folder.uri.toString()}::${relative}`;
+}
 
 const CATALOG_EXTS = ['.w3u', '.w3t', '.w3a', '.w3b', '.w3d', '.w3h', '.w3q'];
 const RACE_OPTIONS: ValueOption[] = [
@@ -466,6 +476,7 @@ function buildObject(
 
     return {
         key: `${group}:${index}`,
+        identity: `${group}:${entryKey(entry)}`,
         group,
         baseId: entry.baseId,
         newId: entry.newId,
@@ -1664,6 +1675,7 @@ async function buildHtml(
     objModEditorUri?: string,
     thumbnailWorkerUri?: string,
     combined?: CombinedObjModInfo,
+    preferredSelectionIdentity?: string,
 ): Promise<string> {
     const typeLabel = TYPE_LABELS[parsed.ext.slice(1)] ?? parsed.ext.slice(1).toUpperCase();
     const triggerStrings = loadTriggerStringsForUri(context.uri);
@@ -1680,9 +1692,10 @@ async function buildHtml(
     // override a restored last-session selection, which should otherwise win over the plain fallback).
     const pendingKey = pendingObjectSelection.get(context.uri.toString());
     if (pendingKey) pendingObjectSelection.delete(context.uri.toString());
+    const preferredKey = objects.find((object) => object.identity === preferredSelectionIdentity)?.key;
     const initialJson = JSON.stringify({
         objects,
-        selectedKey: pendingKey ?? objects[0]?.key ?? '',
+        selectedKey: pendingKey ?? preferredKey ?? objects[0]?.key ?? '',
         isPendingJump: !!pendingKey,
         extended: parsed.extended,
         fileInfo: combined ?? { mainName: fileName },
@@ -1887,6 +1900,19 @@ body.density-cozy #density-toggle { margin-left: auto; }
   color: var(--vscode-editorWarning-foreground, #cca700);
 }
 .editable-badge.dirty:hover { background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 12%, transparent); }
+.refresh-button {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.refresh-button:hover { background: var(--hover); color: var(--fg); }
+.refresh-button:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: 1px; }
 /* Same pill shape as the save badge, but a neutral (non-accent) affordance — it's a view preference,
    not document state. */
 .density-toggle {
@@ -3084,6 +3110,7 @@ ${tooltipFontCss}
     <span class="density-track" aria-hidden="true"><span class="density-thumb"></span></span>
     <span class="density-option density-option-cozy">Spacious</span>
   </button>
+  <button type="button" id="refresh-editor" class="refresh-button" title="Reload this object file from disk">↻ Refresh</button>
   <button type="button" id="editable-badge" class="editable-badge" title="Existing overrides can be edited. Click or Ctrl+S to save.">editable</button>
 </div>
 ${errorBanner}
@@ -3483,6 +3510,8 @@ class ObjModDocument implements vscode.CustomDocument {
     /** Coalesces bursts of fs-watcher events (e.g. a `git pull` touching main+skin+wts together) into
         one combined check instead of one prompt per file. */
     externalChangeDebounce: ReturnType<typeof setTimeout> | undefined;
+    /** Stable rawcode identity last selected for this workspace-relative document path. */
+    selectedIdentity: string | undefined;
 
     constructor(
         readonly uri: vscode.Uri,
@@ -3589,11 +3618,15 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
     private readonly _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<ObjModDocument>>();
     readonly onDidChangeCustomDocument = this._onDidChange.event;
 
-    constructor(private readonly extensionUri: vscode.Uri) {}
+    constructor(
+        private readonly extensionUri: vscode.Uri,
+        private readonly workspaceState: vscode.Memento,
+    ) {}
 
     async openCustomDocument(uri: vscode.Uri, openContext: vscode.CustomDocumentOpenContext): Promise<ObjModDocument> {
         if (openContext.backupId) {
             const restored = await openObjModBackup(uri, openContext.backupId);
+            restored.selectedIdentity = this.storedSelection(uri);
             await this.snapshotKnownBytes(restored);
             return restored;
         }
@@ -3602,6 +3635,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         const { uri: wtsUri, exists } = findWtsUri(uri);
         const wtsWarning = computeWtsWarning(e.displayFile, exists);
         const doc = new ObjModDocument(uri, e.mainFile, e.mainUri, e.skinFile, e.skinUri, e.displayFile, wtsTable, wtsUri, exists, wtsWarning);
+        doc.selectedIdentity = this.storedSelection(uri);
         await this.snapshotKnownBytes(doc);
         return doc;
     }
@@ -3621,7 +3655,8 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         doc.panelWebview = panel.webview;
         doc.panel = panel;
         openObjModDocuments.set(doc.mainUri.toString(), doc);
-        this.watchExternalChanges(doc, panel);
+        this.watchExternalChanges(doc);
+        panel.onDidDispose(() => doc.disposeWatchers());
         const mdxViewerUri = panel.webview.asWebviewUri(
             vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', 'mdxViewer.js'),
         ).toString();
@@ -3643,6 +3678,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
                 objModEditorUri,
                 thumbnailWorkerUri,
                 doc.combinedInfo,
+                doc.selectedIdentity,
             );
         };
 
@@ -3670,6 +3706,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             cacheKey?: string; aliasKey?: string; webpBase64?: string; thumbKey?: string; phase?: string; elapsedMs?: number; deltaMs?: number; detail?: string;
             fieldId?: string; varType?: string; level?: number | null; dataPt?: number | null; value?: string;
             rawcode?: string; label?: string;
+            identity?: string;
         };
         if (msg.type === 'loadObjectDetails' && msg.key) {
             await loadObjectDetails(msg.key, webview, doc);
@@ -3748,6 +3785,14 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             }
             return;
         }
+        if (msg.type === 'selectionChanged' && msg.identity) {
+            this.rememberSelection(doc, msg.identity);
+            return;
+        }
+        if (msg.type === 'refresh') {
+            await this.refreshFromDisk(doc);
+            return;
+        }
         if (msg.type === 'undo') { void vscode.commands.executeCommand('undo'); return; }
         if (msg.type === 'redo') { void vscode.commands.executeCommand('redo'); return; }
         if (msg.type === 'save') { void vscode.commands.executeCommand('workbench.action.files.save'); return; }
@@ -3789,6 +3834,18 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
 
     private postDirtyState(doc: ObjModDocument): void {
         void doc.panelWebview?.postMessage({ type: 'dirtyStateChanged', isDirty: doc.currentRevision !== doc.savedRevision });
+    }
+
+    private storedSelection(uri: vscode.Uri): string | undefined {
+        return this.workspaceState.get<Record<string, string>>(OBJMOD_SELECTIONS_STATE_KEY)?.[objModSelectionPathKey(uri)];
+    }
+
+    private rememberSelection(doc: ObjModDocument, identity: string): void {
+        if (doc.selectedIdentity === identity) return;
+        doc.selectedIdentity = identity;
+        const selections = { ...(this.workspaceState.get<Record<string, string>>(OBJMOD_SELECTIONS_STATE_KEY) ?? {}) };
+        selections[objModSelectionPathKey(doc.uri)] = identity;
+        void this.workspaceState.update(OBJMOD_SELECTIONS_STATE_KEY, selections);
     }
 
     /** A rawcode chip (e.g. an ability on a unit) that isn't overridden in the currently open file —
@@ -3914,8 +3971,24 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         const { exists } = findWtsUri(doc.uri);
         doc.wtsExists = exists;
         doc.wtsWarning = computeWtsWarning(doc.displayFile, exists);
-        if (doc.reload) await doc.reload();
+        this.watchExternalChanges(doc);
         await this.snapshotKnownBytes(doc);
+        if (doc.reload) await doc.reload();
+    }
+
+    private async refreshFromDisk(doc: ObjModDocument): Promise<void> {
+        if (doc.currentRevision !== doc.savedRevision) {
+            const choice = await vscode.window.showWarningMessage(
+                `${uriBaseName(doc.mainUri)} has unsaved changes. Refreshing will discard your edits.`,
+                'Discard Edits and Refresh',
+            );
+            if (choice !== 'Discard Edits and Refresh') return;
+            doc.panel?.reveal();
+            await vscode.commands.executeCommand('workbench.action.files.revert');
+        } else {
+            await this.reloadDocFromDisk(doc);
+        }
+        vscode.window.setStatusBarMessage(`$(sync) Refreshed ${uriBaseName(doc.mainUri)} from disk.`, 4000);
     }
 
     /** Records the bytes currently on disk for every file this document watches, so a later fs-watcher
@@ -3935,7 +4008,8 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
     /** Watches this document's main/skin/wts files for changes made outside this editor (another
      *  editor, `git pull`, a teammate's overwrite) and reacts once bytes on disk actually differ from
      *  what we last read/wrote — see checkExternalChange for what happens once one is confirmed. */
-    private watchExternalChanges(doc: ObjModDocument, panel: vscode.WebviewPanel): void {
+    private watchExternalChanges(doc: ObjModDocument): void {
+        doc.disposeWatchers();
         for (const uri of watchedUris(doc)) {
             const watcher = vscode.workspace.createFileSystemWatcher(
                 new vscode.RelativePattern(vscode.Uri.joinPath(uri, '..'), uriBaseName(uri)),
@@ -3943,15 +4017,22 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             const onEvent = () => this.scheduleExternalChangeCheck(doc);
             watcher.onDidChange(onEvent);
             watcher.onDidCreate(onEvent); // war3map.wts may not have existed yet when this document opened
+            watcher.onDidDelete(onEvent); // Git commonly replaces files through delete/rename/create sequences
             doc.watcherDisposables.push(watcher);
         }
-        panel.onDidDispose(() => doc.disposeWatchers());
     }
 
     // Coalesces a burst of fs events (main+skin+wts all touched by the same `git pull`) into one check.
     private scheduleExternalChangeCheck(doc: ObjModDocument): void {
         if (doc.externalChangeDebounce) clearTimeout(doc.externalChangeDebounce);
-        doc.externalChangeDebounce = setTimeout(() => { void this.checkExternalChange(doc); }, 400);
+        doc.externalChangeDebounce = setTimeout(() => {
+            void this.checkExternalChange(doc).catch((err) => {
+                void showWarningWithLogs(
+                    `Could not refresh ${uriBaseName(doc.mainUri)} after it changed on disk. Use Refresh to try again.`,
+                    err,
+                );
+            });
+        }, 400);
     }
 
     private async checkExternalChange(doc: ObjModDocument): Promise<void> {
@@ -4050,7 +4131,7 @@ async function writeBytesIfChanged(bytes: Buffer, uri: vscode.Uri): Promise<Buff
 export function registerObjModPreview(context: vscode.ExtensionContext): vscode.Disposable {
     return vscode.window.registerCustomEditorProvider(
         'wurst.objModPreview',
-        new ObjModEditorProvider(context.extensionUri),
+        new ObjModEditorProvider(context.extensionUri, context.workspaceState),
         {
             supportsMultipleEditorsPerDocument: false,
             webviewOptions: { retainContextWhenHidden: true },

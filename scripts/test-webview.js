@@ -222,12 +222,13 @@ function installObjModStateDom(persistedState) {
     const els = { tree: new FakeElement(), details: new FakeElement(), search: new FakeElement() };
     global.document = { getElementById: (id) => els[id] || null };
     let state = persistedState || {};
+    const messages = [];
     global.acquireVsCodeApi = () => ({
-        postMessage: () => {},
+        postMessage: (message) => { messages.push(message); },
         getState: () => state,
         setState: (next) => { state = next; },
     });
-    return { getState: () => state };
+    return { getState: () => state, getMessages: () => messages };
 }
 
 // state.ts is meant to make a reopened editor (a webview reload after our external-change auto-reload
@@ -235,9 +236,13 @@ function installObjModStateDom(persistedState) {
 // a blank slate — see the persistUi effect and the restoredSelectedKey logic there.
 function testObjModStateRestoresAndPersistsUiState() {
     moduleCache.clear();
-    const objects = [{ key: 'Custom:0' }, { key: 'Custom:1' }];
+    const objects = [
+        { key: 'Custom:0', identity: 'Custom:hfoo|h001' },
+        { key: 'Custom:1', identity: 'Custom:hrif|h002' },
+    ];
     const dom = installObjModStateDom({
-        selectedKey: 'Custom:1',
+        selectedKey: 'Custom:0', // deliberately stale after an external reorder
+        selectedIdentity: 'Custom:hrif|h002',
         query: 'foo',
         fieldQuery: 'dmg',
         showTechnical: true,
@@ -270,13 +275,19 @@ function testObjModStateRestoresAndPersistsUiState() {
     assert.equal(persistedAfter.treeScrollTop, 240, 'persisting one field must not drop the others');
     assert.equal(persistedAfter.detailsScrollTop, 150, 'persisting one field must not drop the others');
     assert.equal(persistedAfter.selectedKey, 'Custom:1', 'unrelated restored fields must survive a later persist');
+    assert.equal(persistedAfter.selectedIdentity, 'Custom:hrif|h002', 'selection persistence must use stable rawcodes, not an array index');
+    assert.ok(dom.getMessages().some(message => message.type === 'selectionChanged' && message.identity === 'Custom:hrif|h002'),
+        'the stable selection identity must be sent to the host for workspace-relative persistence');
     assert.equal(persistedAfter.listW, 321, 'fields unrelated to reactive ui state (e.g. splitter width) must not be clobbered');
 }
 
 function testObjModStatePendingJumpOverridesRestoredSelection() {
     moduleCache.clear();
-    const objects = [{ key: 'Custom:0' }, { key: 'Custom:1' }];
-    installObjModStateDom({ selectedKey: 'Custom:1' });
+    const objects = [
+        { key: 'Custom:0', identity: 'Custom:hfoo|h001' },
+        { key: 'Custom:1', identity: 'Custom:hrif|h002' },
+    ];
+    installObjModStateDom({ selectedKey: 'Custom:1', selectedIdentity: 'Custom:hrif|h002' });
     global.window.__OBJMOD_INITIAL__ = { objects, selectedKey: 'Custom:0', isPendingJump: true, extended: false };
 
     const state = loadTsModule('src/webview/objModEditor/state.ts');
@@ -285,8 +296,8 @@ function testObjModStatePendingJumpOverridesRestoredSelection() {
 
 function testObjModStateIgnoresStaleRestoredSelection() {
     moduleCache.clear();
-    const objects = [{ key: 'Custom:0' }]; // 'Custom:99' below no longer exists in this file
-    installObjModStateDom({ selectedKey: 'Custom:99' });
+    const objects = [{ key: 'Custom:0', identity: 'Custom:hfoo|h001' }];
+    installObjModStateDom({ selectedKey: 'Custom:99', selectedIdentity: 'Custom:old0|old1' });
     global.window.__OBJMOD_INITIAL__ = { objects, selectedKey: 'Custom:0', isPendingJump: false, extended: false };
 
     const state = loadTsModule('src/webview/objModEditor/state.ts');
@@ -300,8 +311,8 @@ function testObjModStateIgnoresStaleRestoredSelection() {
 function testObjModTreeRenderPreservesScrollPosition() {
     moduleCache.clear();
     const objects = [
-        { key: 'Custom:0', group: 'Custom', race: 'human', displayName: 'Alpha', baseId: 'a000' },
-        { key: 'Custom:1', group: 'Custom', race: 'human', displayName: 'Beta', baseId: 'b000' },
+        { key: 'Custom:0', identity: 'Custom:a000|a001', group: 'Custom', race: 'human', displayName: 'Alpha', baseId: 'a000' },
+        { key: 'Custom:1', identity: 'Custom:b000|b001', group: 'Custom', race: 'human', displayName: 'Beta', baseId: 'b000' },
     ];
     installObjModStateDom({ treeScrollTop: 240 });
     global.window.__OBJMOD_INITIAL__ = { objects, selectedKey: '', isPendingJump: false, extended: false };
@@ -628,7 +639,7 @@ function testNonBlockingStartupAndForcedReinstallWiring() {
     assert.ok(!extension.includes('ensureInstalledOrOfferMigration(true)'), 'manual install/update must not use the no-op ensure path');
     assert.ok(!languageServer.includes('await maybeOfferUpdate(context)'), 'update checks must not delay language-client startup');
     assert.ok(languageServer.includes('void maybeOfferUpdate((update) =>'), 'update checks should still run in the background and update the status item');
-    assert.ok(languageServer.includes("'$(cloud-download) WurstScript Update'"), 'the status item must indicate when an update is available');
+    assert.ok(languageServer.includes("'$(circle-filled) WurstScript Update'"), 'the status item must indicate when an update is available');
     assert.ok(!installer.includes("{ modal: true, detail }, 'Update', 'Later'"), 'the automatic update notification must not be modal');
     assert.ok(installer.includes("'Update', 'Later'"), 'the non-modal update notification must retain its actions');
     assert.ok(installer.includes("execFile(java, ['-jar', COMPILER_JAR, '--version']"), 'version detection must use an asynchronous child process');
@@ -752,7 +763,7 @@ function testAssetBrowserForwardsModelTextures() {
         'asset browser must not silently drop model texture requests'
     );
     assert.ok(
-        script.includes('assetSearchScore(query, item.label, item.value, item.detail)'),
+        script.includes('assetSearchScore(query, item.label, item.value, item.detail, fuzzyMatch)'),
         'code and object-data asset pickers should share the relevance scorer'
     );
     assert.ok(
@@ -794,7 +805,7 @@ function testThumbnailLifecycleGuards() {
     assert.ok(objmod.includes('fetch(initial.thumbnailWorkerUri'), 'the worker bundle must be fetched before creating its Blob URL');
     assert.ok(!objmod.includes('new Worker(initial.thumbnailWorkerUri)'), 'VS Code resource URLs cannot be passed directly to the Worker constructor');
     assert.ok(assetBrowser.includes('modelThumbEnsureInit()'), 'opening or selecting the model asset browser should prewarm the thumbnail worker');
-    assert.ok(assetBrowser.includes("import { assetSearchScore } from '../../features/preview/fuzzy'"), 'objmod asset search should use the shared relevance scorer');
+    assert.ok(assetBrowser.includes("import { assetSearchScore, fuzzyMatch } from '../../features/preview/fuzzy'"), 'objmod asset search should use the shared relevance scorer');
     const ensureInit = /export function modelThumbEnsureInit\(\) \{([\s\S]*?)\n\}/.exec(objmod)?.[1] || '';
     assert.ok(!ensureInit.includes('mpvViewer()'), 'worker startup failure must not fall back to rendering on the objmod UI thread');
     assert.ok(webpack.includes("mdxThumbnailWorker: './src/webview/mdxThumbnailWorker.ts'"), 'the isolated thumbnail worker must be bundled');
@@ -1017,6 +1028,27 @@ function testObjModEditorTypeAndRecoveryGuards() {
     assert.ok(host.includes('wtsEdits: Array.from(doc.wtsEdits)'), 'objmod backups must include staged WTS edits');
     assert.ok(host.includes('currentRevision = beforeRevision'), 'undo must restore a history identity, not decrement a depth');
     assert.ok(!host.includes('doc.editDepth'), 'branch-unsafe edit depth tracking must not return');
+    assert.ok(host.includes('watcher.onDidDelete(onEvent)'), 'external-change detection must cover Git-style file replacement');
+    assert.ok(host.includes('id="refresh-editor"'), 'the object editor must expose a manual refresh action');
+    assert.ok(host.includes('preferredSelectionIdentity'), 'reloading must resolve selection by stable object identity');
+    assert.ok(host.includes('objModSelectionPathKey(doc.uri)'), 'selection must be stored per workspace-relative document path');
+}
+
+function testWpmEditorInlineScriptAndRecoveryGuards() {
+    const host = fs.readFileSync(path.join(root, 'src/features/wpmPreview.ts'), 'utf8');
+    const match = host.match(/<script>\r?\n([\s\S]*?)\r?\n {2}<\/script>/);
+    assert.ok(match, 'WPM editor inline script should be present');
+    const script = match[1]
+        .replace('${wpm.width}', '4')
+        .replace('${wpm.height}', '4')
+        .replace('${dataBase64}', 'AAAAAAAAAAAAAAAAAAAAAA==')
+        .replace(/\\`/g, '`')
+        .replace(/\\\$\{/g, '${');
+    // eslint-disable-next-line sonarjs/constructor-for-side-effects -- parsing the real inline script is the assertion.
+    new vm.Script(script);
+    assert.ok(host.includes('openContext.backupId'), 'WPM documents must restore VS Code hot-exit backups');
+    assert.ok(host.includes('currentRevision !== doc.savedRevision'), 'WPM dirty tracking must distinguish edit-history branches');
+    assert.ok(!host.includes('doc.editDepth'), 'WPM dirty tracking must not use branch-unsafe edit depth');
 }
 
 async function main() {
@@ -1033,6 +1065,7 @@ async function main() {
     testBc5DdsDecode();
     testInstallerVersionShaParsing();
     testObjModEditorTypeAndRecoveryGuards();
+    testWpmEditorInlineScriptAndRecoveryGuards();
     testNonBlockingStartupAndForcedReinstallWiring();
     testWurstProcessMatching();
     await testModelThumbnailRequestsTexturesByDefault();

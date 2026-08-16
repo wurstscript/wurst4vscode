@@ -299,7 +299,7 @@ ${ICON_INLINE_CSS}
     var items = (initial.tabs[activeTab] || []);
     if (!query) return items.slice(0, 500);
     return items.map(function (item, index) {
-      return { item: item, index: index, score: assetSearchScore(query, item.label, item.value, item.detail) };
+      return { item: item, index: index, score: assetSearchScore(query, item.label, item.value, item.detail, fuzzyMatch) };
     }).filter(function (entry) {
       return Number.isFinite(entry.score);
     }).sort(function (a, b) {
@@ -609,6 +609,26 @@ ${ICON_INLINE_CSS}
       if (!modelJob.pendingTextures || modelJob.pendingTextures.size === 0) scheduleModelCapture(0, 1);
     }
   });
+  window.__wurstCodeAssetBrowserDebug = {
+    search: function (value) {
+      query = String(value || '');
+      document.getElementById('search').value = query;
+      render();
+    },
+    state: function () {
+      return {
+        activeTab: activeTab,
+        query: query,
+        results: list().slice(0, 50).map(function (item) {
+          return {
+            label: item.label,
+            value: item.value,
+            score: assetSearchScore(query, item.label, item.value, item.detail, fuzzyMatch)
+          };
+        })
+      };
+    }
+  };
   render();
   document.getElementById('search').focus();
 })();

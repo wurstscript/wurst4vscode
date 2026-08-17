@@ -263,6 +263,21 @@ const openObjModDocuments = new Map<string, ObjModDocument>();
  *  `vscode.openWith` opens (or reveals) that file for a cross-reference jump. */
 const pendingObjectSelection = new Map<string, string>();
 const OBJMOD_SELECTIONS_STATE_KEY = 'wurst.objModSelectionsByRelativePath.v1';
+const OBJMOD_CUSTOM_COLORS_STATE_KEY = 'wurst.objModCustomColors.v1';
+const OBJMOD_CUSTOM_COLORS_MAX = 12;
+
+function normalizeObjModCustomColors(values: unknown): string[] {
+    if (!Array.isArray(values)) return [];
+    const colors: string[] = [];
+    for (const value of values) {
+        const match = /^#?([0-9a-f]{6})$/i.exec(String(value ?? '').trim());
+        if (!match) continue;
+        const hex = match[1].toLowerCase();
+        if (!colors.includes(hex)) colors.push(hex);
+        if (colors.length >= OBJMOD_CUSTOM_COLORS_MAX) break;
+    }
+    return colors;
+}
 
 function objModSelectionPathKey(uri: vscode.Uri): string {
     const folder = vscode.workspace.getWorkspaceFolder(uri);
@@ -1697,6 +1712,7 @@ async function buildHtml(
     thumbnailWorkerUri?: string,
     combined?: CombinedObjModInfo,
     preferredSelectionIdentity?: string,
+    customColors: string[] = [],
 ): Promise<string> {
     const typeLabel = TYPE_LABELS[parsed.ext.slice(1)] ?? parsed.ext.slice(1).toUpperCase();
     const triggerStrings = loadTriggerStringsForUri(context.uri);
@@ -1719,6 +1735,7 @@ async function buildHtml(
         selectedKey: pendingKey ?? preferredKey ?? objects[0]?.key ?? '',
         isPendingJump: !!pendingKey,
         extended: parsed.extended,
+        customColors,
         fileInfo: combined ?? { mainName: fileName },
         thumbnailWorkerUri,
     })
@@ -2188,12 +2205,15 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 .tt-float-toolbar-row { display: flex; align-items: center; gap: 6px; }
 .tt-used-colors {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 3px;
+  max-width: 123px;
   padding-left: 6px;
   margin-left: 2px;
   border-left: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
 }
+.tt-used-colors[hidden] { display: none; }
 .cell-edit {
   display: flex;
   flex-wrap: wrap;
@@ -2597,6 +2617,19 @@ tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--acce
   box-shadow: 0 2px 8px rgba(0,0,0,.35);
 }
 .tt-pop[hidden] { display: none; }
+.tt-palette-label {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+}
+.tt-custom-colors {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 2px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+.tt-custom-colors[hidden] { display: none; }
 .tt-swatches { display: grid; grid-template-columns: repeat(6, 18px); gap: 4px; }
 .tt-sw {
   width: 18px;
@@ -3638,11 +3671,15 @@ async function openObjModBackup(uri: vscode.Uri, backupId: string): Promise<ObjM
 class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument> {
     private readonly _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<ObjModDocument>>();
     readonly onDidChangeCustomDocument = this._onDidChange.event;
+    private customColors: string[];
 
     constructor(
         private readonly extensionUri: vscode.Uri,
         private readonly workspaceState: vscode.Memento,
-    ) {}
+        private readonly globalState: vscode.Memento,
+    ) {
+        this.customColors = normalizeObjModCustomColors(globalState.get(OBJMOD_CUSTOM_COLORS_STATE_KEY));
+    }
 
     async openCustomDocument(uri: vscode.Uri, openContext: vscode.CustomDocumentOpenContext): Promise<ObjModDocument> {
         if (openContext.backupId) {
@@ -3700,6 +3737,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
                 thumbnailWorkerUri,
                 doc.combinedInfo,
                 doc.selectedIdentity,
+                this.customColors,
             );
         };
 
@@ -3728,6 +3766,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             fieldId?: string; varType?: string; level?: number | null; dataPt?: number | null; value?: string;
             rawcode?: string; label?: string;
             identity?: string;
+            color?: string;
         };
         if (msg.type === 'loadObjectDetails' && msg.key) {
             await loadObjectDetails(msg.key, webview, doc);
@@ -3808,6 +3847,14 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         }
         if (msg.type === 'selectionChanged' && msg.identity) {
             this.rememberSelection(doc, msg.identity);
+            return;
+        }
+        if (msg.type === 'rememberCustomColor' && msg.color) {
+            const next = normalizeObjModCustomColors([msg.color, ...this.customColors]);
+            if (next.join(',') !== this.customColors.join(',')) {
+                this.customColors = next;
+                await this.globalState.update(OBJMOD_CUSTOM_COLORS_STATE_KEY, next);
+            }
             return;
         }
         if (msg.type === 'refresh') {
@@ -4152,7 +4199,7 @@ async function writeBytesIfChanged(bytes: Buffer, uri: vscode.Uri): Promise<Buff
 export function registerObjModPreview(context: vscode.ExtensionContext): vscode.Disposable {
     return vscode.window.registerCustomEditorProvider(
         'wurst.objModPreview',
-        new ObjModEditorProvider(context.extensionUri, context.workspaceState),
+        new ObjModEditorProvider(context.extensionUri, context.workspaceState, context.globalState),
         {
             supportsMultipleEditorsPerDocument: false,
             webviewOptions: { retainContextWhenHidden: true },

@@ -1,0 +1,119 @@
+'use strict';
+
+/**
+ * Generates the binary map-data fixtures the e2e specs open.
+ *
+ * They are built here rather than checked in so the bytes stay readable/reviewable as code, and so a
+ * casc-ts format change surfaces as a generator failure instead of a stale blob that quietly parses
+ * into something else.
+ */
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const { repoRequire } = require('./tsLoader');
+
+const { serializeW3i, serializeWpm, BinWriter } = repoRequire('casc-ts/formats');
+
+const W3I_VERSION = 31; // Reforged-era; exercises the v28 game-version block and the v31 tail skips.
+
+/** A tail the display-only player/force parser can read, so the rendered editor has real rows. */
+function buildW3iTail() {
+    const w = new BinWriter(512);
+    w.writeI32(0);            // fog type
+    w.writeF32(3000); w.writeF32(5000); w.writeF32(0.5); // fog start/end/density
+    w.writeI32(0);            // fog color
+    w.writeI32(0);            // global weather id
+    w.writeString('Default'); // sound environment
+    w.writeU8('L'.charCodeAt(0)); // light environment tileset
+    w.writeI32(0);            // water color
+    w.writeI32(0);            // script language (v28+)
+    w.writeI32(0); w.writeI32(0); // supported graphics modes + game data version (v31+)
+
+    w.writeI32(2); // players
+    const player = (num, type, race, name) => {
+        w.writeI32(num); w.writeI32(type); w.writeI32(race); w.writeI32(0);
+        w.writeString(name);
+        w.writeF32(0); w.writeF32(0);   // start x/y
+        w.writeI32(0); w.writeI32(0);   // ally low/high priority
+        w.writeI32(0); w.writeI32(0);   // enemy low/high priority (v31+)
+    };
+    player(0, 1, 1, 'Player 1 (Human)');
+    player(1, 2, 2, 'Player 2 (Computer)');
+
+    w.writeI32(1); // forces
+    w.writeI32(0); w.writeU32(0xffffffff); w.writeString('Force 1');
+    return w.toBuffer();
+}
+
+function buildW3i() {
+    return serializeW3i({
+        version: W3I_VERSION,
+        saves: 1,
+        editorVersion: 6072,
+        gameVersionRaw: (() => {
+            const b = Buffer.alloc(16);
+            b.writeUInt32LE(1, 0); b.writeUInt32LE(36, 4); b.writeUInt32LE(1, 8); b.writeUInt32LE(20363, 12);
+            return b;
+        })(),
+        // Mixed on purpose: `name` is a wts-backed TRIGSTR (editing it must route to war3map.wts),
+        // `author` is an inline string (editing it must rewrite the w3i bytes).
+        name: 'TRIGSTR_001',
+        author: 'Wurst E2E',
+        description: 'TRIGSTR_002',
+        recommendedPlayers: '2',
+        cameraBounds: Buffer.alloc(32),
+        margins: Buffer.alloc(16),
+        width: 64,
+        height: 64,
+        flags: 0x0001 | 0x0400,
+        tileset: 'L',
+        loadingBackground: -1,
+        loadingModel: 'war3mapImported\\LoadingScreen.mdx',
+        loadingText: 'Loading text',
+        loadingTitle: 'Loading title',
+        loadingSubtitle: 'Loading subtitle',
+        gameDataSet: 0,
+        prologuePath: '',
+        prologueText: 'Prologue text',
+        prologueTitle: 'Prologue title',
+        prologueSubtitle: 'Prologue subtitle',
+        tail: buildW3iTail(),
+    });
+}
+
+const WTS = `STRING 1
+{
+E2E Map Name
+}
+
+STRING 2
+{
+E2E map description spanning
+two lines.
+}
+`;
+
+/** 16x16 pathing map with a recognisable block of blocked cells to assert paint/erase against. */
+function buildWpm() {
+    const width = 16;
+    const height = 16;
+    const data = Buffer.alloc(width * height, 0);
+    for (let y = 4; y < 8; y++) {
+        for (let x = 4; x < 8; x++) data[y * width + x] = 0x02; // walkability blocked
+    }
+    return serializeWpm({ version: 0, width, height, data, tail: Buffer.alloc(0) });
+}
+
+/** Writes a fresh temp dir containing war3map.w3i / .wts / .wpm and returns its path. */
+function makeMapFixtureDir() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wurst-e2e-map-'));
+    fs.writeFileSync(path.join(dir, 'war3map.w3i'), buildW3i());
+    fs.writeFileSync(path.join(dir, 'war3map.wts'), WTS, 'utf8');
+    fs.writeFileSync(path.join(dir, 'war3map.wpm'), buildWpm());
+    fs.writeFileSync(path.join(dir, 'wurst.build'), 'projectName = wurst-e2e\n');
+    return dir;
+}
+
+module.exports = { makeMapFixtureDir, buildW3i, buildWpm, WTS, W3I_VERSION };

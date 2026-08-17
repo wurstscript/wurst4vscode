@@ -3,7 +3,7 @@ import { esc, renderWc3Colors } from '../objModWebviewUtils';
 import { batch, effect, untracked } from '../signals';
 import { details, detailCache, pendingDetails, failedDetails, ui, vscodeApi, iconLoader, initial, objects } from './state';
 import { categoryLabel, categoryKey, objectIconHtml, detailsTitleHtml, matches, selectObject } from './objectTree';
-import { valueCell, postEdit, setModValue, editorHtml, collapsedView, normalizeNumberValue, needsColorEditor, tooltipToolbarHtml, tooltipPreviewText, isTooltipTemplateField } from './fieldDisplay';
+import { valueCell, postEdit, setModValue, editorHtml, collapsedView, normalizeNumberValue, needsColorEditor, tooltipToolbarHtml, tooltipPreviewText, isTooltipTemplateField, usedColorSwatchesHtml } from './fieldDisplay';
 import { observeModelThumbs } from './modelThumbnails';
 import { wireColorBar, setCaretEnd, setCaretAtTextOffset, textOffsetAtRange, textRangePrefersNext, richToWc3, forcePlainTextPaste, forceWc3ColorCopy, wrapColor, applyRichColor, updateColorSwatch, containsNode } from './richTextEditor';
 import { openAssetBrowser } from './assetBrowser';
@@ -485,8 +485,39 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
       exitTooltipEdit(true);
     }
   };
-  const onBodyInput = () => { setModValue(mod, richToWc3(body)); schedule(); };
-  const onRawInput = () => { setModValue(mod, rawArea.value); autosizeRaw(rawArea); schedule(); };
+  const usedColorGroup = toolbar.querySelector('.tt-used-colors');
+  const wireUsedColorSwatches = () => {
+    if (!usedColorGroup) return;
+    for (const sw of usedColorGroup.querySelectorAll('.tt-used-sw')) {
+      sw.addEventListener('mousedown', e => e.preventDefault());
+      sw.addEventListener('click', () => {
+        const hex = sw.getAttribute('data-color');
+        if (activeTooltipEdit.rawMode) wrapColor(rawArea, hex);
+        else applyRichColor(body, hex);
+        const colorBar = toolbar.querySelector('.tt-bar');
+        if (colorBar) updateColorSwatch(colorBar, hex);
+      });
+    }
+  };
+  const refreshUsedColors = value => {
+    if (!usedColorGroup) return;
+    usedColorGroup.innerHTML = usedColorSwatchesHtml(value);
+    usedColorGroup.hidden = !usedColorGroup.childElementCount;
+    wireUsedColorSwatches();
+    positionFloatToolbar(toolbar, box.getBoundingClientRect());
+  };
+  const onBodyInput = () => {
+    const value = richToWc3(body);
+    setModValue(mod, value);
+    refreshUsedColors(value);
+    schedule();
+  };
+  const onRawInput = () => {
+    setModValue(mod, rawArea.value);
+    refreshUsedColors(rawArea.value);
+    autosizeRaw(rawArea);
+    schedule();
+  };
   body.addEventListener('input', onBodyInput);
   body.addEventListener('keydown', onEscapeOrSubmit);
   rawArea.addEventListener('input', onRawInput);
@@ -499,17 +530,9 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
   const bar = toolbar.querySelector('.tt-bar');
   if (bar) wireColorBar(bar, body, () => (activeTooltipEdit && activeTooltipEdit.rawMode) ? rawArea : null);
 
-  // Quick-reference swatches for colors already used in this tooltip (see tooltipToolbarHtml) — same
-  // apply logic as a preset swatch, just outside the popover for one-click access.
-  for (const sw of toolbar.querySelectorAll('.tt-used-sw')) {
-    sw.addEventListener('mousedown', e => e.preventDefault());
-    sw.addEventListener('click', () => {
-      const hex = sw.getAttribute('data-color');
-      if (activeTooltipEdit.rawMode) wrapColor(rawArea, hex);
-      else applyRichColor(body, hex);
-      if (bar) updateColorSwatch(bar, hex);
-    });
-  }
+  // Quick-reference swatches stay live while either the rich or raw editor changes, instead of
+  // reflecting only the value from when editing started.
+  wireUsedColorSwatches();
 
   const rawToggle = toolbar.querySelector('.tt-raw-toggle');
   if (rawToggle) {

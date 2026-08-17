@@ -1203,6 +1203,9 @@ function renderW3iForces(forces: W3iForce[] | undefined): string {
 const W3I_EDITOR_CSS = `
 .field-control:not(:disabled):hover { border-color: var(--vscode-inputOption-activeBorder, var(--vscode-focusBorder, #007fd4)); }
 .field-control:focus { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px; }
+/* The display below outranks the user-agent's [hidden] rule, so the badge needs its own guard —
+   without it the "unsaved" marker shows on a clean document too. */
+.dirty-badge[hidden] { display: none; }
 .dirty-badge {
   display: inline-block;
   margin-left: 8px;

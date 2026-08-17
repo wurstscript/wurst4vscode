@@ -885,7 +885,7 @@
         "watch-web": "webpack --watch",
         "test": "npm run test:fuzzy && npm run test:image-decoders && npm run test:diagnostics && npm run test:webview",
         "test:e2e": "npm run compile-web && playwright test --project=webview",
-        "test:e2e:ui": "playwright test --project=webview --ui",
+        "test:e2e:ui": "npm run compile-web && playwright test --project=webview --ui",
         "test:image-decoders": "node ./scripts/test-image-decoders.js",
         "test:diagnostics": "node ./scripts/test-diagnostics.js",
         "test:vsix-contents": "node ./scripts/test-vsix-contents.js",

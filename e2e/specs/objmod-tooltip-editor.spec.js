@@ -180,6 +180,36 @@ test('saved custom colours come back in the palette after a reload', async ({ op
     await expect(custom.locator('.tt-custom-sw').nth(0)).toHaveAttribute('data-color', '123456');
 });
 
+test('the saved-palette spacing follows the density scale', async ({ openObjMod }) => {
+    const { page, host, gotoHtml } = await openObjMod({
+        globalState: { [CUSTOM_COLORS_KEY]: ['123456'] },
+    });
+    await gotoHtml(host.html);
+
+    // Clicking the density toggle is a click outside the editor, which closes it and takes the
+    // floating toolbar with it — so each density is measured on a freshly opened palette.
+    const measurePalette = async () => {
+        const { toolbar } = await openTooltipEditor(page);
+        await toolbar.locator('.tt-color-sq').click();
+        const spacing = await toolbar.locator('.tt-pop .tt-custom-colors').evaluate((el) => {
+            const style = getComputedStyle(el);
+            return { gap: parseFloat(style.rowGap), pad: parseFloat(style.paddingTop) };
+        });
+        await page.keyboard.press('Escape');
+        return spacing;
+    };
+
+    const compact = await measurePalette();
+    await page.click('#density-toggle');
+    await expect(page.locator('body')).toHaveClass(/density-cozy/);
+
+    // Hard-coded px here would leave this corner of the toolbar on the compact scale while the rest
+    // of the editor switched — the whole point of the :root / body.density-cozy variable pair.
+    const cozy = await measurePalette();
+    expect(cozy.gap).toBeGreaterThan(compact.gap);
+    expect(cozy.pad).toBeGreaterThan(compact.pad);
+});
+
 test('a preset colour is never duplicated into the saved palette', async ({ openObjMod }) => {
     const { page, host, gotoHtml } = await openObjMod({
         // ffcc00 is the "Gold" preset; only the non-preset colour should be kept.

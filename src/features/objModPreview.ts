@@ -1844,6 +1844,10 @@ async function buildHtml(
   /* Row height for the field table's collapsed/edit cells, so toggling a cell into edit mode never
      resizes its row. */
   --cell-h: 20px;
+  /* Saved-colour group inside the tooltip colour popover: the gap between its label and swatch grid,
+     and the breathing room above the rule separating it from the presets. */
+  --palette-group-gap: 4px;
+  --palette-group-pad: 2px;
 }
 body.density-cozy {
   --pad-x: 16px;
@@ -1869,6 +1873,8 @@ body.density-cozy {
   --cat-pad: 5px 8px 4px;
   --table-header-h: 27px;
   --cell-h: 24px;
+  --palette-group-gap: 6px;
+  --palette-group-pad: 4px;
 }
 .content {
   flex: 1;
@@ -2625,8 +2631,8 @@ tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--acce
 .tt-custom-colors {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-top: 2px;
+  gap: var(--palette-group-gap);
+  padding-top: var(--palette-group-pad);
   border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }
 .tt-custom-colors[hidden] { display: none; }

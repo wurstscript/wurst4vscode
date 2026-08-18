@@ -54,6 +54,7 @@ export interface ObjModInitial {
   selectedKey: string;
   isPendingJump?: boolean;
   extended: boolean;
+  customColors?: string[];
   fileInfo?: Record<string, unknown>;
   thumbnailWorkerUri?: string;
 }

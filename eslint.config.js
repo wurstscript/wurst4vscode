@@ -59,12 +59,17 @@ module.exports = tseslint.config(
 		},
 	},
 	{
-		// These harnesses embed a function body as a string and run it inside a real browser
-		// page (Puppeteer/Playwright-style `page.evaluate`) — the browser globals below are
-		// used there, not in the surrounding Node script.
-		files: ['scripts/*-e2e.js'],
+		// The Playwright suite and the harness behind it are Node code that also contains callbacks
+		// evaluated inside a real browser page (`page.evaluate`, `locator.evaluate`), so both global
+		// sets are legitimately in scope in the same file.
+		files: ['e2e/**/*.js'],
 		languageOptions: {
 			globals: { ...globals.node, ...globals.browser },
+		},
+		rules: {
+			// Playwright's own web-first assertions (`await expect(locator).toBeVisible()`) aren't
+			// recognised by this rule, so it fires on tests that are entirely assertions.
+			'sonarjs/assertions-in-tests': 'off',
 		},
 	},
 );

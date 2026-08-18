@@ -6,69 +6,21 @@
  * It transpiles the real TypeScript files in-memory, then runs them against a tiny
  * DOM shim. Keep tests here for pure/lite webview behavior that should not need a
  * full VS Code integration launch.
+ *
+ * For behavior that needs a real browser (layout, CSS, events, the host<->webview message
+ * protocol), see the Playwright suite under e2e/ instead.
  */
 
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const ts = require('typescript');
 const vm = require('vm');
 
-const root = path.resolve(__dirname, '..');
-const moduleCache = new Map();
+const { createTsLoader, sharedLoader, root } = require('../e2e/harness/tsLoader');
 
-function loadTsModule(relPath) {
-    const abs = path.resolve(root, relPath);
-    if (moduleCache.has(abs)) return moduleCache.get(abs).exports;
-
-    const src = fs.readFileSync(abs, 'utf8');
-    const js = ts.transpileModule(src, {
-        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
-    }).outputText;
-
-    const mod = { exports: {} };
-    moduleCache.set(abs, mod);
-    const localRequire = (request) => {
-        if (request.startsWith('.')) {
-            const resolved = path.resolve(path.dirname(abs), request);
-            const withExt = fs.existsSync(resolved) ? resolved : `${resolved}.ts`;
-            return loadTsModule(path.relative(root, withExt));
-        }
-        return require(request);
-    };
-    new Function('exports', 'module', 'require', js)(mod.exports, mod, localRequire);
-    return mod.exports;
-}
-
-function loadTsModuleWithMocks(relPath, mocks) {
-    const localCache = new Map();
-    const load = (nextRelPath) => {
-        const abs = path.resolve(root, nextRelPath);
-        if (localCache.has(abs)) return localCache.get(abs).exports;
-
-        const src = fs.readFileSync(abs, 'utf8');
-        const js = ts.transpileModule(src, {
-            compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
-        }).outputText;
-
-        const mod = { exports: {} };
-        localCache.set(abs, mod);
-        const localRequire = (request) => {
-            if (Object.prototype.hasOwnProperty.call(mocks, request)) return mocks[request];
-            if (request.startsWith('.')) {
-                const resolved = path.resolve(path.dirname(abs), request);
-                const withExt = fs.existsSync(resolved) ? resolved : `${resolved}.ts`;
-                const relative = path.relative(root, withExt).replace(/\\/g, '/');
-                if (Object.prototype.hasOwnProperty.call(mocks, relative)) return mocks[relative];
-                return load(relative);
-            }
-            return require(request);
-        };
-        new Function('exports', 'module', 'require', js)(mod.exports, mod, localRequire);
-        return mod.exports;
-    };
-    return load(relPath);
-}
+const loadTsModule = sharedLoader;
+const moduleCache = sharedLoader.cache;
+const loadTsModuleWithMocks = (relPath, mocks) => createTsLoader({ mocks })(relPath);
 
 function testAssetPathNormalization() {
     const { normalizeAssetPath } = loadTsModule('src/webview/assetPathUtils.ts');
@@ -1023,6 +975,40 @@ function testObjModTooltipPreviewHeaders() {
     assert.ok(detailsPanel.includes('renderWc3Colors(tooltipPreviewText(value, isTooltipTemplateField(mod)))'), 'tooltip collapse should restore the cleaned preview only for tooltip fields');
 }
 
+function testObjModSavedAndUsedTooltipColors() {
+    const messages = [];
+    const fieldDisplay = loadTsModuleWithMocks('src/webview/objModEditor/fieldDisplay.ts', {
+        './state': {
+            initial: { customColors: ['#ABCDEF', 'invalid', 'abcdef', '123456', 'ffcc00'] },
+            ui: {},
+            vscodeApi: { postMessage: (message) => messages.push(message) },
+        },
+    });
+
+    assert.deepEqual(fieldDisplay.customColors, ['abcdef', '123456'], 'saved colors should be normalized, deduplicated, and exclude presets');
+    const colors = fieldDisplay.extractUsedColors(
+        '|cff000001one|r |C80000002two|r ||cffff0000 literal |c7f000003three|r ' +
+        '|cff000004four|r |cff000005five|r |czz000006invalid',
+    );
+    assert.deepEqual(colors, ['000001', '000002', '000003', '000004', '000005'], 'every distinct valid WC3 color should be recognized in source order');
+    assert.equal((fieldDisplay.usedColorSwatchesHtml(colors.map((hex) => `|cff${hex}x|r`).join('')).match(/tt-used-sw/g) || []).length, 5, 'the toolbar should render every recognized color');
+    assert.deepEqual(fieldDisplay.extractUsedColors('|cff010203x|r|c80040506y|r|cff070809z|r', 2), ['010203', '040506'], 'an explicit color limit should still be honored');
+    assert.deepEqual(fieldDisplay.extractUsedColors('||cffff0000 escaped'), [], 'an escaped literal pipe must not be mistaken for a color marker');
+
+    assert.equal(fieldDisplay.rememberCustomColor('#654321'), '654321');
+    assert.deepEqual(fieldDisplay.customColors.slice(0, 3), ['654321', 'abcdef', '123456']);
+    assert.deepEqual(messages, [{ type: 'rememberCustomColor', color: '654321' }]);
+    assert.ok(fieldDisplay.customSwatchesHtml().includes('data-color="654321"'), 'remembered colors should render in the saved palette');
+    fieldDisplay.rememberCustomColor('#654321');
+    assert.equal(messages.length, 1, 'choosing the newest saved color again should not write duplicate state');
+
+    const host = fs.readFileSync(path.join(root, 'src/features/objModPreview.ts'), 'utf8');
+    assert.ok(host.includes("context.globalState"), 'saved custom colors should follow the user across workspaces');
+    assert.ok(host.includes("msg.type === 'rememberCustomColor'"), 'the objmod host should persist custom colors sent by the picker');
+    assert.ok(host.includes('customColors,'), 'saved custom colors should be restored into new objmod webviews');
+    assert.ok(host.includes('.tt-custom-colors[hidden] { display: none; }'), 'an empty saved palette should remain hidden despite its flex layout');
+}
+
 function testObjModDensityAndTreeStyling() {
     const host = fs.readFileSync(path.join(root, 'src/features/objModPreview.ts'), 'utf8');
     const webview = fs.readFileSync(path.join(root, 'src/webview/objModEditorWebview.ts'), 'utf8');
@@ -1040,7 +1026,7 @@ function testObjModDensityAndTreeStyling() {
 function testImportedAssetDedupeSafety() {
     const host = fs.readFileSync(path.join(root, 'src/features/objModPreview.ts'), 'utf8');
     const support = fs.readFileSync(path.join(root, 'src/features/imageAssetSupport.ts'), 'utf8');
-    const e2e = fs.readFileSync(path.join(root, 'scripts/objmod-thumbnail-e2e.js'), 'utf8');
+    const e2e = fs.readFileSync(path.join(root, 'e2e/local/fixtures.js'), 'utf8');
 
     assert.ok(!support.includes('hashImportedAsset'), 'asset dedupe must not mistake size+mtime metadata for a content hash');
     assert.ok(!host.includes('opt.hash'), 'distinct imported files must not collapse through metadata collisions');
@@ -1051,6 +1037,23 @@ function testImportedAssetDedupeSafety() {
     );
     assert.ok(e2e.includes("path.join(root, 'wc3data', 'melon.mdx')"), 'generated thumbnail search controls should copy a valid model fixture');
     assert.ok(!e2e.includes("'objmod search fixture'"), 'generated thumbnail fixtures must not contain fake text model bytes');
+}
+
+function testLocalE2eFixturesRemainOptIn() {
+    const fixtures = fs.readFileSync(path.join(root, 'e2e/local/fixtures.js'), 'utf8');
+    // Launching a real VS Code window from a plain `npm test` would be a nasty surprise, so the
+    // local suite must stay behind an explicit env flag.
+    assert.ok(fixtures.includes("process.env.WURST_OBJMOD_E2E === '1'"), 'local VS Code e2e must stay opt-in');
+    assert.ok(fixtures.includes('test.skip(!enabled'), 'local VS Code e2e must skip, not fail, when disabled');
+    // A beforeEach registered inside the shared fixtures module only attaches to whichever spec file
+    // imported it first, so each spec has to opt in explicitly or it would launch VS Code unasked.
+    for (const spec of fs.readdirSync(path.join(root, 'e2e/local')).filter((file) => file.endsWith('.spec.js'))) {
+        const source = fs.readFileSync(path.join(root, 'e2e/local', spec), 'utf8');
+        assert.ok(
+            /^skipUnlessEnabled\(\);$/m.test(source) || /^test\.skip\(!enabled,/m.test(source),
+            `${spec} must gate itself at top level on the local-e2e env flag`,
+        );
+    }
 }
 
 function testObjModEditorTypeAndRecoveryGuards() {
@@ -1121,8 +1124,10 @@ async function main() {
     testTooltipFontRepairsChromiumRejectedGlyphFlags();
     testObjModTooltipWidthWiring();
     testObjModTooltipPreviewHeaders();
+    testObjModSavedAndUsedTooltipColors();
     testObjModDensityAndTreeStyling();
     testImportedAssetDedupeSafety();
+    testLocalE2eFixturesRemainOptIn();
     console.log('webview harness tests passed');
 }
 

@@ -1,4 +1,5 @@
 import { renderWc3Colors } from '../objModWebviewUtils';
+import { customSwatchesHtml, rememberCustomColor } from './fieldDisplay';
 
 // Current selection range for a textarea (kept fresh even after blur, so toolbar/color-picker work).
 export function taRange(ta) {
@@ -303,7 +304,7 @@ export function wireColorBar(bar, rich, getTa) {
     });
   }
   if (pop) {
-    for (const sw of pop.querySelectorAll('.tt-sw')) {
+    const wireSwatch = sw => {
       sw.addEventListener('mousedown', e => e.preventDefault());
       sw.addEventListener('click', () => {
         const hex = sw.getAttribute('data-color');
@@ -313,9 +314,20 @@ export function wireColorBar(bar, rich, getTa) {
         updateColorSwatch(bar, hex);
         pop.hidden = true;
       });
-    }
+    };
+    for (const sw of pop.querySelectorAll('.tt-sw')) wireSwatch(sw);
     const colorInput = pop.querySelector('.tt-color');
     if (colorInput) colorInput.addEventListener('change', () => {
+      const remembered = rememberCustomColor(colorInput.value);
+      if (remembered) {
+        const customGroup = pop.querySelector('.tt-custom-colors');
+        const customSwatches = pop.querySelector('.tt-custom-swatches');
+        if (customGroup && customSwatches) {
+          customGroup.hidden = false;
+          customSwatches.innerHTML = customSwatchesHtml();
+          for (const sw of customSwatches.querySelectorAll('.tt-sw')) wireSwatch(sw);
+        }
+      }
       const t = ta();
       if (t && useRaw()) wrapColor(t, colorInput.value);
       else if (rich) applyRichColor(rich, colorInput.value);

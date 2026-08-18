@@ -1,5 +1,5 @@
 import { esc, renderWc3Colors } from '../objModWebviewUtils';
-import { ui, vscodeApi } from './state';
+import { initial, ui, vscodeApi } from './state';
 
 export function sourcePill(mod) {
   if (!mod.source) return '';
@@ -45,6 +45,40 @@ export var PRESET_COLORS = [
   ['e55bb0', 'Pink'], ['959697', 'Dark Grey'], ['0042ff', 'Player Blue'], ['fffc01', 'Yellow'],
 ];
 
+export const MAX_CUSTOM_COLORS = 12;
+
+export function normalizeCustomColors(values, max = MAX_CUSTOM_COLORS) {
+  const colors: string[] = [];
+  for (const value of Array.isArray(values) ? values : []) {
+    const match = /^#?([0-9a-f]{6})$/i.exec(String(value || '').trim());
+    if (!match) continue;
+    const hex = match[1].toLowerCase();
+    if (!colors.includes(hex) && !PRESET_COLORS.some(preset => preset[0] === hex)) colors.push(hex);
+    if (colors.length >= max) break;
+  }
+  return colors;
+}
+
+export const customColors = normalizeCustomColors(initial.customColors);
+
+export function rememberCustomColor(value) {
+  const normalized = normalizeCustomColors([value], 1)[0];
+  if (!normalized) return '';
+  const previousIndex = customColors.indexOf(normalized);
+  if (previousIndex === 0) return normalized;
+  if (previousIndex > 0) customColors.splice(previousIndex, 1);
+  customColors.unshift(normalized);
+  if (customColors.length > MAX_CUSTOM_COLORS) customColors.length = MAX_CUSTOM_COLORS;
+  vscodeApi.postMessage({ type: 'rememberCustomColor', color: normalized });
+  return normalized;
+}
+
+export function customSwatchesHtml() {
+  return customColors.map(hex =>
+    '<button type="button" class="tt-sw tt-custom-sw" data-color="' + hex + '" style="background:#' + hex + '" title="Saved custom color (#' + hex + ')"></button>'
+  ).join('');
+}
+
 export function swatchesHtml() {
   return PRESET_COLORS.map(c =>
     '<button type="button" class="tt-sw" data-color="' + c[0] + '" style="background:#' + c[0] + '" title="' + esc(c[1]) + ' (#' + c[0] + ')"></button>'
@@ -56,7 +90,12 @@ export function colorBarHtml(mi) {
   return '<div class="tt-bar" data-mi="' + mi + '">' +
     '<button type="button" class="tt-color-sq" title="Text color" aria-label="Text color"></button>' +
     '<div class="tt-pop" hidden>' +
+      '<div class="tt-palette-label">Presets</div>' +
       '<div class="tt-swatches">' + swatchesHtml() + '</div>' +
+      '<div class="tt-custom-colors"' + (customColors.length ? '' : ' hidden') + '>' +
+        '<div class="tt-palette-label">Saved</div>' +
+        '<div class="tt-swatches tt-custom-swatches">' + customSwatchesHtml() + '</div>' +
+      '</div>' +
       '<label class="tt-pick"><input type="color" class="tt-color" value="#ffcc00" aria-label="Custom colour"><span>Custom...</span></label>' +
     '</div>' +
   '</div>';
@@ -65,26 +104,39 @@ export function colorBarHtml(mi) {
 // Distinct |cffRRGGBB colors already present in a WC3 raw string, in first-seen order — lets the
 // toolbar offer "colors already used here" for one-click consistency (e.g. reapplying the same gold
 // used on a keyword elsewhere in the same tooltip) without opening the full preset/custom picker.
-export function extractUsedColors(text, max) {
-  const re = /\|c[0-9a-f]{2}([0-9a-f]{6})/gi;
+export function extractUsedColors(text, max = undefined) {
+  const value = String(text == null ? '' : text);
+  const limit = Number.isFinite(max) && max > 0 ? Math.floor(max) : Number.POSITIVE_INFINITY;
   const seen: string[] = [];
-  let m;
-  while ((m = re.exec(String(text == null ? '' : text)))) {
-    const hex = m[1].toLowerCase();
+  for (let i = 0; i < value.length; i++) {
+    if (value[i] !== '|') continue;
+    const marker = value[i + 1];
+    if (marker === '|') {
+      i++;
+      continue;
+    }
+    if (marker !== 'c' && marker !== 'C') continue;
+    const argb = value.slice(i + 2, i + 10);
+    if (!/^[0-9a-f]{8}$/i.test(argb)) continue;
+    const hex = argb.slice(2).toLowerCase();
     if (!seen.includes(hex)) seen.push(hex);
-    if (seen.length >= (max || 4)) break;
+    if (seen.length >= limit) break;
+    i += 9;
   }
   return seen;
 }
 
+export function usedColorSwatchesHtml(v) {
+  const used = extractUsedColors(v);
+  return used.map(hex =>
+    '<button type="button" class="tt-sw tt-used-sw" data-color="' + hex + '" style="background:#' + hex + '" title="#' + hex + ' (used in this text)"></button>'
+  ).join('');
+}
+
 function usedColorsHtml(v) {
-  const used = extractUsedColors(v, 4);
-  if (!used.length) return '';
-  return '<span class="tt-used-colors" title="Colors already used in this tooltip">' +
-    used.map(hex =>
-      '<button type="button" class="tt-sw tt-used-sw" data-color="' + hex + '" style="background:#' + hex + '" title="#' + hex + ' (used in this tooltip)"></button>'
-    ).join('') +
-  '</span>';
+  const swatches = usedColorSwatchesHtml(v);
+  return '<span class="tt-used-colors" title="Colors used in this text"' + (swatches ? '' : ' hidden') + '>' +
+    swatches + '</span>';
 }
 
 // Floating toolbar mounted beside a tooltip field while it's being edited in place (see

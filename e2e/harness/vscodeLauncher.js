@@ -157,6 +157,9 @@ const EDITOR_ASSOCIATIONS = {
     '*.w3q': 'wurst.objModPreview',
     '*.w3i': 'wurst.w3iEditor',
     '*.wpm': 'wurst.wpmPreview',
+    '*.mmp': 'wurst.mmpEditor',
+    '*.w3c': 'wurst.w3cEditor',
+    '*.w3r': 'wurst.w3rEditor',
 };
 
 function writeUserSettings(userDataDir, settings) {

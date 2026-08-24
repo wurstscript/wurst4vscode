@@ -14,7 +14,7 @@ const { test: base, expect } = require('@playwright/test');
 
 const { startHarnessServer } = require('./harness/server');
 const { createObjModHost } = require('./harness/objmodHost');
-const { createW3iHost, createWpmHost } = require('./harness/mapEditorHosts');
+const { createW3iHost, createWpmHost, createMmpHost, createW3cHost, createW3rHost } = require('./harness/mapEditorHosts');
 const { root } = require('./harness/tsLoader');
 
 /** Mirrors the webview API surface the shipped code uses. State lives in sessionStorage so it
@@ -121,6 +121,42 @@ const test = base.extend({
         const opened = [];
         await use(async (options = {}) => {
             const host = await createWpmHost({ origin: server.origin, ...options });
+            opened.push(host);
+            const wiring = await attachPageToHost(page, server, host);
+            return { host, page, ...wiring };
+        });
+        for (const host of opened) host.dispose();
+    },
+
+    /** Opens the editable .mmp minimap-icon editor. */
+    openMmp: async ({ page, server }, use) => {
+        const opened = [];
+        await use(async (options = {}) => {
+            const host = await createMmpHost({ origin: server.origin, ...options });
+            opened.push(host);
+            const wiring = await attachPageToHost(page, server, host);
+            return { host, page, ...wiring };
+        });
+        for (const host of opened) host.dispose();
+    },
+
+    /** Opens the editable .w3c camera editor. */
+    openW3c: async ({ page, server }, use) => {
+        const opened = [];
+        await use(async (options = {}) => {
+            const host = await createW3cHost({ origin: server.origin, ...options });
+            opened.push(host);
+            const wiring = await attachPageToHost(page, server, host);
+            return { host, page, ...wiring };
+        });
+        for (const host of opened) host.dispose();
+    },
+
+    /** Opens the editable .w3r region editor. */
+    openW3r: async ({ page, server }, use) => {
+        const opened = [];
+        await use(async (options = {}) => {
+            const host = await createW3rHost({ origin: server.origin, ...options });
             opened.push(host);
             const wiring = await attachPageToHost(page, server, host);
             return { host, page, ...wiring };

@@ -106,14 +106,57 @@ function buildWpm() {
     return serializeWpm({ version: 0, width, height, data, tail: Buffer.alloc(0) });
 }
 
-/** Writes a fresh temp dir containing war3map.w3i / .wts / .wpm and returns its path. */
+function buildMmp() {
+    const w = new BinWriter(8 + 4 * 16);
+    w.writeI32(0); // version
+    w.writeI32(4); // icon count
+    const icon = (type, x, y, blue, green, red, alpha = 0xff) => {
+        w.writeI32(type); w.writeI32(x); w.writeI32(y);
+        w.writeU8(blue); w.writeU8(green); w.writeU8(red); w.writeU8(alpha);
+    };
+    icon(0, -1024, 512, 0xff, 0xff, 0xff); // default gold mine color
+    icon(1, 256, -768, 0x40, 0x80, 0xc0);
+    icon(2, 1024, 2048, 0xff, 0xff, 0xff, 0x80);
+    icon(77, 0, 0, 0x10, 0x20, 0x30);
+    return w.toBuffer();
+}
+
+function buildW3c() {
+    const w = new BinWriter(256);
+    w.writeI32(0); w.writeI32(2);
+    const camera = (name, values) => {
+        for (const value of values) w.writeF32(value);
+        w.writeString(name);
+    };
+    camera('Overview', [128, 256, 32, 90, 304, 1650, 0, 70, 5000, 0]);
+    camera('Boss Arena', [-512, 1024, 64, 180, 280, 2200, 3, 75, 6000, 1]);
+    return w.toBuffer();
+}
+
+function buildW3r() {
+    const w = new BinWriter(256);
+    w.writeI32(5); w.writeI32(2);
+    const region = (name, minX, maxX, minY, maxY, index, weather, sound, blue, green, red, endToken = 0) => {
+        w.writeF32(minX); w.writeF32(maxX); w.writeF32(minY); w.writeF32(maxY);
+        w.writeString(name); w.writeI32(index); w.writeId(weather); w.writeString(sound);
+        w.writeU8(blue); w.writeU8(green); w.writeU8(red); w.writeU8(endToken);
+    };
+    region('Spawn Area', -128, 256, -64, 384, 3, 'NULL', 'Sound\\Environment\\GrasslandDay', 0x40, 0x80, 0xc0);
+    region('Boss Room', 512, 1024, 768, 1280, 7, 'SNOW', '', 0x10, 0x20, 0x30, 1);
+    return w.toBuffer();
+}
+
+/** Writes a fresh temp dir containing the editable map-data fixtures and returns its path. */
 function makeMapFixtureDir() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wurst-e2e-map-'));
     fs.writeFileSync(path.join(dir, 'war3map.w3i'), buildW3i());
     fs.writeFileSync(path.join(dir, 'war3map.wts'), WTS, 'utf8');
     fs.writeFileSync(path.join(dir, 'war3map.wpm'), buildWpm());
+    fs.writeFileSync(path.join(dir, 'war3map.mmp'), buildMmp());
+    fs.writeFileSync(path.join(dir, 'war3map.w3c'), buildW3c());
+    fs.writeFileSync(path.join(dir, 'war3map.w3r'), buildW3r());
     fs.writeFileSync(path.join(dir, 'wurst.build'), 'projectName = wurst-e2e\n');
     return dir;
 }
 
-module.exports = { makeMapFixtureDir, buildW3i, buildWpm, WTS, W3I_VERSION };
+module.exports = { makeMapFixtureDir, buildW3i, buildWpm, buildMmp, buildW3c, buildW3r, WTS, W3I_VERSION };

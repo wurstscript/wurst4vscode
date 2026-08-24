@@ -5,7 +5,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import * as vscode from 'vscode';
-import { BinReader, parseW3i as parseW3iFile, serializeW3i, W3iFile, W3iPlayer, W3iForce } from 'casc-ts/formats';
+import { BinReader, BinWriter, parseW3i as parseW3iFile, serializeW3i, W3iFile, W3iPlayer, W3iForce } from 'casc-ts/formats';
 import { ParsedPreviewContext, registerParsedPreviewer } from './preview/framework';
 import {
     loadTriggerStringsForUri, resolveTriggerString, ResolvedText, TriggerStringTable,
@@ -18,20 +18,29 @@ import { showErrorWithLogs, showWarningWithLogs } from './diagnostics';
 
 type MapDataFile =
     | { kind: 'imp'; version: number; imports: ImpEntry[]; error?: string }
-    | { kind: 'mmp'; version: number; icons: MmpIcon[]; error?: string }
+    | ({ kind: 'mmp' } & MmpFile)
     | { kind: 'shd'; width: number; height: number; bytes: Buffer; min: number; max: number; dimensionsSource: string; error?: string }
-    | { kind: 'w3c'; version: number; cameras: W3cCamera[]; error?: string }
+    | ({ kind: 'w3c' } & W3cFile)
     | { kind: 'w3i'; info: W3iInfo; error?: string }
-    | { kind: 'w3r'; version: number; regions: W3rRegion[]; error?: string }
+    | ({ kind: 'w3r' } & W3rFile)
     | { kind: 'w3e'; info: W3eInfo; error?: string }
     | { kind: 'generic'; label: string; bytes: Buffer; note: string; error?: string };
 
 interface MmpIcon {
     type: number;
-    label: string;
     x: number;
     y: number;
-    color: string | null;
+    blue: number;
+    green: number;
+    red: number;
+    alpha: number;
+}
+
+interface MmpFile {
+    version: number;
+    icons: MmpIcon[];
+    tail: Buffer;
+    error?: string;
 }
 
 interface ImpEntry {
@@ -54,6 +63,13 @@ interface W3cCamera {
     farZ: number;
     unknown: number;
     name: string;
+}
+
+interface W3cFile {
+    version: number;
+    cameras: W3cCamera[];
+    tail: Buffer;
+    error?: string;
 }
 
 interface W3iInfo {
@@ -95,7 +111,17 @@ interface W3rRegion {
     maxY: number;
     weatherId: string;
     sound: string;
-    color: string;
+    blue: number;
+    green: number;
+    red: number;
+    endToken: number;
+}
+
+interface W3rFile {
+    version: number;
+    regions: W3rRegion[];
+    tail: Buffer;
+    error?: string;
 }
 
 interface W3eInfo {
@@ -155,10 +181,17 @@ function parseImp(data: Buffer, fileName: string): MapDataFile {
 }
 
 function parseMmp(data: Buffer): MapDataFile {
+    return { kind: 'mmp', ...parseMmpFile(data) };
+}
+
+function parseMmpFile(data: Buffer): MmpFile {
     const r = new BinReader(data);
     try {
         const version = r.readI32();
         const count = r.readI32();
+        if (count < 0 || count > Math.floor(r.remaining / 16)) {
+            throw new Error(`Invalid MMP icon count ${count}.`);
+        }
         const icons: MmpIcon[] = [];
         for (let i = 0; i < count; i++) {
             const type = r.readI32();
@@ -168,14 +201,11 @@ function parseMmp(data: Buffer): MapDataFile {
             const green = r.readU8();
             const red = r.readU8();
             const alpha = r.readU8();
-            const color = blue === 0xff && green === 0xff && red === 0xff && alpha === 0xff
-                ? null
-                : `rgba(${red},${green},${blue},${(alpha / 255).toFixed(3)})`;
-            icons.push({ type, label: mmpIconLabel(type), x, y, color });
+            icons.push({ type, x, y, blue, green, red, alpha });
         }
-        return { kind: 'mmp', version, icons };
+        return { version, icons, tail: r.remaining ? Buffer.from(r.readBytes(r.remaining)) : Buffer.alloc(0) };
     } catch (e) {
-        return { kind: 'mmp', version: 0, icons: [], error: errorMessage(e) };
+        return { version: 0, icons: [], tail: Buffer.alloc(0), error: errorMessage(e) };
     }
 }
 
@@ -263,10 +293,15 @@ function factorDimensions(byteLength: number): { width: number; height: number }
 }
 
 function parseW3c(data: Buffer): MapDataFile {
+    return { kind: 'w3c', ...parseW3cFile(data) };
+}
+
+function parseW3cFile(data: Buffer): W3cFile {
     const r = new BinReader(data);
     try {
         const version = r.readI32();
         const count = r.readI32();
+        if (count < 0 || count > Math.floor(r.remaining / 41)) throw new Error(`Invalid W3C camera count ${count}.`);
         const cameras: W3cCamera[] = [];
         for (let i = 0; i < count; i++) {
             cameras.push({
@@ -283,9 +318,9 @@ function parseW3c(data: Buffer): MapDataFile {
                 name: r.readString(),
             });
         }
-        return { kind: 'w3c', version, cameras };
+        return { version, cameras, tail: r.remaining ? Buffer.from(r.readBytes(r.remaining)) : Buffer.alloc(0) };
     } catch (e) {
-        return { kind: 'w3c', version: 0, cameras: [], error: errorMessage(e) };
+        return { version: 0, cameras: [], tail: Buffer.alloc(0), error: errorMessage(e) };
     }
 }
 
@@ -370,10 +405,15 @@ function parseW3i(data: Buffer): MapDataFile {
 }
 
 function parseW3r(data: Buffer): MapDataFile {
+    return { kind: 'w3r', ...parseW3rFile(data) };
+}
+
+function parseW3rFile(data: Buffer): W3rFile {
     const r = new BinReader(data);
     try {
         const version = r.readI32();
         const count = r.readI32();
+        if (count < 0 || count > Math.floor(r.remaining / 30)) throw new Error(`Invalid W3R region count ${count}.`);
         const regions: W3rRegion[] = [];
         for (let i = 0; i < count; i++) {
             const minX = r.readF32();
@@ -387,12 +427,12 @@ function parseW3r(data: Buffer): MapDataFile {
             const blue = r.readU8();
             const green = r.readU8();
             const red = r.readU8();
-            r.readU8(); // end token
-            regions.push({ name, index, minX, maxX, minY, maxY, weatherId, sound, color: `rgb(${red},${green},${blue})` });
+            const endToken = r.readU8();
+            regions.push({ name, index, minX, maxX, minY, maxY, weatherId, sound, blue, green, red, endToken });
         }
-        return { kind: 'w3r', version, regions };
+        return { version, regions, tail: r.remaining ? Buffer.from(r.readBytes(r.remaining)) : Buffer.alloc(0) };
     } catch (e) {
-        return { kind: 'w3r', version: 0, regions: [], error: errorMessage(e) };
+        return { version: 0, regions: [], tail: Buffer.alloc(0), error: errorMessage(e) };
     }
 }
 
@@ -685,10 +725,10 @@ ${parsed.imports.length ? `<div class="table-wrap"><table><thead><tr><th>#</th><
 function renderMmp(parsed: Extract<MapDataFile, { kind: 'mmp' }>, fileName: string): string {
     const rows = parsed.icons.map((icon, index) => `<tr>
   <td class="num">${index}</td>
-  <td>${escapeHtml(icon.label)}</td>
+  <td>${escapeHtml(mmpIconLabel(icon.type))}</td>
   <td class="num">${icon.x}</td>
   <td class="num">${icon.y}</td>
-  <td>${icon.color ? `<span class="swatch" style="background:${icon.color}"></span>${escapeHtml(icon.color)}` : '<span class="empty">default</span>'}</td>
+  <td>${mmpColorCss(icon) ? `<span class="swatch" style="background:${mmpColorCss(icon)}"></span>${escapeHtml(mmpColorCss(icon) as string)}` : '<span class="empty">default</span>'}</td>
 </tr>`).join('');
     return page(fileName, `
 ${renderHeader(fileName, `WC3 minimap icons - v${parsed.version}`)}
@@ -831,7 +871,7 @@ function renderW3r(parsed: Extract<MapDataFile, { kind: 'w3r' }>, fileName: stri
   <td class="num">${fmt(region.maxY)}</td>
   <td class="mono">${escapeHtml(region.weatherId || '-')}</td>
   <td>${renderResolvedInline(resolveTriggerString(region.sound || '-', triggerStrings))}</td>
-  <td><span class="swatch" style="background:${region.color}"></span>${escapeHtml(region.color)}</td>
+  <td><span class="swatch" style="background:${w3rColorCss(region)}"></span>${escapeHtml(w3rColorCss(region))}</td>
 </tr>`).join('');
     return page(fileName, `
 ${renderHeader(fileName, `WC3 regions - v${parsed.version}`)}
@@ -1044,11 +1084,28 @@ function errorBanner(error?: string): string {
     return error ? `<div class="error">${escapeHtml(error)}</div>` : '';
 }
 
+const MMP_ICON_TYPES: Array<[number, string]> = [
+    [0, 'Gold Mine'],
+    [1, 'Neutral Building / House'],
+    [2, 'Player Start'],
+];
+
 function mmpIconLabel(type: number): string {
-    if (type === 0) return 'Gold Mine';
-    if (type === 1) return 'Neutral Building';
-    if (type === 2) return 'Player Start';
-    return `Unknown (${type})`;
+    return MMP_ICON_TYPES.find(([value]) => value === type)?.[1] ?? `Unknown / custom (${type})`;
+}
+
+function mmpIconTypeOptions(type: number): Array<[number, string]> {
+    if (MMP_ICON_TYPES.some(([value]) => value === type)) return MMP_ICON_TYPES;
+    return [[type, `Unknown / custom (${type})`], ...MMP_ICON_TYPES];
+}
+
+function mmpColorCss(icon: MmpIcon): string | null {
+    if (icon.blue === 0xff && icon.green === 0xff && icon.red === 0xff && icon.alpha === 0xff) return null;
+    return `rgba(${icon.red},${icon.green},${icon.blue},${(icon.alpha / 255).toFixed(3)})`;
+}
+
+function mmpColorHex(icon: MmpIcon): string {
+    return `#${icon.red.toString(16).padStart(2, '0')}${icon.green.toString(16).padStart(2, '0')}${icon.blue.toString(16).padStart(2, '0')}`;
 }
 
 function graphicsLabel(value: number): string {
@@ -1080,6 +1137,695 @@ function fmt(value: number): string {
 
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+}
+
+function w3rColorCss(region: W3rRegion): string {
+    return `rgb(${region.red},${region.green},${region.blue})`;
+}
+
+function colorHex(red: number, green: number, blue: number): string {
+    return `#${red.toString(16).padStart(2, '0')}${green.toString(16).padStart(2, '0')}${blue.toString(16).padStart(2, '0')}`;
+}
+
+const EDITABLE_LIST_CSS = `
+.editable-list { max-width: 1500px; }
+.editable-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin: 3px 0 10px; }
+.action-button, .remove-button {
+  color: var(--btn-fg, var(--fg)); background: var(--btn-bg, var(--input-bg));
+  border: 1px solid var(--border); border-radius: 3px; padding: 4px 9px;
+  font: inherit; font-size: 12px; cursor: pointer;
+}
+.action-button:hover, .remove-button:hover { background: var(--btn-hover, var(--hover)); }
+.remove-button { color: var(--vscode-errorForeground, #f14c4c); background: transparent; padding: 3px 7px; }
+.edit-table { min-width: 1100px; table-layout: fixed; }
+.edit-table th { white-space: nowrap; }
+.edit-table th:last-child { width: 84px; }
+.edit-table td { vertical-align: middle; }
+.list-input { width: 100%; min-width: 0; height: 26px; padding: 3px 6px; color: var(--input-fg); background: var(--input-bg); border: 1px solid var(--input-border, var(--border)); border-radius: 2px; font: inherit; }
+.list-input:focus, .list-color:focus { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px; }
+.list-input.mono { font-family: var(--mono); }
+.list-color { width: 34px; height: 26px; padding: 1px; border: 1px solid var(--input-border, var(--border)); background: var(--input-bg); border-radius: 2px; }
+.edit-table .num { white-space: nowrap; }
+.edit-table .row-number { width: 42px; }
+.edit-table .color-cell { text-align: center; }
+.dirty-badge[hidden] { display: none; }
+`;
+
+const EDITABLE_LIST_SCRIPT = `<script>
+(function () {
+  const api = acquireVsCodeApi();
+  document.addEventListener('change', function (e) {
+    const t = e.target;
+    if (t.matches('[data-field]')) {
+      api.postMessage({ type: 'edit', index: Number(t.getAttribute('data-index')), field: t.getAttribute('data-field'), value: t.value });
+    }
+  });
+  document.addEventListener('click', function (e) {
+    const remove = e.target.closest('[data-remove]');
+    if (remove) api.postMessage({ type: 'remove', index: Number(remove.getAttribute('data-remove')) });
+    else if (e.target.closest('[data-add]')) api.postMessage({ type: 'add' });
+  });
+  window.addEventListener('message', function (event) {
+    const msg = event.data || {};
+    if (msg.type !== 'editorStateChanged') return;
+    const list = document.getElementById('editorList');
+    const count = document.getElementById('editorCount');
+    const badge = document.getElementById('dirtyBadge');
+    if (list) list.innerHTML = msg.listHtml;
+    if (count) count.textContent = String(msg.count);
+    if (badge) badge.hidden = !msg.isDirty;
+  });
+})();
+</script>`;
+
+function renderEditableListPage(
+    fileName: string,
+    meta: string,
+    count: number,
+    countLabel: string,
+    listHtml: string,
+    hint: string,
+    isDirty: boolean,
+    extraCss: string,
+): string {
+    const body = `
+${renderHeader(fileName, meta, true)}
+<div class="dialog editable-list">
+<div class="metric-strip"><span class="metric"><strong id="editorCount">${count}</strong> ${countLabel}</span></div>
+<div class="editable-actions">
+  <button type="button" class="action-button" data-add>Add ${countLabel.slice(0, -1)}</button>
+  <span class="hint">${escapeHtml(hint)}</span>
+</div>
+<div id="editorList">${listHtml}</div>
+</div>
+${EDITABLE_LIST_SCRIPT}`;
+    return page(fileName, body.replace('id="dirtyBadge" hidden', `id="dirtyBadge"${isDirty ? '' : ' hidden'}`), extraCss, true);
+}
+
+const W3C_NUMERIC_FIELDS = new Set<keyof W3cCamera>([
+    'targetX', 'targetY', 'zOffset', 'rotation', 'angleOfAttack', 'distance', 'roll', 'fieldOfView', 'farZ', 'unknown',
+]);
+
+function w3cCameraInput(camera: W3cCamera, index: number, field: keyof W3cCamera, className = ''): string {
+    const value = field === 'name' ? camera.name : fmt(camera[field] as number);
+    const type = field === 'name' ? 'text' : 'number';
+    const step = field === 'name' ? '' : ' step="any"';
+    return `<input class="list-input ${className}" type="${type}"${step} data-index="${index}" data-field="${field}" value="${escapeHtml(value)}" aria-label="Camera ${index + 1} ${field}">`;
+}
+
+function renderW3cList(file: W3cFile): string {
+    if (!file.cameras.length) return '<p class="empty">No cameras. Add one to create a camera record.</p>';
+    const rows = file.cameras.map((camera, index) => `<tr data-row="${index}">
+  <td class="num row-number">${index + 1}</td>
+  <td>${w3cCameraInput(camera, index, 'name')}</td>
+  <td>${w3cCameraInput(camera, index, 'targetX', 'mono')}</td>
+  <td>${w3cCameraInput(camera, index, 'targetY', 'mono')}</td>
+  <td>${w3cCameraInput(camera, index, 'zOffset', 'mono')}</td>
+  <td>${w3cCameraInput(camera, index, 'rotation', 'mono')}</td>
+  <td>${w3cCameraInput(camera, index, 'angleOfAttack', 'mono')}</td>
+  <td>${w3cCameraInput(camera, index, 'distance', 'mono')}</td>
+  <td>${w3cCameraInput(camera, index, 'roll', 'mono')}</td>
+  <td>${w3cCameraInput(camera, index, 'fieldOfView', 'mono')}</td>
+  <td>${w3cCameraInput(camera, index, 'farZ', 'mono')}</td>
+  <td>${w3cCameraInput(camera, index, 'unknown', 'mono')}</td>
+  <td><button type="button" class="remove-button" data-remove="${index}">Remove</button></td>
+</tr>`).join('');
+    return `<div class="table-wrap"><table class="edit-table w3c-table"><thead><tr><th>#</th><th>Name</th><th>Target X</th><th>Target Y</th><th>Z offset</th><th>Rotation</th><th>Angle of attack</th><th>Distance</th><th>Roll</th><th>Field of view</th><th>Far Z</th><th>Unknown</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function renderW3cEditor(doc: W3cDocument, fileName: string): string {
+    return renderEditableListPage(fileName, `WC3 cameras — v${doc.file.version}`, doc.file.cameras.length, 'cameras', renderW3cList(doc.file), 'Camera values are stored as floating-point Warcraft III camera parameters.', doc.currentRevision !== doc.savedRevision, `${EDITABLE_LIST_CSS}
+.w3c-table { min-width: 1500px; }
+.w3c-table th:nth-child(1) { width: 42px; }.w3c-table th:nth-child(2) { width: 180px; }.w3c-table th:nth-child(n+3):nth-child(-n+12) { width: 110px; }
+`);
+}
+
+class W3cDocument implements vscode.CustomDocument {
+    currentRevision = 0;
+    savedRevision = 0;
+    nextRevision = 1;
+    webview?: vscode.Webview;
+    constructor(readonly uri: vscode.Uri, public file: W3cFile) {}
+    dispose(): void {}
+}
+
+interface W3cEdit { apply: () => void; revert: () => void; }
+
+class W3cEditorProvider implements vscode.CustomEditorProvider<W3cDocument> {
+    private readonly _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<W3cDocument>>();
+    readonly onDidChangeCustomDocument = this._onDidChange.event;
+
+    async openCustomDocument(uri: vscode.Uri, openContext: vscode.CustomDocumentOpenContext): Promise<W3cDocument> {
+        const source = openContext.backupId ? vscode.Uri.parse(openContext.backupId) : uri;
+        const doc = new W3cDocument(uri, parseW3cFile(Buffer.from(await vscode.workspace.fs.readFile(source))));
+        if (openContext.backupId) { doc.currentRevision = 1; doc.nextRevision = 2; }
+        return doc;
+    }
+
+    async resolveCustomEditor(doc: W3cDocument, panel: vscode.WebviewPanel): Promise<void> {
+        panel.webview.options = { enableScripts: true, localResourceRoots: [] };
+        doc.webview = panel.webview;
+        panel.onDidDispose(() => { if (doc.webview === panel.webview) doc.webview = undefined; });
+        panel.webview.onDidReceiveMessage((message) => this.handleMessage(message, doc));
+        this.render(doc, panel.webview);
+    }
+
+    private render(doc: W3cDocument, webview: vscode.Webview): void {
+        const fileName = doc.uri.path.slice(doc.uri.path.lastIndexOf('/') + 1);
+        webview.html = doc.file.error
+            ? buildPage({ csp: "default-src 'none'; style-src 'unsafe-inline';", title: escapeHtml(fileName), body: `<div class="wv-state"><span>Failed to parse W3C cameras</span><span class="err">${escapeHtml(doc.file.error)}</span></div>` })
+            : renderW3cEditor(doc, fileName);
+    }
+
+    private handleMessage(message: unknown, doc: W3cDocument): void {
+        if (!message || typeof message !== 'object' || doc.file.error) return;
+        const msg = message as { type?: string; index?: number; field?: string; value?: string };
+        if (msg.type === 'add') return this.addCamera(doc);
+        if (!this.validIndex(msg.index, doc.file.cameras.length)) return;
+        const index = msg.index as number;
+        if (msg.type === 'remove') return this.removeCamera(doc, index);
+        if (msg.type === 'edit' && typeof msg.field === 'string' && typeof msg.value === 'string') this.editCameraField(doc, index, msg.field, msg.value);
+    }
+
+    private validIndex(index: number | undefined, length: number): index is number {
+        return Number.isInteger(index) && (index as number) >= 0 && (index as number) < length;
+    }
+
+    private addCamera(doc: W3cDocument): void {
+        const camera: W3cCamera = { targetX: 0, targetY: 0, zOffset: 0, rotation: 270, angleOfAttack: 304, distance: 1650, roll: 0, fieldOfView: 70, farZ: 5000, unknown: 0, name: 'New Camera' };
+        const index = doc.file.cameras.length;
+        this.pushEdit(doc, 'Add camera', { apply: () => { doc.file.cameras.push(camera); }, revert: () => { doc.file.cameras.splice(index, 1); } });
+    }
+
+    private removeCamera(doc: W3cDocument, index: number): void {
+        const removed = { ...doc.file.cameras[index] };
+        this.pushEdit(doc, 'Remove camera', { apply: () => { doc.file.cameras.splice(index, 1); }, revert: () => { doc.file.cameras.splice(index, 0, removed); } });
+    }
+
+    private editCameraField(doc: W3cDocument, index: number, field: string, rawValue: string): void {
+        const before = { ...doc.file.cameras[index] };
+        const after = { ...before };
+        if (field === 'name') after.name = rawValue;
+        else if (W3C_NUMERIC_FIELDS.has(field as keyof W3cCamera)) {
+            const value = Number(rawValue);
+            if (!Number.isFinite(value)) return;
+            after[field as keyof W3cCamera] = value as never;
+        } else return;
+        if (JSON.stringify(before) === JSON.stringify(after)) return;
+        this.pushEdit(doc, `Edit camera ${field}`, { apply: () => { doc.file.cameras[index] = { ...after }; }, revert: () => { doc.file.cameras[index] = { ...before }; } });
+    }
+
+    private pushEdit(doc: W3cDocument, label: string, edit: W3cEdit): void {
+        const beforeRevision = doc.currentRevision;
+        const afterRevision = doc.nextRevision++;
+        edit.apply(); doc.currentRevision = afterRevision; this.postState(doc);
+        this._onDidChange.fire({ document: doc, label, undo: () => { edit.revert(); doc.currentRevision = beforeRevision; this.postState(doc); }, redo: () => { edit.apply(); doc.currentRevision = afterRevision; this.postState(doc); } });
+    }
+
+    private postState(doc: W3cDocument): void {
+        void doc.webview?.postMessage({ type: 'editorStateChanged', listHtml: renderW3cList(doc.file), count: doc.file.cameras.length, isDirty: doc.currentRevision !== doc.savedRevision });
+    }
+
+    async saveCustomDocument(doc: W3cDocument): Promise<void> {
+        await this.write(doc, doc.uri);
+        doc.savedRevision = doc.currentRevision;
+        this.postState(doc);
+    }
+
+    async saveCustomDocumentAs(doc: W3cDocument, target: vscode.Uri): Promise<void> { await vscode.workspace.fs.writeFile(target, serializeValidatedW3c(doc.file, target.path)); }
+
+    private async write(doc: W3cDocument, uri: vscode.Uri): Promise<void> {
+        const bytes = serializeValidatedW3c(doc.file, uri.path);
+        try { if (Buffer.from(await vscode.workspace.fs.readFile(uri)).equals(bytes)) return; } catch { /* missing → write */ }
+        await vscode.workspace.fs.writeFile(uri, bytes);
+    }
+
+    async revertCustomDocument(doc: W3cDocument): Promise<void> { doc.file = parseW3cFile(Buffer.from(await vscode.workspace.fs.readFile(doc.uri))); doc.currentRevision = 0; doc.savedRevision = 0; doc.nextRevision = 1; if (doc.webview) this.render(doc, doc.webview); }
+
+    async backupCustomDocument(doc: W3cDocument, context: vscode.CustomDocumentBackupContext): Promise<vscode.CustomDocumentBackup> {
+        await vscode.workspace.fs.writeFile(context.destination, serializeValidatedW3c(doc.file, doc.uri.path));
+        return { id: context.destination.toString(), delete: () => vscode.workspace.fs.delete(context.destination).then(() => undefined, () => undefined) };
+    }
+}
+
+function serializeW3c(file: W3cFile): Buffer {
+    const w = new BinWriter(8 + file.cameras.length * 48 + file.tail.length);
+    w.writeI32(file.version); w.writeI32(file.cameras.length);
+    for (const camera of file.cameras) {
+        w.writeF32(camera.targetX); w.writeF32(camera.targetY); w.writeF32(camera.zOffset); w.writeF32(camera.rotation);
+        w.writeF32(camera.angleOfAttack); w.writeF32(camera.distance); w.writeF32(camera.roll); w.writeF32(camera.fieldOfView);
+        w.writeF32(camera.farZ); w.writeF32(camera.unknown); w.writeString(camera.name);
+    }
+    w.writeBytes(file.tail); return w.toBuffer();
+}
+
+function serializeValidatedW3c(file: W3cFile, name: string): Buffer {
+    if (file.error) throw new Error(`Refusing to save ${name}: the source file did not parse (${file.error}).`);
+    const reparsed = parseW3cFile(serializeW3c(file));
+    if (reparsed.error || reparsed.version !== file.version || !reparsed.tail.equals(file.tail) || reparsed.cameras.length !== file.cameras.length || reparsed.cameras.some((camera, i) => JSON.stringify(camera) !== JSON.stringify(file.cameras[i]))) throw new Error(`Refusing to save ${name}: round-trip verification failed.`);
+    return serializeW3c(file);
+}
+
+const W3R_NUMERIC_FIELDS = new Set<keyof W3rRegion>(['minX', 'maxX', 'minY', 'maxY', 'index']);
+
+function w3rRegionInput(region: W3rRegion, index: number, field: keyof W3rRegion, className = ''): string {
+    const value = field === 'name' || field === 'weatherId' || field === 'sound' ? region[field] as string : fmt(region[field] as number);
+    const type = field === 'name' || field === 'weatherId' || field === 'sound' ? 'text' : 'number';
+    const step = type === 'number' && field !== 'index' ? ' step="any"' : '';
+    const maxLength = field === 'weatherId' ? ' maxlength="4"' : '';
+    return `<input class="list-input ${className}" type="${type}"${step}${maxLength} data-index="${index}" data-field="${field}" value="${escapeHtml(value)}" aria-label="Region ${index + 1} ${field}">`;
+}
+
+function renderW3rList(file: W3rFile): string {
+    if (!file.regions.length) return '<p class="empty">No regions. Add one to create a region record.</p>';
+    const rows = file.regions.map((region, index) => `<tr data-row="${index}">
+  <td class="num row-number">${index + 1}</td>
+  <td>${w3rRegionInput(region, index, 'name')}</td>
+  <td>${w3rRegionInput(region, index, 'minX', 'mono')}</td><td>${w3rRegionInput(region, index, 'maxX', 'mono')}</td>
+  <td>${w3rRegionInput(region, index, 'minY', 'mono')}</td><td>${w3rRegionInput(region, index, 'maxY', 'mono')}</td>
+  <td>${w3rRegionInput(region, index, 'index', 'mono')}</td>
+  <td>${w3rRegionInput(region, index, 'weatherId', 'mono')}</td><td>${w3rRegionInput(region, index, 'sound')}</td>
+  <td class="color-cell"><input class="list-color" type="color" data-index="${index}" data-field="color" value="${colorHex(region.red, region.green, region.blue)}" aria-label="Region ${index + 1} color"></td>
+  <td><button type="button" class="remove-button" data-remove="${index}">Remove</button></td>
+</tr>`).join('');
+    return `<div class="table-wrap"><table class="edit-table w3r-table"><thead><tr><th>#</th><th>Name</th><th>Min X</th><th>Max X</th><th>Min Y</th><th>Max Y</th><th>Index</th><th>Weather</th><th>Sound</th><th>Color</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function renderW3rEditor(doc: W3rDocument, fileName: string): string {
+    return renderEditableListPage(fileName, `WC3 regions — v${doc.file.version}`, doc.file.regions.length, 'regions', renderW3rList(doc.file), 'Bounds are map coordinates. Weather uses a four-character WC3 environment id.', doc.currentRevision !== doc.savedRevision, `${EDITABLE_LIST_CSS}
+.w3r-table { min-width: 1250px; }
+.w3r-table th:nth-child(1) { width: 42px; }.w3r-table th:nth-child(2) { width: 180px; }.w3r-table th:nth-child(n+3):nth-child(-n+8) { width: 100px; }.w3r-table th:nth-child(9) { width: 170px; }.w3r-table th:nth-child(10) { width: 70px; }
+`);
+}
+
+class W3rDocument implements vscode.CustomDocument {
+    currentRevision = 0; savedRevision = 0; nextRevision = 1; webview?: vscode.Webview;
+    constructor(readonly uri: vscode.Uri, public file: W3rFile) {}
+    dispose(): void {}
+}
+
+interface W3rEdit { apply: () => void; revert: () => void; }
+
+class W3rEditorProvider implements vscode.CustomEditorProvider<W3rDocument> {
+    private readonly _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<W3rDocument>>();
+    readonly onDidChangeCustomDocument = this._onDidChange.event;
+    async openCustomDocument(uri: vscode.Uri, openContext: vscode.CustomDocumentOpenContext): Promise<W3rDocument> {
+        const source = openContext.backupId ? vscode.Uri.parse(openContext.backupId) : uri;
+        const doc = new W3rDocument(uri, parseW3rFile(Buffer.from(await vscode.workspace.fs.readFile(source))));
+        if (openContext.backupId) { doc.currentRevision = 1; doc.nextRevision = 2; }
+        return doc;
+    }
+    async resolveCustomEditor(doc: W3rDocument, panel: vscode.WebviewPanel): Promise<void> {
+        panel.webview.options = { enableScripts: true, localResourceRoots: [] }; doc.webview = panel.webview;
+        panel.onDidDispose(() => { if (doc.webview === panel.webview) doc.webview = undefined; });
+        panel.webview.onDidReceiveMessage((message) => this.handleMessage(message, doc)); this.render(doc, panel.webview);
+    }
+    private render(doc: W3rDocument, webview: vscode.Webview): void {
+        const fileName = doc.uri.path.slice(doc.uri.path.lastIndexOf('/') + 1);
+        webview.html = doc.file.error ? buildPage({ csp: "default-src 'none'; style-src 'unsafe-inline';", title: escapeHtml(fileName), body: `<div class="wv-state"><span>Failed to parse W3R regions</span><span class="err">${escapeHtml(doc.file.error)}</span></div>` }) : renderW3rEditor(doc, fileName);
+    }
+    private handleMessage(message: unknown, doc: W3rDocument): void {
+        if (!message || typeof message !== 'object' || doc.file.error) return;
+        const msg = message as { type?: string; index?: number; field?: string; value?: string };
+        if (msg.type === 'add') return this.addRegion(doc);
+        if (!this.validIndex(msg.index, doc.file.regions.length)) return;
+        const index = msg.index as number;
+        if (msg.type === 'remove') return this.removeRegion(doc, index);
+        if (msg.type === 'edit' && typeof msg.field === 'string' && typeof msg.value === 'string') this.editRegionField(doc, index, msg.field, msg.value);
+    }
+    private validIndex(index: number | undefined, length: number): index is number { return Number.isInteger(index) && (index as number) >= 0 && (index as number) < length; }
+    private addRegion(doc: W3rDocument): void {
+        const region: W3rRegion = { name: 'New Region', minX: 0, maxX: 128, minY: 0, maxY: 128, index: 0, weatherId: 'NULL', sound: '', blue: 0, green: 0, red: 0, endToken: 0 };
+        const index = doc.file.regions.length; this.pushEdit(doc, 'Add region', { apply: () => { doc.file.regions.push(region); }, revert: () => { doc.file.regions.splice(index, 1); } });
+    }
+    private removeRegion(doc: W3rDocument, index: number): void { const removed = { ...doc.file.regions[index] }; this.pushEdit(doc, 'Remove region', { apply: () => { doc.file.regions.splice(index, 1); }, revert: () => { doc.file.regions.splice(index, 0, removed); } }); }
+    private editRegionField(doc: W3rDocument, index: number, field: string, rawValue: string): void {
+        const before = { ...doc.file.regions[index] }; const after = { ...before };
+        if (field === 'name' || field === 'weatherId' || field === 'sound') after[field] = rawValue;
+        else if (field === 'color') { const color = parseMmpColor(rawValue); if (!color) return; Object.assign(after, color); }
+        else if (W3R_NUMERIC_FIELDS.has(field as keyof W3rRegion)) { const value = Number(rawValue); if (!Number.isFinite(value) || (field === 'index' && !Number.isInteger(value))) return; after[field as keyof W3rRegion] = value as never; }
+        else return;
+        if (JSON.stringify(before) === JSON.stringify(after)) return;
+        this.pushEdit(doc, `Edit region ${field}`, { apply: () => { doc.file.regions[index] = { ...after }; }, revert: () => { doc.file.regions[index] = { ...before }; } });
+    }
+    private pushEdit(doc: W3rDocument, label: string, edit: W3rEdit): void { const before = doc.currentRevision; const after = doc.nextRevision++; edit.apply(); doc.currentRevision = after; this.postState(doc); this._onDidChange.fire({ document: doc, label, undo: () => { edit.revert(); doc.currentRevision = before; this.postState(doc); }, redo: () => { edit.apply(); doc.currentRevision = after; this.postState(doc); } }); }
+    private postState(doc: W3rDocument): void { void doc.webview?.postMessage({ type: 'editorStateChanged', listHtml: renderW3rList(doc.file), count: doc.file.regions.length, isDirty: doc.currentRevision !== doc.savedRevision }); }
+    async saveCustomDocument(doc: W3rDocument): Promise<void> { await this.write(doc, doc.uri); doc.savedRevision = doc.currentRevision; this.postState(doc); }
+    async saveCustomDocumentAs(doc: W3rDocument, target: vscode.Uri): Promise<void> { await vscode.workspace.fs.writeFile(target, serializeValidatedW3r(doc.file, target.path)); }
+    private async write(doc: W3rDocument, uri: vscode.Uri): Promise<void> { const bytes = serializeValidatedW3r(doc.file, uri.path); try { if (Buffer.from(await vscode.workspace.fs.readFile(uri)).equals(bytes)) return; } catch { /* missing → write */ } await vscode.workspace.fs.writeFile(uri, bytes); }
+    async revertCustomDocument(doc: W3rDocument): Promise<void> { doc.file = parseW3rFile(Buffer.from(await vscode.workspace.fs.readFile(doc.uri))); doc.currentRevision = 0; doc.savedRevision = 0; doc.nextRevision = 1; if (doc.webview) this.render(doc, doc.webview); }
+    async backupCustomDocument(doc: W3rDocument, context: vscode.CustomDocumentBackupContext): Promise<vscode.CustomDocumentBackup> { await vscode.workspace.fs.writeFile(context.destination, serializeValidatedW3r(doc.file, doc.uri.path)); return { id: context.destination.toString(), delete: () => vscode.workspace.fs.delete(context.destination).then(() => undefined, () => undefined) }; }
+}
+
+function serializeW3r(file: W3rFile): Buffer {
+    const w = new BinWriter(8 + file.regions.length * 64 + file.tail.length); w.writeI32(file.version); w.writeI32(file.regions.length);
+    for (const region of file.regions) { w.writeF32(region.minX); w.writeF32(region.maxX); w.writeF32(region.minY); w.writeF32(region.maxY); w.writeString(region.name); w.writeI32(region.index); w.writeId(region.weatherId); w.writeString(region.sound); w.writeU8(region.blue); w.writeU8(region.green); w.writeU8(region.red); w.writeU8(region.endToken); }
+    w.writeBytes(file.tail); return w.toBuffer();
+}
+
+function serializeValidatedW3r(file: W3rFile, name: string): Buffer {
+    if (file.error) throw new Error(`Refusing to save ${name}: the source file did not parse (${file.error}).`);
+    const bytes = serializeW3r(file); const reparsed = parseW3rFile(bytes);
+    if (reparsed.error || reparsed.version !== file.version || !reparsed.tail.equals(file.tail) || reparsed.regions.length !== file.regions.length || reparsed.regions.some((region, i) => JSON.stringify(region) !== JSON.stringify(file.regions[i]))) throw new Error(`Refusing to save ${name}: round-trip verification failed.`);
+    return bytes;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Editable .mmp minimap-icon editor
+//
+// MMP is deliberately small: a version, a count, and fixed-size icon records.
+// Keep the opaque tail, if a non-standard file has one, so editing the list does
+// not discard bytes we do not understand.
+// ════════════════════════════════════════════════════════════════════════════
+
+class MmpDocument implements vscode.CustomDocument {
+    currentRevision = 0;
+    savedRevision = 0;
+    nextRevision = 1;
+    webview?: vscode.Webview;
+
+    constructor(readonly uri: vscode.Uri, public file: MmpFile) {}
+
+    dispose(): void {}
+}
+
+interface MmpEdit { apply: () => void; revert: () => void; }
+
+function mmpIconInput(icon: MmpIcon, index: number): string {
+    const defaultColor = !mmpColorCss(icon);
+    const typeOptions = mmpIconTypeOptions(icon.type).map(([value, label]) =>
+        `<option value="${value}"${value === icon.type ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('');
+    const colorDisabled = defaultColor ? ' disabled' : '';
+    return `<tr data-row="${index}">
+  <td class="num row-number">${index + 1}</td>
+  <td><select class="mmp-input mmp-select" data-index="${index}" data-field="type" aria-label="Icon ${index + 1} type">${typeOptions}</select></td>
+  <td><input class="mmp-input mono" type="number" data-index="${index}" data-field="x" value="${icon.x}" aria-label="Icon ${index + 1} X coordinate"></td>
+  <td><input class="mmp-input mono" type="number" data-index="${index}" data-field="y" value="${icon.y}" aria-label="Icon ${index + 1} Y coordinate"></td>
+  <td class="type-label">${escapeHtml(mmpIconLabel(icon.type))}</td>
+  <td class="color-cell">
+    <input class="color-input" type="color" data-index="${index}" data-field="color" value="${mmpColorHex(icon)}" aria-label="Icon ${index + 1} custom color"${colorDisabled}>
+    <input class="alpha-input mmp-input mono" type="number" min="0" max="255" data-index="${index}" data-field="alpha" value="${icon.alpha}" aria-label="Icon ${index + 1} alpha"${colorDisabled}>
+    <label class="default-color"><input type="checkbox" data-index="${index}" data-default-color title="No custom tint; use the normal game icon color"${defaultColor ? ' checked' : ''}> game default</label>
+  </td>
+  <td><button type="button" class="remove-button" data-remove="${index}" title="Remove this minimap icon">Remove</button></td>
+</tr>`;
+}
+
+function renderMmpList(file: MmpFile): string {
+    if (!file.icons.length) return '<p class="empty">No minimap icons. Add one if you want a custom lobby marker.</p>';
+    const rows = file.icons.map((icon, index) => mmpIconInput(icon, index)).join('');
+    return `<div class="table-wrap"><table class="mmp-table"><thead><tr><th>#</th><th>Type</th><th>X</th><th>Y</th><th>Meaning</th><th>Color · alpha</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function renderMmpEditor(doc: MmpDocument, fileName: string): string {
+    const f = doc.file;
+    const dirty = doc.currentRevision !== doc.savedRevision;
+    const body = `
+${renderHeader(fileName, `WC3 minimap icons — v${f.version}`, true)}
+<div class="dialog mmp-editor">
+${errorBanner(f.error)}
+<div class="metric-strip">
+  <span class="metric"><strong id="mmpCount">${f.icons.length}</strong> icon${f.icons.length === 1 ? '' : 's'}</span>
+  <span class="metric">Records are shown in minimap/lobby order</span>
+</div>
+<div class="mmp-actions">
+  <button type="button" class="action-button" data-add>Add minimap icon</button>
+  <span class="hint">Remove entries to hide them from the lobby minimap preview. Coordinates are Warcraft III map coordinates.</span>
+</div>
+<div id="mmpList">${renderMmpList(f)}</div>
+<p class="hint mmp-footer-hint">Game default color = <code>FF FF FF FF</code>: no custom tint, so Warcraft III uses the icon’s normal color. Uncheck it to choose a custom tint.</p>
+</div>
+<script>
+(function () {
+  const api = acquireVsCodeApi();
+  document.addEventListener('change', function (e) {
+    const t = e.target;
+    if (t.matches('[data-default-color]')) {
+      const row = t.closest('[data-row]');
+      row.querySelectorAll('[data-field="color"], [data-field="alpha"]').forEach(function (control) { control.disabled = t.checked; });
+      api.postMessage({ type: 'defaultColor', index: Number(t.getAttribute('data-index')), on: t.checked });
+      return;
+    }
+    if (t.matches('[data-field]')) {
+      api.postMessage({ type: 'edit', index: Number(t.getAttribute('data-index')), field: t.getAttribute('data-field'), value: t.value });
+    }
+  });
+  document.addEventListener('click', function (e) {
+    const remove = e.target.closest('[data-remove]');
+    if (remove) api.postMessage({ type: 'remove', index: Number(remove.getAttribute('data-remove')) });
+    else if (e.target.closest('[data-add]')) api.postMessage({ type: 'add' });
+  });
+  window.addEventListener('message', function (event) {
+    const msg = event.data || {};
+    if (msg.type === 'mmpStateChanged') {
+      const list = document.getElementById('mmpList');
+      const count = document.getElementById('mmpCount');
+      if (list) list.innerHTML = msg.listHtml;
+      if (count) count.textContent = String(msg.count);
+      const badge = document.getElementById('dirtyBadge');
+      if (badge) badge.hidden = !msg.isDirty;
+    } else if (msg.type === 'dirtyStateChanged') {
+      const badge = document.getElementById('dirtyBadge');
+      if (badge) badge.hidden = !msg.isDirty;
+    }
+  });
+})();
+</script>`;
+    // Keep the value explicit here for the initial render; subsequent renders use the same
+    // revision comparison and therefore keep the badge correct after undo/redo as well.
+    return page(fileName, body.replace('id="dirtyBadge" hidden', `id="dirtyBadge"${dirty ? '' : ' hidden'}`), MMP_EDITOR_CSS, true);
+}
+
+const MMP_EDITOR_CSS = `
+.mmp-editor { max-width: 1180px; }
+.mmp-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin: 3px 0 10px; }
+.action-button, .remove-button {
+  color: var(--btn-fg, var(--fg)); background: var(--btn-bg, var(--input-bg));
+  border: 1px solid var(--border); border-radius: 3px; padding: 4px 9px;
+  font: inherit; font-size: 12px; cursor: pointer;
+}
+.action-button:hover, .remove-button:hover { background: var(--btn-hover, var(--hover)); }
+.remove-button { color: var(--vscode-errorForeground, #f14c4c); background: transparent; padding: 3px 7px; }
+.mmp-table { min-width: 820px; table-layout: fixed; }
+.mmp-table th:nth-child(1) { width: 42px; }
+.mmp-table th:nth-child(2), .mmp-table th:nth-child(3), .mmp-table th:nth-child(4) { width: 100px; }
+.mmp-table th:nth-child(5) { width: 180px; }
+.mmp-table th:nth-child(6) { width: 280px; }
+.mmp-table th:nth-child(7) { width: 84px; }
+.mmp-input { width: 100%; min-width: 0; height: 26px; padding: 3px 6px; color: var(--input-fg); background: var(--input-bg); border: 1px solid var(--input-border, var(--border)); border-radius: 2px; font: inherit; }
+.mmp-select { cursor: pointer; }
+.mmp-input:disabled, .color-input:disabled { opacity: 0.55; cursor: default; }
+.mmp-input:focus, .color-input:focus { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px; }
+.mmp-input.mono { font-family: var(--mono); }
+.color-cell { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.color-input { width: 34px; height: 26px; padding: 1px; border: 1px solid var(--input-border, var(--border)); background: var(--input-bg); border-radius: 2px; }
+.alpha-input { width: 68px; }
+.default-color { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+.default-color input { margin: 0; accent-color: var(--vscode-checkbox-selectBackground, var(--vscode-button-background)); }
+.type-label { color: var(--muted); overflow-wrap: anywhere; }
+.row-number { vertical-align: middle; }
+.mmp-footer-hint { margin-top: 10px; }
+.dirty-badge[hidden] { display: none; }
+`;
+
+class MmpEditorProvider implements vscode.CustomEditorProvider<MmpDocument> {
+    private readonly _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<MmpDocument>>();
+    readonly onDidChangeCustomDocument = this._onDidChange.event;
+
+    async openCustomDocument(uri: vscode.Uri, openContext: vscode.CustomDocumentOpenContext): Promise<MmpDocument> {
+        const source = openContext.backupId ? vscode.Uri.parse(openContext.backupId) : uri;
+        const doc = new MmpDocument(uri, parseMmpFile(Buffer.from(await vscode.workspace.fs.readFile(source))));
+        if (openContext.backupId) {
+            doc.currentRevision = 1;
+            doc.nextRevision = 2;
+        }
+        return doc;
+    }
+
+    async resolveCustomEditor(doc: MmpDocument, panel: vscode.WebviewPanel): Promise<void> {
+        panel.webview.options = { enableScripts: true, localResourceRoots: [] };
+        doc.webview = panel.webview;
+        panel.onDidDispose(() => { if (doc.webview === panel.webview) doc.webview = undefined; });
+        panel.webview.onDidReceiveMessage((message) => this.handleMessage(message, doc));
+        this.render(doc, panel.webview);
+    }
+
+    private render(doc: MmpDocument, webview: vscode.Webview): void {
+        const fileName = doc.uri.path.slice(doc.uri.path.lastIndexOf('/') + 1);
+        webview.html = doc.file.error
+            ? buildPage({
+                csp: "default-src 'none'; style-src 'unsafe-inline';",
+                title: escapeHtml(fileName),
+                body: `<div class="wv-state"><span>Failed to parse MMP</span><span class="err">${escapeHtml(doc.file.error)}</span></div>`,
+            })
+            : renderMmpEditor(doc, fileName);
+    }
+
+    private handleMessage(message: unknown, doc: MmpDocument): void {
+        if (!message || typeof message !== 'object' || doc.file.error) return;
+        const msg = message as { type?: string; index?: number; field?: string; value?: string; on?: boolean };
+        if (msg.type === 'add') return this.addIcon(doc);
+        if (!this.isValidIconIndex(msg.index, doc)) return;
+        const index = msg.index as number;
+        if (msg.type === 'remove') return this.removeIcon(doc, index);
+        if (msg.type === 'defaultColor' && typeof msg.on === 'boolean') return this.editDefaultColor(doc, index, msg.on);
+        if (msg.type === 'edit' && typeof msg.field === 'string' && typeof msg.value === 'string') {
+            this.editField(doc, index, msg.field, msg.value);
+        }
+    }
+
+    private isValidIconIndex(index: number | undefined, doc: MmpDocument): index is number {
+        return Number.isInteger(index) && (index as number) >= 0 && (index as number) < doc.file.icons.length;
+    }
+
+    private addIcon(doc: MmpDocument): void {
+        const index = doc.file.icons.length;
+        const icon: MmpIcon = { type: 0, x: 0, y: 0, blue: 0xff, green: 0xff, red: 0xff, alpha: 0xff };
+        this.pushEdit(doc, 'Add minimap icon', {
+            apply: () => { doc.file.icons.push(icon); },
+            revert: () => { doc.file.icons.splice(index, 1); },
+        });
+    }
+
+    private removeIcon(doc: MmpDocument, index: number): void {
+        const removed = { ...doc.file.icons[index] };
+        this.pushEdit(doc, 'Remove minimap icon', {
+            apply: () => { doc.file.icons.splice(index, 1); },
+            revert: () => { doc.file.icons.splice(index, 0, removed); },
+        });
+    }
+
+    private editDefaultColor(doc: MmpDocument, index: number, on: boolean): void {
+        this.editIcon(doc, index, 'Set default icon color', (icon) => {
+            icon.blue = on ? 0xff : icon.blue;
+            icon.green = on ? 0xff : icon.green;
+            icon.red = on ? 0xff : icon.red;
+            icon.alpha = on ? 0xff : icon.alpha;
+        });
+    }
+
+    private editField(doc: MmpDocument, index: number, field: string, rawValue: string): void {
+        if (field === 'color') {
+            const color = parseMmpColor(rawValue);
+            if (color) this.editIcon(doc, index, 'Edit icon color', (icon) => Object.assign(icon, color));
+            return;
+        }
+        if (!['type', 'x', 'y', 'alpha'].includes(field)) return;
+        const value = Number(rawValue);
+        const valid = Number.isInteger(value) && (field !== 'alpha' || value >= 0 && value <= 0xff);
+        if (valid) this.editIcon(doc, index, `Edit icon ${field}`, (icon) => { icon[field as 'type' | 'x' | 'y' | 'alpha'] = value; });
+    }
+
+    private editIcon(doc: MmpDocument, index: number, label: string, mutate: (icon: MmpIcon) => void): void {
+        const before = { ...doc.file.icons[index] };
+        const after = { ...before };
+        mutate(after);
+        if (JSON.stringify(before) === JSON.stringify(after)) return;
+        this.pushEdit(doc, label, {
+            apply: () => { doc.file.icons[index] = { ...after }; },
+            revert: () => { doc.file.icons[index] = { ...before }; },
+        });
+    }
+
+    private pushEdit(doc: MmpDocument, label: string, edit: MmpEdit): void {
+        const beforeRevision = doc.currentRevision;
+        const afterRevision = doc.nextRevision++;
+        edit.apply();
+        doc.currentRevision = afterRevision;
+        this.postState(doc);
+        this._onDidChange.fire({
+            document: doc,
+            label,
+            undo: () => { edit.revert(); doc.currentRevision = beforeRevision; this.postState(doc); },
+            redo: () => { edit.apply(); doc.currentRevision = afterRevision; this.postState(doc); },
+        });
+    }
+
+    private postState(doc: MmpDocument): void {
+        void doc.webview?.postMessage({
+            type: 'mmpStateChanged',
+            listHtml: renderMmpList(doc.file),
+            count: doc.file.icons.length,
+            isDirty: doc.currentRevision !== doc.savedRevision,
+        });
+    }
+
+    async saveCustomDocument(doc: MmpDocument): Promise<void> {
+        try {
+            await this.writeMmp(doc, doc.uri);
+            doc.savedRevision = doc.currentRevision;
+            this.postState(doc);
+        } catch (err) {
+            void showErrorWithLogs(`Minimap icons not saved: ${err instanceof Error ? err.message : String(err)}`, err);
+            throw err;
+        }
+    }
+
+    async saveCustomDocumentAs(doc: MmpDocument, target: vscode.Uri): Promise<void> {
+        await vscode.workspace.fs.writeFile(target, serializeValidatedMmp(doc.file, target.path));
+    }
+
+    private async writeMmp(doc: MmpDocument, uri: vscode.Uri): Promise<void> {
+        const bytes = serializeValidatedMmp(doc.file, uri.path);
+        try {
+            const existing = Buffer.from(await vscode.workspace.fs.readFile(uri));
+            if (existing.equals(bytes)) return;
+        } catch { /* missing → write */ }
+        await vscode.workspace.fs.writeFile(uri, bytes);
+    }
+
+    async revertCustomDocument(doc: MmpDocument): Promise<void> {
+        doc.file = parseMmpFile(Buffer.from(await vscode.workspace.fs.readFile(doc.uri)));
+        doc.currentRevision = 0;
+        doc.savedRevision = 0;
+        doc.nextRevision = 1;
+        if (doc.webview) this.render(doc, doc.webview);
+    }
+
+    async backupCustomDocument(doc: MmpDocument, context: vscode.CustomDocumentBackupContext): Promise<vscode.CustomDocumentBackup> {
+        await vscode.workspace.fs.writeFile(context.destination, serializeValidatedMmp(doc.file, doc.uri.path));
+        return {
+            id: context.destination.toString(),
+            delete: () => vscode.workspace.fs.delete(context.destination).then(() => undefined, () => undefined),
+        };
+    }
+}
+
+function parseMmpColor(value: string): Pick<MmpIcon, 'red' | 'green' | 'blue'> | undefined {
+    if (!/^#[0-9a-f]{6}$/i.test(value)) return undefined;
+    return {
+        red: parseInt(value.slice(1, 3), 16),
+        green: parseInt(value.slice(3, 5), 16),
+        blue: parseInt(value.slice(5, 7), 16),
+    };
+}
+
+function serializeMmp(file: MmpFile): Buffer {
+    const w = new BinWriter(8 + file.icons.length * 16 + file.tail.length);
+    w.writeI32(file.version);
+    w.writeI32(file.icons.length);
+    for (const icon of file.icons) {
+        w.writeI32(icon.type);
+        w.writeI32(icon.x);
+        w.writeI32(icon.y);
+        w.writeU8(icon.blue);
+        w.writeU8(icon.green);
+        w.writeU8(icon.red);
+        w.writeU8(icon.alpha);
+    }
+    w.writeBytes(file.tail);
+    return w.toBuffer();
+}
+
+function serializeValidatedMmp(file: MmpFile, name: string): Buffer {
+    if (file.error) throw new Error(`Refusing to save ${name}: the source file did not parse (${file.error}).`);
+    const bytes = serializeMmp(file);
+    const reparsed = parseMmpFile(bytes);
+    if (reparsed.error || reparsed.version !== file.version || !reparsed.tail.equals(file.tail) || reparsed.icons.length !== file.icons.length ||
+        reparsed.icons.some((icon, index) => JSON.stringify(icon) !== JSON.stringify(file.icons[index]))) {
+        throw new Error(`Refusing to save ${name}: round-trip verification failed.`);
+    }
+    return bytes;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1509,10 +2255,25 @@ export function registerMapDataPreview(_context: vscode.ExtensionContext): vscod
         render: renderMapData,
         webviewOptions: { enableScripts: true },
     });
+    const mmpEditor = vscode.window.registerCustomEditorProvider(
+        'wurst.mmpEditor',
+        new MmpEditorProvider(),
+        { supportsMultipleEditorsPerDocument: false, webviewOptions: { retainContextWhenHidden: true } },
+    );
+    const w3cEditor = vscode.window.registerCustomEditorProvider(
+        'wurst.w3cEditor',
+        new W3cEditorProvider(),
+        { supportsMultipleEditorsPerDocument: false, webviewOptions: { retainContextWhenHidden: true } },
+    );
+    const w3rEditor = vscode.window.registerCustomEditorProvider(
+        'wurst.w3rEditor',
+        new W3rEditorProvider(),
+        { supportsMultipleEditorsPerDocument: false, webviewOptions: { retainContextWhenHidden: true } },
+    );
     const w3iEditor = vscode.window.registerCustomEditorProvider(
         'wurst.w3iEditor',
         new W3iEditorProvider(),
         { supportsMultipleEditorsPerDocument: false, webviewOptions: { retainContextWhenHidden: true } },
     );
-    return vscode.Disposable.from(readonly, w3iEditor);
+    return vscode.Disposable.from(readonly, mmpEditor, w3cEditor, w3rEditor, w3iEditor);
 }

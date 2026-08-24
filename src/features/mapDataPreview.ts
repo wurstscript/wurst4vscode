@@ -1382,8 +1382,18 @@ function serializeW3c(file: W3cFile): Buffer {
 function serializeValidatedW3c(file: W3cFile, name: string): Buffer {
     if (file.error) throw new Error(`Refusing to save ${name}: the source file did not parse (${file.error}).`);
     const reparsed = parseW3cFile(serializeW3c(file));
-    if (reparsed.error || reparsed.version !== file.version || !reparsed.tail.equals(file.tail) || reparsed.cameras.length !== file.cameras.length || reparsed.cameras.some((camera, i) => JSON.stringify(camera) !== JSON.stringify(file.cameras[i]))) throw new Error(`Refusing to save ${name}: round-trip verification failed.`);
+    const expectedCameras = file.cameras.map(normalizeW3cCamera);
+    if (reparsed.error || reparsed.version !== file.version || !reparsed.tail.equals(file.tail) || reparsed.cameras.length !== expectedCameras.length || reparsed.cameras.some((camera, i) => JSON.stringify(camera) !== JSON.stringify(expectedCameras[i]))) throw new Error(`Refusing to save ${name}: round-trip verification failed.`);
     return serializeW3c(file);
+}
+
+function normalizeW3cCamera(camera: W3cCamera): W3cCamera {
+    return {
+        ...camera,
+        targetX: Math.fround(camera.targetX), targetY: Math.fround(camera.targetY), zOffset: Math.fround(camera.zOffset),
+        rotation: Math.fround(camera.rotation), angleOfAttack: Math.fround(camera.angleOfAttack), distance: Math.fround(camera.distance),
+        roll: Math.fround(camera.roll), fieldOfView: Math.fround(camera.fieldOfView), farZ: Math.fround(camera.farZ), unknown: Math.fround(camera.unknown),
+    };
 }
 
 const W3R_NUMERIC_FIELDS = new Set<keyof W3rRegion>(['minX', 'maxX', 'minY', 'maxY', 'index']);
@@ -1498,8 +1508,13 @@ function serializeW3r(file: W3rFile): Buffer {
 function serializeValidatedW3r(file: W3rFile, name: string): Buffer {
     if (file.error) throw new Error(`Refusing to save ${name}: the source file did not parse (${file.error}).`);
     const bytes = serializeW3r(file); const reparsed = parseW3rFile(bytes);
-    if (reparsed.error || reparsed.version !== file.version || !reparsed.tail.equals(file.tail) || reparsed.regions.length !== file.regions.length || reparsed.regions.some((region, i) => JSON.stringify(region) !== JSON.stringify(file.regions[i]))) throw new Error(`Refusing to save ${name}: round-trip verification failed.`);
+    const expectedRegions = file.regions.map(normalizeW3rRegion);
+    if (reparsed.error || reparsed.version !== file.version || !reparsed.tail.equals(file.tail) || reparsed.regions.length !== expectedRegions.length || reparsed.regions.some((region, i) => JSON.stringify(region) !== JSON.stringify(expectedRegions[i]))) throw new Error(`Refusing to save ${name}: round-trip verification failed.`);
     return bytes;
+}
+
+function normalizeW3rRegion(region: W3rRegion): W3rRegion {
+    return { ...region, minX: Math.fround(region.minX), maxX: Math.fround(region.maxX), minY: Math.fround(region.minY), maxY: Math.fround(region.maxY) };
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2268,6 +2283,12 @@ export function registerMapDataPreview(_context: vscode.ExtensionContext): vscod
         render: renderMapData,
         webviewOptions: { enableScripts: true },
     });
+    const readonlyArchive = registerParsedPreviewer<MapDataFile>({
+        viewType: 'wurst.mapDataArchivePreview',
+        parse: parseMapData,
+        render: renderMapData,
+        webviewOptions: { enableScripts: true },
+    });
     const mmpEditor = vscode.window.registerCustomEditorProvider(
         'wurst.mmpEditor',
         new MmpEditorProvider(),
@@ -2288,5 +2309,5 @@ export function registerMapDataPreview(_context: vscode.ExtensionContext): vscod
         new W3iEditorProvider(),
         { supportsMultipleEditorsPerDocument: false, webviewOptions: { retainContextWhenHidden: true } },
     );
-    return vscode.Disposable.from(readonly, mmpEditor, w3cEditor, w3rEditor, w3iEditor);
+    return vscode.Disposable.from(readonly, readonlyArchive, mmpEditor, w3cEditor, w3rEditor, w3iEditor);
 }

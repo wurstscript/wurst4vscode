@@ -529,6 +529,31 @@
                 "priority": "default"
             },
             {
+                "viewType": "wurst.mapDataArchivePreview",
+                "displayName": "WC3 Map Data (read-only)",
+                "selector": [
+                    {
+                        "filenamePattern": "*.mmp"
+                    },
+                    {
+                        "filenamePattern": "*.MMP"
+                    },
+                    {
+                        "filenamePattern": "*.w3c"
+                    },
+                    {
+                        "filenamePattern": "*.W3C"
+                    },
+                    {
+                        "filenamePattern": "*.w3r"
+                    },
+                    {
+                        "filenamePattern": "*.W3R"
+                    }
+                ],
+                "priority": "option"
+            },
+            {
                 "viewType": "wurst.w3cEditor",
                 "displayName": "WC3 Cameras (editable)",
                 "selector": [

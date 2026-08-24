@@ -42,6 +42,17 @@ test('camera editor can add and remove camera records', async ({ openW3c }) => {
     expect(host.editLabels).toEqual(['Add camera', 'Remove camera']);
 });
 
+test('camera editor accepts fractional float32 values', async ({ openW3c }) => {
+    const { page, host } = await openW3c();
+
+    await page.fill('[data-row="0"] [data-field="targetX"]', '0.1');
+    await page.locator('[data-row="0"] [data-field="targetX"]').blur();
+    await host.save();
+
+    const reparsed = host.internals.parseW3cFile(host.readFile());
+    expect(reparsed.cameras[0].targetX).toBe(Math.fround(0.1));
+});
+
 test('region editor exposes bounds, environment, color, and round-trips edits', async ({ openW3r }) => {
     const { page, host, pageErrors } = await openW3r();
 
@@ -77,4 +88,15 @@ test('region editor can add and remove region records', async ({ openW3r }) => {
     await page.click('[data-row="2"] [data-remove]');
     await expect.poll(() => host.doc.file.regions.length).toBe(2);
     expect(host.editLabels).toEqual(['Add region', 'Remove region']);
+});
+
+test('region editor accepts fractional float32 bounds', async ({ openW3r }) => {
+    const { page, host } = await openW3r();
+
+    await page.fill('[data-row="0"] [data-field="minX"]', '12.345');
+    await page.locator('[data-row="0"] [data-field="minX"]').blur();
+    await host.save();
+
+    const reparsed = host.internals.parseW3rFile(host.readFile());
+    expect(reparsed.regions[0].minX).toBe(Math.fround(12.345));
 });

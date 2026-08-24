@@ -47,6 +47,7 @@ test('camera editor accepts fractional float32 values', async ({ openW3c }) => {
 
     await page.fill('[data-row="0"] [data-field="targetX"]', '0.1');
     await page.locator('[data-row="0"] [data-field="targetX"]').blur();
+    await expect(page.locator('[data-row="0"] [data-field="targetX"]')).toHaveValue(Math.fround(0.1).toString());
     await host.save();
 
     const reparsed = host.internals.parseW3cFile(host.readFile());
@@ -95,6 +96,7 @@ test('region editor accepts fractional float32 bounds', async ({ openW3r }) => {
 
     await page.fill('[data-row="0"] [data-field="minX"]', '12.345');
     await page.locator('[data-row="0"] [data-field="minX"]').blur();
+    await expect(page.locator('[data-row="0"] [data-field="minX"]')).toHaveValue(Math.fround(12.345).toString());
     await host.save();
 
     const reparsed = host.internals.parseW3rFile(host.readFile());

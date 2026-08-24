@@ -1135,6 +1135,10 @@ function fmt(value: number): string {
     return value.toFixed(3).replace(/\.?0+$/, '');
 }
 
+function fmtF32(value: number): string {
+    return Math.fround(value).toString();
+}
+
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
@@ -1227,7 +1231,7 @@ const W3C_NUMERIC_FIELDS = new Set<keyof W3cCamera>([
 ]);
 
 function w3cCameraInput(camera: W3cCamera, index: number, field: keyof W3cCamera, className = ''): string {
-    const value = field === 'name' ? camera.name : fmt(camera[field] as number);
+    const value = field === 'name' ? camera.name : fmtF32(camera[field] as number);
     const type = field === 'name' ? 'text' : 'number';
     const step = field === 'name' ? '' : ' step="any"';
     return `<input class="list-input ${className}" type="${type}"${step} data-index="${index}" data-field="${field}" value="${escapeHtml(value)}" aria-label="Camera ${index + 1} ${field}">`;
@@ -1399,7 +1403,7 @@ function normalizeW3cCamera(camera: W3cCamera): W3cCamera {
 const W3R_NUMERIC_FIELDS = new Set<keyof W3rRegion>(['minX', 'maxX', 'minY', 'maxY', 'index']);
 
 function w3rRegionInput(region: W3rRegion, index: number, field: keyof W3rRegion, className = ''): string {
-    const value = field === 'name' || field === 'weatherId' || field === 'sound' ? region[field] as string : fmt(region[field] as number);
+    const value = field === 'name' || field === 'weatherId' || field === 'sound' ? region[field] as string : fmtF32(region[field] as number);
     const type = field === 'name' || field === 'weatherId' || field === 'sound' ? 'text' : 'number';
     const step = type === 'number' && field !== 'index' ? ' step="any"' : '';
     const maxLength = field === 'weatherId' ? ' maxlength="4"' : '';

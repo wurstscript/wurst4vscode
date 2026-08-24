@@ -529,20 +529,14 @@
                 "priority": "default"
             },
             {
-                "viewType": "wurst.mapDataPreview",
-                "displayName": "WC3 Map Data",
+                "viewType": "wurst.mapDataArchivePreview",
+                "displayName": "WC3 Map Data (read-only)",
                 "selector": [
                     {
                         "filenamePattern": "*.mmp"
                     },
                     {
                         "filenamePattern": "*.MMP"
-                    },
-                    {
-                        "filenamePattern": "*.shd"
-                    },
-                    {
-                        "filenamePattern": "*.SHD"
                     },
                     {
                         "filenamePattern": "*.w3c"
@@ -555,6 +549,58 @@
                     },
                     {
                         "filenamePattern": "*.W3R"
+                    }
+                ],
+                "priority": "option"
+            },
+            {
+                "viewType": "wurst.w3cEditor",
+                "displayName": "WC3 Cameras (editable)",
+                "selector": [
+                    {
+                        "filenamePattern": "*.w3c"
+                    },
+                    {
+                        "filenamePattern": "*.W3C"
+                    }
+                ],
+                "priority": "default"
+            },
+            {
+                "viewType": "wurst.w3rEditor",
+                "displayName": "WC3 Regions (editable)",
+                "selector": [
+                    {
+                        "filenamePattern": "*.w3r"
+                    },
+                    {
+                        "filenamePattern": "*.W3R"
+                    }
+                ],
+                "priority": "default"
+            },
+            {
+                "viewType": "wurst.mmpEditor",
+                "displayName": "WC3 Minimap Icons (editable)",
+                "selector": [
+                    {
+                        "filenamePattern": "*.mmp"
+                    },
+                    {
+                        "filenamePattern": "*.MMP"
+                    }
+                ],
+                "priority": "default"
+            },
+            {
+                "viewType": "wurst.mapDataPreview",
+                "displayName": "WC3 Map Data",
+                "selector": [
+                    {
+                        "filenamePattern": "*.shd"
+                    },
+                    {
+                        "filenamePattern": "*.SHD"
                     },
                     {
                         "filenamePattern": "*.w3e"

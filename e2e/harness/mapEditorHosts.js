@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * Harnesses for the two editable map-data formats whose webview JS ships as an inline `<script>`
- * inside the host TypeScript: `.w3i` (W3iEditorProvider in mapDataPreview.ts) and `.wpm`
- * (WpmEditorProvider in wpmPreview.ts).
+ * Harnesses for the editable map-data formats whose webview JS ships as an inline `<script>`
+ * inside the host TypeScript: `.w3i`, `.mmp`, `.w3c`, `.w3r`, and `.wpm`.
  *
  * Until now that inline script was only checked by parsing it with `vm.Script` and grepping the
  * surrounding source for expected substrings — neither of which can tell whether the thing actually
@@ -19,6 +18,9 @@ const { makeMapFixtureDir } = require('./makeFixtures');
 
 const W3I_INTERNALS = `export const __e2e = { W3iEditorProvider, W3iDocument, renderW3iEditor };`;
 const WPM_INTERNALS = `export const __e2e = { WpmEditorProvider, WpmDocument, buildWpmHtml };`;
+const MMP_INTERNALS = `export const __e2e = { MmpEditorProvider, MmpDocument, renderMmpEditor, parseMmpFile };`;
+const W3C_INTERNALS = `export const __e2e = { W3cEditorProvider, W3cDocument, renderW3cEditor, parseW3cFile };`;
+const W3R_INTERNALS = `export const __e2e = { W3rEditorProvider, W3rDocument, renderW3rEditor, parseW3rFile };`;
 
 async function createEditorHost(opts, sourceFile, internals, fileName, providerFactory, isDirty) {
     const fixtureDir = opts.fixtureDir || makeMapFixtureDir();
@@ -79,4 +81,28 @@ function createWpmHost(opts) {
     );
 }
 
-module.exports = { createW3iHost, createWpmHost };
+function createMmpHost(opts) {
+    return createEditorHost(
+        opts, 'src/features/mapDataPreview.ts', MMP_INTERNALS, 'war3map.mmp',
+        (e2e) => new e2e.MmpEditorProvider(),
+        (doc) => doc.currentRevision !== doc.savedRevision,
+    );
+}
+
+function createW3cHost(opts) {
+    return createEditorHost(
+        opts, 'src/features/mapDataPreview.ts', W3C_INTERNALS, 'war3map.w3c',
+        (e2e) => new e2e.W3cEditorProvider(),
+        (doc) => doc.currentRevision !== doc.savedRevision,
+    );
+}
+
+function createW3rHost(opts) {
+    return createEditorHost(
+        opts, 'src/features/mapDataPreview.ts', W3R_INTERNALS, 'war3map.w3r',
+        (e2e) => new e2e.W3rEditorProvider(),
+        (doc) => doc.currentRevision !== doc.savedRevision,
+    );
+}
+
+module.exports = { createW3iHost, createWpmHost, createMmpHost, createW3cHost, createW3rHost };

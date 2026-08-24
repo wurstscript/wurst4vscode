@@ -1436,9 +1436,12 @@ class W3rEditorProvider implements vscode.CustomEditorProvider<W3rDocument> {
         return doc;
     }
     async resolveCustomEditor(doc: W3rDocument, panel: vscode.WebviewPanel): Promise<void> {
-        panel.webview.options = { enableScripts: true, localResourceRoots: [] }; doc.webview = panel.webview;
-        panel.onDidDispose(() => { if (doc.webview === panel.webview) doc.webview = undefined; });
-        panel.webview.onDidReceiveMessage((message) => this.handleMessage(message, doc)); this.render(doc, panel.webview);
+        const webview = panel.webview;
+        webview.options = { enableScripts: true, localResourceRoots: [] };
+        doc.webview = webview;
+        panel.onDidDispose(() => { if (doc.webview === webview) doc.webview = undefined; });
+        webview.onDidReceiveMessage((message) => this.handleMessage(message, doc));
+        this.render(doc, webview);
     }
     private render(doc: W3rDocument, webview: vscode.Webview): void {
         const fileName = doc.uri.path.slice(doc.uri.path.lastIndexOf('/') + 1);
@@ -1461,10 +1464,19 @@ class W3rEditorProvider implements vscode.CustomEditorProvider<W3rDocument> {
     private removeRegion(doc: W3rDocument, index: number): void { const removed = { ...doc.file.regions[index] }; this.pushEdit(doc, 'Remove region', { apply: () => { doc.file.regions.splice(index, 1); }, revert: () => { doc.file.regions.splice(index, 0, removed); } }); }
     private editRegionField(doc: W3rDocument, index: number, field: string, rawValue: string): void {
         const before = { ...doc.file.regions[index] }; const after = { ...before };
-        if (field === 'name' || field === 'weatherId' || field === 'sound') after[field] = rawValue;
-        else if (field === 'color') { const color = parseMmpColor(rawValue); if (!color) return; Object.assign(after, color); }
-        else if (W3R_NUMERIC_FIELDS.has(field as keyof W3rRegion)) { const value = Number(rawValue); if (!Number.isFinite(value) || (field === 'index' && !Number.isInteger(value))) return; after[field as keyof W3rRegion] = value as never; }
-        else return;
+        if (field === 'name' || field === 'weatherId' || field === 'sound') {
+            after[field] = rawValue;
+        } else if (field === 'color') {
+            const color = parseMmpColor(rawValue);
+            if (!color) return;
+            Object.assign(after, color);
+        } else if (W3R_NUMERIC_FIELDS.has(field as keyof W3rRegion)) {
+            const value = Number(rawValue);
+            if (!Number.isFinite(value) || (field === 'index' && !Number.isInteger(value))) return;
+            after[field as keyof W3rRegion] = value as never;
+        } else {
+            return;
+        }
         if (JSON.stringify(before) === JSON.stringify(after)) return;
         this.pushEdit(doc, `Edit region ${field}`, { apply: () => { doc.file.regions[index] = { ...after }; }, revert: () => { doc.file.regions[index] = { ...before }; } });
     }
@@ -1643,11 +1655,12 @@ class MmpEditorProvider implements vscode.CustomEditorProvider<MmpDocument> {
     }
 
     async resolveCustomEditor(doc: MmpDocument, panel: vscode.WebviewPanel): Promise<void> {
-        panel.webview.options = { enableScripts: true, localResourceRoots: [] };
-        doc.webview = panel.webview;
-        panel.onDidDispose(() => { if (doc.webview === panel.webview) doc.webview = undefined; });
-        panel.webview.onDidReceiveMessage((message) => this.handleMessage(message, doc));
-        this.render(doc, panel.webview);
+        const panelWebview = panel.webview;
+        panelWebview.options = { enableScripts: true, localResourceRoots: [] };
+        doc.webview = panelWebview;
+        panel.onDidDispose(() => { if (doc.webview === panelWebview) doc.webview = undefined; });
+        panelWebview.onDidReceiveMessage((message) => this.handleMessage(message, doc));
+        this.render(doc, panelWebview);
     }
 
     private render(doc: MmpDocument, webview: vscode.Webview): void {

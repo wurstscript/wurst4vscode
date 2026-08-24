@@ -93,6 +93,21 @@ STRING 2
 E2E map description spanning
 two lines.
 }
+
+STRING 3
+{
+Resolved Overview
+}
+
+STRING 4
+{
+Resolved Spawn
+}
+
+STRING 5
+{
+Resolved Region Sound
+}
 `;
 
 /** 16x16 pathing map with a recognisable block of blocked cells to assert paint/erase against. */
@@ -128,7 +143,7 @@ function buildW3c() {
         for (const value of values) w.writeF32(value);
         w.writeString(name);
     };
-    camera('Overview', [128, 256, 32, 90, 304, 1650, 0, 70, 5000, 0]);
+    camera('TRIGSTR_003', [128, 256, 32, 90, 304, 1650, 0, 70, 5000, 0]);
     camera('Boss Arena', [-512, 1024, 64, 180, 280, 2200, 3, 75, 6000, 1]);
     return w.toBuffer();
 }
@@ -141,7 +156,7 @@ function buildW3r() {
         w.writeString(name); w.writeI32(index); w.writeId(weather); w.writeString(sound);
         w.writeU8(blue); w.writeU8(green); w.writeU8(red); w.writeU8(endToken);
     };
-    region('Spawn Area', -128, 256, -64, 384, 3, 'NULL', 'Sound\\Environment\\GrasslandDay', 0x40, 0x80, 0xc0);
+    region('TRIGSTR_004', -128, 256, -64, 384, 3, 'NULL', 'TRIGSTR_005', 0x40, 0x80, 0xc0);
     region('Boss Room', 512, 1024, 768, 1280, 7, 'SNOW', '', 0x10, 0x20, 0x30, 1);
     return w.toBuffer();
 }

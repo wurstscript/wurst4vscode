@@ -1230,18 +1230,51 @@ const W3C_NUMERIC_FIELDS = new Set<keyof W3cCamera>([
     'targetX', 'targetY', 'zOffset', 'rotation', 'angleOfAttack', 'distance', 'roll', 'fieldOfView', 'farZ', 'unknown',
 ]);
 
-function w3cCameraInput(camera: W3cCamera, index: number, field: keyof W3cCamera, className = ''): string {
-    const value = field === 'name' ? camera.name : fmtF32(camera[field] as number);
-    const type = field === 'name' ? 'text' : 'number';
-    const step = field === 'name' ? '' : ' step="any"';
-    return `<input class="list-input ${className}" type="${type}"${step} data-index="${index}" data-field="${field}" value="${escapeHtml(value)}" aria-label="Camera ${index + 1} ${field}">`;
+function resolveEditableTriggerString(raw: string, triggerStrings: TriggerStringTable, wtsEdits: Map<number, string>): string {
+    const match = /^TRIGSTR_(\d+)$/i.exec(raw.trim());
+    if (!match) return raw;
+    const id = Number(match[1]);
+    if (wtsEdits.has(id)) return wtsEdits.get(id) as string;
+    const resolved = resolveTriggerString(raw, triggerStrings);
+    return resolved.missing ? raw : String(resolved.value ?? '');
 }
 
-function renderW3cList(file: W3cFile): string {
+function makeTriggerStringEdit(raw: string, triggerStrings: TriggerStringTable, wtsEdits: Map<number, string>, value: string): W3cEdit | undefined {
+    const match = /^TRIGSTR_(\d+)$/i.exec(raw.trim());
+    if (!match) return undefined;
+    const id = Number(match[1]);
+    const current = wtsEdits.get(id) ?? String(resolveTriggerString(raw, triggerStrings).value ?? '');
+    if (current === value) return undefined;
+    const had = wtsEdits.has(id);
+    const previous = wtsEdits.get(id);
+    return {
+        apply: () => { wtsEdits.set(id, value); },
+        revert: () => { if (had) wtsEdits.set(id, previous as string); else wtsEdits.delete(id); },
+    };
+}
+
+async function writeTriggerStringEdits(edits: Map<number, string>, wtsUri: vscode.Uri | undefined, wtsExists: boolean): Promise<void> {
+    if (!edits.size || !wtsUri) return;
+    let original = '';
+    if (wtsExists) {
+        try { original = Buffer.from(await vscode.workspace.fs.readFile(wtsUri)).toString('utf8'); } catch { /* create fresh */ }
+    }
+    await vscode.workspace.fs.writeFile(wtsUri, Buffer.from(applyWtsEdits(original, edits), 'utf8'));
+}
+
+function w3cCameraInput(camera: W3cCamera, index: number, field: keyof W3cCamera, className = '', triggerStrings: TriggerStringTable = new Map(), wtsEdits: Map<number, string> = new Map()): string {
+    const value = field === 'name' ? resolveEditableTriggerString(camera.name, triggerStrings, wtsEdits) : fmtF32(camera[field] as number);
+    const type = field === 'name' ? 'text' : 'number';
+    const step = field === 'name' ? '' : ' step="any"';
+    const source = field === 'name' && /^TRIGSTR_\d+$/i.test(camera.name.trim()) ? ` title="Source: ${escapeHtml(camera.name)}"` : '';
+    return `<input class="list-input ${className}" type="${type}"${step}${source} data-index="${index}" data-field="${field}" value="${escapeHtml(value)}" aria-label="Camera ${index + 1} ${field}">`;
+}
+
+function renderW3cList(file: W3cFile, triggerStrings: TriggerStringTable = new Map(), wtsEdits: Map<number, string> = new Map()): string {
     if (!file.cameras.length) return '<p class="empty">No cameras. Add one to create a camera record.</p>';
     const rows = file.cameras.map((camera, index) => `<tr data-row="${index}">
   <td class="num row-number">${index + 1}</td>
-  <td>${w3cCameraInput(camera, index, 'name')}</td>
+  <td>${w3cCameraInput(camera, index, 'name', '', triggerStrings, wtsEdits)}</td>
   <td>${w3cCameraInput(camera, index, 'targetX', 'mono')}</td>
   <td>${w3cCameraInput(camera, index, 'targetY', 'mono')}</td>
   <td>${w3cCameraInput(camera, index, 'zOffset', 'mono')}</td>
@@ -1258,7 +1291,7 @@ function renderW3cList(file: W3cFile): string {
 }
 
 function renderW3cEditor(doc: W3cDocument, fileName: string): string {
-    return renderEditableListPage(fileName, `WC3 cameras — v${doc.file.version}`, doc.file.cameras.length, 'cameras', renderW3cList(doc.file), 'Camera values are stored as floating-point Warcraft III camera parameters.', doc.currentRevision !== doc.savedRevision, `${EDITABLE_LIST_CSS}
+    return renderEditableListPage(fileName, `WC3 cameras — v${doc.file.version}`, doc.file.cameras.length, 'cameras', renderW3cList(doc.file, doc.wtsTable, doc.wtsEdits), 'Camera values are stored as floating-point Warcraft III camera parameters.', doc.currentRevision !== doc.savedRevision, `${EDITABLE_LIST_CSS}
 .w3c-table { min-width: 1500px; }
 .w3c-table th:nth-child(1) { width: 42px; }.w3c-table th:nth-child(2) { width: 180px; }.w3c-table th:nth-child(n+3):nth-child(-n+12) { width: 110px; }
 `);
@@ -1269,7 +1302,8 @@ class W3cDocument implements vscode.CustomDocument {
     savedRevision = 0;
     nextRevision = 1;
     webview?: vscode.Webview;
-    constructor(readonly uri: vscode.Uri, public file: W3cFile) {}
+    wtsEdits = new Map<number, string>();
+    constructor(readonly uri: vscode.Uri, public file: W3cFile, public wtsTable: TriggerStringTable, public wtsUri: vscode.Uri | undefined, public wtsExists: boolean) {}
     dispose(): void {}
 }
 
@@ -1281,7 +1315,8 @@ class W3cEditorProvider implements vscode.CustomEditorProvider<W3cDocument> {
 
     async openCustomDocument(uri: vscode.Uri, openContext: vscode.CustomDocumentOpenContext): Promise<W3cDocument> {
         const source = openContext.backupId ? vscode.Uri.parse(openContext.backupId) : uri;
-        const doc = new W3cDocument(uri, parseW3cFile(Buffer.from(await vscode.workspace.fs.readFile(source))));
+        const { uri: wtsUri, exists } = findWtsUri(uri);
+        const doc = new W3cDocument(uri, parseW3cFile(Buffer.from(await vscode.workspace.fs.readFile(source))), loadTriggerStringsForUri(uri), wtsUri, exists);
         if (openContext.backupId) { doc.currentRevision = 1; doc.nextRevision = 2; }
         return doc;
     }
@@ -1329,10 +1364,14 @@ class W3cEditorProvider implements vscode.CustomEditorProvider<W3cDocument> {
     private editCameraField(doc: W3cDocument, index: number, field: string, rawValue: string): void {
         const before = { ...doc.file.cameras[index] };
         const after = { ...before };
-        if (field === 'name') after.name = rawValue;
+        if (field === 'name') {
+            const triggerEdit = makeTriggerStringEdit(before.name, doc.wtsTable, doc.wtsEdits, rawValue);
+            if (triggerEdit) return this.pushEdit(doc, `Edit camera ${field}`, triggerEdit);
+            after.name = rawValue;
+        }
         else if (W3C_NUMERIC_FIELDS.has(field as keyof W3cCamera)) {
             const value = Number(rawValue);
-            if (!Number.isFinite(value)) return;
+            if (!Number.isFinite(value) || !Number.isFinite(Math.fround(value))) return;
             after[field as keyof W3cCamera] = value as never;
         } else return;
         if (JSON.stringify(before) === JSON.stringify(after)) return;
@@ -1347,16 +1386,21 @@ class W3cEditorProvider implements vscode.CustomEditorProvider<W3cDocument> {
     }
 
     private postState(doc: W3cDocument): void {
-        void doc.webview?.postMessage({ type: 'editorStateChanged', listHtml: renderW3cList(doc.file), count: doc.file.cameras.length, isDirty: doc.currentRevision !== doc.savedRevision });
+        void doc.webview?.postMessage({ type: 'editorStateChanged', listHtml: renderW3cList(doc.file, doc.wtsTable, doc.wtsEdits), count: doc.file.cameras.length, isDirty: doc.currentRevision !== doc.savedRevision });
     }
 
     async saveCustomDocument(doc: W3cDocument): Promise<void> {
         await this.write(doc, doc.uri);
+        await writeTriggerStringEdits(doc.wtsEdits, doc.wtsUri, doc.wtsExists);
         doc.savedRevision = doc.currentRevision;
         this.postState(doc);
     }
 
-    async saveCustomDocumentAs(doc: W3cDocument, target: vscode.Uri): Promise<void> { await vscode.workspace.fs.writeFile(target, serializeValidatedW3c(doc.file, target.path)); }
+    async saveCustomDocumentAs(doc: W3cDocument, target: vscode.Uri): Promise<void> {
+        await vscode.workspace.fs.writeFile(target, serializeValidatedW3c(doc.file, target.path));
+        const { uri, exists } = findWtsUri(target);
+        await writeTriggerStringEdits(doc.wtsEdits, uri, exists);
+    }
 
     private async write(doc: W3cDocument, uri: vscode.Uri): Promise<void> {
         const bytes = serializeValidatedW3c(doc.file, uri.path);
@@ -1364,7 +1408,12 @@ class W3cEditorProvider implements vscode.CustomEditorProvider<W3cDocument> {
         await vscode.workspace.fs.writeFile(uri, bytes);
     }
 
-    async revertCustomDocument(doc: W3cDocument): Promise<void> { doc.file = parseW3cFile(Buffer.from(await vscode.workspace.fs.readFile(doc.uri))); doc.currentRevision = 0; doc.savedRevision = 0; doc.nextRevision = 1; if (doc.webview) this.render(doc, doc.webview); }
+    async revertCustomDocument(doc: W3cDocument): Promise<void> {
+        doc.file = parseW3cFile(Buffer.from(await vscode.workspace.fs.readFile(doc.uri)));
+        doc.wtsTable = loadTriggerStringsForUri(doc.uri); doc.wtsEdits.clear();
+        const { uri, exists } = findWtsUri(doc.uri); doc.wtsUri = uri; doc.wtsExists = exists;
+        doc.currentRevision = 0; doc.savedRevision = 0; doc.nextRevision = 1; if (doc.webview) this.render(doc, doc.webview);
+    }
 
     async backupCustomDocument(doc: W3cDocument, context: vscode.CustomDocumentBackupContext): Promise<vscode.CustomDocumentBackup> {
         await vscode.workspace.fs.writeFile(context.destination, serializeValidatedW3c(doc.file, doc.uri.path));
@@ -1402,23 +1451,29 @@ function normalizeW3cCamera(camera: W3cCamera): W3cCamera {
 
 const W3R_NUMERIC_FIELDS = new Set<keyof W3rRegion>(['minX', 'maxX', 'minY', 'maxY', 'index']);
 
-function w3rRegionInput(region: W3rRegion, index: number, field: keyof W3rRegion, className = ''): string {
-    const value = field === 'name' || field === 'weatherId' || field === 'sound' ? region[field] as string : fmtF32(region[field] as number);
+function w3rRegionInput(region: W3rRegion, index: number, field: keyof W3rRegion, className = '', triggerStrings: TriggerStringTable = new Map(), wtsEdits: Map<number, string> = new Map()): string {
+    const isString = field === 'name' || field === 'weatherId' || field === 'sound';
+    let value: string;
+    if (isString && field !== 'weatherId') value = resolveEditableTriggerString(region[field] as string, triggerStrings, wtsEdits);
+    else if (isString) value = region[field] as string;
+    else value = fmtF32(region[field] as number);
     const type = field === 'name' || field === 'weatherId' || field === 'sound' ? 'text' : 'number';
     const step = type === 'number' && field !== 'index' ? ' step="any"' : '';
     const maxLength = field === 'weatherId' ? ' maxlength="4"' : '';
-    return `<input class="list-input ${className}" type="${type}"${step}${maxLength} data-index="${index}" data-field="${field}" value="${escapeHtml(value)}" aria-label="Region ${index + 1} ${field}">`;
+    const raw = field === 'name' || field === 'sound' ? region[field] as string : '';
+    const source = raw && /^TRIGSTR_\d+$/i.test(raw.trim()) ? ` title="Source: ${escapeHtml(raw)}"` : '';
+    return `<input class="list-input ${className}" type="${type}"${step}${maxLength}${source} data-index="${index}" data-field="${field}" value="${escapeHtml(value)}" aria-label="Region ${index + 1} ${field}">`;
 }
 
-function renderW3rList(file: W3rFile): string {
+function renderW3rList(file: W3rFile, triggerStrings: TriggerStringTable = new Map(), wtsEdits: Map<number, string> = new Map()): string {
     if (!file.regions.length) return '<p class="empty">No regions. Add one to create a region record.</p>';
     const rows = file.regions.map((region, index) => `<tr data-row="${index}">
   <td class="num row-number">${index + 1}</td>
-  <td>${w3rRegionInput(region, index, 'name')}</td>
+  <td>${w3rRegionInput(region, index, 'name', '', triggerStrings, wtsEdits)}</td>
   <td>${w3rRegionInput(region, index, 'minX', 'mono')}</td><td>${w3rRegionInput(region, index, 'maxX', 'mono')}</td>
   <td>${w3rRegionInput(region, index, 'minY', 'mono')}</td><td>${w3rRegionInput(region, index, 'maxY', 'mono')}</td>
   <td>${w3rRegionInput(region, index, 'index', 'mono')}</td>
-  <td>${w3rRegionInput(region, index, 'weatherId', 'mono')}</td><td>${w3rRegionInput(region, index, 'sound')}</td>
+  <td>${w3rRegionInput(region, index, 'weatherId', 'mono', triggerStrings, wtsEdits)}</td><td>${w3rRegionInput(region, index, 'sound', '', triggerStrings, wtsEdits)}</td>
   <td class="color-cell"><input class="list-color" type="color" data-index="${index}" data-field="color" value="${colorHex(region.red, region.green, region.blue)}" aria-label="Region ${index + 1} color"></td>
   <td><button type="button" class="remove-button" data-remove="${index}">Remove</button></td>
 </tr>`).join('');
@@ -1426,7 +1481,7 @@ function renderW3rList(file: W3rFile): string {
 }
 
 function renderW3rEditor(doc: W3rDocument, fileName: string): string {
-    return renderEditableListPage(fileName, `WC3 regions — v${doc.file.version}`, doc.file.regions.length, 'regions', renderW3rList(doc.file), 'Bounds are map coordinates. Weather uses a four-character WC3 environment id.', doc.currentRevision !== doc.savedRevision, `${EDITABLE_LIST_CSS}
+    return renderEditableListPage(fileName, `WC3 regions — v${doc.file.version}`, doc.file.regions.length, 'regions', renderW3rList(doc.file, doc.wtsTable, doc.wtsEdits), 'Bounds are map coordinates. Weather uses a four-character WC3 environment id.', doc.currentRevision !== doc.savedRevision, `${EDITABLE_LIST_CSS}
 .w3r-table { min-width: 1250px; }
 .w3r-table th:nth-child(1) { width: 42px; }.w3r-table th:nth-child(2) { width: 180px; }.w3r-table th:nth-child(n+3):nth-child(-n+8) { width: 100px; }.w3r-table th:nth-child(9) { width: 170px; }.w3r-table th:nth-child(10) { width: 70px; }
 `);
@@ -1434,7 +1489,8 @@ function renderW3rEditor(doc: W3rDocument, fileName: string): string {
 
 class W3rDocument implements vscode.CustomDocument {
     currentRevision = 0; savedRevision = 0; nextRevision = 1; webview?: vscode.Webview;
-    constructor(readonly uri: vscode.Uri, public file: W3rFile) {}
+    wtsEdits = new Map<number, string>();
+    constructor(readonly uri: vscode.Uri, public file: W3rFile, public wtsTable: TriggerStringTable, public wtsUri: vscode.Uri | undefined, public wtsExists: boolean) {}
     dispose(): void {}
 }
 
@@ -1445,7 +1501,8 @@ class W3rEditorProvider implements vscode.CustomEditorProvider<W3rDocument> {
     readonly onDidChangeCustomDocument = this._onDidChange.event;
     async openCustomDocument(uri: vscode.Uri, openContext: vscode.CustomDocumentOpenContext): Promise<W3rDocument> {
         const source = openContext.backupId ? vscode.Uri.parse(openContext.backupId) : uri;
-        const doc = new W3rDocument(uri, parseW3rFile(Buffer.from(await vscode.workspace.fs.readFile(source))));
+        const { uri: wtsUri, exists } = findWtsUri(uri);
+        const doc = new W3rDocument(uri, parseW3rFile(Buffer.from(await vscode.workspace.fs.readFile(source))), loadTriggerStringsForUri(uri), wtsUri, exists);
         if (openContext.backupId) { doc.currentRevision = 1; doc.nextRevision = 2; }
         return doc;
     }
@@ -1478,7 +1535,11 @@ class W3rEditorProvider implements vscode.CustomEditorProvider<W3rDocument> {
     private removeRegion(doc: W3rDocument, index: number): void { const removed = { ...doc.file.regions[index] }; this.pushEdit(doc, 'Remove region', { apply: () => { doc.file.regions.splice(index, 1); }, revert: () => { doc.file.regions.splice(index, 0, removed); } }); }
     private editRegionField(doc: W3rDocument, index: number, field: string, rawValue: string): void {
         const before = { ...doc.file.regions[index] }; const after = { ...before };
-        if (field === 'name' || field === 'weatherId' || field === 'sound') {
+        if (field === 'name' || field === 'sound') {
+            const triggerEdit = makeTriggerStringEdit(before[field], doc.wtsTable, doc.wtsEdits, rawValue);
+            if (triggerEdit) return this.pushEdit(doc, `Edit region ${field}`, triggerEdit);
+            after[field] = rawValue;
+        } else if (field === 'weatherId') {
             after[field] = rawValue;
         } else if (field === 'color') {
             const color = parseMmpColor(rawValue);
@@ -1486,7 +1547,7 @@ class W3rEditorProvider implements vscode.CustomEditorProvider<W3rDocument> {
             Object.assign(after, color);
         } else if (W3R_NUMERIC_FIELDS.has(field as keyof W3rRegion)) {
             const value = Number(rawValue);
-            if (!Number.isFinite(value) || (field === 'index' && !Number.isInteger(value))) return;
+            if (!Number.isFinite(value) || !Number.isFinite(Math.fround(value)) || (field === 'index' && !Number.isInteger(value))) return;
             after[field as keyof W3rRegion] = value as never;
         } else {
             return;
@@ -1495,11 +1556,11 @@ class W3rEditorProvider implements vscode.CustomEditorProvider<W3rDocument> {
         this.pushEdit(doc, `Edit region ${field}`, { apply: () => { doc.file.regions[index] = { ...after }; }, revert: () => { doc.file.regions[index] = { ...before }; } });
     }
     private pushEdit(doc: W3rDocument, label: string, edit: W3rEdit): void { const before = doc.currentRevision; const after = doc.nextRevision++; edit.apply(); doc.currentRevision = after; this.postState(doc); this._onDidChange.fire({ document: doc, label, undo: () => { edit.revert(); doc.currentRevision = before; this.postState(doc); }, redo: () => { edit.apply(); doc.currentRevision = after; this.postState(doc); } }); }
-    private postState(doc: W3rDocument): void { void doc.webview?.postMessage({ type: 'editorStateChanged', listHtml: renderW3rList(doc.file), count: doc.file.regions.length, isDirty: doc.currentRevision !== doc.savedRevision }); }
-    async saveCustomDocument(doc: W3rDocument): Promise<void> { await this.write(doc, doc.uri); doc.savedRevision = doc.currentRevision; this.postState(doc); }
-    async saveCustomDocumentAs(doc: W3rDocument, target: vscode.Uri): Promise<void> { await vscode.workspace.fs.writeFile(target, serializeValidatedW3r(doc.file, target.path)); }
+    private postState(doc: W3rDocument): void { void doc.webview?.postMessage({ type: 'editorStateChanged', listHtml: renderW3rList(doc.file, doc.wtsTable, doc.wtsEdits), count: doc.file.regions.length, isDirty: doc.currentRevision !== doc.savedRevision }); }
+    async saveCustomDocument(doc: W3rDocument): Promise<void> { await this.write(doc, doc.uri); await writeTriggerStringEdits(doc.wtsEdits, doc.wtsUri, doc.wtsExists); doc.savedRevision = doc.currentRevision; this.postState(doc); }
+    async saveCustomDocumentAs(doc: W3rDocument, target: vscode.Uri): Promise<void> { await vscode.workspace.fs.writeFile(target, serializeValidatedW3r(doc.file, target.path)); const { uri, exists } = findWtsUri(target); await writeTriggerStringEdits(doc.wtsEdits, uri, exists); }
     private async write(doc: W3rDocument, uri: vscode.Uri): Promise<void> { const bytes = serializeValidatedW3r(doc.file, uri.path); try { if (Buffer.from(await vscode.workspace.fs.readFile(uri)).equals(bytes)) return; } catch { /* missing → write */ } await vscode.workspace.fs.writeFile(uri, bytes); }
-    async revertCustomDocument(doc: W3rDocument): Promise<void> { doc.file = parseW3rFile(Buffer.from(await vscode.workspace.fs.readFile(doc.uri))); doc.currentRevision = 0; doc.savedRevision = 0; doc.nextRevision = 1; if (doc.webview) this.render(doc, doc.webview); }
+    async revertCustomDocument(doc: W3rDocument): Promise<void> { doc.file = parseW3rFile(Buffer.from(await vscode.workspace.fs.readFile(doc.uri))); doc.wtsTable = loadTriggerStringsForUri(doc.uri); doc.wtsEdits.clear(); const { uri, exists } = findWtsUri(doc.uri); doc.wtsUri = uri; doc.wtsExists = exists; doc.currentRevision = 0; doc.savedRevision = 0; doc.nextRevision = 1; if (doc.webview) this.render(doc, doc.webview); }
     async backupCustomDocument(doc: W3rDocument, context: vscode.CustomDocumentBackupContext): Promise<vscode.CustomDocumentBackup> { await vscode.workspace.fs.writeFile(context.destination, serializeValidatedW3r(doc.file, doc.uri.path)); return { id: context.destination.toString(), delete: () => vscode.workspace.fs.delete(context.destination).then(() => undefined, () => undefined) }; }
 }
 

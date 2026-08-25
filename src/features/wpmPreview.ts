@@ -329,12 +329,21 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
         : (zoom * 100).toFixed(0) + '%';
     }
 
+    let dirtyMinX = W, dirtyMinY = H, dirtyMaxX = -1, dirtyMaxY = -1;
     function refreshCell(index) {
       writePixel(index);
+      const x = index % W, y = Math.floor(index / W);
+      dirtyMinX = Math.min(dirtyMinX, x);
+      dirtyMaxX = Math.max(dirtyMaxX, x);
+      dirtyMinY = Math.min(dirtyMinY, y);
+      dirtyMaxY = Math.max(dirtyMaxY, y);
     }
 
     function flushImage() {
-      offCtx.putImageData(img, 0, 0);
+      if (dirtyMaxX < dirtyMinX || dirtyMaxY < dirtyMinY) return;
+      offCtx.putImageData(img, 0, 0, dirtyMinX, H - 1 - dirtyMaxY,
+        dirtyMaxX - dirtyMinX + 1, dirtyMaxY - dirtyMinY + 1);
+      dirtyMinX = W; dirtyMinY = H; dirtyMaxX = -1; dirtyMaxY = -1;
     }
 
     let rafId = null;
@@ -478,7 +487,7 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
         const index = stack.pop();
         const x = index % W, y = Math.floor(index / W);
         data[index] = replacement;
-        writePixel(index);
+        refreshCell(index);
         changed[index] = 1;
         if (x > 0) enqueue(index - 1);
         if (x + 1 < W) enqueue(index + 1);
@@ -624,7 +633,7 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
       changes.forEach((change) => {
         if (Number.isInteger(change.index) && change.index >= 0 && change.index < data.length) {
           data[change.index] = change.value & 0xff;
-          writePixel(change.index);
+          refreshCell(change.index);
         }
       });
       flushImage();
@@ -637,7 +646,7 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
             run.start < 0 || run.length < 1 || run.start + run.length > data.length) return;
         for (let index = run.start; index < run.start + run.length; index++) {
           data[index] = run.value & 0xff;
-          writePixel(index);
+          refreshCell(index);
         }
       });
       offCtx.putImageData(img, 0, 0);

@@ -331,9 +331,10 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
 
     function refreshCell(index) {
       writePixel(index);
-      const dataY = Math.floor(index / W);
-      const dispY = H - 1 - dataY;
-      offCtx.putImageData(img, 0, 0, index % W, dispY, 1, 1);
+    }
+
+    function flushImage() {
+      offCtx.putImageData(img, 0, 0);
     }
 
     let rafId = null;
@@ -430,12 +431,12 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
       }
     }
 
-    function paintCell(x, y, next, refresh = true) {
+    function paintCell(x, y, next) {
       if (x < 0 || x >= W || y < 0 || y >= H) return;
       const index = y * W + x;
       if (!gestureChanges.has(index)) gestureChanges.set(index, data[index]);
       data[index] = next;
-      if (refresh) refreshCell(index);
+      refreshCell(index);
     }
 
     function paintBrush(x, y) {
@@ -455,6 +456,7 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
 
     function paintLine(fromX, fromY, toX, toY) {
       lineCells(fromX, fromY, toX, toY, paintBrush);
+      flushImage();
       scheduleDraw();
     }
 
@@ -483,7 +485,7 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
         if (y > 0) enqueue(index - W);
         if (y + 1 < H) enqueue(index + W);
       }
-      offCtx.putImageData(img, 0, 0);
+      flushImage();
       scheduleDraw();
       const runs = [];
       for (let index = 0; index < changed.length;) {
@@ -521,7 +523,7 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
         } else if (tool === 'fill') {
           gestureRuns = fillFrom(cell.index); finishEdit();
         } else {
-          paintBrush(cell.x, cell.y); scheduleDraw();
+          paintBrush(cell.x, cell.y); flushImage(); scheduleDraw();
         }
         return;
       }
@@ -552,6 +554,7 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
     const endDrag = () => {
       if (editing && tool === 'line' && lineStart && lineCurrent) {
         lineCells(lineStart.x, lineStart.y, lineCurrent.x, lineCurrent.y, paintBrush);
+        flushImage();
         lineStart = null; lineCurrent = null;
         scheduleDraw();
       }
@@ -624,7 +627,7 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
           writePixel(change.index);
         }
       });
-      offCtx.putImageData(img, 0, 0);
+      flushImage();
       scheduleDraw();
     }
 

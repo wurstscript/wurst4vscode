@@ -376,6 +376,7 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
     // ── Pan and cell editing ───────────────────────────────────────────────────
     let dragging = false, editing = false, dragSX = 0, dragSY = 0, dragCamX = 0, dragCamY = 0;
     let gestureChanges = new Map(), lastEditX = -1, lastEditY = -1;
+    let gestureRuns = null;
     let lineStart = null, lineCurrent = null;
 
     function eventCell(e) {
@@ -460,8 +461,9 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
     function fillFrom(startIndex) {
       const replacement = tool === 'erase' ? 0 : brushValue();
       const source = data[startIndex];
-      if (source === replacement) return;
+      if (source === replacement) return [];
       const visited = new Uint8Array(data.length);
+      const changed = new Uint8Array(data.length);
       const stack = [startIndex];
       visited[startIndex] = 1;
       const enqueue = (index) => {
@@ -473,7 +475,9 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
       while (stack.length) {
         const index = stack.pop();
         const x = index % W, y = Math.floor(index / W);
-        paintCell(x, y, replacement, false);
+        data[index] = replacement;
+        writePixel(index);
+        changed[index] = 1;
         if (x > 0) enqueue(index - 1);
         if (x + 1 < W) enqueue(index + 1);
         if (y > 0) enqueue(index - W);
@@ -481,18 +485,12 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
       }
       offCtx.putImageData(img, 0, 0);
       scheduleDraw();
-    }
-
-    function compactRuns(changes) {
-      const sorted = changes.slice().sort((a, b) => a.index - b.index);
       const runs = [];
-      for (const change of sorted) {
-        const previous = runs[runs.length - 1];
-        if (previous && previous.start + previous.length === change.index && previous.value === change.value) {
-          previous.length++;
-        } else {
-          runs.push({ start: change.index, length: 1, value: change.value });
-        }
+      for (let index = 0; index < changed.length;) {
+        if (!changed[index]) { index++; continue; }
+        const start = index;
+        while (index < changed.length && changed[index]) index++;
+        runs.push({ start, length: index - start, value: replacement });
       }
       return runs;
     }
@@ -500,29 +498,28 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
     function finishEdit() {
       if (!editing) return;
       editing = false;
+      const runs = gestureRuns;
       const changes = [];
       gestureChanges.forEach((before, index) => {
         const value = data[index];
         if (value !== before) changes.push({ index, value });
       });
       gestureChanges = new Map();
-      if (changes.length) {
-        api.postMessage(tool === 'fill'
-          ? { type: 'editRuns', runs: compactRuns(changes) }
-          : { type: 'editCells', changes });
-      }
+      gestureRuns = null;
+      if (runs) api.postMessage({ type: 'editRuns', runs });
+      else if (changes.length) api.postMessage({ type: 'editCells', changes });
     }
 
     viewport.addEventListener('pointerdown', (e) => {
       const cell = eventCell(e);
       if (e.button === 0 && e.altKey && cell) { pickBrush(data[cell.index]); return; }
       if (tool !== 'pan' && e.button === 0 && cell) {
-        editing = true; gestureChanges = new Map(); lastEditX = cell.x; lastEditY = cell.y;
+        editing = true; gestureChanges = new Map(); gestureRuns = null; lastEditX = cell.x; lastEditY = cell.y;
         viewport.setPointerCapture(e.pointerId);
         if (tool === 'line') {
           lineStart = cell; lineCurrent = cell; scheduleDraw();
         } else if (tool === 'fill') {
-          fillFrom(cell.index); finishEdit();
+          gestureRuns = fillFrom(cell.index); finishEdit();
         } else {
           paintBrush(cell.x, cell.y); scheduleDraw();
         }
@@ -632,13 +629,16 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
     }
 
     function applyRuns(runs) {
-      const changes = [];
       runs.forEach((run) => {
         if (!Number.isInteger(run.start) || !Number.isInteger(run.length) || !Number.isInteger(run.value) ||
             run.start < 0 || run.length < 1 || run.start + run.length > data.length) return;
-        for (let index = run.start; index < run.start + run.length; index++) changes.push({ index, value: run.value });
+        for (let index = run.start; index < run.start + run.length; index++) {
+          data[index] = run.value & 0xff;
+          writePixel(index);
+        }
       });
-      applyChanges(changes);
+      offCtx.putImageData(img, 0, 0);
+      scheduleDraw();
     }
 
     window.addEventListener('message', (event) => {
@@ -657,6 +657,7 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
     if (!Number.isFinite(savedState.zoom)) fitToView();
     setTool(tool);
     updateBrushValue();
+    updateBrushSize();
     draw();
   </script>
 </body>
@@ -676,16 +677,15 @@ class WpmDocument implements vscode.CustomDocument {
     dispose(): void {}
 }
 
-interface WpmCellChange {
-    index: number;
-    before: number;
-    after: number;
-}
-
-interface WpmCellRun {
+interface WpmRequestedRun {
     start: number;
     length: number;
     value: number;
+}
+
+interface WpmRunChange extends WpmRequestedRun {
+    before: number;
+    after: number;
 }
 
 interface WpmEditMessage {
@@ -694,9 +694,9 @@ interface WpmEditMessage {
     runs?: Array<{ start?: number; length?: number; value?: number }>;
 }
 
-function compactWpmRuns(changes: Array<{ index: number; value: number }>): WpmCellRun[] {
+function compactWpmRuns(changes: Array<{ index: number; value: number }>): WpmRequestedRun[] {
     const sorted = changes.slice().sort((a, b) => a.index - b.index);
-    const runs: WpmCellRun[] = [];
+    const runs: WpmRequestedRun[] = [];
     for (const change of sorted) {
         const previous = runs[runs.length - 1];
         if (previous && previous.start + previous.length === change.index && previous.value === change.value) {
@@ -720,29 +720,53 @@ function collectWpmCellRequests(changes: Array<{ index?: number; value?: number 
     return requested;
 }
 
-function collectWpmRunRequests(runs: Array<{ start?: number; length?: number; value?: number }>, dataLength: number): Map<number, number> {
-    const requested = new Map<number, number>();
+function collectWpmRunRequests(runs: Array<{ start?: number; length?: number; value?: number }>, dataLength: number): WpmRequestedRun[] {
+    const requested: WpmRequestedRun[] = [];
     for (const run of runs) {
         const valid = Number.isInteger(run.start) && Number.isInteger(run.length) && Number.isInteger(run.value) &&
             (run.start as number) >= 0 && (run.length as number) >= 1 &&
             (run.start as number) + (run.length as number) <= dataLength &&
             (run.value as number) >= 0 && (run.value as number) <= 0xff;
-        if (!valid) continue;
-        for (let index = run.start as number; index < (run.start as number) + (run.length as number); index++) {
-            requested.set(index, run.value as number);
-        }
+        if (valid) requested.push({ start: run.start as number, length: run.length as number, value: run.value as number });
     }
-    return requested;
+    return requested.sort((a, b) => a.start - b.start);
 }
 
-function collectWpmRequests(message: WpmEditMessage, dataLength: number): Map<number, number> {
+function collectWpmRequests(message: WpmEditMessage, dataLength: number): WpmRequestedRun[] {
     if (message.type === 'editCells' && Array.isArray(message.changes)) {
-        return collectWpmCellRequests(message.changes, dataLength);
+        const requested = collectWpmCellRequests(message.changes, dataLength);
+        return compactWpmRuns(Array.from(requested, ([index, value]) => ({ index, value })));
     }
     if (message.type === 'editRuns' && Array.isArray(message.runs)) {
         return collectWpmRunRequests(message.runs, dataLength);
     }
-    return new Map();
+    return [];
+}
+
+function buildWpmRunChanges(data: Buffer, requested: WpmRequestedRun[]): WpmRunChange[] {
+    const changes: WpmRunChange[] = [];
+    for (const run of requested) {
+        let start = run.start;
+        let before = data[start];
+        let length = 1;
+        for (let offset = 1; offset < run.length; offset++) {
+            const nextBefore = data[run.start + offset];
+            if (nextBefore === before) {
+                length++;
+                continue;
+            }
+            if (before !== run.value) changes.push({ start, length, value: run.value, before, after: run.value });
+            start = run.start + offset;
+            before = nextBefore;
+            length = 1;
+        }
+        if (before !== run.value) changes.push({ start, length, value: run.value, before, after: run.value });
+    }
+    return changes;
+}
+
+function wpmRunCellCount(changes: WpmRunChange[]): number {
+    return changes.reduce((total, change) => total + change.length, 0);
 }
 
 class WpmEditorProvider implements vscode.CustomEditorProvider<WpmDocument> {
@@ -784,42 +808,40 @@ class WpmEditorProvider implements vscode.CustomEditorProvider<WpmDocument> {
     private handleMessage(message: unknown, doc: WpmDocument): void {
         if (!message || typeof message !== 'object') return;
         const requested = collectWpmRequests(message as WpmEditMessage, doc.file.data.length);
-        if (!requested.size) return;
-        const changes: WpmCellChange[] = [];
-        requested.forEach((after, index) => {
-            const before = doc.file.data[index];
-            if (after !== before) changes.push({ index, before, after });
-        });
+        if (!requested.length) return;
+        const changes = buildWpmRunChanges(doc.file.data, requested);
         if (!changes.length) return;
 
         const beforeRevision = doc.currentRevision;
         const afterRevision = doc.nextRevision++;
-        this.applyCells(doc, changes, false);
+        this.applyRuns(doc, changes, false);
         doc.currentRevision = afterRevision;
         this.postDirtyState(doc);
+        const changedCells = wpmRunCellCount(changes);
         this._onDidChange.fire({
             document: doc,
-            label: `${changes.every((change) => change.after === 0) ? 'Erase' : 'Paint'} ${changes.length} pathing cell${changes.length === 1 ? '' : 's'}`,
+            label: `${changes.every((change) => change.after === 0) ? 'Erase' : 'Paint'} ${changedCells} pathing cell${changedCells === 1 ? '' : 's'}`,
             undo: () => {
-                this.applyCells(doc, changes, true);
+                this.applyRuns(doc, changes, true);
                 doc.currentRevision = beforeRevision;
                 this.postDirtyState(doc);
             },
             redo: () => {
-                this.applyCells(doc, changes, false);
+                this.applyRuns(doc, changes, false);
                 doc.currentRevision = afterRevision;
                 this.postDirtyState(doc);
             },
         });
     }
 
-    private applyCells(doc: WpmDocument, changes: WpmCellChange[], useBefore: boolean): void {
-        const patches = changes.map((change) => {
+    private applyRuns(doc: WpmDocument, changes: WpmRunChange[], useBefore: boolean): void {
+        const patches: WpmRequestedRun[] = [];
+        for (const change of changes) {
             const value = useBefore ? change.before : change.after;
-            doc.file.data[change.index] = value;
-            return { index: change.index, value };
-        });
-        void doc.webview?.postMessage({ type: 'applyRuns', runs: compactWpmRuns(patches) });
+            for (let index = change.start; index < change.start + change.length; index++) doc.file.data[index] = value;
+            patches.push({ start: change.start, length: change.length, value });
+        }
+        void doc.webview?.postMessage({ type: 'applyRuns', runs: patches });
     }
 
     private postDirtyState(doc: WpmDocument): void {

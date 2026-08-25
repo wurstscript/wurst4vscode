@@ -1100,7 +1100,13 @@ function testWpmEditorInlineScriptAndRecoveryGuards() {
 }
 
 function testWpmFlagSemantics() {
-    const { WPM_FLAG_DEFS, WPM_KNOWN_VERSION, wpmCellRgb, wpmFlagLabels } = loadTsModule('src/features/wpmFlags.ts');
+    const { WPM_FLAG_DEFS, WPM_KNOWN_VERSION, wpmCellRgb, wpmFlagLabels } = loadTsModuleWithMocks('src/features/wpmPreview.ts', {
+        vscode: {},
+        'casc-ts/formats': {},
+        './diagnostics': {},
+        './webviewShared': {},
+        './webviewUtils': {},
+    });
     assert.strictEqual(WPM_KNOWN_VERSION, 0);
     assert.deepStrictEqual(WPM_FLAG_DEFS.map((definition) => definition.bit), [1, 2, 4, 8, 16, 32, 64, 128]);
     assert.deepStrictEqual(wpmFlagLabels(0xd0), ['No Peon Harvest', 'No Water / Unfloatable', 'Unamphibious']);

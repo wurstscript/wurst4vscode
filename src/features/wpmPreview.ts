@@ -7,8 +7,58 @@ import { parseWpm, serializeWpm, WpmFile } from 'casc-ts/formats';
 import { showErrorWithLogs } from './diagnostics';
 import { buildPage } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
-import { wpmCellRgb, wpmColorTable, WPM_FLAG_DEFS, WPM_KNOWN_VERSION } from './wpmFlags';
 export { WpmFile } from 'casc-ts/formats';
+
+export interface WpmFlagDefinition {
+    bit: number;
+    label: string;
+    description: string;
+    color: [number, number, number];
+    primary?: boolean;
+}
+
+/** The only WPM header version with a documented byte layout. */
+export const WPM_KNOWN_VERSION = 0;
+
+export const WPM_FLAG_DEFS: readonly WpmFlagDefinition[] = [
+    { bit: 0x01, label: 'Reserved', description: 'Reserved bit; standard maps normally leave it clear.', color: [160, 160, 160] },
+    { bit: 0x02, label: 'Unwalkable', description: 'Ground units cannot walk through this cell.', color: [255, 0, 0], primary: true },
+    { bit: 0x04, label: 'Unflyable', description: 'Flying units cannot pass through this cell.', color: [0, 255, 0], primary: true },
+    { bit: 0x08, label: 'Unbuildable', description: 'Buildings cannot be placed on this cell.', color: [0, 0, 255], primary: true },
+    { bit: 0x10, label: 'No Peon Harvest', description: 'Peons cannot harvest resources from this cell.', color: [240, 170, 40] },
+    { bit: 0x20, label: 'Blighted', description: 'The cell is marked as blight.', color: [190, 80, 0] },
+    { bit: 0x40, label: 'No Water / Unfloatable', description: 'The WC3 pathing state for no water / unfloatable movement. It is commonly set on ordinary dry ground; terrain water is stored in W3E.', color: [120, 120, 120] },
+    { bit: 0x80, label: 'Unamphibious', description: 'The WC3 pathing state for amphibious movement.', color: [180, 80, 220] },
+];
+
+function blendWpmColor(base: [number, number, number], overlay: [number, number, number]): [number, number, number] {
+    return [(base[0] + overlay[0]) >> 1, (base[1] + overlay[1]) >> 1, (base[2] + overlay[2]) >> 1];
+}
+
+export function wpmCellRgb(flag: number): [number, number, number] {
+    let rgb: [number, number, number] = [0, 0, 0];
+    for (const definition of WPM_FLAG_DEFS) {
+        if ((flag & definition.bit) === 0) continue;
+        if (definition.primary) {
+            rgb = [
+                definition.bit === 0x02 ? definition.color[0] : rgb[0],
+                definition.bit === 0x04 ? definition.color[1] : rgb[1],
+                definition.bit === 0x08 ? definition.color[2] : rgb[2],
+            ];
+        } else {
+            rgb = blendWpmColor(rgb, definition.color);
+        }
+    }
+    return rgb;
+}
+
+export function wpmFlagLabels(flag: number): string[] {
+    return WPM_FLAG_DEFS.filter((definition) => (flag & definition.bit) !== 0).map((definition) => definition.label);
+}
+
+export function wpmColorTable(): Array<[number, number, number]> {
+    return Array.from({ length: 256 }, (_, flag) => wpmCellRgb(flag));
+}
 
 // ── HTML Rendering ────────────────────────────────────────────────────────────
 
@@ -379,12 +429,12 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
       }
     }
 
-    function paintCell(x, y, next) {
+    function paintCell(x, y, next, refresh = true) {
       if (x < 0 || x >= W || y < 0 || y >= H) return;
       const index = y * W + x;
       if (!gestureChanges.has(index)) gestureChanges.set(index, data[index]);
       data[index] = next;
-      refreshCell(index);
+      if (refresh) refreshCell(index);
     }
 
     function paintBrush(x, y) {
@@ -423,12 +473,28 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
       while (stack.length) {
         const index = stack.pop();
         const x = index % W, y = Math.floor(index / W);
-        paintCell(x, y, replacement);
+        paintCell(x, y, replacement, false);
         if (x > 0) enqueue(index - 1);
         if (x + 1 < W) enqueue(index + 1);
         if (y > 0) enqueue(index - W);
         if (y + 1 < H) enqueue(index + W);
       }
+      offCtx.putImageData(img, 0, 0);
+      scheduleDraw();
+    }
+
+    function compactRuns(changes) {
+      const sorted = changes.slice().sort((a, b) => a.index - b.index);
+      const runs = [];
+      for (const change of sorted) {
+        const previous = runs[runs.length - 1];
+        if (previous && previous.start + previous.length === change.index && previous.value === change.value) {
+          previous.length++;
+        } else {
+          runs.push({ start: change.index, length: 1, value: change.value });
+        }
+      }
+      return runs;
     }
 
     function finishEdit() {
@@ -440,7 +506,11 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
         if (value !== before) changes.push({ index, value });
       });
       gestureChanges = new Map();
-      if (changes.length) api.postMessage({ type: 'editCells', changes });
+      if (changes.length) {
+        api.postMessage(tool === 'fill'
+          ? { type: 'editRuns', runs: compactRuns(changes) }
+          : { type: 'editCells', changes });
+      }
     }
 
     viewport.addEventListener('pointerdown', (e) => {
@@ -550,16 +620,33 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
     });
     viewport.addEventListener('mouseleave', () => tooltip.style.display = 'none');
 
+    function applyChanges(changes) {
+      changes.forEach((change) => {
+        if (Number.isInteger(change.index) && change.index >= 0 && change.index < data.length) {
+          data[change.index] = change.value & 0xff;
+          writePixel(change.index);
+        }
+      });
+      offCtx.putImageData(img, 0, 0);
+      scheduleDraw();
+    }
+
+    function applyRuns(runs) {
+      const changes = [];
+      runs.forEach((run) => {
+        if (!Number.isInteger(run.start) || !Number.isInteger(run.length) || !Number.isInteger(run.value) ||
+            run.start < 0 || run.length < 1 || run.start + run.length > data.length) return;
+        for (let index = run.start; index < run.start + run.length; index++) changes.push({ index, value: run.value });
+      });
+      applyChanges(changes);
+    }
+
     window.addEventListener('message', (event) => {
       const message = event.data || {};
       if (message.type === 'applyCells' && Array.isArray(message.changes)) {
-        message.changes.forEach((change) => {
-          if (Number.isInteger(change.index) && change.index >= 0 && change.index < data.length) {
-            data[change.index] = change.value & 0xff;
-            refreshCell(change.index);
-          }
-        });
-        scheduleDraw();
+        applyChanges(message.changes);
+      } else if (message.type === 'applyRuns' && Array.isArray(message.runs)) {
+        applyRuns(message.runs);
       } else if (message.type === 'dirtyStateChanged') {
         document.getElementById('dirtyBadge').hidden = !message.isDirty;
       }
@@ -593,6 +680,69 @@ interface WpmCellChange {
     index: number;
     before: number;
     after: number;
+}
+
+interface WpmCellRun {
+    start: number;
+    length: number;
+    value: number;
+}
+
+interface WpmEditMessage {
+    type?: string;
+    changes?: Array<{ index?: number; value?: number }>;
+    runs?: Array<{ start?: number; length?: number; value?: number }>;
+}
+
+function compactWpmRuns(changes: Array<{ index: number; value: number }>): WpmCellRun[] {
+    const sorted = changes.slice().sort((a, b) => a.index - b.index);
+    const runs: WpmCellRun[] = [];
+    for (const change of sorted) {
+        const previous = runs[runs.length - 1];
+        if (previous && previous.start + previous.length === change.index && previous.value === change.value) {
+            previous.length++;
+        } else {
+            runs.push({ start: change.index, length: 1, value: change.value });
+        }
+    }
+    return runs;
+}
+
+function collectWpmCellRequests(changes: Array<{ index?: number; value?: number }>, dataLength: number): Map<number, number> {
+    const requested = new Map<number, number>();
+    for (const change of changes) {
+        if (Number.isInteger(change.index) && Number.isInteger(change.value) &&
+            (change.index as number) >= 0 && (change.index as number) < dataLength &&
+            (change.value as number) >= 0 && (change.value as number) <= 0xff) {
+            requested.set(change.index as number, change.value as number);
+        }
+    }
+    return requested;
+}
+
+function collectWpmRunRequests(runs: Array<{ start?: number; length?: number; value?: number }>, dataLength: number): Map<number, number> {
+    const requested = new Map<number, number>();
+    for (const run of runs) {
+        const valid = Number.isInteger(run.start) && Number.isInteger(run.length) && Number.isInteger(run.value) &&
+            (run.start as number) >= 0 && (run.length as number) >= 1 &&
+            (run.start as number) + (run.length as number) <= dataLength &&
+            (run.value as number) >= 0 && (run.value as number) <= 0xff;
+        if (!valid) continue;
+        for (let index = run.start as number; index < (run.start as number) + (run.length as number); index++) {
+            requested.set(index, run.value as number);
+        }
+    }
+    return requested;
+}
+
+function collectWpmRequests(message: WpmEditMessage, dataLength: number): Map<number, number> {
+    if (message.type === 'editCells' && Array.isArray(message.changes)) {
+        return collectWpmCellRequests(message.changes, dataLength);
+    }
+    if (message.type === 'editRuns' && Array.isArray(message.runs)) {
+        return collectWpmRunRequests(message.runs, dataLength);
+    }
+    return new Map();
 }
 
 class WpmEditorProvider implements vscode.CustomEditorProvider<WpmDocument> {
@@ -633,17 +783,8 @@ class WpmEditorProvider implements vscode.CustomEditorProvider<WpmDocument> {
 
     private handleMessage(message: unknown, doc: WpmDocument): void {
         if (!message || typeof message !== 'object') return;
-        const msg = message as { type?: string; changes?: Array<{ index?: number; value?: number }> };
-        if (msg.type !== 'editCells' || !Array.isArray(msg.changes)) return;
-
-        const requested = new Map<number, number>();
-        for (const change of msg.changes) {
-            if (Number.isInteger(change.index) && Number.isInteger(change.value) &&
-                (change.index as number) >= 0 && (change.index as number) < doc.file.data.length &&
-                (change.value as number) >= 0 && (change.value as number) <= 0xff) {
-                requested.set(change.index as number, change.value as number);
-            }
-        }
+        const requested = collectWpmRequests(message as WpmEditMessage, doc.file.data.length);
+        if (!requested.size) return;
         const changes: WpmCellChange[] = [];
         requested.forEach((after, index) => {
             const before = doc.file.data[index];
@@ -678,7 +819,7 @@ class WpmEditorProvider implements vscode.CustomEditorProvider<WpmDocument> {
             doc.file.data[change.index] = value;
             return { index: change.index, value };
         });
-        void doc.webview?.postMessage({ type: 'applyCells', changes: patches });
+        void doc.webview?.postMessage({ type: 'applyRuns', runs: compactWpmRuns(patches) });
     }
 
     private postDirtyState(doc: WpmDocument): void {

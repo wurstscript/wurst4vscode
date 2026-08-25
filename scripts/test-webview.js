@@ -1088,6 +1088,8 @@ function testWpmEditorInlineScriptAndRecoveryGuards() {
         .replace('${wpm.width}', '4')
         .replace('${wpm.height}', '4')
         .replace('${dataBase64}', 'AAAAAAAAAAAAAAAAAAAAAA==')
+        .replace('${JSON.stringify(colorTable)}', '[[0, 0, 0]]')
+        .replace('${JSON.stringify(WPM_FLAG_DEFS.map(({ bit, label }) => ({ bit, label })))}', '[]')
         .replace(/\\`/g, '`')
         .replace(/\\\$\{/g, '${');
     // eslint-disable-next-line sonarjs/constructor-for-side-effects -- parsing the real inline script is the assertion.
@@ -1095,6 +1097,15 @@ function testWpmEditorInlineScriptAndRecoveryGuards() {
     assert.ok(host.includes('openContext.backupId'), 'WPM documents must restore VS Code hot-exit backups');
     assert.ok(host.includes('currentRevision !== doc.savedRevision'), 'WPM dirty tracking must distinguish edit-history branches');
     assert.ok(!host.includes('doc.editDepth'), 'WPM dirty tracking must not use branch-unsafe edit depth');
+}
+
+function testWpmFlagSemantics() {
+    const { WPM_FLAG_DEFS, WPM_KNOWN_VERSION, wpmCellRgb, wpmFlagLabels } = loadTsModule('src/features/wpmFlags.ts');
+    assert.strictEqual(WPM_KNOWN_VERSION, 0);
+    assert.deepStrictEqual(WPM_FLAG_DEFS.map((definition) => definition.bit), [1, 2, 4, 8, 16, 32, 64, 128]);
+    assert.deepStrictEqual(wpmFlagLabels(0xd0), ['No Peon Harvest', 'No Water / Unfloatable', 'Unamphibious']);
+    assert.deepStrictEqual(wpmCellRgb(0x0a), [255, 0, 255], 'primary pathing colors must remain RGB channels');
+    assert.notDeepStrictEqual(wpmCellRgb(0x80), [0, 0, 0], 'amphibious cells must not render as an anonymous black cell');
 }
 
 async function main() {
@@ -1128,6 +1139,7 @@ async function main() {
     testObjModDensityAndTreeStyling();
     testImportedAssetDedupeSafety();
     testLocalE2eFixturesRemainOptIn();
+    testWpmFlagSemantics();
     console.log('webview harness tests passed');
 }
 

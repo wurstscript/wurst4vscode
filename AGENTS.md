@@ -112,6 +112,7 @@ Three tiers, cheapest first. Put a test in the cheapest tier that can actually c
    - `e2e/harness/vscodeLauncher.js` pins `workbench.editorAssociations` in the temp profile. Without it a `.w3u`/`.w3a` passed on the command line opens in the *text* editor on a cold `--extensionDevelopmentPath` start, because the extension host has not registered its custom editors yet — and no webview is ever created.
 
 ### Editable binary formats
+- `.imp` remains intentionally read-only: it is World Editor import-manager bookkeeping, not a useful standalone editing target for normal Wurst workflows.
 - **.w3i is an editable custom editor** (`wurst.w3iEditor`, in `mapDataPreview.ts`) backed by `casc-ts` `parseW3i`/`serializeW3i`, which use a **parse-prefix + opaque-tail** model: only leading string/scalar fields are editable; players/forces/lists are preserved verbatim in `file.tail` (and parsed best-effort for display only). Every save passes a round-trip safety gate (`serializeValidatedW3i`). TRIGSTR-backed strings edit `war3map.wts`; inline strings edit the w3i bytes. The other map-data formats remain read-only under `wurst.mapDataPreview` (the old read-only `renderW3i`/`parseW3i` in that file are retained but no longer routed to).
 - When adding a new editable binary format, mirror this: a casc-ts parser+serializer with a byte-exact round-trip test, a `CustomEditorProvider` with dirty tracking, and a serialize→re-parse→compare safety gate before any write.
 

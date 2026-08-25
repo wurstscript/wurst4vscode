@@ -128,6 +128,47 @@ test('a drag paints a line of cells as one undo step', async ({ openWpm }) => {
     await expect.poll(() => host.isDirty).toBe(false);
 });
 
+test('the brush size expands one gesture into a square of cells', async ({ openWpm }) => {
+    const { page, host } = await openWpm();
+    await page.click('#btnZoomFit');
+    await page.click('[data-tool="paint"]');
+    await page.fill('#brushSize', '3');
+    await expect(page.locator('#brushSizeValue')).toHaveText('3 × 3');
+
+    const box = await page.locator('#viewport').boundingBox();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+
+    await expect.poll(() => host.editLabels.length).toBe(1);
+    const painted = Number(/Paint (\d+)/.exec(host.editLabels[0])[1]);
+    expect(painted).toBeGreaterThan(1);
+    expect(painted).toBeLessThanOrEqual(9);
+});
+
+test('line and fill tools produce one undoable edit each', async ({ openWpm }) => {
+    const { page, host } = await openWpm();
+    await page.click('#btnZoomFit');
+    const box = await page.locator('#viewport').boundingBox();
+
+    await page.click('[data-tool="line"]');
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x + box.width * 0.3, y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.7, y, { steps: 4 });
+    await page.mouse.up();
+    await expect.poll(() => host.editLabels.length).toBe(1);
+    expect(host.editLabels[0]).toMatch(/^Paint \d+ pathing cells$/);
+
+    await page.click('[data-tool="fill"]');
+    await page.mouse.click(box.x + box.width * 0.8, box.y + box.height * 0.8);
+    await expect.poll(() => host.editLabels.length).toBe(2);
+    expect(host.editLabels[1]).toMatch(/^Paint \d+ pathing cells$/);
+
+    host.undo();
+    await expect.poll(() => host.editLabels.length).toBe(2);
+    host.undo();
+    await expect.poll(() => host.isDirty).toBe(false);
+});
+
 test('the erase tool clears flags instead of painting them', async ({ openWpm }) => {
     const { page, host } = await openWpm();
     await page.click('#btnZoomFit');
@@ -168,6 +209,23 @@ test('Alt+click picks up the brush flags from the cell under the cursor', async 
     await page.keyboard.up('Alt');
 
     await expect(page.locator('#brushValue')).toHaveText('0x0A');
+    await expect(page.locator('[data-tool="paint"]')).toHaveClass(/active/);
+});
+
+test('Alt-click samples the complete flag byte from a cell', async ({ openWpm }) => {
+    const { page } = await openWpm();
+    await page.click('#btnZoomFit');
+
+    const box = await page.locator('#viewport').boundingBox();
+    const cellSize = await page.locator('#wpmCanvas').evaluate((canvas) => Math.min(canvas.width / 16, canvas.height / 16));
+    await page.keyboard.down('Alt');
+    await page.mouse.click(box.x + box.width / 2 + cellSize, box.y + box.height / 2);
+    await page.keyboard.up('Alt');
+
+    await expect(page.locator('#brushValue')).toHaveText('0xD0');
+    await expect(page.locator('[data-brush-bit="16"]')).toBeChecked();
+    await expect(page.locator('[data-brush-bit="64"]')).toBeChecked();
+    await expect(page.locator('[data-brush-bit="128"]')).toBeChecked();
     await expect(page.locator('[data-tool="paint"]')).toHaveClass(/active/);
 });
 

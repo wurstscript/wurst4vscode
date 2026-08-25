@@ -118,6 +118,7 @@ function buildWpm() {
     for (let y = 4; y < 8; y++) {
         for (let x = 4; x < 8; x++) data[y * width + x] = 0x02; // walkability blocked
     }
+    data[7 * width + 9] = 0xd0; // unfloatable + unamphibious + no-peon-harvest: picker must preserve every bit
     return serializeWpm({ version: 0, width, height, data, tail: Buffer.alloc(0) });
 }
 

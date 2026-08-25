@@ -649,7 +649,7 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
           refreshCell(index);
         }
       });
-      offCtx.putImageData(img, 0, 0);
+      flushImage();
       scheduleDraw();
     }
 

@@ -580,6 +580,72 @@ function testInstallerVersionShaParsing() {
     assert.equal(mod.displayGitSha('73DFD74A6'), '73dfd74', 'prompt display must always use 7 lowercase characters');
 }
 
+async function testInstalledVersionDetection() {
+    let invocation;
+    const diagnostics = [];
+    const commonMocks = {
+        vscode: {
+            workspace: { getConfiguration: () => ({ get: () => '' }) },
+            window: {},
+            ProgressLocation: {},
+        },
+        fs: {
+            existsSync: () => true,
+            statSync: () => ({ size: 123, mtimeMs: 456 }),
+        },
+        '../paths': {
+            WURST_HOME: 'wurst-home', RUNTIME_DIR: 'runtime', COMPILER_DIR: 'compiler',
+            COMPILER_JAR: 'wurstscript.jar', GRILL_HOME_DIR: 'grill', UPDATE_SNOOZE_FILE: 'snooze.json',
+        },
+        './fsUtils': {},
+        './pathManager': {},
+        '../languageServer': {},
+        '../features/diagnostics': {
+            appendDiagnostic: (_source, message) => diagnostics.push(message),
+        },
+    };
+    const mod = loadTsModuleWithMocks('src/install/installer.ts', {
+        ...commonMocks,
+        child_process: {
+            spawnSync: () => ({ status: 0 }),
+            execFile: (command, args, _options, callback) => {
+                invocation = { command, args };
+                callback(null, '1.9.0.0-v0.0.0-6-b36c3461-61-gba83111da\n', '');
+            },
+        },
+        './downloader': {},
+    });
+
+    assert.equal(await mod.getInstalledVersionString(), '1.9.0.0-v0.0.0-6-b36c3461-61-gba83111da');
+    assert.deepEqual(invocation, {
+        command: require('path').join('runtime', 'bin', process.platform === 'win32' ? 'java.exe' : 'java'),
+        args: ['-jar', 'wurstscript.jar', '-version'],
+    }, 'version detection must use the compiler-supported -version flag');
+    assert.deepEqual(diagnostics, []);
+
+    let fetchedLatest = false;
+    let prompted = false;
+    const failureMod = loadTsModuleWithMocks('src/install/installer.ts', {
+        ...commonMocks,
+        vscode: {
+            ...commonMocks.vscode,
+            window: { showInformationMessage: () => { prompted = true; } },
+        },
+        child_process: {
+            spawnSync: () => ({ status: 0 }),
+            execFile: (_command, _args, _options, callback) => callback(new Error('version failed'), '', ''),
+        },
+        './downloader': {
+            fetchNightlyCommitSha: async () => { fetchedLatest = true; return 'a'.repeat(40); },
+        },
+    });
+
+    await failureMod.maybeOfferUpdate();
+    assert.equal(fetchedLatest, false, 'a failed installed-version check must not be treated as an available update');
+    assert.equal(prompted, false, 'a failed installed-version check must not show a misleading update prompt');
+    assert.ok(diagnostics.some((message) => message.includes('version detection failed')));
+}
+
 function testNonBlockingStartupAndForcedReinstallWiring() {
     const extension = fs.readFileSync(path.join(root, 'src/extension.ts'), 'utf8');
     const languageServer = fs.readFileSync(path.join(root, 'src/languageServer.ts'), 'utf8');
@@ -594,7 +660,7 @@ function testNonBlockingStartupAndForcedReinstallWiring() {
     assert.ok(languageServer.includes("'$(circle-filled) WurstScript Update'"), 'the status item must indicate when an update is available');
     assert.ok(!installer.includes("{ modal: true, detail }, 'Update', 'Later'"), 'the automatic update notification must not be modal');
     assert.ok(installer.includes("'Update', 'Later'"), 'the non-modal update notification must retain its actions');
-    assert.ok(installer.includes("execFile(java, ['-jar', COMPILER_JAR, '--version']"), 'version detection must use an asynchronous child process');
+    assert.ok(installer.includes("execFile(java, ['-jar', COMPILER_JAR, '-version']"), 'version detection must use an asynchronous child process');
     assert.ok(!manifest.activationEvents.includes('workspaceContains:**/*.wurst'), 'activation must not recursively scan for loose Wurst files');
     assert.ok(manifest.activationEvents.includes('onLanguage:wurst'), 'opening a Wurst document must activate the extension');
     assert.ok(installer.includes('withWurstInstallLock('), 'install replacement must be serialized across VS Code windows');
@@ -1127,6 +1193,7 @@ async function main() {
     await testFolderModeMapAssetResolution();
     testBc5DdsDecode();
     testInstallerVersionShaParsing();
+    await testInstalledVersionDetection();
     testObjModEditorTypeAndRecoveryGuards();
     testWpmEditorInlineScriptAndRecoveryGuards();
     testNonBlockingStartupAndForcedReinstallWiring();

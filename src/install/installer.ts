@@ -36,7 +36,7 @@ type PreparedNightlyInstall = {
 };
 
 export type UpdateAvailable = {
-    installedSha: string | null;
+    installedSha: string;
     latestSha: string;
 };
 
@@ -143,8 +143,14 @@ export function getInstalledVersionString(): Promise<string | null> {
 
     installedVersionCacheKey = cacheKey;
     installedVersionPromise = new Promise((resolve) => {
-        execFile(java, ['-jar', COMPILER_JAR, '--version'], { encoding: 'utf8', windowsHide: true }, (error, stdout, stderr) => {
+        execFile(java, ['-jar', COMPILER_JAR, '-version'], { encoding: 'utf8', windowsHide: true }, (error, stdout, stderr) => {
             if (error) {
+                const output = `${stdout || ''}\n${stderr || ''}`.trim();
+                const outputDetail = output ? `\n${output}` : '';
+                appendDiagnostic(
+                    'VS Code extension',
+                    `WurstScript version detection failed: ${error.message}${outputDetail}`
+                );
                 resolve(null);
                 return;
             }
@@ -429,14 +435,23 @@ export async function maybeOfferUpdate(onUpdateAvailable?: (update: UpdateAvaila
 
         const installed = await getInstalledVersionString();
         const installedSha = installed ? extractGitSha(installed) : null;
+        if (!installedSha) {
+            appendDiagnostic(
+                'VS Code extension',
+                installed
+                    ? `Update check skipped: installed version did not contain a Git revision: ${installed}`
+                    : 'Update check skipped: installed WurstScript version could not be determined.'
+            );
+            return;
+        }
         const latestSha = await fetchNightlyCommitSha();
-        if (installedSha && gitShasMatch(installedSha, latestSha)) return;
+        if (gitShasMatch(installedSha, latestSha)) return;
 
         onUpdateAvailable?.({ installedSha, latestSha });
         if (readUpdateSnoozedUntil() > Date.now()) return;
 
         const versions = [
-            installedSha ? `Installed: ${displayGitSha(installedSha)}` : 'Installed: unknown',
+            `Installed: ${displayGitSha(installedSha)}`,
             `Latest: ${displayGitSha(latestSha)}`,
         ].join(' · ');
 

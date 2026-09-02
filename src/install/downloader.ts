@@ -1,14 +1,44 @@
 'use strict';
 
 import * as fs from 'fs';
+import { ClientRequest } from 'http';
 import * as path from 'path';
 import * as https from 'https';
 import * as vscode from 'vscode';
 import { NIGHTLY_RELEASE_BY_TAG_API, NIGHTLY_COMMIT_API, WURSTSETUP_RELEASE } from '../paths';
 import StreamZip = require('node-stream-zip');
 
+const DOWNLOAD_TIMEOUT_MS = 30_000;
+const MAX_REDIRECTS = 5;
+
+function clearTimer(timer: ReturnType<typeof setTimeout> | null): void {
+    if (timer) clearTimeout(timer);
+}
+
+function cleanupDownloadedFile(destination: string): void {
+    try { fs.unlinkSync(destination); } catch {}
+}
+
+function resolveRedirect(baseUrl: string, location: string): string {
+    try { return new URL(location, baseUrl).toString(); } catch { return location; }
+}
+
 export function githubJson<T = any>(url: string): Promise<T> {
     return new Promise((resolve, reject) => {
+        let done = false;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const fail = (error: Error) => {
+            if (done) return;
+            done = true;
+            clearTimer(timer);
+            reject(error);
+        };
+        const succeed = (value: T) => {
+            if (done) return;
+            done = true;
+            clearTimer(timer);
+            resolve(value);
+        };
         const req = https.request(url, {
             method: 'GET',
             headers: {
@@ -18,17 +48,27 @@ export function githubJson<T = any>(url: string): Promise<T> {
             },
         }, (res) => {
             if (!res.statusCode || res.statusCode >= 400) {
-                reject(new Error(`GitHub API error: HTTP ${res.statusCode}`));
+                res.resume();
+                fail(new Error(`GitHub API error: HTTP ${res.statusCode}`));
                 return;
             }
             const chunks: Buffer[] = [];
             res.on('data', (d) => chunks.push(Buffer.from(d)));
             res.on('end', () => {
-                try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
-                catch (e) { reject(e); }
+                try {
+                    const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+                    succeed(parsed);
+                } catch (error) {
+                    fail(error instanceof Error ? error : new Error(String(error)));
+                }
             });
+            res.on('error', (error) => fail(error));
         });
-        req.on('error', reject);
+        timer = setTimeout(() => {
+            req.destroy();
+            fail(new Error(`GitHub API request timed out after ${DOWNLOAD_TIMEOUT_MS}ms`));
+        }, DOWNLOAD_TIMEOUT_MS);
+        req.on('error', fail);
         req.end();
     });
 }
@@ -78,46 +118,97 @@ export async function downloadFileWithProgress(
     onPct?: (pct: number) => void,
     cancellationToken?: vscode.CancellationToken
 ): Promise<number> {
-    const maxRedirects = 5;
     fs.mkdirSync(path.dirname(destination), { recursive: true });
 
     return new Promise<number>((resolve, reject) => {
-        let received = 0, total = 0, cancelled = false;
-        if (cancellationToken) cancellationToken.onCancellationRequested(() => (cancelled = true));
+        let received = 0;
+        let total = 0;
+        let cancelled = false;
+        let settled = false;
+        let request: ClientRequest | null = null;
+        let output: fs.WriteStream | null = null;
+        let timeout: ReturnType<typeof setTimeout> | null = null;
+        if (cancellationToken) cancellationToken.onCancellationRequested(() => {
+            if (settled) return;
+            cancelled = true;
+            finishFailure(new Error('Download cancelled by user'));
+        });
 
-        function requestUrl(currentUrl: string, redirects: number) {
-            if (cancelled) return reject(new Error('Download cancelled by user'));
-            if (redirects > maxRedirects) return reject(new Error('Too many redirects'));
+        const clearDownloadTimeout = () => clearTimer(timeout);
+        const finishFailure = (error: Error) => {
+            if (settled) return;
+            settled = true;
+            clearDownloadTimeout();
+            if (request) request.destroy();
+            if (output) {
+                output.destroy();
+            }
+            cleanupDownloadedFile(destination);
+            reject(error);
+        };
 
-            const req = https.get(currentUrl, (res) => {
+        const finishSuccess = () => {
+            if (settled) return;
+            clearDownloadTimeout();
+            try {
+                const size = fs.statSync(destination).size;
+                settled = true;
+                resolve(size);
+            } catch (error) {
+                finishFailure(error instanceof Error ? error : new Error(String(error)));
+            }
+        };
+
+        const requestUrl = (currentUrl: string, redirects: number) => {
+            if (settled) return;
+            if (cancelled) return finishFailure(new Error('Download cancelled by user'));
+            if (redirects > MAX_REDIRECTS) return finishFailure(new Error('Too many redirects'));
+
+            clearDownloadTimeout();
+            const req = https.get(currentUrl, { headers: { 'User-Agent': 'wurst4vscode' } }, (res) => {
+                clearDownloadTimeout();
                 if ([301, 302, 303, 307, 308].includes(res.statusCode!)) {
                     const loc = res.headers.location;
-                    if (!loc) return reject(new Error('Redirect without Location header'));
+                    if (!loc) return finishFailure(new Error('Redirect without Location header'));
                     res.destroy();
-                    return requestUrl(loc, redirects + 1);
+                    return requestUrl(resolveRedirect(currentUrl, String(loc)), redirects + 1);
                 }
-                if (res.statusCode !== 200) return reject(new Error(`Download failed: HTTP ${res.statusCode}`));
+                if (res.statusCode !== 200) {
+                    const status = res.statusCode == null ? 'unknown' : res.statusCode;
+                    res.destroy();
+                    return finishFailure(new Error(`Download failed: HTTP ${status}`));
+                }
+
                 total = parseInt(res.headers['content-length'] || '0', 10);
-                const fileStream = fs.createWriteStream(destination);
+                output = fs.createWriteStream(destination);
+
                 // eslint-disable-next-line sonarjs/no-nested-functions -- TODO(lint-cleanup): pre-existing Node callback-style download logic; tracked for an async/await refactor rather than a rushed change to this path.
                 res.on('data', (chunk) => {
-                    if (cancelled) { req.destroy(); return; }
+                    if (cancelled) return finishFailure(new Error('Download cancelled by user'));
                     received += chunk.length;
                     if (total > 0 && onPct) onPct((received / total) * 100);
                 });
-                res.pipe(fileStream);
                 // eslint-disable-next-line sonarjs/no-nested-functions -- TODO(lint-cleanup): pre-existing Node callback-style download logic; tracked for an async/await refactor rather than a rushed change to this path.
-                fileStream.on('finish', () => {
-                    fileStream.close();
-                    if (cancelled) return reject(new Error('Download cancelled by user'));
-                    resolve(fs.statSync(destination).size);
+                output.on('finish', () => {
+                    output?.close();
+                    if (cancelled) return finishFailure(new Error('Download cancelled by user'));
+                    finishSuccess();
                 });
-                // eslint-disable-next-line sonarjs/no-nested-functions -- TODO(lint-cleanup): see above
-                res.on('error', (err) => { fs.unlink(destination, () => {}); reject(err); });
+                // eslint-disable-next-line sonarjs/no-nested-functions -- TODO(lint-cleanup): pre-existing Node callback-style download logic; tracked for an async/await refactor rather than a rushed change to this path.
+                res.on('error', (err) => { finishFailure(err); });
+            // eslint-disable-next-line sonarjs/no-nested-functions -- TODO(lint-cleanup): pre-existing Node callback-style download logic; tracked for an async/await refactor rather than a rushed change to this path.
+            output.on('error', (err) => { finishFailure(err); });
+            res.pipe(output);
+        });
+            req.setTimeout(DOWNLOAD_TIMEOUT_MS, () => {
+                finishFailure(new Error(`Download timed out after ${DOWNLOAD_TIMEOUT_MS}ms`));
             });
-            // eslint-disable-next-line sonarjs/no-nested-functions -- TODO(lint-cleanup): see above
-            req.on('error', (err) => { fs.unlink(destination, () => {}); reject(err); });
-        }
+            req.on('error', (err) => { finishFailure(err); });
+            request = req;
+            timeout = setTimeout(() => {
+                finishFailure(new Error(`Download timed out after ${DOWNLOAD_TIMEOUT_MS}ms`));
+            }, DOWNLOAD_TIMEOUT_MS);
+        };
 
         requestUrl(url, 0);
     });

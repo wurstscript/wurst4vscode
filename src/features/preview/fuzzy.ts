@@ -52,7 +52,8 @@ export function fuzzyMatch(query: string, text: string): boolean {
  * `.toString()`. Its fuzzy matcher is an explicit argument because a bundled function's source
  * cannot safely refer back to another symbol in the extension module. Search individual fields
  * instead of one joined haystack so a query cannot be assembled from unrelated letters across a
- * label, path, and detail.
+ * label, path, and detail. Multi-token queries are intentionally lenient: matching every token gets
+ * the best rank, but an asset matching only some tokens remains visible with a coverage penalty.
  */
 export function assetSearchScore(
     query: string,
@@ -63,6 +64,7 @@ export function assetSearchScore(
 ): number {
     const q = String(query === null || query === undefined ? '' : query).toLowerCase().trim();
     if (!q) return 0;
+    const tokens = q.split(/\s+/).filter(Boolean);
 
     const rawLabel = String(label === null || label === undefined ? '' : label);
     const normalizedValue = String(value === null || value === undefined ? '' : value).replace(/\\/g, '/');
@@ -72,13 +74,32 @@ export function assetSearchScore(
     const labelStem = normalizedLabel.replace(/\.[^.]+$/, '');
     const labelWords = rawLabel.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
     const valueWords = normalizedValue.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
+    const normalizedDetail = String(detail === null || detail === undefined ? '' : detail).toLowerCase();
 
-    if (labelStem === q || stem === q) return 0;
-    if (labelStem.startsWith(q) || stem.startsWith(q)) return 10;
-    if (normalizedLabel.includes(q) || basename.includes(q)) return 20;
-    if (labelWords.includes(q)) return 30;
-    if (valueWords.includes(q)) return 40;
-    if (String(detail === null || detail === undefined ? '' : detail).toLowerCase().includes(q)) return 50;
-    if (matchesFuzzy(q, labelStem) || matchesFuzzy(q, stem)) return 80;
-    return Number.POSITIVE_INFINITY;
+    const scoreToken = (token: string): number => {
+        if (labelStem === token || stem === token) return 0;
+        if (labelStem.startsWith(token) || stem.startsWith(token)) return 10;
+        if (normalizedLabel.includes(token) || basename.includes(token)) return 20;
+        if (labelWords.includes(token)) return 30;
+        if (valueWords.includes(token)) return 40;
+        if (normalizedDetail.includes(token)) return 50;
+        if (matchesFuzzy(token, labelStem) || matchesFuzzy(token, stem)) return 80;
+        return Number.POSITIVE_INFINITY;
+    };
+
+    let total = 0;
+    let matchedTokens = 0;
+    for (const token of tokens) {
+        const score = scoreToken(token);
+        if (Number.isFinite(score)) {
+            total += score;
+            matchedTokens++;
+        }
+    }
+
+    // Keep useful partial results visible for a lenient picker. A fully matching result always beats
+    // a partial one, while the per-token quality still orders exact/prefix/substring/fuzzy matches.
+    if (!matchedTokens) return Number.POSITIVE_INFINITY;
+    const missingTokens = tokens.length - matchedTokens;
+    return total / matchedTokens + missingTokens * 100 + (tokens.length - 1);
 }

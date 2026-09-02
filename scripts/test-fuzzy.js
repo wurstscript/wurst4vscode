@@ -90,6 +90,32 @@ assert.deepStrictEqual(
     [0, 10, 20],
     'asset relevance scores should be deterministic',
 );
-passed += 3;
+const queryPhrase = [
+    { label: 'Captain Footman.mdx', value: 'imports\\units\\CaptainFootman.mdx' },
+    { label: 'Footman.mdx', value: 'imports\\units\\Footman.mdx' },
+    { label: 'Footman Portrait.mdx', value: 'imports\\units\\FootmanPortrait.mdx' },
+];
+const phraseResults = queryPhrase
+    .map((item, index) => ({ ...item, index, score: assetSearchScore('footman captain', item.label, item.value, '', fuzzyMatch) }))
+    .filter((item) => Number.isFinite(item.score))
+    .sort((a, b) => a.score - b.score || a.index - b.index);
+assert.strictEqual(
+    phraseResults[0]?.label,
+    'Captain Footman.mdx',
+    'asset tokenized scoring should keep the intended winner first',
+);
+assert.ok(
+    phraseResults.some((item) => item.label === 'Footman.mdx'),
+    'lenient multi-token search should keep an asset when one query token is missing',
+);
+assert.ok(
+    Number.isFinite(assetSearchScore('captain', 'Captain Footman.mdx', 'imports\\units\\CaptainFootman.mdx', '', fuzzyMatch)),
+    'a single token should match a multi-token asset label',
+);
+assert.ok(
+    Number.isFinite(assetSearchScore('human footman', 'Captain Footman.mdx', 'imports\\units\\CaptainFootman.mdx', '', fuzzyMatch)),
+    'lenient multi-token search should keep a relevant partial match',
+);
+passed += 4;
 
 console.log(`fuzzy unit tests passed (${passed} assertions)`);

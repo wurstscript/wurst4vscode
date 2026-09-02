@@ -27,6 +27,18 @@ export function githubJson<T = any>(url: string): Promise<T> {
     return new Promise((resolve, reject) => {
         let done = false;
         let timer: ReturnType<typeof setTimeout> | null = null;
+        const fail = (error: Error) => {
+            if (done) return;
+            done = true;
+            clearTimer(timer);
+            reject(error);
+        };
+        const succeed = (value: T) => {
+            if (done) return;
+            done = true;
+            clearTimer(timer);
+            resolve(value);
+        };
         const req = https.request(url, {
             method: 'GET',
             headers: {
@@ -35,13 +47,9 @@ export function githubJson<T = any>(url: string): Promise<T> {
                 'X-GitHub-Api-Version': '2022-11-28',
             },
         }, (res) => {
-            clearTimer(timer);
             if (!res.statusCode || res.statusCode >= 400) {
                 res.resume();
-                if (!done) {
-                    done = true;
-                    reject(new Error(`GitHub API error: HTTP ${res.statusCode}`));
-                }
+                fail(new Error(`GitHub API error: HTTP ${res.statusCode}`));
                 return;
             }
             const chunks: Buffer[] = [];
@@ -49,33 +57,18 @@ export function githubJson<T = any>(url: string): Promise<T> {
             res.on('end', () => {
                 try {
                     const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-                    if (!done) {
-                        done = true;
-                        resolve(parsed);
-                    }
+                    succeed(parsed);
                 } catch (error) {
-                    if (!done) {
-                        done = true;
-                        reject(error);
-                    }
-                } finally {
-                    clearTimer(timer);
+                    fail(error instanceof Error ? error : new Error(String(error)));
                 }
             });
+            res.on('error', (error) => fail(error));
         });
         timer = setTimeout(() => {
             req.destroy();
-            if (!done) {
-                done = true;
-                reject(new Error(`GitHub API request timed out after ${DOWNLOAD_TIMEOUT_MS}ms`));
-            }
+            fail(new Error(`GitHub API request timed out after ${DOWNLOAD_TIMEOUT_MS}ms`));
         }, DOWNLOAD_TIMEOUT_MS);
-        req.on('error', (error) => {
-            clearTimer(timer);
-            if (done) return;
-            done = true;
-            reject(error);
-        });
+        req.on('error', fail);
         req.end();
     });
 }

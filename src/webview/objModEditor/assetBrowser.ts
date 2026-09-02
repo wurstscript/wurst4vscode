@@ -140,7 +140,9 @@ export function renderAssetGrid() {
       : (o.iconPath
         ? '<span class="object-icon" data-key="ab:' + esc(o.value) + '" data-icon="' + esc(o.iconPath) + '"></span>'
         : '<span class="object-icon missing"></span>');
-    const previewHint = activeTab === 'model' ? ' — Ctrl+click to open full preview' : '';
+    const previewHint = activeTab
+      ? ' — Ctrl+click to open in previewer'
+      : '';
     return '<button type="button" class="ab-card" data-value="' + esc(o.value) + '" data-search-score="' + score + '" aria-label="' + esc(o.label + ' — ' + o.value) + '" title="' + esc(o.label + ' — ' + o.value + previewHint) + '">' +
       icon + '<span class="ab-card-label">' + esc(o.label) + '</span></button>';
   }).join('');
@@ -226,7 +228,7 @@ export function setupAssetBrowser() {
   if (grid) grid.addEventListener('click', e => {
     if (e.target.closest('#ab-catalog-retry')) { requestAssetCatalog(); return; }
     const card = e.target.closest('.ab-card[data-value]');
-    if (card && assetBrowserUi.activeTab === 'model' && (e.ctrlKey || e.metaKey)) {
+    if (card && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       vscodeApi.postMessage({ type: 'openAsset', path: card.getAttribute('data-value') || '' });
       return;

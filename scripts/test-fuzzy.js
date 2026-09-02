@@ -90,6 +90,29 @@ assert.deepStrictEqual(
     [0, 10, 20],
     'asset relevance scores should be deterministic',
 );
+const queryPhrase = [
+    { label: 'Captain Footman.mdx', value: 'imports\\units\\CaptainFootman.mdx' },
+    { label: 'Footman.mdx', value: 'imports\\units\\Footman.mdx' },
+    { label: 'Footman Portrait.mdx', value: 'imports\\units\\FootmanPortrait.mdx' },
+];
+const phraseResults = queryPhrase
+    .map((item, index) => ({ ...item, index, score: assetSearchScore('footman captain', item.label, item.value, '', fuzzyMatch) }))
+    .filter((item) => Number.isFinite(item.score))
+    .sort((a, b) => a.score - b.score || a.index - b.index);
+assert.ok(
+    phraseResults.every((item) => item.label === 'Captain Footman.mdx'),
+    'multi-token search should require all tokens, so “captain” filters to captain-only matches',
+);
+assert.strictEqual(
+    phraseResults[0]?.label,
+    'Captain Footman.mdx',
+    'asset tokenized scoring should keep the intended winner first',
+);
+
+assert.ok(
+    !Number.isFinite(assetSearchScore('human footman', 'Captain Footman.mdx', 'imports\\units\\CaptainFootman.mdx', '', fuzzyMatch)),
+    'multi-token query should not match when one token is missing',
+);
 passed += 3;
 
 console.log(`fuzzy unit tests passed (${passed} assertions)`);

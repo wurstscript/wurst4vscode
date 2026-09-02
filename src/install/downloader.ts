@@ -48,9 +48,10 @@ export function githubJson<T = any>(url: string): Promise<T> {
             res.on('data', (d) => chunks.push(Buffer.from(d)));
             res.on('end', () => {
                 try {
+                    const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
                     if (!done) {
                         done = true;
-                        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+                        resolve(parsed);
                     }
                 } catch (error) {
                     if (!done) {

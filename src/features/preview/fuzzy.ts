@@ -52,7 +52,8 @@ export function fuzzyMatch(query: string, text: string): boolean {
  * `.toString()`. Its fuzzy matcher is an explicit argument because a bundled function's source
  * cannot safely refer back to another symbol in the extension module. Search individual fields
  * instead of one joined haystack so a query cannot be assembled from unrelated letters across a
- * label, path, and detail.
+ * label, path, and detail. Multi-token queries are intentionally lenient: matching every token gets
+ * the best rank, but an asset matching only some tokens remains visible with a coverage penalty.
  */
 export function assetSearchScore(
     query: string,
@@ -87,11 +88,18 @@ export function assetSearchScore(
     };
 
     let total = 0;
+    let matchedTokens = 0;
     for (const token of tokens) {
         const score = scoreToken(token);
-        if (!Number.isFinite(score)) return Number.POSITIVE_INFINITY;
-        total += score;
+        if (Number.isFinite(score)) {
+            total += score;
+            matchedTokens++;
+        }
     }
 
-    return total / tokens.length + (tokens.length - 1);
+    // Keep useful partial results visible for a lenient picker. A fully matching result always beats
+    // a partial one, while the per-token quality still orders exact/prefix/substring/fuzzy matches.
+    if (!matchedTokens) return Number.POSITIVE_INFINITY;
+    const missingTokens = tokens.length - matchedTokens;
+    return total / matchedTokens + missingTokens * 100 + (tokens.length - 1);
 }

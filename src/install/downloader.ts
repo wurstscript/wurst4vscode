@@ -1,6 +1,7 @@
 'use strict';
 
 import * as fs from 'fs';
+import { ClientRequest } from 'http';
 import * as path from 'path';
 import * as https from 'https';
 import * as vscode from 'vscode';
@@ -130,7 +131,7 @@ export async function downloadFileWithProgress(
         let total = 0;
         let cancelled = false;
         let settled = false;
-        let request: https.ClientRequest | null = null;
+        let request: ClientRequest | null = null;
         let output: fs.WriteStream | null = null;
         let timeout: ReturnType<typeof setTimeout> | null = null;
         if (cancellationToken) cancellationToken.onCancellationRequested(() => {
@@ -154,10 +155,11 @@ export async function downloadFileWithProgress(
 
         const finishSuccess = () => {
             if (settled) return;
-            settled = true;
             clearDownloadTimeout();
             try {
-                resolve(fs.statSync(destination).size);
+                const size = fs.statSync(destination).size;
+                settled = true;
+                resolve(size);
             } catch (error) {
                 finishFailure(error instanceof Error ? error : new Error(String(error)));
             }

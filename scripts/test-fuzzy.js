@@ -99,20 +99,23 @@ const phraseResults = queryPhrase
     .map((item, index) => ({ ...item, index, score: assetSearchScore('footman captain', item.label, item.value, '', fuzzyMatch) }))
     .filter((item) => Number.isFinite(item.score))
     .sort((a, b) => a.score - b.score || a.index - b.index);
-assert.ok(
-    phraseResults.every((item) => item.label === 'Captain Footman.mdx'),
-    'multi-token search should require all tokens, so “captain” filters to captain-only matches',
-);
 assert.strictEqual(
     phraseResults[0]?.label,
     'Captain Footman.mdx',
     'asset tokenized scoring should keep the intended winner first',
 );
-
 assert.ok(
-    !Number.isFinite(assetSearchScore('human footman', 'Captain Footman.mdx', 'imports\\units\\CaptainFootman.mdx', '', fuzzyMatch)),
-    'multi-token query should not match when one token is missing',
+    phraseResults.some((item) => item.label === 'Footman.mdx'),
+    'lenient multi-token search should keep an asset when one query token is missing',
 );
-passed += 3;
+assert.ok(
+    Number.isFinite(assetSearchScore('captain', 'Captain Footman.mdx', 'imports\\units\\CaptainFootman.mdx', '', fuzzyMatch)),
+    'a single token should match a multi-token asset label',
+);
+assert.ok(
+    Number.isFinite(assetSearchScore('human footman', 'Captain Footman.mdx', 'imports\\units\\CaptainFootman.mdx', '', fuzzyMatch)),
+    'lenient multi-token search should keep a relevant partial match',
+);
+passed += 4;
 
 console.log(`fuzzy unit tests passed (${passed} assertions)`);

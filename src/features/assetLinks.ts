@@ -5,8 +5,9 @@ import * as path from 'path';
 import { gatherImportedAssets, getCandidateRoots, requestPreviewIcon, resolveAssetPath as resolveAssetPathString, resolveAssetPathWithCasc } from './imageAssetSupport';
 import { loadObjValueCatalog, type ValueOption } from './objModPreview';
 import { cacheModelThumbnail, markModelThumbnailBad, postTexturesToWebview, requestModelThumbnail } from './preview/modelPreviewHost';
+import { getGameAssetCacheDir, getModelThumbCacheDir } from './preview/cascStorage';
 import { isSoundAssetPath, playSoundInline } from './soundPreview';
-import { buildPage, ICON_INLINE_CSS, PREVIEW_ICON_CSP } from './webviewShared';
+import { buildPage, ICON_INLINE_CSS } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
 import { showWarningWithLogs } from './diagnostics';
 import { assetSearchScore, fuzzyMatch } from './preview/fuzzy';
@@ -168,9 +169,10 @@ async function replaceAssetString(target: BrowseAssetTarget, assetPath: string):
 }
 
 async function openCodeAssetBrowser(context: vscode.ExtensionContext, target: BrowseAssetTarget): Promise<void> {
-    const [catalog, imported] = await Promise.all([
+    const [catalog, imported, assetRoots] = await Promise.all([
         loadObjValueCatalog(),
         gatherImportedAssets(target.uri.fsPath),
+        getCandidateRoots(target.uri.fsPath),
     ]);
     const panel = vscode.window.createWebviewPanel(
         'wurst.assetBrowser',
@@ -179,7 +181,15 @@ async function openCodeAssetBrowser(context: vscode.ExtensionContext, target: Br
         {
             enableScripts: true,
             retainContextWhenHidden: true,
-            localResourceRoots: [context.extensionUri, vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview')],
+            // Asset roots + caches are admitted so models and cached thumbnails can be fetched by URI
+            // instead of travelling through postMessage as base64.
+            localResourceRoots: [
+                context.extensionUri,
+                vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview'),
+                ...assetRoots.map((root) => vscode.Uri.file(root)),
+                vscode.Uri.file(getGameAssetCacheDir()),
+                vscode.Uri.file(getModelThumbCacheDir()),
+            ],
         },
     );
     const mdxViewerUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview', 'mdxViewer.js')).toString();
@@ -205,7 +215,7 @@ async function openCodeAssetBrowser(context: vscode.ExtensionContext, target: Br
         } else if (msg.type === 'loadObjectIcon' && typeof msg.iconPath === 'string' && typeof msg.key === 'string') {
             void requestPreviewIcon(msg.iconPath, msg.key, panel.webview, target.uri);
         } else if (msg.type === 'loadModelThumb' && typeof msg.path === 'string' && typeof msg.key === 'string') {
-            void requestModelThumbnail(msg.path, msg.key, target.uri, panel.webview);
+            void requestModelThumbnail(msg.path, msg.key, target.uri, panel.webview, true);
         } else if (msg.type === 'requestTextures' && Array.isArray(msg.paths)) {
             void postTexturesToWebview(
                 msg.paths.filter((candidate: unknown): candidate is string => typeof candidate === 'string'),
@@ -235,7 +245,10 @@ function dedupeAssetOptions(options: readonly ValueOption[]): ValueOption[] {
 
 function buildAssetBrowserHtml(initialJson: string, currentValue: string, cspSource: string, mdxViewerUri: string): string {
     return buildPage({
-        csp: PREVIEW_ICON_CSP.replace("script-src 'unsafe-inline';", `script-src 'unsafe-inline' ${cspSource};`),
+        // Models and cached thumbnails are fetched/displayed as webview resource URIs (see
+        // requestModelThumbnail with useModelUri), so the extension's cspSource must be admitted for
+        // connect-src and img-src, not only script-src.
+        csp: `default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' ${cspSource}; img-src data: ${cspSource}; connect-src ${cspSource};`,
         title: 'Choose Warcraft III Asset',
         extraCss: `
 ${ICON_INLINE_CSS}
@@ -471,8 +484,15 @@ ${ICON_INLINE_CSS}
     for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
     return out.buffer;
   }
+  // The host sends either a webview resource URI (fetched here) or, for test doubles, base64 bytes.
   function loadModelBytes(job) {
-    return base64ToArrayBuffer(job.mdxBase64 || '');
+    if (job.modelUri) {
+      return fetch(job.modelUri).then(function (response) {
+        if (!response.ok) throw new Error('fetch ' + response.status);
+        return response.arrayBuffer();
+      });
+    }
+    return Promise.resolve(base64ToArrayBuffer(job.mdxBase64 || ''));
   }
   function renderModelThumb(job) {
     if (!ensureModelRenderer()) { markModelFailed(job.key, 'renderer-missing'); return; }
@@ -480,11 +500,16 @@ ${ICON_INLINE_CSS}
     modelJob.receivedTextures = new Set();
     modelJob.requestedTextures = null;
     modelJob.pendingTextures = new Set();
-    try {
-      mpvViewer().loadModel(loadModelBytes(job), job.fileName || '', job.format || 'mdx', { autoplay: false, textureCacheKey: 'thumbnail' });
-    } catch (e) {
-      markModelFailed(job.key, 'load-error');
-    }
+    loadModelBytes(job).then(function (bytes) {
+      if (modelJob !== job) return; // superseded while the bytes were in flight
+      try {
+        mpvViewer().loadModel(bytes, job.fileName || '', job.format || 'mdx', { autoplay: false, textureCacheKey: 'thumbnail' });
+      } catch (e) {
+        markModelFailed(job.key, 'load-error');
+      }
+    }, function () {
+      if (modelJob === job) markModelFailed(job.key, 'fetch-error');
+    });
   }
   function scheduleModelCapture(delayMs, frames) {
     if (!modelJob) return;

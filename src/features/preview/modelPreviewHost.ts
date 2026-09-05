@@ -23,11 +23,22 @@ function extOf(p: string): string {
     return dot > slash ? p.slice(dot + 1).toLowerCase() : '';
 }
 
-async function readCachedThumb(cacheKey: string): Promise<{ uri: string; cachePath: string; bytes: number; buf: Buffer } | undefined> {
+/**
+ * Cached thumbnails are handed to the webview as `vscode-webview` resource URIs (the thumb cache dir
+ * is in every consumer's `localResourceRoots`), so the bytes never travel through postMessage as
+ * base64 and the webview does not keep a data URL per thumbnail alive. Falls back to a data URL for
+ * webviews without `asWebviewUri` (test doubles).
+ */
+function thumbUri(webview: vscode.Webview, cachePath: string, bytes: Buffer): string {
+    if (typeof webview.asWebviewUri !== 'function') return `data:image/webp;base64,${bytes.toString('base64')}`;
+    return webview.asWebviewUri(vscode.Uri.file(cachePath)).toString();
+}
+
+async function readCachedThumb(webview: vscode.Webview, cacheKey: string): Promise<{ uri: string; cachePath: string; bytes: number } | undefined> {
     const cachePath = path.join(getModelThumbCacheDir(), `${cacheKey}.webp`);
     try {
         const buf = await fs.promises.readFile(cachePath);
-        return { uri: `data:image/webp;base64,${buf.toString('base64')}`, cachePath, bytes: buf.length, buf };
+        return { uri: thumbUri(webview, cachePath, buf), cachePath, bytes: buf.length };
     } catch {
         return undefined;
     }
@@ -181,6 +192,22 @@ function rememberTexturePayload(key: string, payload: TexturePayload): void {
         if (first) texturePayloadCacheBytes -= texturePayloadSize(first);
         texturePayloadCache.delete(firstKey);
     }
+}
+
+/**
+ * Forget every recorded texture miss. Misses are cached process-wide so a model with an absent
+ * texture does not re-probe the filesystem and CASC on every render; that cache has to be dropped
+ * when the world may have changed: an explicit Refresh/reload in a viewer, or a new WC3 game path.
+ */
+export function clearTextureMissCache(): void {
+    textureMissingCache.clear();
+}
+
+/** Drops cached texture misses when `wurst.wc3path` changes (the game data behind them moved). */
+export function registerTextureCacheInvalidation(): vscode.Disposable {
+    return vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration('wurst.wc3path')) clearTextureMissCache();
+    });
 }
 
 function rememberMissingTexture(key: string): void {
@@ -411,7 +438,7 @@ export async function requestModelThumbnail(
             diagnostic.modelBytes = stat.size;
         }
         const aliasKey = statThumbKey(resolved, stat);
-        const statCached = modelThumbCacheDisabled() ? undefined : await readCachedThumb(aliasKey);
+        const statCached = modelThumbCacheDisabled() ? undefined : await readCachedThumb(webview, aliasKey);
         const tStatCache = Date.now();
         if (statCached) {
             thumbLog(`${key} cache-hit-stat aliasKey=${aliasKey} path="${statCached.cachePath}" bytes=${statCached.bytes} roots=${tRoots - t0}ms resolve=${tResolved - tRoots}ms stat/cacheRead=${tStatCache - tStatStart}ms total=${tStatCache - t0}ms`);
@@ -497,7 +524,7 @@ export async function cacheModelThumbnail(key: string, cacheKey: string, webpBas
         const tWrite = Date.now();
         const aliasKeySuffix = aliasKey ? ` aliasKey=${aliasKey}` : '';
         thumbLog(`${key} cache-write key=${cacheKey}${aliasKeySuffix} path="${cachePath}" bytes=${bytes.length} decode=${tDecode - t0}ms mkdir=${tMkdir - tDecode}ms write=${tWrite - tMkdir}ms total=${tWrite - t0}ms`);
-        await webview.postMessage({ type: 'modelThumbLoaded', key, uri: `data:image/webp;base64,${bytes.toString('base64')}`, cacheKey });
+        await webview.postMessage({ type: 'modelThumbLoaded', key, uri: thumbUri(webview, cachePath, bytes), cacheKey });
     } catch (err) {
         thumbLog(`${key} cache-write error key=${cacheKey} total=${Date.now() - t0}ms error=${err instanceof Error ? err.message : String(err)}`);
         await webview.postMessage({ type: 'modelThumbMissing', key });
@@ -535,7 +562,9 @@ export async function postTexturesToWebview(
     };
     let roots: string[];
     try {
-        roots = await getCandidateRoots(documentUri.fsPath);
+        // Models reference textures relative to their map/project root, which may be an ancestor of
+        // the model's folder rather than a workspace folder (the standalone viewer relied on this).
+        roots = await getCandidateRoots(documentUri.fsPath, { includeAncestors: true });
     } catch (err) {
         stats.errors = uniqueTexPaths.length;
         await forEachLimited(uniqueTexPaths, TEXTURE_RESOLVE_CONCURRENCY, async (texPath) => {
@@ -579,7 +608,7 @@ export async function postTexturesToWebview(
                 texturePayloadCache.set(cacheKey, cachedPayload);
                 stats.payloadCache++;
                 stats.sent++;
-                await post({ type: 'mdxTexture', path: texPath, ...cachedPayload });
+                await post({ type: 'mdxTexture', path: texPath, resolvedFsPath: resolved, ...cachedPayload });
                 return;
             }
             const bytes = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(resolved)));
@@ -595,7 +624,7 @@ export async function postTexturesToWebview(
             rememberTexturePayload(cacheKey, built.payload);
             if (built.decodedDds) stats.decodedDds++;
             stats.sent++;
-            await post({ type: 'mdxTexture', path: texPath, ...built.payload });
+            await post({ type: 'mdxTexture', path: texPath, resolvedFsPath: resolved, ...built.payload });
         } catch {
             rememberMissingTexture(missKey);
             stats.errors++;

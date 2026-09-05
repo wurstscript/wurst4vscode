@@ -10,14 +10,9 @@ import {
     getGameAssetCacheDir,
     findGameTexture,
     findGameAsset,
-    findLocalTexture,
 } from './preview/cascStorage';
-import {
-    DecodedBlpImage,
-    decodeRasterPreview,
-    decodeDds,
-    decodeTga,
-} from './preview/imageDecoders';
+import { DecodedBlpImage, decodeRasterPreview } from './preview/imageDecoders';
+import { clearTextureMissCache, postTexturesToWebview } from './preview/modelPreviewHost';
 
 // Re-exported for backwards-compat with existing callers that import from blpPreview.
 export { decodeRasterPreview, decodeToRgba } from './preview/imageDecoders';
@@ -206,7 +201,8 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
             const watcher = vscode.workspace.createFileSystemWatcher(
                 new vscode.RelativePattern(path.dirname(filePath), path.basename(filePath))
             );
-            const rerender = () => { cachedBytes = undefined; requestRender(); };
+            // The file changed on disk; textures that were missing may have arrived with it.
+            const rerender = () => { cachedBytes = undefined; clearTextureMissCache(); requestRender(); };
             watcher.onDidChange(rerender);
             watcher.onDidCreate(rerender);
             webviewPanel.onDidDispose(() => watcher.dispose());
@@ -229,6 +225,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
             if (type === 'refresh') {
                 dbg(`refresh requested`);
                 cachedBytes = undefined;
+                clearTextureMissCache();
                 requestRender();
                 return;
             }
@@ -243,72 +240,10 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
                 const rawPaths = (msg as { paths?: unknown }).paths;
                 if (!Array.isArray(rawPaths)) return;
                 const texPaths: string[] = rawPaths.filter((p): p is string => typeof p === 'string');
-                const mdxFsPath = document.uri.scheme === 'file' ? document.uri.fsPath : '';
                 dbg(`texture request: ${texPaths.length} paths`);
-
-                // Resolve textures concurrently
-                // eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
-                await Promise.all(texPaths.map(async (texPath) => {
-                    try {
-                        let texBuf: Buffer | null = null;
-                        let texExt: 'blp' | 'dds' | 'tga' | null = null;
-                        let resolvedFsPath: string | null = null;
-
-                        // 1. Local file lookup (also tries .dds for .blp references)
-                        if (mdxFsPath) {
-                            const found = findLocalTexture(texPath, mdxFsPath);
-                            if (found) {
-                                texBuf = found.buf;
-                                const localExt = path.extname(found.foundPath).toLowerCase();
-                                if (localExt === '.dds') texExt = 'dds';
-                                else if (localExt === '.tga') texExt = 'tga';
-                                else texExt = 'blp';
-                                resolvedFsPath = found.foundPath;
-                            }
-                        }
-
-                        // 2. CASC local archive fallback (uses wurst.wc3path)
-                        if (!texBuf) {
-                            const casc = await findGameTexture(texPath, dbg);
-                            if (casc) {
-                                texBuf = casc.buf;
-                                texExt = casc.ext;
-                                // Reconstruct the cache path so the webview can offer an "open" link
-                                const cacheDir = getGameAssetCacheDir();
-                                const normalized = texPath.replace(/\//g, '\\').toLowerCase();
-                                const base = normalized.replace(/\.[^\\.]+$/, '');
-                                const rel = `${base}.${texExt}`;
-                                // ':' (CASC namespaces like "_hd.w3mod:") is illegal in Windows paths — mirror getCachedAssetPath.
-                                resolvedFsPath = path.join(cacheDir, ...rel.replace(/:/g, '$').split('\\'));
-                            }
-                        }
-
-                        if (!texBuf || !texExt) {
-                            await webviewPanel.webview.postMessage({ type: 'texture', path: texPath, resolvedFsPath: null, blpBase64: null });
-                            dbg(`texture ${texPath}: not found`);
-                            return;
-                        }
-
-                        if (texExt === 'dds' || texExt === 'tga') {
-                            const decoded = texExt === 'dds' ? decodeDds(new Uint8Array(texBuf)) : decodeTga(new Uint8Array(texBuf));
-                            if (decoded.mode === 'rgba') {
-                                await webviewPanel.webview.postMessage({
-                                    type: 'texture', path: texPath, resolvedFsPath,
-                                    blpBase64: null, rgbaBase64: decoded.rgbaBase64,
-                                    width: decoded.width, height: decoded.height,
-                                });
-                            } else {
-                                await webviewPanel.webview.postMessage({ type: 'texture', path: texPath, resolvedFsPath, blpBase64: null });
-                            }
-                        } else {
-                            await webviewPanel.webview.postMessage({ type: 'texture', path: texPath, resolvedFsPath, blpBase64: texBuf.toString('base64') });
-                        }
-                        dbg(`texture ${texPath}: found (${texExt})`);
-                    } catch (e) {
-                        dbg(`texture error ${texPath}: ${String(e)}`);
-                        await webviewPanel.webview.postMessage({ type: 'texture', path: texPath, resolvedFsPath: null, blpBase64: null });
-                    }
-                }));
+                // Same resolver, payload cache and concurrency limit as the object editor's inline
+                // model preview and the asset browser — this viewer used to carry its own copy.
+                await postTexturesToWebview(texPaths, document.uri, webviewPanel.webview);
                 return;
             }
             if (type === 'openTexture') {
@@ -978,7 +913,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
         if (w3v) w3v.loadModel(base64ToArrayBuffer(msg.mdxBase64), msg.fileName || '', msg.format || 'mdx');
         return;
       }
-      if (msg.type === 'texture') {
+      if (msg.type === 'mdxTexture') {
         if (w3v) {
           if (msg.ddsBase64) {
             w3v.onTextureDds(msg.path, base64ToArrayBuffer(msg.ddsBase64));

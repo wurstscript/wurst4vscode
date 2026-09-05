@@ -1047,6 +1047,8 @@ function testObjModSaveCommitsFocusedEditor() {
 
 function testObjModTooltipFontWiring() {
     const host = fs.readFileSync(path.join(root, 'src/features/objModPreview.ts'), 'utf8');
+    // Viewer CSS lives in its own stylesheet now; only the runtime @font-face rule stays in the host.
+    const css = fs.readFileSync(path.join(root, 'src/webview/objModEditor/objModEditor.css'), 'utf8');
     const packageJson = fs.readFileSync(path.join(root, 'package.json'), 'utf8');
     const packageData = JSON.parse(packageJson);
 
@@ -1059,10 +1061,10 @@ function testObjModTooltipFontWiring() {
     assert.ok(host.includes('@font-face'), 'objmod should declare the project font for tooltip previews');
     assert.ok(!host.includes("Buffer.from(bytes).toString('base64')"), 'project fonts should not be embedded as large data URLs');
     assert.ok(/\.tt-collapsed-box,\r?\n\.tt-preview \{/.test(host), 'the custom font should be assigned only to tooltip boxes');
-    assert.ok(!host.includes('.tt-collapsed-box *'), 'the custom font should not use descendant-wide override selectors');
-    assert.ok(host.includes('td.value { font-family: var(--font); }'), 'ordinary field values should use the VS Code UI font');
-    assert.ok(host.includes('.tt-empty { color: var(--muted); font-style: normal; }'), 'ordinary empty values should not be italicized');
-    assert.ok(host.includes('.tt-collapsed-box .tt-empty,'), 'only framed WC3 text may retain the italic empty placeholder');
+    assert.ok(!host.includes('.tt-collapsed-box *') && !css.includes('.tt-collapsed-box *'), 'the custom font should not use descendant-wide override selectors');
+    assert.ok(css.includes('td.value { font-family: var(--font); }'), 'ordinary field values should use the VS Code UI font');
+    assert.ok(css.includes('.tt-empty { color: var(--muted); font-style: normal; }'), 'ordinary empty values should not be italicized');
+    assert.ok(css.includes('.tt-collapsed-box .tt-empty,'), 'only framed WC3 text may retain the italic empty placeholder');
     assert.ok(packageJson.includes('wurst.objModTooltipFont'), 'the tooltip font setting should be contributed by the extension');
     assert.equal(packageData.contributes.configuration.properties['wurst.objModTooltipFont'].default, '', 'the tooltip font setting must default to disabled');
 }
@@ -1164,11 +1166,14 @@ function testObjModSavedAndUsedTooltipColors() {
     assert.ok(host.includes("context.globalState"), 'saved custom colors should follow the user across workspaces');
     assert.ok(host.includes("msg.type === 'rememberCustomColor'"), 'the objmod host should persist custom colors sent by the picker');
     assert.ok(host.includes('customColors,'), 'saved custom colors should be restored into new objmod webviews');
-    assert.ok(host.includes('.tt-custom-colors[hidden] { display: none; }'), 'an empty saved palette should remain hidden despite its flex layout');
+    const css = fs.readFileSync(path.join(root, 'src/webview/objModEditor/objModEditor.css'), 'utf8');
+    assert.ok(css.includes('.tt-custom-colors[hidden] { display: none; }'), 'an empty saved palette should remain hidden despite its flex layout');
 }
 
 function testObjModDensityAndTreeStyling() {
-    const host = fs.readFileSync(path.join(root, 'src/features/objModPreview.ts'), 'utf8');
+    // Host markup plus the extracted stylesheet: these guards cover both the DOM and its CSS.
+    const host = fs.readFileSync(path.join(root, 'src/features/objModPreview.ts'), 'utf8')
+        + '\n' + fs.readFileSync(path.join(root, 'src/webview/objModEditor/objModEditor.css'), 'utf8');
     const webview = fs.readFileSync(path.join(root, 'src/webview/objModEditorWebview.ts'), 'utf8');
 
     assert.ok(host.includes('id="density-toggle" class="density-toggle" role="switch"'), 'density must render as an obvious switch control');
@@ -1240,18 +1245,12 @@ function testObjModEditorTypeAndRecoveryGuards() {
 
 function testWpmEditorInlineScriptAndRecoveryGuards() {
     const host = fs.readFileSync(path.join(root, 'src/features/wpmPreview.ts'), 'utf8');
-    const match = host.match(/<script>\r?\n([\s\S]*?)\r?\n {2}<\/script>/);
-    assert.ok(match, 'WPM editor inline script should be present');
-    const script = match[1]
-        .replace('${wpm.width}', '4')
-        .replace('${wpm.height}', '4')
-        .replace('${dataBase64}', 'AAAAAAAAAAAAAAAAAAAAAA==')
-        .replace('${JSON.stringify(colorTable)}', '[[0, 0, 0]]')
-        .replace('${JSON.stringify(WPM_FLAG_DEFS.map(({ bit, label }) => ({ bit, label })))}', '[]')
-        .replace(/\\`/g, '`')
-        .replace(/\\\$\{/g, '${');
-    // eslint-disable-next-line sonarjs/constructor-for-side-effects -- parsing the real inline script is the assertion.
-    new vm.Script(script);
+    // The editor script is a real webview bundle (src/webview/wpmEditorWebview.ts); the host only
+    // hands over the grid and loads it under a nonce.
+    assert.ok(host.includes("'wpmEditorWebview.js'"), 'WPM host must load the bundled editor script');
+    assert.ok(host.includes('window.__WPM_INITIAL__ ='), 'WPM host must hand the grid to the bundle');
+    assert.ok(!host.includes("script-src 'unsafe-inline'"), 'WPM page must not allow arbitrary inline scripts');
+    assert.ok(fs.existsSync(path.join(root, 'src/webview/wpmEditorWebview.ts')), 'WPM editor bundle source must exist');
     // The lifecycle lives in the shared editable-editor base now; the WPM module only contributes
     // parse/serialize/render/edit translation on top of it.
     const framework = fs.readFileSync(path.join(root, 'src/features/preview/framework.ts'), 'utf8');

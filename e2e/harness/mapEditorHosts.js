@@ -11,7 +11,7 @@
 
 const fs = require('fs');
 
-const { createTsLoader } = require('./tsLoader');
+const { createTsLoader, root } = require('./tsLoader');
 const { createVscodeMock, fileUri } = require('./vscodeMock');
 const { mountCustomEditor } = require('./customEditorHost');
 const { makeMapFixtureDir } = require('./makeFixtures');
@@ -76,7 +76,7 @@ function createW3iHost(opts) {
 function createWpmHost(opts) {
     return createEditorHost(
         opts, 'src/features/wpmPreview.ts', WPM_INTERNALS, 'war3map.wpm',
-        (e2e) => new e2e.WpmEditorProvider(),
+        (e2e) => new e2e.WpmEditorProvider(fileUri(root)),
         (doc) => doc.currentRevision !== doc.savedRevision,
     );
 }

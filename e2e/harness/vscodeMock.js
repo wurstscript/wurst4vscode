@@ -63,7 +63,8 @@ function createVscodeMock(options = {}) {
     const vscodeMock = {
         Uri: {
             file: fileUri,
-            parse: (value) => fileUri(String(value).replace(/^file:\/\//, '')),
+            // `file:///C:/x` must come back as `C:\x`, not `\C:\x`: drop the slash before a drive letter.
+            parse: (value) => fileUri(String(value).replace(/^file:\/\//, '').replace(/^\/([A-Za-z]:)/, '$1')),
             joinPath: (base, ...parts) => fileUri(path.join(base.fsPath, ...parts)),
         },
         workspace: {

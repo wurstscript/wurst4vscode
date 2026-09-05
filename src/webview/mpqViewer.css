@@ -1,0 +1,156 @@
+/* MPQ archive viewer webview stylesheet (see mpqViewer.ts / mpqViewerWebview.ts). */
+/* ── search ──────────────────────────────────────────────────────────────── */
+.search-wrap {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar);
+  flex-shrink: 0;
+  display: flex; align-items: center; gap: 6px;
+}
+.search-icon { flex-shrink: 0; opacity: 0.5; }
+.search-input {
+  flex: 1;
+  background: var(--input-bg); color: var(--input-fg);
+  border: 1px solid var(--input-border); border-radius: 3px;
+  padding: 3px 7px;
+  font-family: var(--font); font-size: var(--font-size);
+  outline: none;
+}
+.search-input::placeholder { color: var(--input-ph); }
+.search-input:focus { border-color: var(--vscode-focusBorder, #007fd4); }
+.match-count { color: var(--muted); font-size: 11px; white-space: nowrap; }
+
+/* ── tree ────────────────────────────────────────────────────────────────── */
+.tree-wrap {
+  flex: 1; overflow-y: auto; overflow-x: hidden; padding: 2px 0;
+}
+.tree-wrap::-webkit-scrollbar { width: 8px; }
+.tree-wrap::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(121,121,121,.4)); border-radius: 4px; }
+.tree-wrap::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100,100,100,.7)); }
+
+.row {
+  display: flex; align-items: center; gap: 5px;
+  padding: 2px 4px 2px 0;
+  cursor: pointer; user-select: none; min-height: 22px;
+  position: relative;
+}
+.row:hover { background: var(--hover); }
+.row:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px; }
+.row-select {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px;
+  padding: 0; border: 0; background: transparent; color: inherit; font: inherit;
+  text-align: left; cursor: pointer; user-select: none;
+}
+.row-select:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px; }
+.row.selected { background: var(--active); color: var(--active-fg); }
+.row.selected .size, .row.selected .folder-meta { color: var(--active-fg); opacity: 0.75; }
+.row.hidden,
+[data-type="folder"].hidden { display: none !important; }
+
+/* chevron */
+.chevron {
+  flex-shrink: 0; width: 16px; height: 16px;
+  display: flex; align-items: center; justify-content: center;
+  transition: transform 0.12s ease;
+  color: var(--icon-fg); opacity: 0.7;
+}
+.chevron svg { width: 10px; height: 10px; fill: currentColor; }
+.collapsed .chevron { transform: rotate(-90deg); }
+
+/* folder icon */
+.folder-icon {
+  flex-shrink: 0; width: 16px; height: 16px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--vscode-symbolIcon-folderForeground, #dcb67a);
+}
+.folder-icon svg { width: 15px; height: 15px; fill: currentColor; }
+
+.folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-meta { color: var(--muted); font-size: 11px; white-space: nowrap; flex-shrink: 0; margin-left: 4px; }
+
+.children { overflow: hidden; }
+.children.collapsed { display: none; }
+
+/* badge */
+.badge {
+  flex-shrink: 0; font-size: 9px; font-weight: 700; letter-spacing: 0.04em;
+  padding: 1px 4px; border-radius: 3px; color: #fff;
+  min-width: 26px; text-align: center; font-family: var(--mono);
+}
+
+.file-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-desc {
+  color: var(--muted);
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.size {
+  color: var(--muted); font-size: 11px; white-space: nowrap;
+  flex-shrink: 0; font-family: var(--mono); text-align: right; min-width: 52px;
+}
+
+/* inline open button — only shows on hover / selection */
+.row-action {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  margin-left: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--icon-fg);
+  opacity: 0;
+  pointer-events: none;
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.row-action svg { width: 13px; height: 13px; fill: currentColor; }
+.row-action span { line-height: 1; }
+.row:hover .row-action,
+.row.selected .row-action,
+.row:focus-within .row-action {
+  opacity: 0.92;
+  pointer-events: auto;
+}
+.row-action:hover {
+  background: var(--hover);
+  border-color: var(--border);
+  opacity: 1;
+}
+.row.selected .row-action:hover { background: rgba(255,255,255,0.15); }
+.row.selected .file-desc,
+.row.selected .size { color: var(--active-fg); opacity: 0.82; }
+
+/* ── busy / extraction in progress ───────────────────────────────────────── */
+.btn-spinner {
+  display: none;
+  width: 12px; height: 12px;
+  border: 2px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: mpq-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+.wv-btn.busy .btn-spinner { display: inline-block; }
+.wv-btn.busy svg { display: none; }
+.wv-btn.busy { opacity: 1; cursor: progress; } /* keep the active button readable while disabled */
+@keyframes mpq-spin { to { transform: rotate(360deg); } }
+body.extracting .row-action { opacity: 0.35; pointer-events: none; }
+body.extracting .tree-wrap { cursor: progress; }

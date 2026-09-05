@@ -43,6 +43,7 @@ const REQUIRED_BUNDLES = [
     'dist/webview/mpqViewerWebview.js',
     'dist/webview/objModEditorWebview.js',
     'dist/webview/mdxThumbnailWorker.js',
+    'dist/webview/wpmEditorWebview.js',
 ];
 for (const required of ['package.json', 'README.md', ...REQUIRED_BUNDLES]) {
     assert(files.includes(required), `Required release file is missing: ${required}`);

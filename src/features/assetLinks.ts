@@ -5,6 +5,7 @@ import * as path from 'path';
 import { gatherImportedAssets, getCandidateRoots, requestPreviewIcon, resolveAssetPath as resolveAssetPathString, resolveAssetPathWithCasc } from './imageAssetSupport';
 import { loadObjValueCatalog, type ValueOption } from './objModPreview';
 import { cacheModelThumbnail, markModelThumbnailBad, postTexturesToWebview, requestModelThumbnail } from './preview/modelPreviewHost';
+import { getGameAssetCacheDir, getModelThumbCacheDir } from './preview/cascStorage';
 import { isSoundAssetPath, playSoundInline } from './soundPreview';
 import { buildPage, ICON_INLINE_CSS, PREVIEW_ICON_CSP } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
@@ -168,9 +169,10 @@ async function replaceAssetString(target: BrowseAssetTarget, assetPath: string):
 }
 
 async function openCodeAssetBrowser(context: vscode.ExtensionContext, target: BrowseAssetTarget): Promise<void> {
-    const [catalog, imported] = await Promise.all([
+    const [catalog, imported, assetRoots] = await Promise.all([
         loadObjValueCatalog(),
         gatherImportedAssets(target.uri.fsPath),
+        getCandidateRoots(target.uri.fsPath),
     ]);
     const panel = vscode.window.createWebviewPanel(
         'wurst.assetBrowser',
@@ -179,7 +181,15 @@ async function openCodeAssetBrowser(context: vscode.ExtensionContext, target: Br
         {
             enableScripts: true,
             retainContextWhenHidden: true,
-            localResourceRoots: [context.extensionUri, vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview')],
+            // Asset roots + caches are admitted so models and cached thumbnails can be fetched by URI
+            // instead of travelling through postMessage as base64.
+            localResourceRoots: [
+                context.extensionUri,
+                vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview'),
+                ...assetRoots.map((root) => vscode.Uri.file(root)),
+                vscode.Uri.file(getGameAssetCacheDir()),
+                vscode.Uri.file(getModelThumbCacheDir()),
+            ],
         },
     );
     const mdxViewerUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview', 'mdxViewer.js')).toString();
@@ -205,7 +215,7 @@ async function openCodeAssetBrowser(context: vscode.ExtensionContext, target: Br
         } else if (msg.type === 'loadObjectIcon' && typeof msg.iconPath === 'string' && typeof msg.key === 'string') {
             void requestPreviewIcon(msg.iconPath, msg.key, panel.webview, target.uri);
         } else if (msg.type === 'loadModelThumb' && typeof msg.path === 'string' && typeof msg.key === 'string') {
-            void requestModelThumbnail(msg.path, msg.key, target.uri, panel.webview);
+            void requestModelThumbnail(msg.path, msg.key, target.uri, panel.webview, true);
         } else if (msg.type === 'requestTextures' && Array.isArray(msg.paths)) {
             void postTexturesToWebview(
                 msg.paths.filter((candidate: unknown): candidate is string => typeof candidate === 'string'),

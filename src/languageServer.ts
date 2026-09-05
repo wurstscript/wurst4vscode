@@ -59,7 +59,11 @@ export async function stopLanguageServerIfRunning(): Promise<boolean> {
         appendDiagnostic('VS Code extension', `Language server stop failed: ${formatDiagnosticError(error)}`);
     }
     clientRef = null;
+    // Nothing restarts the server after an intentional stop (the install flow reloads the window
+    // instead), so a command issued now must fail fast with the unavailable-server dialog rather
+    // than wait on a handle that will never resolve. startLanguageClient() replaces a settled handle.
     resetClientHandle();
+    clientDeferred.reject(new Error('The WurstScript language server was stopped.'));
     return true;
 }
 

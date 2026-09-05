@@ -6,13 +6,13 @@ import { LanguageClient, ExecuteCommandParams, ExecuteCommandRequest } from 'vsc
 import { workspace, window } from 'vscode';
 import { WURST_HOME } from '../paths';
 import { appendDiagnostic, buildDiagnosticsText, formatDiagnosticError, showDiagnosticOutput, showErrorWithLogs } from './diagnostics';
-
-let diagnosticsClient: LanguageClient | null = null;
+import { getRunningLanguageClient } from '../languageServer';
 
 function showLanguageServerOutput(): void {
     try {
-        if (diagnosticsClient) {
-            diagnosticsClient.outputChannel.show();
+        const client = getRunningLanguageClient();
+        if (client) {
+            client.outputChannel.show();
             return;
         }
         void vscode.commands.executeCommand('workbench.action.output.toggleOutput');
@@ -109,7 +109,6 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
             else if (choice === 'View Logs') showDiagnosticOutput();
             return undefined;
         }
-        diagnosticsClient = client;
         return action(client);
     };
 

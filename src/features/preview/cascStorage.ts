@@ -486,6 +486,12 @@ async function detectGameDataRoot(log: (msg: string) => void): Promise<GameDataR
 let cascStorageInstance: CascStorage | null = null;
 let cascStorageRoot: string | null = null;
 let cascStorageOpening: Promise<CascStorage | null> | null = null;
+/**
+ * Bumped by `resetCascStorage`. An open that was in flight when the reset happened completes
+ * against an older generation and must not publish its result into the shared singletons — it would
+ * otherwise re-install the previous WC3 root and clear the newer open's promise.
+ */
+let storageGeneration = 0;
 
 async function getCascStorageInstance(wc3Root: string, log: (msg: string) => void): Promise<CascStorage | null> {
     if (cascStorageInstance && cascStorageRoot === wc3Root) {
@@ -497,25 +503,32 @@ async function getCascStorageInstance(wc3Root: string, log: (msg: string) => voi
     // Root changed or first open — (re-)initialise
     cascStorageInstance = null;
     cascStorageRoot = wc3Root;
-    cascStorageOpening = (async () => {
+    const generation = storageGeneration;
+    const opening = (async () => {
         try {
             log(`CASC opening storage at: ${wc3Root}`);
             channelLog(`opening storage at: ${wc3Root}`);
-            cascStorageInstance = await CascStorage.openAsync(wc3Root, log);
-            log(`CASC storage opened (${cascStorageInstance.fileCount} files)`);
-            channelLog(`storage opened (${cascStorageInstance.fileCount} files)`);
-            return cascStorageInstance;
+            const storage = await CascStorage.openAsync(wc3Root, log);
+            if (generation !== storageGeneration) {
+                channelLog(`discarding CASC storage opened for a superseded root: ${wc3Root}`);
+                return null;
+            }
+            cascStorageInstance = storage;
+            log(`CASC storage opened (${storage.fileCount} files)`);
+            channelLog(`storage opened (${storage.fileCount} files)`);
+            return storage;
         } catch (e) {
             const detail = formatDiagnosticError(e);
             log(`CASC open failed: ${detail}`);
             channelLog(`storage open failed: ${detail}`);
-            cascStorageRoot = null;
+            if (generation === storageGeneration) cascStorageRoot = null;
             return null;
         } finally {
-            cascStorageOpening = null;
+            if (generation === storageGeneration) cascStorageOpening = null;
         }
     })();
-    return cascStorageOpening;
+    cascStorageOpening = opening;
+    return opening;
 }
 
 let mpqStorageInstance: MpqGameStorage | null = null;
@@ -531,25 +544,34 @@ async function getGameStorageInstance(root: GameDataRoot, log: (msg: string) => 
     if (mpqStorageOpening && mpqStorageRoot === root.root) return mpqStorageOpening;
     mpqStorageInstance = null;
     mpqStorageRoot = root.root;
-    mpqStorageOpening = (async () => {
+    const generation = storageGeneration;
+    const opening = (async () => {
         try {
-            mpqStorageInstance = await MpqGameStorage.openAsync(root.root, log);
-            return mpqStorageInstance;
+            const storage = await MpqGameStorage.openAsync(root.root, log);
+            if (generation !== storageGeneration) {
+                channelLog(`discarding MPQ storage opened for a superseded root: ${root.root}`);
+                void storage.close();
+                return null;
+            }
+            mpqStorageInstance = storage;
+            return storage;
         } catch (error) {
             const detail = formatDiagnosticError(error);
             log(`MPQ game storage open failed: ${detail}`);
             channelLog(`game storage open failed: ${detail}`);
-            mpqStorageRoot = null;
+            if (generation === storageGeneration) mpqStorageRoot = null;
             return null;
         } finally {
-            mpqStorageOpening = null;
+            if (generation === storageGeneration) mpqStorageOpening = null;
         }
     })();
-    return mpqStorageOpening;
+    mpqStorageOpening = opening;
+    return opening;
 }
 
-/** Reset the singleton (e.g. when wc3path setting changes). */
+/** Reset the singleton (e.g. when wc3path setting changes). In-flight opens are invalidated. */
 export function resetCascStorage(): void {
+    storageGeneration++;
     void mpqStorageInstance?.close();
     closeAllSegments();
     cascStorageInstance = null;

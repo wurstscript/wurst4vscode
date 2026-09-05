@@ -699,6 +699,65 @@ function testNonBlockingStartupAndForcedReinstallWiring() {
     assert.ok(manifest.contributes.commands.some((item) => item.command === 'wurst.stopAllProcesses'), 'force-stop command must be contributed');
 }
 
+/** The server-backed commands await this handle, so its lifecycle decides whether they run, fail fast, or hang. */
+async function testLanguageClientHandleLifecycle() {
+    let failStart = false;
+    const clients = [];
+    class FakeLanguageClient {
+        constructor() { this.stopped = false; this.outputChannel = { show() {} }; clients.push(this); }
+        start() { return Promise.resolve(); }
+        stop() { this.stopped = true; return Promise.resolve(); }
+        onNotification() {}
+    }
+    const mod = loadTsModuleWithMocks('src/languageServer.ts', {
+        vscode: {
+            window: { createStatusBarItem: () => ({ show() {}, dispose() {} }) },
+            StatusBarAlignment: { Right: 2 },
+            workspace: {
+                getConfiguration: () => ({ get: (_key, fallback) => fallback }),
+                createFileSystemWatcher: () => ({ onDidCreate() {}, onDidChange() {}, onDidDelete() {}, dispose() {} }),
+            },
+        },
+        'vscode-languageclient/node': { LanguageClient: FakeLanguageClient },
+        fs: { existsSync: () => true },
+        './paths': { RUNTIME_DIR: 'runtime', COMPILER_JAR: 'wurstscript.jar' },
+        './install/installer': {
+            ensureInstalledOrOfferMigration: async () => { if (failStart) throw new Error('not installed'); },
+            getBundledJava: () => 'java',
+            checkCustomJavaVersion: async () => undefined,
+            getInstalledVersionString: async () => 'v1',
+            maybeOfferUpdate: async () => undefined,
+        },
+        './features/diagnostics': { appendDiagnostic() {}, formatDiagnosticError: (e) => String(e) },
+    });
+    const context = { subscriptions: [] };
+    const settled = (promise) => Promise.race([
+        promise.then(() => 'resolved', () => 'rejected'),
+        new Promise((resolve) => setTimeout(() => resolve('pending'), 20)),
+    ]);
+
+    assert.equal(await settled(mod.getLanguageClient()), 'pending', 'before startup the handle must wait, not fail');
+    assert.equal(await mod.stopLanguageServerIfRunning(), false, 'stopping with no client is a no-op');
+    assert.equal(await settled(mod.getLanguageClient()), 'pending', 'a no-op stop must not settle the handle');
+
+    await mod.startLanguageClient(context);
+    assert.equal(await mod.getLanguageClient(), clients[0], 'the handle resolves to the started client');
+    assert.equal(mod.getRunningLanguageClient(), clients[0], 'output-channel commands must see the running client without a prior command');
+
+    assert.equal(await mod.stopLanguageServerIfRunning(), true);
+    assert.equal(clients[0].stopped, true);
+    assert.equal(mod.getRunningLanguageClient(), null);
+    assert.equal(await settled(mod.getLanguageClient()), 'rejected', 'after an intentional stop a command must fail fast instead of waiting forever');
+
+    await mod.startLanguageClient(context);
+    assert.equal(await mod.getLanguageClient(), clients[1], 'a restart hands out a fresh handle');
+    await mod.stopLanguageServerIfRunning();
+
+    failStart = true;
+    await assert.rejects(mod.startLanguageClient(context));
+    assert.equal(await settled(mod.getLanguageClient()), 'rejected', 'a failed start must reject the handle');
+}
+
 function testWurstProcessMatching() {
     const runtime = 'C:\\Users\\tester\\.wurst\\wurst-runtime';
     const jar = 'C:\\Users\\tester\\.wurst\\wurst-compiler\\wurstscript.jar';
@@ -1230,6 +1289,7 @@ async function main() {
     testObjModEditorTypeAndRecoveryGuards();
     testWpmEditorInlineScriptAndRecoveryGuards();
     testNonBlockingStartupAndForcedReinstallWiring();
+    await testLanguageClientHandleLifecycle();
     testWurstProcessMatching();
     await testModelThumbnailRequestsTexturesByDefault();
     testAssetBrowserForwardsModelTextures();

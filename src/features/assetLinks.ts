@@ -484,8 +484,15 @@ ${ICON_INLINE_CSS}
     for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
     return out.buffer;
   }
+  // The host sends either a webview resource URI (fetched here) or, for test doubles, base64 bytes.
   function loadModelBytes(job) {
-    return base64ToArrayBuffer(job.mdxBase64 || '');
+    if (job.modelUri) {
+      return fetch(job.modelUri).then(function (response) {
+        if (!response.ok) throw new Error('fetch ' + response.status);
+        return response.arrayBuffer();
+      });
+    }
+    return Promise.resolve(base64ToArrayBuffer(job.mdxBase64 || ''));
   }
   function renderModelThumb(job) {
     if (!ensureModelRenderer()) { markModelFailed(job.key, 'renderer-missing'); return; }
@@ -493,11 +500,16 @@ ${ICON_INLINE_CSS}
     modelJob.receivedTextures = new Set();
     modelJob.requestedTextures = null;
     modelJob.pendingTextures = new Set();
-    try {
-      mpvViewer().loadModel(loadModelBytes(job), job.fileName || '', job.format || 'mdx', { autoplay: false, textureCacheKey: 'thumbnail' });
-    } catch (e) {
-      markModelFailed(job.key, 'load-error');
-    }
+    loadModelBytes(job).then(function (bytes) {
+      if (modelJob !== job) return; // superseded while the bytes were in flight
+      try {
+        mpvViewer().loadModel(bytes, job.fileName || '', job.format || 'mdx', { autoplay: false, textureCacheKey: 'thumbnail' });
+      } catch (e) {
+        markModelFailed(job.key, 'load-error');
+      }
+    }, function () {
+      if (modelJob === job) markModelFailed(job.key, 'fetch-error');
+    });
   }
   function scheduleModelCapture(delayMs, frames) {
     if (!modelJob) return;

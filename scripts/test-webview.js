@@ -736,11 +736,13 @@ async function testLanguageClientHandleLifecycle() {
         new Promise((resolve) => setTimeout(() => resolve('pending'), 20)),
     ]);
 
-    assert.equal(await settled(mod.getLanguageClient()), 'pending', 'before startup the handle must wait, not fail');
+    assert.equal(await settled(mod.getLanguageClient()), 'rejected', 'with no start underway (e.g. an empty window) a command must fail fast, not wait forever');
+    await assert.rejects(mod.getLanguageClient(), /Open a folder/);
     assert.equal(await mod.stopLanguageServerIfRunning(), false, 'stopping with no client is a no-op');
-    assert.equal(await settled(mod.getLanguageClient()), 'pending', 'a no-op stop must not settle the handle');
 
-    await mod.startLanguageClient(context);
+    const starting = mod.startLanguageClient(context);
+    assert.equal(await settled(mod.getLanguageClient()), 'resolved', 'a request during startup waits for that start');
+    await starting;
     assert.equal(await mod.getLanguageClient(), clients[0], 'the handle resolves to the started client');
     assert.equal(mod.getRunningLanguageClient(), clients[0], 'output-channel commands must see the running client without a prior command');
 
@@ -748,6 +750,7 @@ async function testLanguageClientHandleLifecycle() {
     assert.equal(clients[0].stopped, true);
     assert.equal(mod.getRunningLanguageClient(), null);
     assert.equal(await settled(mod.getLanguageClient()), 'rejected', 'after an intentional stop a command must fail fast instead of waiting forever');
+    await assert.rejects(mod.getLanguageClient(), /was stopped/);
 
     await mod.startLanguageClient(context);
     assert.equal(await mod.getLanguageClient(), clients[1], 'a restart hands out a fresh handle');
@@ -756,6 +759,7 @@ async function testLanguageClientHandleLifecycle() {
     failStart = true;
     await assert.rejects(mod.startLanguageClient(context));
     assert.equal(await settled(mod.getLanguageClient()), 'rejected', 'a failed start must reject the handle');
+    await assert.rejects(mod.getLanguageClient(), /not installed/);
 }
 
 function testWurstProcessMatching() {

@@ -439,7 +439,16 @@ function textureBasePath(assetPath: string): string {
  * extension host while the language server is still booting. Concurrent callers share one probe.
  */
 function getGameDataRoot(log: (msg: string) => void): Promise<GameDataRoot | null> {
-    if (!gameDataRootPromise) gameDataRootPromise = detectGameDataRoot(log);
+    if (!gameDataRootPromise) {
+        const generation = storageGeneration;
+        gameDataRootPromise = detectGameDataRoot(log).then((root) => {
+            // A reset while detection was in flight (wurst.wc3path changed) invalidates this answer
+            // for everyone still awaiting it — hand them the current generation's detection instead
+            // of a root that would then open the superseded installation.
+            if (generation !== storageGeneration) return getGameDataRoot(log);
+            return root;
+        });
+    }
     return gameDataRootPromise;
 }
 

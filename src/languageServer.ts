@@ -13,42 +13,26 @@ let clientRef: LanguageClient | null = null;
 
 // Commands that talk to the server are registered at activation, before (and independent of) the
 // JVM start, so they exist in the palette even while the server is still booting or when it failed.
-// They await this handle; it resolves once the client is running and rejects when startup failed,
-// so a command never hangs silently and can point the user at the install/update action instead.
-type ClientDeferred = {
-    promise: Promise<LanguageClient>;
-    resolve: (client: LanguageClient) => void;
-    reject: (error: unknown) => void;
-    settled: boolean;
-};
+// They ask for the client through getLanguageClient(), which reflects three states and nothing
+// else: running (resolve now), starting (wait for that start), or not running (reject now with the
+// reason). There is deliberately no "pending until something happens" state — an intentional stop,
+// a failed start and a window without a workspace folder all fall into "not running", so a command
+// can never hang on a handle that nothing will ever settle.
+let startingClient: Promise<LanguageClient> | null = null;
+let unavailableReason: Error = new Error(
+    'The WurstScript language server has not been started. Open a folder containing a Wurst project.',
+);
 
-function newClientDeferred(): ClientDeferred {
-    const deferred = {} as ClientDeferred;
-    deferred.settled = false;
-    deferred.promise = new Promise<LanguageClient>((resolve, reject) => {
-        deferred.resolve = (client) => { deferred.settled = true; resolve(client); };
-        deferred.reject = (error) => { deferred.settled = true; reject(error); };
-    });
-    // A rejected handle is consumed through getLanguageClient(); avoid an unhandled-rejection report
-    // when nobody happens to be waiting on it.
-    deferred.promise.catch(() => undefined);
-    return deferred;
-}
-
-let clientDeferred = newClientDeferred();
-
-/** Resolves with the running language client, or rejects if the server could not be started. */
+/** Resolves with the running language client, or rejects with why there is none. */
 export function getLanguageClient(): Promise<LanguageClient> {
-    return clientDeferred.promise;
+    if (clientRef) return Promise.resolve(clientRef);
+    if (startingClient) return startingClient;
+    return Promise.reject(unavailableReason);
 }
 
 /** The running client if there is one right now (no waiting). */
 export function getRunningLanguageClient(): LanguageClient | null {
     return clientRef;
-}
-
-function resetClientHandle(): void {
-    if (clientDeferred.settled) clientDeferred = newClientDeferred();
 }
 
 export async function stopLanguageServerIfRunning(): Promise<boolean> {
@@ -60,16 +44,21 @@ export async function stopLanguageServerIfRunning(): Promise<boolean> {
     }
     clientRef = null;
     // Nothing restarts the server after an intentional stop (the install flow reloads the window
-    // instead), so a command issued now must fail fast with the unavailable-server dialog rather
-    // than wait on a handle that will never resolve. startLanguageClient() replaces a settled handle.
-    resetClientHandle();
-    clientDeferred.reject(new Error('The WurstScript language server was stopped.'));
+    // instead), so commands issued from now on fail fast with this reason.
+    unavailableReason = new Error('The WurstScript language server was stopped.');
     return true;
 }
 
 export async function startLanguageClient(context: ExtensionContext): Promise<void> {
-    if (clientRef) return;
-    resetClientHandle();
+    if (clientRef || startingClient) return;
+    let announceStarted!: (client: LanguageClient) => void;
+    let announceFailed!: (error: unknown) => void;
+    startingClient = new Promise<LanguageClient>((resolve, reject) => {
+        announceStarted = resolve;
+        announceFailed = reject;
+    });
+    // Consumed through getLanguageClient(); avoid an unhandled-rejection report when nobody waits.
+    startingClient.catch(() => undefined);
 
     let client: LanguageClient;
     try {
@@ -96,11 +85,20 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
         if (typeof anyClient.onReady === 'function') await anyClient.onReady();
     } catch (error) {
         clientRef = null;
+        startingClient = null;
+        unavailableReason = error instanceof Error ? error : new Error(String(error));
         appendDiagnostic('VS Code extension', `Wurst language server failed to start: ${formatDiagnosticError(error)}`);
-        clientDeferred.reject(error);
+        announceFailed(error);
         throw error;
     }
-    clientDeferred.resolve(client);
+    startingClient = null;
+    if (clientRef !== client) {
+        // Stopped (or replaced) while it was still starting up: report the stop, not a client that
+        // is no longer running.
+        announceFailed(unavailableReason);
+        return;
+    }
+    announceStarted(client);
 
     const sb = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     let installedVersion = 'detecting...';

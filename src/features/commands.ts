@@ -101,8 +101,9 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
             client = await getClient();
         } catch (error) {
             appendDiagnostic('VS Code extension', `Command skipped, language server unavailable: ${formatDiagnosticError(error)}`);
+            const reason = error instanceof Error ? error.message : String(error);
             const choice = await vscode.window.showErrorMessage(
-                'The WurstScript language server is not running, so this command is unavailable.',
+                `This command needs the WurstScript language server, which is not running. ${reason}`,
                 'Install/Update', 'View Logs',
             );
             if (choice === 'Install/Update') void vscode.commands.executeCommand('wurst.installOrUpdate');

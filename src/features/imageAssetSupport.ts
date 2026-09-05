@@ -181,18 +181,30 @@ export function registerAssetRootInvalidation(): vscode.Disposable {
     );
 }
 
-export async function getCandidateRoots(documentFsPath: string): Promise<string[]> {
+export interface CandidateRootOptions {
+    /**
+     * Also treat up to four ancestor directories of the document as roots. Model files reference
+     * textures relative to their map/project root, which is often a parent of the model's folder
+     * without being a workspace folder itself. Only for lookups, not for scans: `gatherImportedAssets`
+     * must never walk a home directory.
+     */
+    includeAncestors?: boolean;
+}
+
+const ANCESTOR_ROOT_LEVELS = 4;
+
+export async function getCandidateRoots(documentFsPath: string, options: CandidateRootOptions = {}): Promise<string[]> {
     const workspaceKey = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath).join('|');
-    const cacheKey = `${documentFsPath}|${workspaceKey}`;
+    const cacheKey = `${documentFsPath}|${options.includeAncestors ? 'ancestors' : ''}|${workspaceKey}`;
     let promise = candidateRootsCache.get(cacheKey);
     if (!promise) {
-        promise = getCandidateRootsUncached(documentFsPath);
+        promise = getCandidateRootsUncached(documentFsPath, options);
         candidateRootsCache.set(cacheKey, promise);
     }
     return [...await promise];
 }
 
-async function getCandidateRootsUncached(documentFsPath: string): Promise<string[]> {
+async function getCandidateRootsUncached(documentFsPath: string, options: CandidateRootOptions): Promise<string[]> {
     const seen = new Set<string>();
     const roots: string[] = [];
     const add = (candidate: string) => {
@@ -215,6 +227,15 @@ async function getCandidateRootsUncached(documentFsPath: string): Promise<string
     add(documentDir);
     if (/\.(w3x|w3m)$/i.test(documentDir)) {
         addAssetSubdirs(documentDir);
+    }
+    if (options.includeAncestors) {
+        let dir = documentDir;
+        for (let level = 0; level < ANCESTOR_ROOT_LEVELS; level++) {
+            const parent = path.dirname(dir);
+            if (parent === dir) break;
+            add(parent);
+            dir = parent;
+        }
     }
 
     await Promise.all((vscode.workspace.workspaceFolders ?? []).map(async (folder) => {

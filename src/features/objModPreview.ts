@@ -9,6 +9,7 @@ import { parseObjMod, serializeObjMod, ObjModFile, ObjModEntry, ObjModMod, ObjMo
 import { ParsedPreviewContext } from './preview/framework';
 import { requestPreviewIcon, requestTooltipBackdrop, requestTooltipBorder, getCandidateRoots, resolveAssetPathWithCasc, gatherImportedAssets } from './imageAssetSupport';
 import {
+    clearTextureMissCache,
     postModelToWebview,
     postTexturesToWebview,
     requestModelThumbnail,
@@ -30,7 +31,7 @@ import {
     UNIT_PROFILE_PATHS, ABILITY_PROFILE_PATHS, UPGRADE_PROFILE_PATHS,
     ITEM_PROFILE_PATHS, DESTRUCTABLE_PROFILE_PATHS, DOODAD_PROFILE_PATHS,
 } from './preview/wc3Data';
-import { getGameAssetCacheDir, listGameAssetPaths } from './preview/cascStorage';
+import { getGameAssetCacheDir, getModelThumbCacheDir, listGameAssetPaths } from './preview/cascStorage';
 import { showErrorWithLogs, showWarningWithLogs } from './diagnostics';
 import { repairTooltipTrueTypeFont } from './preview/tooltipFont';
 import {
@@ -3712,6 +3713,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
                 vscode.Uri.file(path.dirname(doc.uri.fsPath)),
                 vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview'),
                 vscode.Uri.file(getGameAssetCacheDir()),
+                vscode.Uri.file(getModelThumbCacheDir()),
             ],
         };
         const fileName = doc.uri.path.slice(doc.uri.path.lastIndexOf('/') + 1);
@@ -3864,6 +3866,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             return;
         }
         if (msg.type === 'refresh') {
+            clearTextureMissCache();
             await this.refreshFromDisk(doc);
             return;
         }

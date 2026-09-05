@@ -863,32 +863,6 @@ export function logGameData(message: string): void {
     defaultCascLog(message);
 }
 
-/** Try to read a texture file from the local filesystem relative to the MDX file.
- *  Returns the buffer and the actual path found (may differ in extension). */
-export function findLocalTexture(texPath: string, mdxFsPath: string): { buf: Buffer; foundPath: string } | null {
-    const normalized = texPath.replace(/\\/g, '/');
-    // When the model references a .blp, also try the Reforged .dds equivalent.
-    const alternates = [normalized];
-    if (normalized.toLowerCase().endsWith('.blp')) {
-        alternates.push(normalized.slice(0, -4) + '.dds');
-    }
-    const mdxDir = path.dirname(mdxFsPath);
-
-    let dir = mdxDir;
-    for (let i = 0; i < 4; i++) {
-        for (const alt of alternates) {
-            const candidate = path.join(dir, alt);
-            if (fs.existsSync(candidate)) {
-                return { buf: fs.readFileSync(candidate), foundPath: candidate };
-            }
-        }
-        const parent = path.dirname(dir);
-        if (parent === dir) break;
-        dir = parent;
-    }
-    return null;
-}
-
 /**
  * Ensures a texture asset is present in the CASC disk cache, extracting from
  * the WC3 game files if needed.

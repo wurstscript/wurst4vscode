@@ -30,6 +30,7 @@ import { registerFileCreation } from './features/fileCreation';
 import { openIssueReport } from './features/issueReporting';
 import { registerCascDiagnosticsCommand, registerGameDataSettingsWatcher } from './features/preview/cascStorage';
 import { registerAssetRootInvalidation } from './features/imageAssetSupport';
+import { registerTextureCacheInvalidation } from './features/preview/modelPreviewHost';
 import { formatDiagnosticError, showErrorWithLogs, showWarningWithLogs } from './features/diagnostics';
 
 export async function activate(context: ExtensionContext) {
@@ -53,6 +54,7 @@ export async function activate(context: ExtensionContext) {
     context.subscriptions.push(registerCascDiagnosticsCommand());
     context.subscriptions.push(registerGameDataSettingsWatcher());
     context.subscriptions.push(registerAssetRootInvalidation());
+    context.subscriptions.push(registerTextureCacheInvalidation());
     registerWurstDiagnosticsCommands(context);
 
     registerBasicCommands(context);

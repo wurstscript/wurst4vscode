@@ -38,8 +38,17 @@ function statThumbKey(resolvedPath: string, stat: fs.Stats): string {
     return `v8s-${fastByteHash(Buffer.from(identity, 'utf8'))}`;
 }
 
+/**
+ * Thumbnail tracing (console lines + the JSONL diagnostics file) is opt-in: every visible thumbnail
+ * used to write several log lines and a disk append in production. Enable with
+ * `WURST_MODEL_THUMB_DEBUG=1`; the thumbnail e2e runs turn it on together with the cache switch.
+ */
+function thumbDiagnosticsEnabled(): boolean {
+    return process.env.WURST_MODEL_THUMB_DEBUG === '1' || process.env.WURST_MODEL_THUMB_DISABLE_CACHE === '1';
+}
+
 function thumbLog(message: string): void {
-    console.log(`[wurst-model-thumb] ${message}`);
+    if (thumbDiagnosticsEnabled()) console.log(`[wurst-model-thumb] ${message}`);
 }
 
 type ThumbnailDiagnostic = {
@@ -64,6 +73,7 @@ export function getModelThumbnailDiagnosticsPath(): string {
 }
 
 function appendThumbnailDiagnostic(entry: Record<string, unknown>): void {
+    if (!thumbDiagnosticsEnabled()) return;
     const diagnosticsPath = getModelThumbnailDiagnosticsPath();
     diagnosticWrite = diagnosticWrite.then(async () => {
         await fs.promises.mkdir(path.dirname(diagnosticsPath), { recursive: true });

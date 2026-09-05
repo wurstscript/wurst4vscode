@@ -180,7 +180,18 @@ export interface EditableBinaryEditorOpts<TFile extends { error?: string }, TDoc
     onSave?: (doc: TDoc, target: vscode.Uri) => Promise<void>;
     /** Reset sidecar state when the document is reverted to disk. */
     onRevert?: (doc: TDoc) => void;
+    /**
+     * Unsaved state that lives outside the binary model (e.g. pending `war3map.wts` edits). Without
+     * this, a hot-exit backup would restore the document as dirty while silently dropping exactly
+     * those edits, because the backup holds only the serialized file. `save` returns JSON-serializable
+     * data written beside the backup; `restore` applies it to a freshly opened document.
+     */
+    sidecar?: { save: (doc: TDoc) => unknown; restore: (doc: TDoc, data: unknown) => void };
     webviewOptions?: vscode.WebviewOptions;
+}
+
+function sidecarBackupUri(destination: vscode.Uri): vscode.Uri {
+    return destination.with({ path: `${destination.path}.sidecar.json` });
 }
 
 export class EditableBinaryEditorProvider<TFile extends { error?: string }, TDoc extends EditableBinaryDocument<TFile>>
@@ -197,8 +208,20 @@ export class EditableBinaryEditorProvider<TFile extends { error?: string }, TDoc
         if (openContext.backupId) {
             doc.currentRevision = 1;
             doc.nextRevision = 2;
+            await this.restoreSidecar(doc, source);
         }
         return doc;
+    }
+
+    private async restoreSidecar(doc: TDoc, backup: vscode.Uri): Promise<void> {
+        if (!this.opts.sidecar) return;
+        let raw: Uint8Array;
+        try {
+            raw = await vscode.workspace.fs.readFile(sidecarBackupUri(backup));
+        } catch {
+            return; // backup written before sidecar support, or the format has none pending
+        }
+        this.opts.sidecar.restore(doc, JSON.parse(Buffer.from(raw).toString('utf8')));
     }
 
     async resolveCustomEditor(doc: TDoc, panel: vscode.WebviewPanel): Promise<void> {
@@ -217,13 +240,18 @@ export class EditableBinaryEditorProvider<TFile extends { error?: string }, TDoc
             : this.opts.render(doc);
     }
 
-    /** Apply an edit, mark the document dirty and hand VS Code its undo/redo. */
-    pushEdit(doc: TDoc, label: string, edit: BinaryEdit): void {
+    /**
+     * Apply an edit, mark the document dirty and hand VS Code its undo/redo. `postState` runs after
+     * every step; `rerender` additionally replaces the whole page for editors whose incremental update
+     * cannot express the change (e.g. a form whose controls mirror a flag word).
+     */
+    pushEdit(doc: TDoc, label: string, edit: BinaryEdit, rerender: { onApply?: boolean; onUndoRedo?: boolean } = {}): void {
         const beforeRevision = doc.currentRevision;
         const afterRevision = doc.nextRevision++;
         edit.apply();
         doc.currentRevision = afterRevision;
         this.opts.postState(doc);
+        if (rerender.onApply) this.render(doc);
         this._onDidChange.fire({
             document: doc,
             label,
@@ -231,11 +259,13 @@ export class EditableBinaryEditorProvider<TFile extends { error?: string }, TDoc
                 edit.revert();
                 doc.currentRevision = beforeRevision;
                 this.opts.postState(doc);
+                if (rerender.onUndoRedo) this.render(doc);
             },
             redo: () => {
                 edit.apply();
                 doc.currentRevision = afterRevision;
                 this.opts.postState(doc);
+                if (rerender.onUndoRedo) this.render(doc);
             },
         });
     }
@@ -268,9 +298,15 @@ export class EditableBinaryEditorProvider<TFile extends { error?: string }, TDoc
 
     async backupCustomDocument(doc: TDoc, context: vscode.CustomDocumentBackupContext): Promise<vscode.CustomDocumentBackup> {
         await vscode.workspace.fs.writeFile(context.destination, this.opts.serialize(doc.file, doc.uri.path));
+        const sidecarUri = sidecarBackupUri(context.destination);
+        if (this.opts.sidecar) {
+            const data = JSON.stringify(this.opts.sidecar.save(doc));
+            await vscode.workspace.fs.writeFile(sidecarUri, Buffer.from(data, 'utf8'));
+        }
+        const remove = (target: vscode.Uri) => vscode.workspace.fs.delete(target).then(() => undefined, () => undefined);
         return {
             id: context.destination.toString(),
-            delete: () => vscode.workspace.fs.delete(context.destination).then(() => undefined, () => undefined),
+            delete: async () => { await remove(context.destination); await remove(sidecarUri); },
         };
     }
 

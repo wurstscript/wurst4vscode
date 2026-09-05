@@ -14,14 +14,13 @@ import {
 import { getCandidateRoots, resolveAssetPathWithCasc } from './imageAssetSupport';
 import { buildPage } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
-import { showErrorWithLogs, showWarningWithLogs } from './diagnostics';
+import { showWarningWithLogs } from './diagnostics';
 
 type MapDataFile =
     | { kind: 'imp'; version: number; imports: ImpEntry[]; error?: string }
     | ({ kind: 'mmp' } & MmpFile)
     | { kind: 'shd'; width: number; height: number; bytes: Buffer; min: number; max: number; dimensionsSource: string; error?: string }
     | ({ kind: 'w3c' } & W3cFile)
-    | { kind: 'w3i'; info: W3iInfo; error?: string }
     | ({ kind: 'w3r' } & W3rFile)
     | { kind: 'w3e'; info: W3eInfo; error?: string }
     | { kind: 'generic'; label: string; bytes: Buffer; note: string; error?: string };
@@ -72,36 +71,6 @@ interface W3cFile {
     error?: string;
 }
 
-interface W3iInfo {
-    version: number;
-    saves: number;
-    editorVersion: number;
-    gameVersion?: string;
-    name: string;
-    author: string;
-    description: string;
-    recommendedPlayers: string;
-    width: number;
-    height: number;
-    flags: number;
-    tileset: string;
-    loadingBackground?: number;
-    loadingModel?: string;
-    loadingTitle?: string;
-    loadingText?: string;
-    loadingSubtitle?: string;
-    gameDataSet?: number;
-    prologueTitle?: string;
-    prologueText?: string;
-    prologueSubtitle?: string;
-    scriptLang?: string;
-    graphics?: string;
-    gameDataVersion?: string;
-    forceCameraZoom?: { default: number; max: number; min: number };
-    playersCount?: number;
-    forcesCount?: number;
-}
-
 interface W3rRegion {
     name: string;
     index: number;
@@ -145,7 +114,6 @@ function parseMapData(data: Buffer, fileName: string, context: ParsedPreviewCont
     if (ext === '.mmp') return parseMmp(data);
     if (ext === '.shd') return parseShd(data, context);
     if (ext === '.w3c') return parseW3c(data);
-    if (ext === '.w3i') return parseW3i(data);
     if (ext === '.w3r') return parseW3r(data);
     if (ext === '.w3e') return parseW3e(data);
     return parseGeneric(data, ext);
@@ -324,86 +292,6 @@ function parseW3cFile(data: Buffer): W3cFile {
     }
 }
 
-function parseW3i(data: Buffer): MapDataFile {
-    const r = new BinReader(data);
-    const info: W3iInfo = {
-        version: 0,
-        saves: 0,
-        editorVersion: 0,
-        name: '',
-        author: '',
-        description: '',
-        recommendedPlayers: '',
-        width: 0,
-        height: 0,
-        flags: 0,
-        tileset: '',
-    };
-
-    try {
-        info.version = r.readI32();
-        info.saves = r.readI32();
-        info.editorVersion = r.readI32();
-
-        if (info.version >= 28) {
-            const major = r.readU32();
-            const minor = r.readU32();
-            const rev = r.readU32();
-            const build = r.readU32();
-            info.gameVersion = `${major}.${minor}.${rev}.${build}`;
-        }
-
-        info.name = r.readString();
-        info.author = r.readString();
-        info.description = r.readString();
-        info.recommendedPlayers = r.readString();
-
-        r.skip(8 * 4); // camera bounds
-        r.skip(4 * 4); // margins
-        info.width = r.readI32();
-        info.height = r.readI32();
-        info.flags = r.readI32();
-        info.tileset = String.fromCharCode(r.readU8());
-
-        info.loadingBackground = r.readI32();
-        if (info.version >= 25) info.loadingModel = r.readString();
-        info.loadingText = r.readString();
-        info.loadingTitle = r.readString();
-        info.loadingSubtitle = r.readString();
-        info.gameDataSet = r.readI32();
-
-        r.readString(); // prologue path
-        info.prologueText = r.readString();
-        info.prologueTitle = r.readString();
-        info.prologueSubtitle = r.readString();
-
-        r.skip(4 + 4 + 4 + 4 + 4); // fog type/start/end/density/color
-        r.skip(4); // global weather id
-        r.readString(); // sound environment
-        r.skip(1); // light environment tileset
-        r.skip(4); // water color
-
-        if (info.version >= 28) {
-            info.scriptLang = r.readU32() === 1 ? 'Lua' : 'JASS';
-        }
-        if (info.version >= 31) {
-            info.graphics = graphicsLabel(r.readU32());
-            info.gameDataVersion = r.readU32() === 1 ? 'TFT' : 'RoC';
-        }
-        if (info.version >= 33) {
-            info.forceCameraZoom = { default: r.readI32(), max: r.readI32(), min: r.readI32() };
-        }
-
-        if (!r.eof) info.playersCount = r.readI32();
-        skipW3iPlayers(r, info.version, info.playersCount ?? 0);
-        if (!r.eof) info.forcesCount = r.readI32();
-
-        return { kind: 'w3i', info };
-    } catch (e) {
-        return { kind: 'w3i', info, error: errorMessage(e) };
-    }
-}
-
 function parseW3r(data: Buffer): MapDataFile {
     return { kind: 'w3r', ...parseW3rFile(data) };
 }
@@ -481,26 +369,12 @@ function parseGeneric(data: Buffer, ext: string): MapDataFile {
     return { kind: 'generic', label, note, bytes: data };
 }
 
-function skipW3iPlayers(r: BinReader, version: number, count: number): void {
-    for (let i = 0; i < count && !r.eof; i++) {
-        r.skip(4); // num
-        r.skip(4); // type
-        r.skip(4); // race
-        r.skip(4); // fixed start
-        r.readString(); // name
-        r.skip(4 + 4); // start x/y
-        r.skip(4 + 4); // ally low/high
-        if (version >= 31) r.skip(4 + 4); // enemy low/high
-    }
-}
-
 function renderMapData(parsed: MapDataFile, fileName: string, context: ParsedPreviewContext): string {
     const triggerStrings = loadTriggerStringsForUri(context.uri);
     if (parsed.kind === 'imp') return renderImp(parsed, fileName);
     if (parsed.kind === 'mmp') return renderMmp(parsed, fileName);
     if (parsed.kind === 'shd') return renderShd(parsed, fileName);
     if (parsed.kind === 'w3c') return renderW3c(parsed, fileName, triggerStrings);
-    if (parsed.kind === 'w3i') return renderW3i(parsed, fileName, triggerStrings);
     if (parsed.kind === 'w3r') return renderW3r(parsed, fileName, triggerStrings);
     if (parsed.kind === 'w3e') return renderW3e(parsed, fileName);
     return renderGeneric(parsed, fileName);
@@ -796,71 +670,6 @@ ${parsed.cameras.length ? `<div class="table-wrap"><table><thead><tr><th>#</th><
 </div>`);
 }
 
-function renderW3i(parsed: Extract<MapDataFile, { kind: 'w3i' }>, fileName: string, triggerStrings: TriggerStringTable): string {
-    const info = parsed.info;
-    return page(fileName, `
-${renderHeader(fileName, 'WC3 map information')}
-<div class="dialog">
-${errorBanner(parsed.error)}
-<section class="section">
-  <h2>General</h2>
-  <div class="form-grid">
-    ${renderInput('Map name', resolveTriggerString(info.name, triggerStrings))}
-    ${renderInput('Author', resolveTriggerString(info.author, triggerStrings))}
-    ${renderInput('Recommended players', resolveTriggerString(info.recommendedPlayers, triggerStrings))}
-    ${renderSelect('Tileset', info.tileset, tilesetOptions())}
-    ${renderInput('Width', info.width || undefined, 'mono')}
-    ${renderInput('Height', info.height || undefined, 'mono')}
-    ${renderSelect('Script language', info.scriptLang, optionList(['JASS', 'Lua']))}
-    ${renderSelect('Graphics mode', info.graphics, optionList(['SD', 'HD', 'SD and HD']))}
-  </div>
-</section>
-<section class="section">
-  <h2>Description</h2>
-  ${renderTextarea('Description', resolveTriggerString(info.description, triggerStrings), true)}
-</section>
-<section class="section">
-  <h2>Options</h2>
-  <div class="checkbox-grid">
-    ${W3I_FLAG_DEFS.map(([bit, label]) => renderCheckbox(label, (info.flags & bit) !== 0)).join('')}
-  </div>
-</section>
-<section class="section">
-  <h2>Loading Screen</h2>
-  <div class="form-grid">
-    ${renderSelect('Background', info.loadingBackground, loadingBackgroundOptions())}
-    ${renderInput('Model', resolveTriggerString(info.loadingModel, triggerStrings))}
-    ${renderInput('Title', resolveTriggerString(info.loadingTitle, triggerStrings))}
-    ${renderInput('Subtitle', resolveTriggerString(info.loadingSubtitle, triggerStrings))}
-    ${renderTextarea('Text', resolveTriggerString(info.loadingText, triggerStrings), true)}
-  </div>
-</section>
-<section class="section">
-  <h2>Prologue</h2>
-  <div class="form-grid">
-    ${renderInput('Title', resolveTriggerString(info.prologueTitle, triggerStrings))}
-    ${renderInput('Subtitle', resolveTriggerString(info.prologueSubtitle, triggerStrings))}
-    ${renderTextarea('Text', resolveTriggerString(info.prologueText, triggerStrings), true)}
-  </div>
-</section>
-<section class="section">
-  <h2>Technical</h2>
-  <div class="form-grid compact">
-    ${renderInput('Format version', info.version, 'mono')}
-    ${renderInput('Editor version', info.editorVersion, 'mono')}
-    ${renderInput('Game version', info.gameVersion, 'mono')}
-    ${renderInput('Saves', info.saves, 'mono')}
-    ${renderInput('Flags', `0x${(info.flags >>> 0).toString(16).padStart(8, '0')}`, 'mono')}
-    ${renderSelect('Game data', info.gameDataVersion, optionList(['RoC', 'TFT']))}
-    ${renderInput('Game data set', info.gameDataSet, 'mono')}
-    ${renderInput('Camera zoom', info.forceCameraZoom ? `${info.forceCameraZoom.min}..${info.forceCameraZoom.max} (default ${info.forceCameraZoom.default})` : undefined, 'mono')}
-    ${renderInput('Players', info.playersCount, 'mono')}
-    ${renderInput('Forces', info.forcesCount, 'mono')}
-  </div>
-</section>
-</div>`);
-}
-
 function renderW3r(parsed: Extract<MapDataFile, { kind: 'w3r' }>, fileName: string, triggerStrings: TriggerStringTable): string {
     const rows = parsed.regions.map((region) => `<tr>
   <td class="num">${region.index}</td>
@@ -1023,10 +832,6 @@ function controlValue(value: ControlValue): string {
     return value === undefined || value === '' ? '' : String(value);
 }
 
-function optionList(values: string[]): SelectOption[] {
-    return values.map((value) => ({ value, label: value }));
-}
-
 function tilesetOptions(): SelectOption[] {
     return [
         ['A', 'Ashenvale'],
@@ -1106,13 +911,6 @@ function mmpColorCss(icon: MmpIcon): string | null {
 
 function mmpColorHex(icon: MmpIcon): string {
     return `#${icon.red.toString(16).padStart(2, '0')}${icon.green.toString(16).padStart(2, '0')}${icon.blue.toString(16).padStart(2, '0')}`;
-}
-
-function graphicsLabel(value: number): string {
-    if (value === 1) return 'SD';
-    if (value === 2) return 'HD';
-    if (value === 3) return 'SD and HD';
-    return `Unknown (${value})`;
 }
 
 const W3I_FLAG_DEFS: Array<[number, string]> = [
@@ -1297,11 +1095,15 @@ function renderW3cEditor(doc: W3cDocument, fileName: string): string {
 `);
 }
 
-class W3cDocument extends EditableBinaryDocument<W3cFile> {
+/**
+ * Editable document whose TRIGSTR_ fields live in the sibling `war3map.wts`. Pending string edits are
+ * kept apart from the binary model and written as a sidecar on save (see `wtsSidecar`).
+ */
+class TriggerStringBackedDocument<TFile> extends EditableBinaryDocument<TFile> {
     wtsTable: TriggerStringTable = loadTriggerStringsForUri(this.uri);
     wtsUri: vscode.Uri | undefined = findWtsUri(this.uri).uri;
     wtsExists = findWtsUri(this.uri).exists;
-    wtsEdits = new Map<number, string>();
+    readonly wtsEdits = new Map<number, string>();
 
     reloadTriggerStrings(): void {
         this.wtsTable = loadTriggerStringsForUri(this.uri);
@@ -1311,6 +1113,31 @@ class W3cDocument extends EditableBinaryDocument<W3cFile> {
         this.wtsEdits.clear();
     }
 }
+
+/**
+ * Provider hooks for every wts-backed editor: write pending string edits beside the target on save,
+ * reload them on revert, and carry them through hot-exit backups (they are not part of the binary
+ * file, so the base provider cannot preserve them on its own).
+ */
+const wtsSidecar = {
+    onSave: async (doc: TriggerStringBackedDocument<unknown>, target: vscode.Uri): Promise<void> => {
+        const { uri, exists } = findWtsUri(target);
+        await writeTriggerStringEdits(doc.wtsEdits, uri, exists);
+    },
+    onRevert: (doc: TriggerStringBackedDocument<unknown>): void => doc.reloadTriggerStrings(),
+    sidecar: {
+        save: (doc: TriggerStringBackedDocument<unknown>): unknown => ({ wtsEdits: [...doc.wtsEdits] }),
+        restore: (doc: TriggerStringBackedDocument<unknown>, data: unknown): void => {
+            const edits = (data as { wtsEdits?: unknown })?.wtsEdits;
+            if (!Array.isArray(edits)) return;
+            for (const entry of edits) {
+                if (Array.isArray(entry) && Number.isInteger(entry[0]) && typeof entry[1] === 'string') doc.wtsEdits.set(entry[0], entry[1]);
+            }
+        },
+    },
+};
+
+class W3cDocument extends TriggerStringBackedDocument<W3cFile> {}
 
 function validListIndex(index: number | undefined, length: number): index is number {
     return Number.isInteger(index) && (index as number) >= 0 && (index as number) < length;
@@ -1364,11 +1191,7 @@ class W3cEditorProvider extends EditableBinaryEditorProvider<W3cFile, W3cDocumen
             postState: (doc) => {
                 void doc.webview?.postMessage({ type: 'editorStateChanged', listHtml: renderW3cList(doc.file, doc.wtsTable, doc.wtsEdits), count: doc.file.cameras.length, isDirty: doc.isDirty });
             },
-            onSave: async (doc, target) => {
-                const { uri, exists } = findWtsUri(target);
-                await writeTriggerStringEdits(doc.wtsEdits, uri, exists);
-            },
-            onRevert: (doc) => doc.reloadTriggerStrings(),
+            ...wtsSidecar,
             handleMessage: handleW3cMessage,
         });
     }
@@ -1440,81 +1263,68 @@ function renderW3rEditor(doc: W3rDocument, fileName: string): string {
 `);
 }
 
-class W3rDocument implements vscode.CustomDocument {
-    currentRevision = 0; savedRevision = 0; nextRevision = 1; webview?: vscode.Webview;
-    wtsEdits = new Map<number, string>();
-    constructor(readonly uri: vscode.Uri, public file: W3rFile, public wtsTable: TriggerStringTable, public wtsUri: vscode.Uri | undefined, public wtsExists: boolean) {}
-    dispose(): void {}
+class W3rDocument extends TriggerStringBackedDocument<W3rFile> {}
+
+function handleW3rMessage(message: unknown, doc: W3rDocument, provider: W3rEditorProvider): void {
+    if (!message || typeof message !== 'object' || doc.file.error) return;
+    const msg = message as { type?: string; index?: number; field?: string; value?: string };
+    if (msg.type === 'add') return addW3rRegion(doc, provider);
+    if (!validListIndex(msg.index, doc.file.regions.length)) return;
+    const index = msg.index;
+    if (msg.type === 'remove') return removeW3rRegion(doc, provider, index);
+    if (msg.type === 'edit' && typeof msg.field === 'string' && typeof msg.value === 'string') editW3rRegionField(doc, provider, index, msg.field, msg.value);
 }
 
-interface W3rEdit { apply: () => void; revert: () => void; }
+function addW3rRegion(doc: W3rDocument, provider: W3rEditorProvider): void {
+    const region: W3rRegion = { name: 'New Region', minX: 0, maxX: 128, minY: 0, maxY: 128, index: 0, weatherId: 'NULL', sound: '', blue: 0, green: 0, red: 0, endToken: 0 };
+    const index = doc.file.regions.length;
+    provider.pushEdit(doc, 'Add region', { apply: () => { doc.file.regions.push(region); }, revert: () => { doc.file.regions.splice(index, 1); } });
+}
 
-class W3rEditorProvider implements vscode.CustomEditorProvider<W3rDocument> {
-    private readonly _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<W3rDocument>>();
-    readonly onDidChangeCustomDocument = this._onDidChange.event;
-    async openCustomDocument(uri: vscode.Uri, openContext: vscode.CustomDocumentOpenContext): Promise<W3rDocument> {
-        const source = openContext.backupId ? vscode.Uri.parse(openContext.backupId) : uri;
-        const { uri: wtsUri, exists } = findWtsUri(uri);
-        const doc = new W3rDocument(uri, parseW3rFile(Buffer.from(await vscode.workspace.fs.readFile(source))), loadTriggerStringsForUri(uri), wtsUri, exists);
-        if (openContext.backupId) { doc.currentRevision = 1; doc.nextRevision = 2; }
-        return doc;
+function removeW3rRegion(doc: W3rDocument, provider: W3rEditorProvider, index: number): void {
+    const removed = { ...doc.file.regions[index] };
+    provider.pushEdit(doc, 'Remove region', { apply: () => { doc.file.regions.splice(index, 1); }, revert: () => { doc.file.regions.splice(index, 0, removed); } });
+}
+
+function editW3rRegionField(doc: W3rDocument, provider: W3rEditorProvider, index: number, field: string, rawValue: string): void {
+    const before = { ...doc.file.regions[index] };
+    const after = { ...before };
+    if (field === 'name' || field === 'sound') {
+        const triggerEdit = makeTriggerStringEdit(before[field], doc.wtsTable, doc.wtsEdits, rawValue);
+        if (triggerEdit) return provider.pushEdit(doc, `Edit region ${field}`, triggerEdit);
+        after[field] = rawValue;
+    } else if (field === 'weatherId') {
+        after[field] = rawValue;
+    } else if (field === 'color') {
+        const color = parseMmpColor(rawValue);
+        if (!color) return;
+        Object.assign(after, color);
+    } else if (W3R_NUMERIC_FIELDS.has(field as keyof W3rRegion)) {
+        const value = Number(rawValue);
+        if (!Number.isFinite(value) || !Number.isFinite(Math.fround(value)) || (field === 'index' && !Number.isInteger(value))) return;
+        after[field as keyof W3rRegion] = value as never;
+    } else {
+        return;
     }
-    async resolveCustomEditor(doc: W3rDocument, panel: vscode.WebviewPanel): Promise<void> {
-        const webview = panel.webview;
-        webview.options = { enableScripts: true, localResourceRoots: [] };
-        doc.webview = webview;
-        panel.onDidDispose(() => { if (doc.webview === webview) doc.webview = undefined; });
-        webview.onDidReceiveMessage((message) => this.handleMessage(message, doc));
-        this.render(doc, webview);
+    if (JSON.stringify(before) === JSON.stringify(after)) return;
+    provider.pushEdit(doc, `Edit region ${field}`, { apply: () => { doc.file.regions[index] = { ...after }; }, revert: () => { doc.file.regions[index] = { ...before }; } });
+}
+
+class W3rEditorProvider extends EditableBinaryEditorProvider<W3rFile, W3rDocument> {
+    constructor() {
+        super({
+            label: 'W3R regions',
+            parse: parseW3rFile,
+            serialize: serializeValidatedW3r,
+            createDocument: (uri, file) => new W3rDocument(uri, file),
+            render: (doc) => renderW3rEditor(doc, doc.fileName),
+            postState: (doc) => {
+                void doc.webview?.postMessage({ type: 'editorStateChanged', listHtml: renderW3rList(doc.file, doc.wtsTable, doc.wtsEdits), count: doc.file.regions.length, isDirty: doc.isDirty });
+            },
+            ...wtsSidecar,
+            handleMessage: handleW3rMessage,
+        });
     }
-    private render(doc: W3rDocument, webview: vscode.Webview): void {
-        const fileName = doc.uri.path.slice(doc.uri.path.lastIndexOf('/') + 1);
-        webview.html = doc.file.error ? buildPage({ csp: "default-src 'none'; style-src 'unsafe-inline';", title: escapeHtml(fileName), body: `<div class="wv-state"><span>Failed to parse W3R regions</span><span class="err">${escapeHtml(doc.file.error)}</span></div>` }) : renderW3rEditor(doc, fileName);
-    }
-    private handleMessage(message: unknown, doc: W3rDocument): void {
-        if (!message || typeof message !== 'object' || doc.file.error) return;
-        const msg = message as { type?: string; index?: number; field?: string; value?: string };
-        if (msg.type === 'add') return this.addRegion(doc);
-        if (!this.validIndex(msg.index, doc.file.regions.length)) return;
-        const index = msg.index as number;
-        if (msg.type === 'remove') return this.removeRegion(doc, index);
-        if (msg.type === 'edit' && typeof msg.field === 'string' && typeof msg.value === 'string') this.editRegionField(doc, index, msg.field, msg.value);
-    }
-    private validIndex(index: number | undefined, length: number): index is number { return Number.isInteger(index) && (index as number) >= 0 && (index as number) < length; }
-    private addRegion(doc: W3rDocument): void {
-        const region: W3rRegion = { name: 'New Region', minX: 0, maxX: 128, minY: 0, maxY: 128, index: 0, weatherId: 'NULL', sound: '', blue: 0, green: 0, red: 0, endToken: 0 };
-        const index = doc.file.regions.length; this.pushEdit(doc, 'Add region', { apply: () => { doc.file.regions.push(region); }, revert: () => { doc.file.regions.splice(index, 1); } });
-    }
-    private removeRegion(doc: W3rDocument, index: number): void { const removed = { ...doc.file.regions[index] }; this.pushEdit(doc, 'Remove region', { apply: () => { doc.file.regions.splice(index, 1); }, revert: () => { doc.file.regions.splice(index, 0, removed); } }); }
-    private editRegionField(doc: W3rDocument, index: number, field: string, rawValue: string): void {
-        const before = { ...doc.file.regions[index] }; const after = { ...before };
-        if (field === 'name' || field === 'sound') {
-            const triggerEdit = makeTriggerStringEdit(before[field], doc.wtsTable, doc.wtsEdits, rawValue);
-            if (triggerEdit) return this.pushEdit(doc, `Edit region ${field}`, triggerEdit);
-            after[field] = rawValue;
-        } else if (field === 'weatherId') {
-            after[field] = rawValue;
-        } else if (field === 'color') {
-            const color = parseMmpColor(rawValue);
-            if (!color) return;
-            Object.assign(after, color);
-        } else if (W3R_NUMERIC_FIELDS.has(field as keyof W3rRegion)) {
-            const value = Number(rawValue);
-            if (!Number.isFinite(value) || !Number.isFinite(Math.fround(value)) || (field === 'index' && !Number.isInteger(value))) return;
-            after[field as keyof W3rRegion] = value as never;
-        } else {
-            return;
-        }
-        if (JSON.stringify(before) === JSON.stringify(after)) return;
-        this.pushEdit(doc, `Edit region ${field}`, { apply: () => { doc.file.regions[index] = { ...after }; }, revert: () => { doc.file.regions[index] = { ...before }; } });
-    }
-    private pushEdit(doc: W3rDocument, label: string, edit: W3rEdit): void { const before = doc.currentRevision; const after = doc.nextRevision++; edit.apply(); doc.currentRevision = after; this.postState(doc); this._onDidChange.fire({ document: doc, label, undo: () => { edit.revert(); doc.currentRevision = before; this.postState(doc); }, redo: () => { edit.apply(); doc.currentRevision = after; this.postState(doc); } }); }
-    private postState(doc: W3rDocument): void { void doc.webview?.postMessage({ type: 'editorStateChanged', listHtml: renderW3rList(doc.file, doc.wtsTable, doc.wtsEdits), count: doc.file.regions.length, isDirty: doc.currentRevision !== doc.savedRevision }); }
-    async saveCustomDocument(doc: W3rDocument): Promise<void> { await this.write(doc, doc.uri); await writeTriggerStringEdits(doc.wtsEdits, doc.wtsUri, doc.wtsExists); doc.savedRevision = doc.currentRevision; this.postState(doc); }
-    async saveCustomDocumentAs(doc: W3rDocument, target: vscode.Uri): Promise<void> { await vscode.workspace.fs.writeFile(target, serializeValidatedW3r(doc.file, target.path)); const { uri, exists } = findWtsUri(target); await writeTriggerStringEdits(doc.wtsEdits, uri, exists); }
-    private async write(doc: W3rDocument, uri: vscode.Uri): Promise<void> { const bytes = serializeValidatedW3r(doc.file, uri.path); try { if (Buffer.from(await vscode.workspace.fs.readFile(uri)).equals(bytes)) return; } catch { /* missing → write */ } await vscode.workspace.fs.writeFile(uri, bytes); }
-    async revertCustomDocument(doc: W3rDocument): Promise<void> { doc.file = parseW3rFile(Buffer.from(await vscode.workspace.fs.readFile(doc.uri))); doc.wtsTable = loadTriggerStringsForUri(doc.uri); doc.wtsEdits.clear(); const { uri, exists } = findWtsUri(doc.uri); doc.wtsUri = uri; doc.wtsExists = exists; doc.currentRevision = 0; doc.savedRevision = 0; doc.nextRevision = 1; if (doc.webview) this.render(doc, doc.webview); }
-    async backupCustomDocument(doc: W3rDocument, context: vscode.CustomDocumentBackupContext): Promise<vscode.CustomDocumentBackup> { await vscode.workspace.fs.writeFile(context.destination, serializeValidatedW3r(doc.file, doc.uri.path)); return { id: context.destination.toString(), delete: () => vscode.workspace.fs.delete(context.destination).then(() => undefined, () => undefined) }; }
 }
 
 function serializeW3r(file: W3rFile): Buffer {
@@ -1543,18 +1353,7 @@ function normalizeW3rRegion(region: W3rRegion): W3rRegion {
 // not discard bytes we do not understand.
 // ════════════════════════════════════════════════════════════════════════════
 
-class MmpDocument implements vscode.CustomDocument {
-    currentRevision = 0;
-    savedRevision = 0;
-    nextRevision = 1;
-    webview?: vscode.Webview;
-
-    constructor(readonly uri: vscode.Uri, public file: MmpFile) {}
-
-    dispose(): void {}
-}
-
-interface MmpEdit { apply: () => void; revert: () => void; }
+class MmpDocument extends EditableBinaryDocument<MmpFile> {}
 
 function mmpIconInput(icon: MmpIcon, index: number): string {
     const defaultColor = !mmpColorCss(icon);
@@ -1673,167 +1472,79 @@ const MMP_EDITOR_CSS = `
 .dirty-badge[hidden] { display: none; }
 `;
 
-class MmpEditorProvider implements vscode.CustomEditorProvider<MmpDocument> {
-    private readonly _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<MmpDocument>>();
-    readonly onDidChangeCustomDocument = this._onDidChange.event;
-
-    async openCustomDocument(uri: vscode.Uri, openContext: vscode.CustomDocumentOpenContext): Promise<MmpDocument> {
-        const source = openContext.backupId ? vscode.Uri.parse(openContext.backupId) : uri;
-        const doc = new MmpDocument(uri, parseMmpFile(Buffer.from(await vscode.workspace.fs.readFile(source))));
-        if (openContext.backupId) {
-            doc.currentRevision = 1;
-            doc.nextRevision = 2;
-        }
-        return doc;
-    }
-
-    async resolveCustomEditor(doc: MmpDocument, panel: vscode.WebviewPanel): Promise<void> {
-        const panelWebview = panel.webview;
-        panelWebview.options = { enableScripts: true, localResourceRoots: [] };
-        doc.webview = panelWebview;
-        panel.onDidDispose(() => { if (doc.webview === panelWebview) doc.webview = undefined; });
-        panelWebview.onDidReceiveMessage((message) => this.handleMessage(message, doc));
-        this.render(doc, panelWebview);
-    }
-
-    private render(doc: MmpDocument, webview: vscode.Webview): void {
-        const fileName = doc.uri.path.slice(doc.uri.path.lastIndexOf('/') + 1);
-        webview.html = doc.file.error
-            ? buildPage({
-                csp: "default-src 'none'; style-src 'unsafe-inline';",
-                title: escapeHtml(fileName),
-                body: `<div class="wv-state"><span>Failed to parse MMP</span><span class="err">${escapeHtml(doc.file.error)}</span></div>`,
-            })
-            : renderMmpEditor(doc, fileName);
-    }
-
-    private handleMessage(message: unknown, doc: MmpDocument): void {
-        if (!message || typeof message !== 'object' || doc.file.error) return;
-        const msg = message as { type?: string; index?: number; field?: string; value?: string; on?: boolean };
-        if (msg.type === 'add') return this.addIcon(doc);
-        if (!this.isValidIconIndex(msg.index, doc)) return;
-        const index = msg.index as number;
-        if (msg.type === 'remove') return this.removeIcon(doc, index);
-        if (msg.type === 'defaultColor' && typeof msg.on === 'boolean') return this.editDefaultColor(doc, index, msg.on);
-        if (msg.type === 'edit' && typeof msg.field === 'string' && typeof msg.value === 'string') {
-            this.editField(doc, index, msg.field, msg.value);
-        }
-    }
-
-    private isValidIconIndex(index: number | undefined, doc: MmpDocument): index is number {
-        return Number.isInteger(index) && (index as number) >= 0 && (index as number) < doc.file.icons.length;
-    }
-
-    private addIcon(doc: MmpDocument): void {
-        const index = doc.file.icons.length;
-        const icon: MmpIcon = { type: 0, x: 0, y: 0, blue: 0xff, green: 0xff, red: 0xff, alpha: 0xff };
-        this.pushEdit(doc, 'Add minimap icon', {
-            apply: () => { doc.file.icons.push(icon); },
-            revert: () => { doc.file.icons.splice(index, 1); },
+function handleMmpMessage(message: unknown, doc: MmpDocument, provider: MmpEditorProvider): void {
+    if (!message || typeof message !== 'object' || doc.file.error) return;
+    const msg = message as { type?: string; index?: number; field?: string; value?: string; on?: boolean };
+    if (msg.type === 'add') return addMmpIcon(doc, provider);
+    if (!validListIndex(msg.index, doc.file.icons.length)) return;
+    const index = msg.index;
+    if (msg.type === 'remove') return removeMmpIcon(doc, provider, index);
+    if (msg.type === 'defaultColor' && typeof msg.on === 'boolean') {
+        return editMmpIcon(doc, provider, index, 'Set default icon color', (icon) => {
+            icon.blue = msg.on ? 0xff : icon.blue;
+            icon.green = msg.on ? 0xff : icon.green;
+            icon.red = msg.on ? 0xff : icon.red;
+            icon.alpha = msg.on ? 0xff : icon.alpha;
         });
     }
+    if (msg.type === 'edit' && typeof msg.field === 'string' && typeof msg.value === 'string') {
+        editMmpField(doc, provider, index, msg.field, msg.value);
+    }
+}
 
-    private removeIcon(doc: MmpDocument, index: number): void {
-        const removed = { ...doc.file.icons[index] };
-        this.pushEdit(doc, 'Remove minimap icon', {
-            apply: () => { doc.file.icons.splice(index, 1); },
-            revert: () => { doc.file.icons.splice(index, 0, removed); },
+function addMmpIcon(doc: MmpDocument, provider: MmpEditorProvider): void {
+    const index = doc.file.icons.length;
+    const icon: MmpIcon = { type: 0, x: 0, y: 0, blue: 0xff, green: 0xff, red: 0xff, alpha: 0xff };
+    provider.pushEdit(doc, 'Add minimap icon', {
+        apply: () => { doc.file.icons.push(icon); },
+        revert: () => { doc.file.icons.splice(index, 1); },
+    });
+}
+
+function removeMmpIcon(doc: MmpDocument, provider: MmpEditorProvider, index: number): void {
+    const removed = { ...doc.file.icons[index] };
+    provider.pushEdit(doc, 'Remove minimap icon', {
+        apply: () => { doc.file.icons.splice(index, 1); },
+        revert: () => { doc.file.icons.splice(index, 0, removed); },
+    });
+}
+
+function editMmpField(doc: MmpDocument, provider: MmpEditorProvider, index: number, field: string, rawValue: string): void {
+    if (field === 'color') {
+        const color = parseMmpColor(rawValue);
+        if (color) editMmpIcon(doc, provider, index, 'Edit icon color', (icon) => Object.assign(icon, color));
+        return;
+    }
+    if (!['type', 'x', 'y', 'alpha'].includes(field)) return;
+    const value = Number(rawValue);
+    const valid = Number.isInteger(value) && (field !== 'alpha' || value >= 0 && value <= 0xff);
+    if (valid) editMmpIcon(doc, provider, index, `Edit icon ${field}`, (icon) => { icon[field as 'type' | 'x' | 'y' | 'alpha'] = value; });
+}
+
+function editMmpIcon(doc: MmpDocument, provider: MmpEditorProvider, index: number, label: string, mutate: (icon: MmpIcon) => void): void {
+    const before = { ...doc.file.icons[index] };
+    const after = { ...before };
+    mutate(after);
+    if (JSON.stringify(before) === JSON.stringify(after)) return;
+    provider.pushEdit(doc, label, {
+        apply: () => { doc.file.icons[index] = { ...after }; },
+        revert: () => { doc.file.icons[index] = { ...before }; },
+    });
+}
+
+class MmpEditorProvider extends EditableBinaryEditorProvider<MmpFile, MmpDocument> {
+    constructor() {
+        super({
+            label: 'minimap icons',
+            parse: parseMmpFile,
+            serialize: serializeValidatedMmp,
+            createDocument: (uri, file) => new MmpDocument(uri, file),
+            render: (doc) => renderMmpEditor(doc, doc.fileName),
+            postState: (doc) => {
+                void doc.webview?.postMessage({ type: 'mmpStateChanged', listHtml: renderMmpList(doc.file), count: doc.file.icons.length, isDirty: doc.isDirty });
+            },
+            handleMessage: handleMmpMessage,
         });
-    }
-
-    private editDefaultColor(doc: MmpDocument, index: number, on: boolean): void {
-        this.editIcon(doc, index, 'Set default icon color', (icon) => {
-            icon.blue = on ? 0xff : icon.blue;
-            icon.green = on ? 0xff : icon.green;
-            icon.red = on ? 0xff : icon.red;
-            icon.alpha = on ? 0xff : icon.alpha;
-        });
-    }
-
-    private editField(doc: MmpDocument, index: number, field: string, rawValue: string): void {
-        if (field === 'color') {
-            const color = parseMmpColor(rawValue);
-            if (color) this.editIcon(doc, index, 'Edit icon color', (icon) => Object.assign(icon, color));
-            return;
-        }
-        if (!['type', 'x', 'y', 'alpha'].includes(field)) return;
-        const value = Number(rawValue);
-        const valid = Number.isInteger(value) && (field !== 'alpha' || value >= 0 && value <= 0xff);
-        if (valid) this.editIcon(doc, index, `Edit icon ${field}`, (icon) => { icon[field as 'type' | 'x' | 'y' | 'alpha'] = value; });
-    }
-
-    private editIcon(doc: MmpDocument, index: number, label: string, mutate: (icon: MmpIcon) => void): void {
-        const before = { ...doc.file.icons[index] };
-        const after = { ...before };
-        mutate(after);
-        if (JSON.stringify(before) === JSON.stringify(after)) return;
-        this.pushEdit(doc, label, {
-            apply: () => { doc.file.icons[index] = { ...after }; },
-            revert: () => { doc.file.icons[index] = { ...before }; },
-        });
-    }
-
-    private pushEdit(doc: MmpDocument, label: string, edit: MmpEdit): void {
-        const beforeRevision = doc.currentRevision;
-        const afterRevision = doc.nextRevision++;
-        edit.apply();
-        doc.currentRevision = afterRevision;
-        this.postState(doc);
-        this._onDidChange.fire({
-            document: doc,
-            label,
-            undo: () => { edit.revert(); doc.currentRevision = beforeRevision; this.postState(doc); },
-            redo: () => { edit.apply(); doc.currentRevision = afterRevision; this.postState(doc); },
-        });
-    }
-
-    private postState(doc: MmpDocument): void {
-        void doc.webview?.postMessage({
-            type: 'mmpStateChanged',
-            listHtml: renderMmpList(doc.file),
-            count: doc.file.icons.length,
-            isDirty: doc.currentRevision !== doc.savedRevision,
-        });
-    }
-
-    async saveCustomDocument(doc: MmpDocument): Promise<void> {
-        try {
-            await this.writeMmp(doc, doc.uri);
-            doc.savedRevision = doc.currentRevision;
-            this.postState(doc);
-        } catch (err) {
-            void showErrorWithLogs(`Minimap icons not saved: ${err instanceof Error ? err.message : String(err)}`, err);
-            throw err;
-        }
-    }
-
-    async saveCustomDocumentAs(doc: MmpDocument, target: vscode.Uri): Promise<void> {
-        await vscode.workspace.fs.writeFile(target, serializeValidatedMmp(doc.file, target.path));
-    }
-
-    private async writeMmp(doc: MmpDocument, uri: vscode.Uri): Promise<void> {
-        const bytes = serializeValidatedMmp(doc.file, uri.path);
-        try {
-            const existing = Buffer.from(await vscode.workspace.fs.readFile(uri));
-            if (existing.equals(bytes)) return;
-        } catch { /* missing → write */ }
-        await vscode.workspace.fs.writeFile(uri, bytes);
-    }
-
-    async revertCustomDocument(doc: MmpDocument): Promise<void> {
-        doc.file = parseMmpFile(Buffer.from(await vscode.workspace.fs.readFile(doc.uri)));
-        doc.currentRevision = 0;
-        doc.savedRevision = 0;
-        doc.nextRevision = 1;
-        if (doc.webview) this.render(doc, doc.webview);
-    }
-
-    async backupCustomDocument(doc: MmpDocument, context: vscode.CustomDocumentBackupContext): Promise<vscode.CustomDocumentBackup> {
-        await vscode.workspace.fs.writeFile(context.destination, serializeValidatedMmp(doc.file, doc.uri.path));
-        return {
-            id: context.destination.toString(),
-            delete: () => vscode.workspace.fs.delete(context.destination).then(() => undefined, () => undefined),
-        };
     }
 }
 
@@ -1897,23 +1608,7 @@ function w3iLabel(arr: string[], index: number): string {
     return arr[index] || `#${index}`;
 }
 
-class W3iDocument implements vscode.CustomDocument {
-    editDepth = 0;
-    savedDepth = 0;
-    panelWebview?: vscode.Webview;
-    reload?: () => Promise<void>;
-
-    constructor(
-        readonly uri: vscode.Uri,
-        public file: W3iFile,
-        public wtsTable: TriggerStringTable,
-        public wtsUri: vscode.Uri | undefined,
-        public wtsExists: boolean,
-        public readonly wtsEdits: Map<number, string>,
-    ) {}
-
-    dispose(): void {}
-}
+class W3iDocument extends TriggerStringBackedDocument<W3iFile> {}
 
 /** Resolve a string field for display, overlaying any pending wts edits. */
 function resolveW3iString(raw: string | undefined, doc: W3iDocument): ResolvedText {
@@ -2115,155 +1810,79 @@ ${renderW3iForces(f.forces)}
     return page(fileName, body, W3I_EDITOR_CSS, true);
 }
 
-interface W3iEdit { apply: () => void; revert: () => void; }
+function handleW3iMessage(message: unknown, doc: W3iDocument, provider: W3iEditorProvider): void {
+    if (!message || typeof message !== 'object') return;
+    const msg = message as { type?: string; field?: string; value?: string; bit?: number; on?: boolean; path?: string };
 
-class W3iEditorProvider implements vscode.CustomEditorProvider<W3iDocument> {
-    private readonly _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<W3iDocument>>();
-    readonly onDidChangeCustomDocument = this._onDidChange.event;
-
-    async openCustomDocument(uri: vscode.Uri): Promise<W3iDocument> {
-        const file = parseW3iFile(Buffer.from(await vscode.workspace.fs.readFile(uri)));
-        const wtsTable = loadTriggerStringsForUri(uri);
-        const { uri: wtsUri, exists } = findWtsUri(uri);
-        return new W3iDocument(uri, file, wtsTable, wtsUri, exists, new Map());
+    if (msg.type === 'openAsset' && msg.path) {
+        void openW3iAsset(msg.path, doc.uri);
+        return;
     }
-
-    async resolveCustomEditor(doc: W3iDocument, panel: vscode.WebviewPanel): Promise<void> {
-        panel.webview.options = { enableScripts: true };
-        doc.panelWebview = panel.webview;
-        const fileName = doc.uri.path.slice(doc.uri.path.lastIndexOf('/') + 1);
-        doc.reload = async () => { panel.webview.html = renderW3iEditor(doc, fileName); };
-        panel.webview.onDidReceiveMessage((message) => this.handleMessage(message, doc));
-        await doc.reload();
+    if (msg.type === 'flag' && typeof msg.bit === 'number') {
+        const prev = doc.file.flags;
+        const next = msg.on ? (prev | msg.bit) : (prev & ~msg.bit);
+        if (next === prev) return;
+        // The flag checkboxes mirror one flag word, so the whole form is re-rendered rather than patched.
+        provider.pushEdit(doc, 'Toggle flag', { apply: () => { doc.file.flags = next; }, revert: () => { doc.file.flags = prev; } }, { onApply: true, onUndoRedo: true });
+        return;
     }
-
-    private handleMessage(message: unknown, doc: W3iDocument): void {
-        if (!message || typeof message !== 'object') return;
-        const msg = message as { type?: string; field?: string; value?: string; bit?: number; on?: boolean; path?: string };
-
-        if (msg.type === 'openAsset' && msg.path) {
-            void openW3iAsset(msg.path, doc.uri);
-            return;
-        }
-        if (msg.type === 'flag' && typeof msg.bit === 'number') {
-            const prev = doc.file.flags;
-            const next = msg.on ? (prev | msg.bit) : (prev & ~msg.bit);
-            if (next === prev) return;
-            this.pushEdit(doc, `Toggle flag`, { apply: () => { doc.file.flags = next; }, revert: () => { doc.file.flags = prev; } }, true);
-            return;
-        }
-        if (msg.type === 'edit' && msg.field) {
-            const edit = this.makeFieldEdit(doc, msg.field as keyof W3iFile, msg.value ?? '');
-            if (edit) this.pushEdit(doc, `Edit ${msg.field}`, edit, false);
-        }
+    if (msg.type === 'edit' && msg.field) {
+        const edit = makeW3iFieldEdit(doc, msg.field as keyof W3iFile, msg.value ?? '');
+        // Applying keeps the control the user is typing in; undo/redo re-render so the form shows the restored value.
+        if (edit) provider.pushEdit(doc, `Edit ${msg.field}`, edit, { onUndoRedo: true });
     }
+}
 
-    /** Build an edit for a field. String fields may route to war3map.wts; selects/scalars edit the w3i struct. */
-    private makeFieldEdit(doc: W3iDocument, field: keyof W3iFile, value: string): W3iEdit | undefined {
-        if (W3I_STRING_FIELDS.has(field)) {
-            const raw = ((doc.file[field] as string | undefined) ?? '').trim();
-            const match = /^TRIGSTR_(\d+)$/i.exec(raw);
-            if (match) {
-                const id = Number(match[1]);
-                const had = doc.wtsEdits.has(id);
-                const prev = doc.wtsEdits.get(id);
-                if (!had && resolveTriggerString(raw, doc.wtsTable).value === value) return undefined;
-                return {
-                    apply: () => { doc.wtsEdits.set(id, value); },
-                    revert: () => { if (had) doc.wtsEdits.set(id, prev as string); else doc.wtsEdits.delete(id); },
-                };
-            }
-            const prevVal = doc.file[field] as string | undefined;
-            if ((prevVal ?? '') === value) return undefined;
+/** Build an edit for a field. String fields may route to war3map.wts; selects/scalars edit the w3i struct. */
+function makeW3iFieldEdit(doc: W3iDocument, field: keyof W3iFile, value: string): BinaryEdit | undefined {
+    if (W3I_STRING_FIELDS.has(field)) {
+        const raw = ((doc.file[field] as string | undefined) ?? '').trim();
+        const match = /^TRIGSTR_(\d+)$/i.exec(raw);
+        if (match) {
+            const id = Number(match[1]);
+            const had = doc.wtsEdits.has(id);
+            const prev = doc.wtsEdits.get(id);
+            if (!had && resolveTriggerString(raw, doc.wtsTable).value === value) return undefined;
             return {
-                apply: () => { (doc.file as unknown as Record<string, unknown>)[field] = value; },
-                revert: () => { (doc.file as unknown as Record<string, unknown>)[field] = prevVal; },
+                apply: () => { doc.wtsEdits.set(id, value); },
+                revert: () => { if (had) doc.wtsEdits.set(id, prev as string); else doc.wtsEdits.delete(id); },
             };
         }
-        // Scalar fields: tileset (char), loadingBackground / gameDataSet (int).
-        const prevVal = doc.file[field];
-        if (field === 'tileset') {
-            const next = (value || ' ').charAt(0);
-            if (next === prevVal) return undefined;
-            return { apply: () => { doc.file.tileset = next; }, revert: () => { doc.file.tileset = prevVal as string; } };
-        }
-        const num = Number(value);
-        if (!Number.isFinite(num) || num === prevVal) return undefined;
+        const prevVal = doc.file[field] as string | undefined;
+        if ((prevVal ?? '') === value) return undefined;
         return {
-            apply: () => { (doc.file as unknown as Record<string, unknown>)[field] = num; },
+            apply: () => { (doc.file as unknown as Record<string, unknown>)[field] = value; },
             revert: () => { (doc.file as unknown as Record<string, unknown>)[field] = prevVal; },
         };
     }
+    // Scalar fields: tileset (char), loadingBackground / gameDataSet (int).
+    const prevVal = doc.file[field];
+    if (field === 'tileset') {
+        const next = (value || ' ').charAt(0);
+        if (next === prevVal) return undefined;
+        return { apply: () => { doc.file.tileset = next; }, revert: () => { doc.file.tileset = prevVal as string; } };
+    }
+    const num = Number(value);
+    if (!Number.isFinite(num) || num === prevVal) return undefined;
+    return {
+        apply: () => { (doc.file as unknown as Record<string, unknown>)[field] = num; },
+        revert: () => { (doc.file as unknown as Record<string, unknown>)[field] = prevVal; },
+    };
+}
 
-    private pushEdit(doc: W3iDocument, label: string, edit: W3iEdit, reloadOnApply: boolean): void {
-        edit.apply();
-        doc.editDepth++;
-        this.postDirtyState(doc);
-        if (reloadOnApply) void doc.reload?.();
-        this._onDidChange.fire({
-            document: doc,
-            label,
-            undo: () => { edit.revert(); doc.editDepth--; this.postDirtyState(doc); void doc.reload?.(); },
-            redo: () => { edit.apply(); doc.editDepth++; this.postDirtyState(doc); void doc.reload?.(); },
+class W3iEditorProvider extends EditableBinaryEditorProvider<W3iFile, W3iDocument> {
+    constructor() {
+        super({
+            label: 'map info',
+            parse: parseW3iFile,
+            serialize: serializeValidatedW3i,
+            createDocument: (uri, file) => new W3iDocument(uri, file),
+            render: (doc) => renderW3iEditor(doc, doc.fileName),
+            webviewOptions: { enableScripts: true },
+            postState: (doc) => { void doc.webview?.postMessage({ type: 'dirtyStateChanged', isDirty: doc.isDirty }); },
+            ...wtsSidecar,
+            handleMessage: handleW3iMessage,
         });
-    }
-
-    private postDirtyState(doc: W3iDocument): void {
-        void doc.panelWebview?.postMessage({ type: 'dirtyStateChanged', isDirty: doc.editDepth !== doc.savedDepth });
-    }
-
-    async saveCustomDocument(doc: W3iDocument): Promise<void> {
-        try {
-            await this.writeW3i(doc, doc.uri);
-            await this.writeWts(doc, doc.wtsUri, doc.wtsExists);
-            if (doc.wtsUri) doc.wtsExists = true;
-            doc.savedDepth = doc.editDepth;
-            this.postDirtyState(doc);
-        } catch (err) {
-            void showErrorWithLogs(`Map info not saved: ${err instanceof Error ? err.message : String(err)}`, err);
-            throw err;
-        }
-    }
-
-    async saveCustomDocumentAs(doc: W3iDocument, target: vscode.Uri): Promise<void> {
-        await vscode.workspace.fs.writeFile(target, serializeValidatedW3i(doc.file, target.path));
-        const { uri: wtsUri, exists } = findWtsUri(target);
-        await this.writeWts(doc, wtsUri, exists);
-    }
-
-    private async writeW3i(doc: W3iDocument, uri: vscode.Uri): Promise<void> {
-        const bytes = serializeValidatedW3i(doc.file, uri.path);
-        try {
-            const existing = Buffer.from(await vscode.workspace.fs.readFile(uri));
-            if (existing.equals(bytes)) return;
-        } catch { /* missing → write */ }
-        await vscode.workspace.fs.writeFile(uri, bytes);
-    }
-
-    private async writeWts(doc: W3iDocument, wtsUri: vscode.Uri | undefined, wtsExists: boolean): Promise<void> {
-        if (!doc.wtsEdits.size || !wtsUri) return;
-        let original = '';
-        if (wtsExists) {
-            try { original = Buffer.from(await vscode.workspace.fs.readFile(wtsUri)).toString('utf8'); } catch { /* create fresh */ }
-        }
-        await vscode.workspace.fs.writeFile(wtsUri, Buffer.from(applyWtsEdits(original, doc.wtsEdits), 'utf8'));
-    }
-
-    async revertCustomDocument(doc: W3iDocument): Promise<void> {
-        doc.file = parseW3iFile(Buffer.from(await vscode.workspace.fs.readFile(doc.uri)));
-        doc.wtsTable = loadTriggerStringsForUri(doc.uri);
-        doc.wtsEdits.clear();
-        const { exists } = findWtsUri(doc.uri);
-        doc.wtsExists = exists;
-        doc.editDepth = 0;
-        doc.savedDepth = 0;
-        this.postDirtyState(doc);
-        if (doc.reload) await doc.reload();
-    }
-
-    async backupCustomDocument(doc: W3iDocument, context: vscode.CustomDocumentBackupContext): Promise<vscode.CustomDocumentBackup> {
-        await vscode.workspace.fs.writeFile(context.destination, serializeValidatedW3i(doc.file, doc.uri.path));
-        return { id: context.destination.toString(), delete: () => vscode.workspace.fs.delete(context.destination).then(() => undefined, () => undefined) };
     }
 }
 

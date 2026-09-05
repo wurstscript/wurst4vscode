@@ -111,3 +111,24 @@ test('region editor accepts fractional float32 bounds', async ({ openW3r }) => {
     const reparsed = host.internals.parseW3rFile(host.readFile());
     expect(reparsed.regions[0].minX).toBe(Math.fround(12.345));
 });
+
+test('a hot-exit backup carries pending wts edits through restore', async ({ openW3c }) => {
+    const { page, host } = await openW3c();
+    const { fileUri } = require('../harness/vscodeMock');
+
+    // The only unsaved change lives in the wts sidecar, not in the camera bytes.
+    await page.fill('[data-row="0"] [data-field="name"]', 'Backed Up Name');
+    await page.locator('[data-row="0"] [data-field="name"]').blur();
+    await expect.poll(() => host.doc.wtsEdits.get(3)).toBe('Backed Up Name');
+
+    const destination = fileUri(`${host.fixtureDir}/backup.w3c`);
+    const backup = await host.provider.backupCustomDocument(host.doc, { destination });
+    const restored = await host.provider.openCustomDocument(fileUri(host.filePath), { backupId: backup.id });
+    expect(restored.isDirty).toBe(true);
+    expect(restored.wtsEdits.get(3)).toBe('Backed Up Name');
+    expect(host.readText('war3map.wts')).not.toContain('Backed Up Name');
+
+    await backup.delete();
+    expect(host.fileExists('backup.w3c')).toBe(false);
+    expect(host.fileExists('backup.w3c.sidecar.json')).toBe(false);
+});

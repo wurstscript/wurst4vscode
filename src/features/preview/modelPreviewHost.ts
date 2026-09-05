@@ -194,6 +194,22 @@ function rememberTexturePayload(key: string, payload: TexturePayload): void {
     }
 }
 
+/**
+ * Forget every recorded texture miss. Misses are cached process-wide so a model with an absent
+ * texture does not re-probe the filesystem and CASC on every render; that cache has to be dropped
+ * when the world may have changed: an explicit Refresh/reload in a viewer, or a new WC3 game path.
+ */
+export function clearTextureMissCache(): void {
+    textureMissingCache.clear();
+}
+
+/** Drops cached texture misses when `wurst.wc3path` changes (the game data behind them moved). */
+export function registerTextureCacheInvalidation(): vscode.Disposable {
+    return vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration('wurst.wc3path')) clearTextureMissCache();
+    });
+}
+
 function rememberMissingTexture(key: string): void {
     if (textureMissingCache.has(key)) {
         textureMissingCache.delete(key);

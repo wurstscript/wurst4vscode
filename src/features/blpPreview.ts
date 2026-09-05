@@ -12,7 +12,7 @@ import {
     findGameAsset,
 } from './preview/cascStorage';
 import { DecodedBlpImage, decodeRasterPreview } from './preview/imageDecoders';
-import { postTexturesToWebview } from './preview/modelPreviewHost';
+import { clearTextureMissCache, postTexturesToWebview } from './preview/modelPreviewHost';
 
 // Re-exported for backwards-compat with existing callers that import from blpPreview.
 export { decodeRasterPreview, decodeToRgba } from './preview/imageDecoders';
@@ -201,7 +201,8 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
             const watcher = vscode.workspace.createFileSystemWatcher(
                 new vscode.RelativePattern(path.dirname(filePath), path.basename(filePath))
             );
-            const rerender = () => { cachedBytes = undefined; requestRender(); };
+            // The file changed on disk; textures that were missing may have arrived with it.
+            const rerender = () => { cachedBytes = undefined; clearTextureMissCache(); requestRender(); };
             watcher.onDidChange(rerender);
             watcher.onDidCreate(rerender);
             webviewPanel.onDidDispose(() => watcher.dispose());
@@ -224,6 +225,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
             if (type === 'refresh') {
                 dbg(`refresh requested`);
                 cachedBytes = undefined;
+                clearTextureMissCache();
                 requestRender();
                 return;
             }

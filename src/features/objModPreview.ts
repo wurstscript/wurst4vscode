@@ -9,6 +9,7 @@ import { parseObjMod, serializeObjMod, ObjModFile, ObjModEntry, ObjModMod, ObjMo
 import { ParsedPreviewContext } from './preview/framework';
 import { requestPreviewIcon, requestTooltipBackdrop, requestTooltipBorder, getCandidateRoots, resolveAssetPathWithCasc, gatherImportedAssets } from './imageAssetSupport';
 import {
+    clearTextureMissCache,
     postModelToWebview,
     postTexturesToWebview,
     requestModelThumbnail,
@@ -3865,6 +3866,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             return;
         }
         if (msg.type === 'refresh') {
+            clearTextureMissCache();
             await this.refreshFromDisk(doc);
             return;
         }

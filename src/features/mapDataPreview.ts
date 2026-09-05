@@ -1114,13 +1114,27 @@ class TriggerStringBackedDocument<TFile> extends EditableBinaryDocument<TFile> {
     }
 }
 
-/** `onSave` / `onRevert` for every wts-backed editor: write pending string edits beside the target. */
+/**
+ * Provider hooks for every wts-backed editor: write pending string edits beside the target on save,
+ * reload them on revert, and carry them through hot-exit backups (they are not part of the binary
+ * file, so the base provider cannot preserve them on its own).
+ */
 const wtsSidecar = {
     onSave: async (doc: TriggerStringBackedDocument<unknown>, target: vscode.Uri): Promise<void> => {
         const { uri, exists } = findWtsUri(target);
         await writeTriggerStringEdits(doc.wtsEdits, uri, exists);
     },
     onRevert: (doc: TriggerStringBackedDocument<unknown>): void => doc.reloadTriggerStrings(),
+    sidecar: {
+        save: (doc: TriggerStringBackedDocument<unknown>): unknown => ({ wtsEdits: [...doc.wtsEdits] }),
+        restore: (doc: TriggerStringBackedDocument<unknown>, data: unknown): void => {
+            const edits = (data as { wtsEdits?: unknown })?.wtsEdits;
+            if (!Array.isArray(edits)) return;
+            for (const entry of edits) {
+                if (Array.isArray(entry) && Number.isInteger(entry[0]) && typeof entry[1] === 'string') doc.wtsEdits.set(entry[0], entry[1]);
+            }
+        },
+    },
 };
 
 class W3cDocument extends TriggerStringBackedDocument<W3cFile> {}

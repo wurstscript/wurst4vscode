@@ -10,8 +10,8 @@ import { appendDiagnostic, formatDiagnosticError } from '../diagnostics';
 
 const WURST_HOME = path.join(os.homedir(), '.wurst');
 
-let defaultWarcraftPathsCache: string[] | null = null;
-let gameDataRootCache: GameDataRoot | null | undefined;
+let defaultWarcraftPathsCache: Promise<string[]> | null = null;
+let gameDataRootPromise: Promise<GameDataRoot | null> | undefined;
 let loggedCascRootMessage = '';
 const cascTextureMissCache = new Set<string>();
 const cascAssetMissCache = new Set<string>();
@@ -88,6 +88,28 @@ class MpqGameStorage implements GameStorage {
 
     get fileCount(): number { return this.archives.reduce((sum, archive) => sum + archive.storage.fileCount, 0); }
 
+    /** Lowercase basename → archive paths, highest-priority archive first. Built on first use. */
+    private basenameIndex: Promise<Map<string, string[]>> | undefined;
+
+    private buildBasenameIndex(): Promise<Map<string, string[]>> {
+        if (!this.basenameIndex) {
+            this.basenameIndex = (async () => {
+                const index = new Map<string, string[]>();
+                for (let i = this.archives.length - 1; i >= 0; i--) {
+                    for (const filePath of await this.archives[i].storage.listFilesAsync()) {
+                        const normalized = normalizeCascAssetPath(filePath);
+                        const basename = normalized.slice(normalized.lastIndexOf('\\') + 1);
+                        const list = index.get(basename);
+                        if (list) list.push(filePath);
+                        else index.set(basename, [filePath]);
+                    }
+                }
+                return index;
+            })();
+        }
+        return this.basenameIndex;
+    }
+
     async readFileAsync(filePath: string): Promise<Buffer> {
         const normalized = normalizeCascAssetPath(filePath);
         for (let i = this.archives.length - 1; i >= 0; i--) {
@@ -126,15 +148,8 @@ class MpqGameStorage implements GameStorage {
 
     async findPathByBasenameAsync(basename: string): Promise<string | null> {
         const needle = normalizeCascAssetPath(basename);
-        for (let i = this.archives.length - 1; i >= 0; i--) {
-            const paths = await this.archives[i].storage.listFilesAsync();
-            const match = paths.find((filePath) => {
-                const normalized = normalizeCascAssetPath(filePath);
-                return normalized.endsWith(`\\${needle}`) || normalized === needle;
-            });
-            if (match) return match;
-        }
-        return null;
+        const index = await this.buildBasenameIndex();
+        return index.get(needle)?.[0] ?? null;
     }
 
     async close(): Promise<void> {
@@ -169,15 +184,25 @@ function normalizeWindowsDriveRoot(value: string | undefined): string | null {
     return match ? `${match[1].toUpperCase()}:\\` : null;
 }
 
-function getWindowsDriveRoots(): string[] {
+async function pathExists(candidate: string): Promise<boolean> {
+    try {
+        await fs.promises.access(candidate, fs.constants.F_OK);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+// Probing every drive letter used to be a synchronous `existsSync` loop on the extension host. A
+// disconnected mapped network drive can make that stall for seconds, during which the language
+// client cannot process a single message. Probe them all concurrently and asynchronously instead.
+async function getWindowsDriveRoots(): Promise<string[]> {
+    const candidates: string[] = [];
     const seen = new Set<string>();
-    const roots: string[] = [];
     const add = (driveRoot: string | null) => {
         if (!driveRoot || seen.has(driveRoot)) return;
         seen.add(driveRoot);
-        try {
-            if (fs.existsSync(driveRoot)) roots.push(driveRoot);
-        } catch {}
+        candidates.push(driveRoot);
     };
 
     add(normalizeWindowsDriveRoot(process.env.SystemDrive));
@@ -188,7 +213,8 @@ function getWindowsDriveRoots(): string[] {
         add(`${String.fromCharCode(code)}:\\`);
     }
 
-    return roots;
+    const present = await Promise.all(candidates.map(pathExists));
+    return candidates.filter((_, index) => present[index]);
 }
 
 /**
@@ -198,44 +224,49 @@ function getWindowsDriveRoots(): string[] {
  * Steam-library-style folder, a renamed directory) is invisible to them. `reg.exe` ships with every
  * Windows install, so this needs no new dependency.
  */
-function getWindowsRegistryInstallPaths(): string[] {
+function queryRegistryInstallPath(key: string): Promise<string | undefined> {
+    return new Promise((resolve) => {
+        child_process.execFile('reg', ['query', key, '/v', 'InstallPath'], {
+            encoding: 'utf8',
+            windowsHide: true,
+            timeout: 5000,
+        }, (error, stdout) => {
+            // A missing key (not installed, or installed by something that doesn't write it) is
+            // not an error, just no answer from this candidate.
+            if (error) return resolve(undefined);
+            const match = /InstallPath\s+REG_SZ\s+(.+)/i.exec(stdout || '');
+            resolve(match?.[1]?.trim() || undefined);
+        });
+    });
+}
+
+async function getWindowsRegistryInstallPaths(): Promise<string[]> {
     const keys = [
         'HKLM\\SOFTWARE\\WOW6432Node\\Blizzard Entertainment\\Warcraft III',
         'HKLM\\SOFTWARE\\Blizzard Entertainment\\Warcraft III',
         'HKCU\\SOFTWARE\\WOW6432Node\\Blizzard Entertainment\\Warcraft III',
         'HKCU\\SOFTWARE\\Blizzard Entertainment\\Warcraft III',
     ];
+    const results = await Promise.all(keys.map(queryRegistryInstallPath));
     const found: string[] = [];
-    for (const key of keys) {
-        try {
-            const out = child_process.execFileSync('reg', ['query', key, '/v', 'InstallPath'], {
-                encoding: 'utf8',
-                windowsHide: true,
-                timeout: 5000,
-            });
-            const match = /InstallPath\s+REG_SZ\s+(.+)/i.exec(out);
-            const installPath = match?.[1]?.trim();
-            if (installPath) {
-                channelLog(`registry: ${key} -> ${installPath}`);
-                found.push(installPath);
-            }
-        } catch {
-            // Key doesn't exist (not installed, or installed by something that doesn't write it) —
-            // not an error, just try the next candidate.
-        }
-    }
+    results.forEach((installPath, index) => {
+        if (!installPath) return;
+        channelLog(`registry: ${keys[index]} -> ${installPath}`);
+        found.push(installPath);
+    });
     return found;
 }
 
-function getWindowsWarcraftPaths(): string[] {
+async function getWindowsWarcraftPaths(): Promise<string[]> {
     const relativeCandidates = [
         path.join('Program Files (x86)', 'Warcraft III'),
         path.join('Program Files', 'Warcraft III'),
         path.join('Games', 'Warcraft III'),
         'Warcraft III',
     ];
-    const paths: string[] = [...getWindowsRegistryInstallPaths()];
-    for (const driveRoot of getWindowsDriveRoots()) {
+    const [registryPaths, driveRoots] = await Promise.all([getWindowsRegistryInstallPaths(), getWindowsDriveRoots()]);
+    const paths: string[] = [...registryPaths];
+    for (const driveRoot of driveRoots) {
         for (const rel of relativeCandidates) {
             paths.push(path.join(driveRoot, rel));
         }
@@ -243,14 +274,18 @@ function getWindowsWarcraftPaths(): string[] {
     return paths;
 }
 
-function getDefaultWarcraftPaths(): string[] {
+function getDefaultWarcraftPaths(): Promise<string[]> {
     if (defaultWarcraftPathsCache) {
         return defaultWarcraftPathsCache;
     }
+    defaultWarcraftPathsCache = computeDefaultWarcraftPaths();
+    return defaultWarcraftPathsCache;
+}
 
+async function computeDefaultWarcraftPaths(): Promise<string[]> {
     let candidates: string[];
     if (process.platform === 'win32') {
-        candidates = getWindowsWarcraftPaths();
+        candidates = await getWindowsWarcraftPaths();
     } else if (process.platform === 'darwin') {
         candidates = [
             '/Applications/Warcraft III',
@@ -266,17 +301,19 @@ function getDefaultWarcraftPaths(): string[] {
     } else {
         candidates = [];
     }
-
-    defaultWarcraftPathsCache = candidates;
     return candidates;
 }
 
 /** Walk up from `startPath` until we find a WC3 CASC root (has Data/ AND .build.info or .build.db). */
-function findCascDataRoot(startPath: string): string | null {
+async function findCascDataRoot(startPath: string): Promise<string | null> {
     let dir = startPath;
     for (let i = 0; i < 5; i++) {
-        if (fs.existsSync(path.join(dir, 'Data')) &&
-            (fs.existsSync(path.join(dir, '.build.info')) || fs.existsSync(path.join(dir, '.build.db')))) {
+        const [hasData, hasInfo, hasDb] = await Promise.all([
+            pathExists(path.join(dir, 'Data')),
+            pathExists(path.join(dir, '.build.info')),
+            pathExists(path.join(dir, '.build.db')),
+        ]);
+        if (hasData && (hasInfo || hasDb)) {
             return dir;
         }
         const parent = path.dirname(dir);
@@ -286,18 +323,18 @@ function findCascDataRoot(startPath: string): string | null {
     return null;
 }
 
-function hasLegacyMpqArchive(dir: string): boolean {
+async function hasLegacyMpqArchive(dir: string): Promise<boolean> {
     try {
-        return fs.readdirSync(dir).some((entry) => /^(war3|war3x|war3patch|war3local|war3xlocal)\.mpq$/i.test(entry));
+        return (await fs.promises.readdir(dir)).some((entry) => /^(war3|war3x|war3patch|war3local|war3xlocal)\.mpq$/i.test(entry));
     } catch {
         return false;
     }
 }
 
-function findMpqDataRoot(startPath: string): string | null {
+async function findMpqDataRoot(startPath: string): Promise<string | null> {
     let dir = startPath;
     for (let i = 0; i < 5; i++) {
-        if (hasLegacyMpqArchive(dir)) return dir;
+        if (await hasLegacyMpqArchive(dir)) return dir;
         const parent = path.dirname(dir);
         if (parent === dir) break;
         dir = parent;
@@ -347,10 +384,11 @@ function getSourceCachePath(kind: GameStorageKind, normalizedAssetPath: string):
 
 export async function findCachedGameAsset(assetPath: string): Promise<string | undefined> {
     const normalized = normalizeCascAssetPath(assetPath);
+    const root = await getGameDataRoot(defaultCascLog);
     const candidates = [
-        gameDataRootCache?.kind ? getSourceCachePath(gameDataRootCache.kind, normalized) : '',
+        root?.kind ? getSourceCachePath(root.kind, normalized) : '',
         // Preserve assets extracted by older extension versions when CASC is active.
-        gameDataRootCache?.kind === 'casc' ? getCachedAssetPath(getCacheDir(), normalized) : '',
+        root?.kind === 'casc' ? getCachedAssetPath(getCacheDir(), normalized) : '',
     ].filter(Boolean);
     for (const candidate of candidates) {
         try {
@@ -395,46 +433,57 @@ function textureBasePath(assetPath: string): string {
     return normalizeCascAssetPath(assetPath).replace(/\.[^\\.]+$/, '');
 }
 
-function getGameDataRoot(log: (msg: string) => void): GameDataRoot | null {
-    if (gameDataRootCache !== undefined) {
-        return gameDataRootCache;
+/**
+ * Locate the WC3 game data once and remember the answer. Detection is fully asynchronous (registry
+ * queries, drive probing, directory walks) so the first asset lookup after startup never blocks the
+ * extension host while the language server is still booting. Concurrent callers share one probe.
+ */
+function getGameDataRoot(log: (msg: string) => void): Promise<GameDataRoot | null> {
+    if (!gameDataRootPromise) {
+        const generation = storageGeneration;
+        gameDataRootPromise = detectGameDataRoot(log).then((root) => {
+            // A reset while detection was in flight (wurst.wc3path changed) invalidates this answer
+            // for everyone still awaiting it — hand them the current generation's detection instead
+            // of a root that would then open the superseded installation.
+            if (generation !== storageGeneration) return getGameDataRoot(log);
+            return root;
+        });
     }
+    return gameDataRootPromise;
+}
+
+async function detectGameDataRoot(log: (msg: string) => void): Promise<GameDataRoot | null> {
     const wc3path = vscode.workspace.getConfiguration('wurst').get<string>('wc3path', '');
     if (wc3path) {
-        const dataRoot = findCascDataRoot(wc3path);
+        const dataRoot = await findCascDataRoot(wc3path);
         if (dataRoot) {
             if (dataRoot !== wc3path) logCascRootOnce(`CASC root: ${dataRoot} (from ${wc3path})`, log);
-            gameDataRootCache = { kind: 'casc', root: dataRoot };
-            return gameDataRootCache;
+            return { kind: 'casc', root: dataRoot };
         }
-        const mpqRoot = findMpqDataRoot(wc3path);
+        const mpqRoot = await findMpqDataRoot(wc3path);
         if (mpqRoot) {
             logCascRootOnce(`Legacy MPQ root: ${mpqRoot} (from ${wc3path})`, log);
-            gameDataRootCache = { kind: 'mpq', root: mpqRoot };
-            return gameDataRootCache;
+            return { kind: 'mpq', root: mpqRoot };
         }
         log(`CASC wurst.wc3path "${wc3path}" has no WC3 CASC root — falling back to default paths`);
         channelLog(`wurst.wc3path "${wc3path}" has no WC3 CASC root (looked for Data/ + .build.info|.build.db) — falling back to default paths`);
     }
-    const defaultPaths = getDefaultWarcraftPaths();
+    const defaultPaths = await getDefaultWarcraftPaths();
     for (const p of defaultPaths) {
-        const dataRoot = findCascDataRoot(p);
+        const dataRoot = await findCascDataRoot(p);
         if (dataRoot) {
             logCascRootOnce(`CASC root: ${dataRoot}`, log);
-            gameDataRootCache = { kind: 'casc', root: dataRoot };
-            return gameDataRootCache;
+            return { kind: 'casc', root: dataRoot };
         }
-        const mpqRoot = findMpqDataRoot(p);
+        const mpqRoot = await findMpqDataRoot(p);
         if (mpqRoot) {
             logCascRootOnce(`Legacy MPQ root: ${mpqRoot}`, log);
-            gameDataRootCache = { kind: 'mpq', root: mpqRoot };
-            return gameDataRootCache;
+            return { kind: 'mpq', root: mpqRoot };
         }
     }
     logCascRootOnce(`CASC skip: no WC3 install found (${defaultPaths.length} default paths checked)`, log);
     channelLog('Checked paths:\n' + defaultPaths.map((p) => '  - ' + p).join('\n'));
     channelLog('If Warcraft III is installed somewhere else, set the "wurst.wc3path" setting to its folder.');
-    gameDataRootCache = null;
     return null;
 }
 
@@ -446,6 +495,12 @@ function getGameDataRoot(log: (msg: string) => void): GameDataRoot | null {
 let cascStorageInstance: CascStorage | null = null;
 let cascStorageRoot: string | null = null;
 let cascStorageOpening: Promise<CascStorage | null> | null = null;
+/**
+ * Bumped by `resetCascStorage`. An open that was in flight when the reset happened completes
+ * against an older generation and must not publish its result into the shared singletons — it would
+ * otherwise re-install the previous WC3 root and clear the newer open's promise.
+ */
+let storageGeneration = 0;
 
 async function getCascStorageInstance(wc3Root: string, log: (msg: string) => void): Promise<CascStorage | null> {
     if (cascStorageInstance && cascStorageRoot === wc3Root) {
@@ -457,25 +512,32 @@ async function getCascStorageInstance(wc3Root: string, log: (msg: string) => voi
     // Root changed or first open — (re-)initialise
     cascStorageInstance = null;
     cascStorageRoot = wc3Root;
-    cascStorageOpening = (async () => {
+    const generation = storageGeneration;
+    const opening = (async () => {
         try {
             log(`CASC opening storage at: ${wc3Root}`);
             channelLog(`opening storage at: ${wc3Root}`);
-            cascStorageInstance = await CascStorage.openAsync(wc3Root, log);
-            log(`CASC storage opened (${cascStorageInstance.fileCount} files)`);
-            channelLog(`storage opened (${cascStorageInstance.fileCount} files)`);
-            return cascStorageInstance;
+            const storage = await CascStorage.openAsync(wc3Root, log);
+            if (generation !== storageGeneration) {
+                channelLog(`discarding CASC storage opened for a superseded root: ${wc3Root}`);
+                return null;
+            }
+            cascStorageInstance = storage;
+            log(`CASC storage opened (${storage.fileCount} files)`);
+            channelLog(`storage opened (${storage.fileCount} files)`);
+            return storage;
         } catch (e) {
             const detail = formatDiagnosticError(e);
             log(`CASC open failed: ${detail}`);
             channelLog(`storage open failed: ${detail}`);
-            cascStorageRoot = null;
+            if (generation === storageGeneration) cascStorageRoot = null;
             return null;
         } finally {
-            cascStorageOpening = null;
+            if (generation === storageGeneration) cascStorageOpening = null;
         }
     })();
-    return cascStorageOpening;
+    cascStorageOpening = opening;
+    return opening;
 }
 
 let mpqStorageInstance: MpqGameStorage | null = null;
@@ -491,25 +553,34 @@ async function getGameStorageInstance(root: GameDataRoot, log: (msg: string) => 
     if (mpqStorageOpening && mpqStorageRoot === root.root) return mpqStorageOpening;
     mpqStorageInstance = null;
     mpqStorageRoot = root.root;
-    mpqStorageOpening = (async () => {
+    const generation = storageGeneration;
+    const opening = (async () => {
         try {
-            mpqStorageInstance = await MpqGameStorage.openAsync(root.root, log);
-            return mpqStorageInstance;
+            const storage = await MpqGameStorage.openAsync(root.root, log);
+            if (generation !== storageGeneration) {
+                channelLog(`discarding MPQ storage opened for a superseded root: ${root.root}`);
+                void storage.close();
+                return null;
+            }
+            mpqStorageInstance = storage;
+            return storage;
         } catch (error) {
             const detail = formatDiagnosticError(error);
             log(`MPQ game storage open failed: ${detail}`);
             channelLog(`game storage open failed: ${detail}`);
-            mpqStorageRoot = null;
+            if (generation === storageGeneration) mpqStorageRoot = null;
             return null;
         } finally {
-            mpqStorageOpening = null;
+            if (generation === storageGeneration) mpqStorageOpening = null;
         }
     })();
-    return mpqStorageOpening;
+    mpqStorageOpening = opening;
+    return opening;
 }
 
-/** Reset the singleton (e.g. when wc3path setting changes). */
+/** Reset the singleton (e.g. when wc3path setting changes). In-flight opens are invalidated. */
 export function resetCascStorage(): void {
+    storageGeneration++;
     void mpqStorageInstance?.close();
     closeAllSegments();
     cascStorageInstance = null;
@@ -518,7 +589,8 @@ export function resetCascStorage(): void {
     mpqStorageInstance = null;
     mpqStorageRoot = null;
     mpqStorageOpening = null;
-    gameDataRootCache = undefined;
+    gameDataRootPromise = undefined;
+    defaultWarcraftPathsCache = null;
     loggedCascRootMessage = '';
     cascTextureMissCache.clear();
     cascAssetMissCache.clear();
@@ -556,7 +628,7 @@ type TextureExt = 'dds' | 'blp' | 'tga';
 // eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 export async function findCascTexture(texPath: string, log: (msg: string) => void): Promise<{ buf: Buffer; ext: TextureExt } | null> {
     const cacheDir = getCacheDir();
-    const gameRoot = getGameDataRoot(log);
+    const gameRoot = await getGameDataRoot(log);
     const cacheKind = gameRoot?.kind ?? 'casc';
     // CASC paths are lowercase with backslash separators
     const basePath = textureBasePath(texPath);
@@ -698,7 +770,7 @@ async function writeGameCache(root: GameDataRoot, assetPath: string, data: Buffe
 
 export async function findCascAsset(assetPath: string, log: (msg: string) => void): Promise<Buffer | null> {
     const normalized = normalizeCascAssetPath(assetPath);
-    const gameRoot = getGameDataRoot(log);
+    const gameRoot = await getGameDataRoot(log);
     const cached = await readCachedGameBuffer(normalized, gameRoot);
     if (cached) return cached;
 
@@ -745,7 +817,7 @@ export async function listGameAssetPaths(
     predicate: (assetPath: string) => boolean,
     log: (msg: string) => void = defaultCascLog,
 ): Promise<string[]> {
-    const gameRoot = getGameDataRoot(log);
+    const gameRoot = await getGameDataRoot(log);
     if (!gameRoot) return [];
     const storage = await getGameStorageInstance(gameRoot, log);
     if (!storage) return [];
@@ -828,7 +900,7 @@ export async function ensureCascCached(assetPath: string): Promise<string | unde
     const result = await findCascTexture(assetPath, defaultCascLog);
     if (!result) return undefined;
     const rel = `${textureBasePath(assetPath)}.${result.ext}`;
-    const kind = getGameDataRoot(defaultCascLog)?.kind ?? 'casc';
+    const kind = (await getGameDataRoot(defaultCascLog))?.kind ?? 'casc';
     return getSourceCachePath(kind, rel);
 }
 
@@ -837,7 +909,7 @@ export const ensureGameTextureCached = ensureCascCached;
 export async function ensureCascAssetCached(assetPath: string): Promise<string | undefined> {
     const result = await findCascAsset(assetPath, defaultCascLog);
     if (!result) return undefined;
-    const kind = getGameDataRoot(defaultCascLog)?.kind ?? 'casc';
+    const kind = (await getGameDataRoot(defaultCascLog))?.kind ?? 'casc';
     return getSourceCachePath(kind, normalizeCascAssetPath(assetPath));
 }
 
@@ -846,7 +918,19 @@ export const ensureGameAssetCached = ensureCascAssetCached;
 export function registerCascDiagnosticsCommand(): vscode.Disposable {
     return vscode.commands.registerCommand('wurst.showWc3DataLog', () => {
         // Touch it once so the log has *something* in it even before any preview has loaded.
-        getGameDataRoot(defaultCascLog);
+        void getGameDataRoot(defaultCascLog);
         getCascOutputChannel().show();
+    });
+}
+
+/**
+ * Re-detect the game data when `wurst.wc3path` changes. Without this the first detection result
+ * stuck for the whole session and pointing the setting at a different install needed a reload.
+ */
+export function registerGameDataSettingsWatcher(): vscode.Disposable {
+    return vscode.workspace.onDidChangeConfiguration((event) => {
+        if (!event.affectsConfiguration('wurst.wc3path')) return;
+        channelLog('wurst.wc3path changed, re-detecting game data');
+        resetCascStorage();
     });
 }

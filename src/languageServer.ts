@@ -7,11 +7,33 @@ import { LanguageClient, LanguageClientOptions, ServerOptions, Executable } from
 import { RUNTIME_DIR, COMPILER_JAR } from './paths';
 import { getBundledJava, checkCustomJavaVersion, getInstalledVersionString, ensureInstalledOrOfferMigration, maybeOfferUpdate } from './install/installer';
 import type { UpdateAvailable } from './install/installer';
-import { registerCommands } from './features/commands';
-import { registerFileCreation } from './features/fileCreation';
 import { appendDiagnostic, formatDiagnosticError } from './features/diagnostics';
 
 let clientRef: LanguageClient | null = null;
+
+// Commands that talk to the server are registered at activation, before (and independent of) the
+// JVM start, so they exist in the palette even while the server is still booting or when it failed.
+// They ask for the client through getLanguageClient(), which reflects three states and nothing
+// else: running (resolve now), starting (wait for that start), or not running (reject now with the
+// reason). There is deliberately no "pending until something happens" state — an intentional stop,
+// a failed start and a window without a workspace folder all fall into "not running", so a command
+// can never hang on a handle that nothing will ever settle.
+let startingClient: Promise<LanguageClient> | null = null;
+let unavailableReason: Error = new Error(
+    'The WurstScript language server has not been started. Open a folder containing a Wurst project.',
+);
+
+/** Resolves with the running language client, or rejects with why there is none. */
+export function getLanguageClient(): Promise<LanguageClient> {
+    if (clientRef) return Promise.resolve(clientRef);
+    if (startingClient) return startingClient;
+    return Promise.reject(unavailableReason);
+}
+
+/** The running client if there is one right now (no waiting). */
+export function getRunningLanguageClient(): LanguageClient | null {
+    return clientRef;
+}
 
 export async function stopLanguageServerIfRunning(): Promise<boolean> {
     if (!clientRef) return false;
@@ -21,24 +43,36 @@ export async function stopLanguageServerIfRunning(): Promise<boolean> {
         appendDiagnostic('VS Code extension', `Language server stop failed: ${formatDiagnosticError(error)}`);
     }
     clientRef = null;
+    // Nothing restarts the server after an intentional stop (the install flow reloads the window
+    // instead), so commands issued from now on fail fast with this reason.
+    unavailableReason = new Error('The WurstScript language server was stopped.');
     return true;
 }
 
 export async function startLanguageClient(context: ExtensionContext): Promise<void> {
-    if (clientRef) return;
+    if (clientRef || startingClient) return;
+    let announceStarted!: (client: LanguageClient) => void;
+    let announceFailed!: (error: unknown) => void;
+    startingClient = new Promise<LanguageClient>((resolve, reject) => {
+        announceStarted = resolve;
+        announceFailed = reject;
+    });
+    // Consumed through getLanguageClient(); avoid an unhandled-rejection report when nobody waits.
+    startingClient.catch(() => undefined);
 
-    await ensureInstalledOrOfferMigration(false);
-
-    const serverOptions = await getServerOptions();
-    const clientOptions: LanguageClientOptions = {
-        documentSelector: ['wurst'],
-        synchronize: { configurationSection: 'wurst' },
-    };
-
-    const client = new LanguageClient('Wurstscript Language Server', serverOptions, clientOptions);
-    clientRef = client;
-
+    let client: LanguageClient;
     try {
+        await ensureInstalledOrOfferMigration(false);
+
+        const serverOptions = await getServerOptions();
+        const clientOptions: LanguageClientOptions = {
+            documentSelector: ['wurst'],
+            synchronize: { configurationSection: 'wurst' },
+        };
+
+        client = new LanguageClient('Wurstscript Language Server', serverOptions, clientOptions);
+        clientRef = client;
+
         const startResult = client.start();
         if (isDisposable(startResult)) {
             context.subscriptions.push(startResult);
@@ -51,9 +85,20 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
         if (typeof anyClient.onReady === 'function') await anyClient.onReady();
     } catch (error) {
         clientRef = null;
+        startingClient = null;
+        unavailableReason = error instanceof Error ? error : new Error(String(error));
         appendDiagnostic('VS Code extension', `Wurst language server failed to start: ${formatDiagnosticError(error)}`);
+        announceFailed(error);
         throw error;
     }
+    startingClient = null;
+    if (clientRef !== client) {
+        // Stopped (or replaced) while it was still starting up: report the stop, not a client that
+        // is no longer running.
+        announceFailed(unavailableReason);
+        return;
+    }
+    announceStarted(client);
 
     const sb = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     let installedVersion = 'detecting...';
@@ -77,12 +122,11 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
         workspace.getConfiguration().update('wurst.wc3path', params);
     });
 
-    context.subscriptions.push(registerCommands(client));
-    context.subscriptions.push(registerFileCreation());
     context.subscriptions.push(registerFileChanges(client));
 
-    // Version detection starts a JVM and the update check performs network I/O.
-    // Neither should delay language features or block the extension host.
+    // Version detection may start a JVM (once per installed jar, then served from a disk cache) and
+    // the update check performs network I/O. Neither should delay language features or block the
+    // extension host.
     void getInstalledVersionString().then((version) => {
         try {
             installedVersion = version ?? 'unknown';

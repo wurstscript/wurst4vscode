@@ -582,6 +582,7 @@ function testInstallerVersionShaParsing() {
 
 async function testInstalledVersionDetection() {
     let invocation;
+    let persisted;
     const diagnostics = [];
     const commonMocks = {
         vscode: {
@@ -592,10 +593,15 @@ async function testInstalledVersionDetection() {
         fs: {
             existsSync: () => true,
             statSync: () => ({ size: 123, mtimeMs: 456 }),
+            // No persisted version cache in this fake home: detection must fall through to the JVM.
+            readFileSync: () => { throw new Error('ENOENT'); },
+            mkdirSync: () => undefined,
+            writeFileSync: (file, contents) => { persisted = { file, contents: JSON.parse(contents) }; },
         },
         '../paths': {
             WURST_HOME: 'wurst-home', RUNTIME_DIR: 'runtime', COMPILER_DIR: 'compiler',
             COMPILER_JAR: 'wurstscript.jar', GRILL_HOME_DIR: 'grill', UPDATE_SNOOZE_FILE: 'snooze.json',
+            INSTALLED_VERSION_CACHE_FILE: 'compiler/installed-version.json',
         },
         './fsUtils': {},
         './pathManager': {},
@@ -622,6 +628,25 @@ async function testInstalledVersionDetection() {
         args: ['-jar', 'wurstscript.jar', '-version'],
     }, 'version detection must use the compiler-supported -version flag');
     assert.deepEqual(diagnostics, []);
+    assert.equal(persisted?.file, 'compiler/installed-version.json', 'a successful detection must be persisted for later sessions');
+    assert.equal(persisted?.contents.version, '1.9.0.0-v0.0.0-6-b36c3461-61-gba83111da');
+
+    // A later session with the same jar must answer from the cache instead of starting another JVM.
+    let cachedInvocations = 0;
+    const cachedMod = loadTsModuleWithMocks('src/install/installer.ts', {
+        ...commonMocks,
+        fs: {
+            ...commonMocks.fs,
+            readFileSync: () => JSON.stringify(persisted.contents),
+        },
+        child_process: {
+            spawnSync: () => ({ status: 0 }),
+            execFile: () => { cachedInvocations++; },
+        },
+        './downloader': {},
+    });
+    assert.equal(await cachedMod.getInstalledVersionString(), '1.9.0.0-v0.0.0-6-b36c3461-61-gba83111da');
+    assert.equal(cachedInvocations, 0, 'a persisted version for the installed jar must not start a JVM');
 
     let fetchedLatest = false;
     let prompted = false;
@@ -653,6 +678,10 @@ function testNonBlockingStartupAndForcedReinstallWiring() {
     const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
     assert.ok(extension.includes('await installWithRetry({ offerPostInstallActions: false })'), 'manual install/update must force installation');
+    assert.ok(!extension.includes('await startLanguageClientWhenWorkspaceIsOpen('), 'activation must not wait for the language server JVM');
+    assert.ok(extension.includes('void startLanguageClientWhenWorkspaceIsOpen('), 'the language server must still be started at activation');
+    assert.ok(extension.includes('registerCommands(getLanguageClient)'), 'server-backed commands must be registered at activation, not after the server is up');
+    assert.ok(!languageServer.includes('registerCommands('), 'command registration must not depend on a successful server start');
     assert.ok(extension.includes("workbench.action.reloadWindow"), 'forced reinstall must reload the stopped language server');
     assert.ok(!extension.includes('ensureInstalledOrOfferMigration(true)'), 'manual install/update must not use the no-op ensure path');
     assert.ok(!languageServer.includes('await maybeOfferUpdate(context)'), 'update checks must not delay language-client startup');
@@ -668,6 +697,69 @@ function testNonBlockingStartupAndForcedReinstallWiring() {
     assert.ok(installer.includes('getInstallationStamp() !== initialInstallationStamp'), 'a mutex waiter must skip duplicate work after another completed install');
     assert.ok(extension.includes("registerCommand('wurst.stopAllProcesses'"), 'force-stop command must be registered');
     assert.ok(manifest.contributes.commands.some((item) => item.command === 'wurst.stopAllProcesses'), 'force-stop command must be contributed');
+}
+
+/** The server-backed commands await this handle, so its lifecycle decides whether they run, fail fast, or hang. */
+async function testLanguageClientHandleLifecycle() {
+    let failStart = false;
+    const clients = [];
+    class FakeLanguageClient {
+        constructor() { this.stopped = false; this.outputChannel = { show() {} }; clients.push(this); }
+        start() { return Promise.resolve(); }
+        stop() { this.stopped = true; return Promise.resolve(); }
+        onNotification() {}
+    }
+    const mod = loadTsModuleWithMocks('src/languageServer.ts', {
+        vscode: {
+            window: { createStatusBarItem: () => ({ show() {}, dispose() {} }) },
+            StatusBarAlignment: { Right: 2 },
+            workspace: {
+                getConfiguration: () => ({ get: (_key, fallback) => fallback }),
+                createFileSystemWatcher: () => ({ onDidCreate() {}, onDidChange() {}, onDidDelete() {}, dispose() {} }),
+            },
+        },
+        'vscode-languageclient/node': { LanguageClient: FakeLanguageClient },
+        fs: { existsSync: () => true },
+        './paths': { RUNTIME_DIR: 'runtime', COMPILER_JAR: 'wurstscript.jar' },
+        './install/installer': {
+            ensureInstalledOrOfferMigration: async () => { if (failStart) throw new Error('not installed'); },
+            getBundledJava: () => 'java',
+            checkCustomJavaVersion: async () => undefined,
+            getInstalledVersionString: async () => 'v1',
+            maybeOfferUpdate: async () => undefined,
+        },
+        './features/diagnostics': { appendDiagnostic() {}, formatDiagnosticError: (e) => String(e) },
+    });
+    const context = { subscriptions: [] };
+    const settled = (promise) => Promise.race([
+        promise.then(() => 'resolved', () => 'rejected'),
+        new Promise((resolve) => setTimeout(() => resolve('pending'), 20)),
+    ]);
+
+    assert.equal(await settled(mod.getLanguageClient()), 'rejected', 'with no start underway (e.g. an empty window) a command must fail fast, not wait forever');
+    await assert.rejects(mod.getLanguageClient(), /Open a folder/);
+    assert.equal(await mod.stopLanguageServerIfRunning(), false, 'stopping with no client is a no-op');
+
+    const starting = mod.startLanguageClient(context);
+    assert.equal(await settled(mod.getLanguageClient()), 'resolved', 'a request during startup waits for that start');
+    await starting;
+    assert.equal(await mod.getLanguageClient(), clients[0], 'the handle resolves to the started client');
+    assert.equal(mod.getRunningLanguageClient(), clients[0], 'output-channel commands must see the running client without a prior command');
+
+    assert.equal(await mod.stopLanguageServerIfRunning(), true);
+    assert.equal(clients[0].stopped, true);
+    assert.equal(mod.getRunningLanguageClient(), null);
+    assert.equal(await settled(mod.getLanguageClient()), 'rejected', 'after an intentional stop a command must fail fast instead of waiting forever');
+    await assert.rejects(mod.getLanguageClient(), /was stopped/);
+
+    await mod.startLanguageClient(context);
+    assert.equal(await mod.getLanguageClient(), clients[1], 'a restart hands out a fresh handle');
+    await mod.stopLanguageServerIfRunning();
+
+    failStart = true;
+    await assert.rejects(mod.startLanguageClient(context));
+    assert.equal(await settled(mod.getLanguageClient()), 'rejected', 'a failed start must reject the handle');
+    await assert.rejects(mod.getLanguageClient(), /not installed/);
 }
 
 function testWurstProcessMatching() {
@@ -1160,9 +1252,13 @@ function testWpmEditorInlineScriptAndRecoveryGuards() {
         .replace(/\\\$\{/g, '${');
     // eslint-disable-next-line sonarjs/constructor-for-side-effects -- parsing the real inline script is the assertion.
     new vm.Script(script);
-    assert.ok(host.includes('openContext.backupId'), 'WPM documents must restore VS Code hot-exit backups');
-    assert.ok(host.includes('currentRevision !== doc.savedRevision'), 'WPM dirty tracking must distinguish edit-history branches');
-    assert.ok(!host.includes('doc.editDepth'), 'WPM dirty tracking must not use branch-unsafe edit depth');
+    // The lifecycle lives in the shared editable-editor base now; the WPM module only contributes
+    // parse/serialize/render/edit translation on top of it.
+    const framework = fs.readFileSync(path.join(root, 'src/features/preview/framework.ts'), 'utf8');
+    assert.ok(host.includes('extends EditableBinaryEditorProvider<WpmFile, WpmDocument>'), 'WPM editor must be built on the shared editable provider');
+    assert.ok(framework.includes('openContext.backupId'), 'editable documents must restore VS Code hot-exit backups');
+    assert.ok(framework.includes('this.currentRevision !== this.savedRevision'), 'dirty tracking must distinguish edit-history branches');
+    assert.ok(!host.includes('doc.editDepth') && !framework.includes('editDepth'), 'dirty tracking must not use branch-unsafe edit depth');
 }
 
 function testWpmFlagSemantics() {
@@ -1197,6 +1293,7 @@ async function main() {
     testObjModEditorTypeAndRecoveryGuards();
     testWpmEditorInlineScriptAndRecoveryGuards();
     testNonBlockingStartupAndForcedReinstallWiring();
+    await testLanguageClientHandleLifecycle();
     testWurstProcessMatching();
     await testModelThumbnailRequestsTexturesByDefault();
     testAssetBrowserForwardsModelTextures();

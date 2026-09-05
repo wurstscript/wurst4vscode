@@ -466,12 +466,21 @@ async function resolveCachedGameAsset(variant: string): Promise<string | undefin
 }
 
 /**
- * Resolve an asset to a concrete file using WC3-style precedence: game data first, then
- * project-local roots (map folder/imports/workspace). Pass `kind` to constrain a model/texture
- * lookup to its own extension class.
+ * Resolve an asset to a concrete file using WC3's precedence: files inside the map (map folder,
+ * `imports/`, workspace roots) override the game's own data, so project-local roots are checked
+ * first and game data (extracted cache, then CASC/MPQ) only afterwards. Besides being the correct
+ * order, it also means a purely local import never pays for a full CASC candidate probe and
+ * basename search before it is found. Pass `kind` to constrain a model/texture lookup to its own
+ * extension class.
  */
 export async function resolveAssetPathWithCasc(assetPath: string, roots: readonly string[], kind: AssetKind = 'any'): Promise<string | undefined> {
     const variants = assetPathVariants(assetPath, kind);
+    const cacheDir = getGameAssetCacheDir();
+    const localRoots = roots.filter((root) => root !== cacheDir);
+    for (const variant of variants) {
+        const resolved = await resolveAssetPath(variant, localRoots, kind);
+        if (resolved) return resolved;
+    }
     for (const variant of variants) {
         const cached = await resolveCachedGameAsset(variant);
         if (cached) return cached;
@@ -481,10 +490,6 @@ export async function resolveAssetPathWithCasc(assetPath: string, roots: readonl
             ? await ensureGameTextureCached(variant)
             : await ensureGameAssetCached(variant);
         if (cached) return cached;
-    }
-    for (const variant of variants) {
-        const resolved = await resolveAssetPath(variant, roots);
-        if (resolved) return resolved;
     }
     return undefined;
 }

@@ -217,13 +217,18 @@ export class EditableBinaryEditorProvider<TFile extends { error?: string }, TDoc
             : this.opts.render(doc);
     }
 
-    /** Apply an edit, mark the document dirty and hand VS Code its undo/redo. */
-    pushEdit(doc: TDoc, label: string, edit: BinaryEdit): void {
+    /**
+     * Apply an edit, mark the document dirty and hand VS Code its undo/redo. `postState` runs after
+     * every step; `rerender` additionally replaces the whole page for editors whose incremental update
+     * cannot express the change (e.g. a form whose controls mirror a flag word).
+     */
+    pushEdit(doc: TDoc, label: string, edit: BinaryEdit, rerender: { onApply?: boolean; onUndoRedo?: boolean } = {}): void {
         const beforeRevision = doc.currentRevision;
         const afterRevision = doc.nextRevision++;
         edit.apply();
         doc.currentRevision = afterRevision;
         this.opts.postState(doc);
+        if (rerender.onApply) this.render(doc);
         this._onDidChange.fire({
             document: doc,
             label,
@@ -231,11 +236,13 @@ export class EditableBinaryEditorProvider<TFile extends { error?: string }, TDoc
                 edit.revert();
                 doc.currentRevision = beforeRevision;
                 this.opts.postState(doc);
+                if (rerender.onUndoRedo) this.render(doc);
             },
             redo: () => {
                 edit.apply();
                 doc.currentRevision = afterRevision;
                 this.opts.postState(doc);
+                if (rerender.onUndoRedo) this.render(doc);
             },
         });
     }

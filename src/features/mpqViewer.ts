@@ -52,7 +52,8 @@ function getPreviewViewType(fileName: string): string | undefined {
     if (ext === '.wtg') return 'wurst.wtgPreview';
     if (ext === '.wct') return 'wurst.wctPreview';
     if (['.mmp', '.w3c', '.w3r'].includes(ext)) return 'wurst.mapDataArchivePreview';
-    if (['.imp', '.shd', '.w3i', '.w3e', '.w3s', '.w3l', '.w3o'].includes(ext)) return 'wurst.mapDataPreview';
+    if (ext === '.w3i') return 'wurst.w3iEditor';
+    if (['.imp', '.shd', '.w3e', '.w3s', '.w3l', '.w3o'].includes(ext)) return 'wurst.mapDataPreview';
     return undefined;
 }
 

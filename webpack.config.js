@@ -10,19 +10,7 @@
 /** @typedef {import('webpack').Configuration} WebpackConfig **/
 
 const path = require('path');
-const fs = require('fs');
 const webpack = require('webpack');
-
-/** Copies a file from src to dst after webpack emits — used for files that can't be bundled (e.g. native-addon workers). */
-class CopyFilePlugin {
-	constructor(src, dst) { this.src = src; this.dst = dst; }
-	apply(compiler) {
-		compiler.hooks.afterEmit.tap('CopyFilePlugin', () => {
-			fs.mkdirSync(path.dirname(this.dst), { recursive: true });
-			fs.copyFileSync(this.src, this.dst);
-		});
-	}
-}
 
 /** @type WebpackConfig */
 const webExtensionConfig = {
@@ -127,7 +115,6 @@ const nodeExtensionConfig = {
 	target: 'node',
 	entry: {
 		extension: './src/extension.ts',
-		'casc-extract-worker': './src/casc-extract-worker.ts',
 	},
 	output: {
 		filename: '[name].js',

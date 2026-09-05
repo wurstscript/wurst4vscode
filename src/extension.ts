@@ -29,6 +29,7 @@ import { registerCommands, registerWurstDiagnosticsCommands } from './features/c
 import { registerFileCreation } from './features/fileCreation';
 import { openIssueReport } from './features/issueReporting';
 import { registerCascDiagnosticsCommand, registerGameDataSettingsWatcher } from './features/preview/cascStorage';
+import { registerAssetRootInvalidation } from './features/imageAssetSupport';
 import { formatDiagnosticError, showErrorWithLogs, showWarningWithLogs } from './features/diagnostics';
 
 export async function activate(context: ExtensionContext) {
@@ -51,6 +52,7 @@ export async function activate(context: ExtensionContext) {
     context.subscriptions.push(registerAgentsGuideOffer(context));
     context.subscriptions.push(registerCascDiagnosticsCommand());
     context.subscriptions.push(registerGameDataSettingsWatcher());
+    context.subscriptions.push(registerAssetRootInvalidation());
     registerWurstDiagnosticsCommands(context);
 
     registerBasicCommands(context);

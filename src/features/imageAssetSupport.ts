@@ -162,6 +162,22 @@ async function getFreshPreviewPath(basePath: string, sourceMtime: number): Promi
 
 const candidateRootsCache = new Map<string, Promise<string[]>>();
 
+/**
+ * The candidate-root list is cached per document and workspace, so a folder created after the first
+ * scan (`imports/`, a new folder-mode `.w3x`) was invisible until reload. Drop the cache when the
+ * workspace changes shape or when one of the directories the scan looks for is created or removed.
+ */
+export function registerAssetRootInvalidation(): vscode.Disposable {
+    const invalidate = () => candidateRootsCache.clear();
+    const watcher = vscode.workspace.createFileSystemWatcher('**/{imports,war3mapImported,war3map,assets,UI,*.w3x,*.w3m}', false, true, false);
+    return vscode.Disposable.from(
+        vscode.workspace.onDidChangeWorkspaceFolders(invalidate),
+        watcher,
+        watcher.onDidCreate(invalidate),
+        watcher.onDidDelete(invalidate),
+    );
+}
+
 export async function getCandidateRoots(documentFsPath: string): Promise<string[]> {
     const workspaceKey = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath).join('|');
     const cacheKey = `${documentFsPath}|${workspaceKey}`;

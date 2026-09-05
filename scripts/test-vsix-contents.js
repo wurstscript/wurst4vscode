@@ -34,7 +34,17 @@ const forbidden = [
 const leaked = files.filter((file) => forbidden.some((pattern) => pattern.test(file)));
 assert.deepStrictEqual(leaked, [], `Test/development files would be packaged:\n${leaked.join('\n')}`);
 
-for (const required of ['package.json', 'README.md', 'dist/extension.js']) {
+// Every bundle the host references with asWebviewUri, plus the web entry. A partial webpack run
+// used to ship silently and leave the object editor with a 404'd script.
+const REQUIRED_BUNDLES = [
+    'dist/extension.js',
+    'dist/web/extension.js',
+    'dist/webview/mdxViewer.js',
+    'dist/webview/mpqViewerWebview.js',
+    'dist/webview/objModEditorWebview.js',
+    'dist/webview/mdxThumbnailWorker.js',
+];
+for (const required of ['package.json', 'README.md', ...REQUIRED_BUNDLES]) {
     assert(files.includes(required), `Required release file is missing: ${required}`);
 }
 assert(

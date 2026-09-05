@@ -69,7 +69,7 @@ function createW3iHost(opts) {
     return createEditorHost(
         opts, 'src/features/mapDataPreview.ts', W3I_INTERNALS, 'war3map.w3i',
         (e2e) => new e2e.W3iEditorProvider(),
-        (doc) => doc.editDepth !== doc.savedDepth,
+        (doc) => doc.currentRevision !== doc.savedRevision,
     );
 }
 

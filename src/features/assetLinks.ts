@@ -7,7 +7,7 @@ import { loadObjValueCatalog, type ValueOption } from './objModPreview';
 import { cacheModelThumbnail, markModelThumbnailBad, postTexturesToWebview, requestModelThumbnail } from './preview/modelPreviewHost';
 import { getGameAssetCacheDir, getModelThumbCacheDir } from './preview/cascStorage';
 import { isSoundAssetPath, playSoundInline } from './soundPreview';
-import { buildPage, ICON_INLINE_CSS, PREVIEW_ICON_CSP } from './webviewShared';
+import { buildPage, ICON_INLINE_CSS } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
 import { showWarningWithLogs } from './diagnostics';
 import { assetSearchScore, fuzzyMatch } from './preview/fuzzy';
@@ -245,7 +245,10 @@ function dedupeAssetOptions(options: readonly ValueOption[]): ValueOption[] {
 
 function buildAssetBrowserHtml(initialJson: string, currentValue: string, cspSource: string, mdxViewerUri: string): string {
     return buildPage({
-        csp: PREVIEW_ICON_CSP.replace("script-src 'unsafe-inline';", `script-src 'unsafe-inline' ${cspSource};`),
+        // Models and cached thumbnails are fetched/displayed as webview resource URIs (see
+        // requestModelThumbnail with useModelUri), so the extension's cspSource must be admitted for
+        // connect-src and img-src, not only script-src.
+        csp: `default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' ${cspSource}; img-src data: ${cspSource}; connect-src ${cspSource};`,
         title: 'Choose Warcraft III Asset',
         extraCss: `
 ${ICON_INLINE_CSS}

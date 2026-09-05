@@ -546,7 +546,9 @@ export async function postTexturesToWebview(
     };
     let roots: string[];
     try {
-        roots = await getCandidateRoots(documentUri.fsPath);
+        // Models reference textures relative to their map/project root, which may be an ancestor of
+        // the model's folder rather than a workspace folder (the standalone viewer relied on this).
+        roots = await getCandidateRoots(documentUri.fsPath, { includeAncestors: true });
     } catch (err) {
         stats.errors = uniqueTexPaths.length;
         await forEachLimited(uniqueTexPaths, TEXTURE_RESOLVE_CONCURRENCY, async (texPath) => {

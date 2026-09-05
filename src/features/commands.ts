@@ -58,9 +58,60 @@ export function registerWurstDiagnosticsCommands(context: vscode.ExtensionContex
     );
 }
 
-export function registerCommands(client: LanguageClient): vscode.Disposable {
-    diagnosticsClient = client;
+function showClientOutput(client: LanguageClient): void {
+    try {
+        (client as any).outputChannel?.show();
+    } catch {}
+}
+
+function runTests(client: LanguageClient, request: ExecuteCommandParams): Thenable<unknown> {
+    // Show the Wurst output so users see progress immediately
+    showClientOutput(client);
+    return client.sendRequest(ExecuteCommandRequest.type, request).then(
+        (result: unknown) => {
+            // Non-modal heads-up; users can jump to Output again if they closed it
+            vscode.window.showInformationMessage('Wurst tests finished.', 'Open Output').then((btn) => {
+                if (btn === 'Open Output') showClientOutput(client);
+            });
+            return result;
+        },
+        (err) => {
+            showClientOutput(client);
+            appendDiagnostic('VS Code extension', `Wurst tests failed: ${formatDiagnosticError(err)}`);
+            vscode.window.showErrorMessage('Wurst tests failed. See "WurstScript" output for details.', 'View Logs').then((btn) => {
+                if (btn === 'View Logs') showClientOutput(client);
+            });
+            throw err;
+        }
+    );
+}
+
+/**
+ * Registers the commands that forward to the language server. `getClient` resolves once the server
+ * is running (and rejects if it could not start), so these can be registered at activation and
+ * still behave sensibly while the JVM is booting: the command waits, or reports why the server is
+ * unavailable, instead of VS Code claiming the command does not exist.
+ */
+export function registerCommands(getClient: () => Promise<LanguageClient>): vscode.Disposable {
     let _lastMapConfig: string | undefined = undefined;
+
+    const withClient = async <T>(action: (client: LanguageClient) => Thenable<T> | T): Promise<T | undefined> => {
+        let client: LanguageClient;
+        try {
+            client = await getClient();
+        } catch (error) {
+            appendDiagnostic('VS Code extension', `Command skipped, language server unavailable: ${formatDiagnosticError(error)}`);
+            const choice = await vscode.window.showErrorMessage(
+                'The WurstScript language server is not running, so this command is unavailable.',
+                'Install/Update', 'View Logs',
+            );
+            if (choice === 'Install/Update') void vscode.commands.executeCommand('wurst.installOrUpdate');
+            else if (choice === 'View Logs') showDiagnosticOutput();
+            return undefined;
+        }
+        diagnosticsClient = client;
+        return action(client);
+    };
 
     // Accepts both archive files (*.w3x, *.w3m) and folder-mode directories (*.w3x/, *.w3m/)
     const isMapPath = (value: string | undefined): value is string => {
@@ -148,7 +199,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
                 },
             ],
         };
-        return client.sendRequest(ExecuteCommandRequest.type, request);
+        return withClient((client) => client.sendRequest(ExecuteCommandRequest.type, request));
     };
 
     const startMap = async (cmd: 'wurst.startmap' | 'wurst.hotstartmap', args: any) => {
@@ -183,7 +234,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
             ],
         };
         _lastMapConfig = mappath;
-        return client.sendRequest(ExecuteCommandRequest.type, request);
+        return withClient((client) => client.sendRequest(ExecuteCommandRequest.type, request));
     };
 
     const reloadMap = async () => {
@@ -191,7 +242,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
             command: 'wurst.hotreload',
             arguments: [{}],
         };
-        return client.sendRequest(ExecuteCommandRequest.type, request);
+        return withClient((client) => client.sendRequest(ExecuteCommandRequest.type, request));
     };
 
     const startLast = () => {
@@ -232,30 +283,8 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
             args = [data];
         }
 
-        // Show the Wurst output so users see progress immediately
-        try {
-            (client as any).outputChannel?.show();
-        } catch {}
-
         const request: ExecuteCommandParams = { command: 'wurst.tests', arguments: args };
-
-        return client.sendRequest(ExecuteCommandRequest.type, request).then(
-            (result: any) => {
-                // Non-modal heads-up; users can jump to Output again if they closed it
-                vscode.window.showInformationMessage('Wurst tests finished.', 'Open Output').then((btn) => {
-                    if (btn === 'Open Output') (client as any).outputChannel?.show();
-                });
-                return result;
-            },
-            (err) => {
-                (client as any).outputChannel?.show();
-                appendDiagnostic('VS Code extension', `Wurst tests failed: ${formatDiagnosticError(err)}`);
-                vscode.window.showErrorMessage('Wurst tests failed. See "WurstScript" output for details.', 'View Logs').then((btn) => {
-                    if (btn === 'View Logs') (client as any).outputChannel?.show();
-                });
-                throw err;
-            }
-        );
+        return withClient((client) => runTests(client, request));
     };
 
     const performCodeAction = (args: any[]) => {
@@ -263,7 +292,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
             command: 'wurst.perform_code_action',
             arguments: args,
         };
-        return client.sendRequest(ExecuteCommandRequest.type, request);
+        return withClient((client) => client.sendRequest(ExecuteCommandRequest.type, request));
     };
 
     const fixAllQuickfixes = () => {
@@ -271,7 +300,7 @@ export function registerCommands(client: LanguageClient): vscode.Disposable {
             command: 'wurst.fix_all_quickfixes',
             arguments: [],
         };
-        return client.sendRequest(ExecuteCommandRequest.type, request);
+        return withClient((client) => client.sendRequest(ExecuteCommandRequest.type, request));
     };
 
     return vscode.Disposable.from(

@@ -7,11 +7,49 @@ import { LanguageClient, LanguageClientOptions, ServerOptions, Executable } from
 import { RUNTIME_DIR, COMPILER_JAR } from './paths';
 import { getBundledJava, checkCustomJavaVersion, getInstalledVersionString, ensureInstalledOrOfferMigration, maybeOfferUpdate } from './install/installer';
 import type { UpdateAvailable } from './install/installer';
-import { registerCommands } from './features/commands';
-import { registerFileCreation } from './features/fileCreation';
 import { appendDiagnostic, formatDiagnosticError } from './features/diagnostics';
 
 let clientRef: LanguageClient | null = null;
+
+// Commands that talk to the server are registered at activation, before (and independent of) the
+// JVM start, so they exist in the palette even while the server is still booting or when it failed.
+// They await this handle; it resolves once the client is running and rejects when startup failed,
+// so a command never hangs silently and can point the user at the install/update action instead.
+type ClientDeferred = {
+    promise: Promise<LanguageClient>;
+    resolve: (client: LanguageClient) => void;
+    reject: (error: unknown) => void;
+    settled: boolean;
+};
+
+function newClientDeferred(): ClientDeferred {
+    const deferred = {} as ClientDeferred;
+    deferred.settled = false;
+    deferred.promise = new Promise<LanguageClient>((resolve, reject) => {
+        deferred.resolve = (client) => { deferred.settled = true; resolve(client); };
+        deferred.reject = (error) => { deferred.settled = true; reject(error); };
+    });
+    // A rejected handle is consumed through getLanguageClient(); avoid an unhandled-rejection report
+    // when nobody happens to be waiting on it.
+    deferred.promise.catch(() => undefined);
+    return deferred;
+}
+
+let clientDeferred = newClientDeferred();
+
+/** Resolves with the running language client, or rejects if the server could not be started. */
+export function getLanguageClient(): Promise<LanguageClient> {
+    return clientDeferred.promise;
+}
+
+/** The running client if there is one right now (no waiting). */
+export function getRunningLanguageClient(): LanguageClient | null {
+    return clientRef;
+}
+
+function resetClientHandle(): void {
+    if (clientDeferred.settled) clientDeferred = newClientDeferred();
+}
 
 export async function stopLanguageServerIfRunning(): Promise<boolean> {
     if (!clientRef) return false;
@@ -21,24 +59,27 @@ export async function stopLanguageServerIfRunning(): Promise<boolean> {
         appendDiagnostic('VS Code extension', `Language server stop failed: ${formatDiagnosticError(error)}`);
     }
     clientRef = null;
+    resetClientHandle();
     return true;
 }
 
 export async function startLanguageClient(context: ExtensionContext): Promise<void> {
     if (clientRef) return;
+    resetClientHandle();
 
-    await ensureInstalledOrOfferMigration(false);
-
-    const serverOptions = await getServerOptions();
-    const clientOptions: LanguageClientOptions = {
-        documentSelector: ['wurst'],
-        synchronize: { configurationSection: 'wurst' },
-    };
-
-    const client = new LanguageClient('Wurstscript Language Server', serverOptions, clientOptions);
-    clientRef = client;
-
+    let client: LanguageClient;
     try {
+        await ensureInstalledOrOfferMigration(false);
+
+        const serverOptions = await getServerOptions();
+        const clientOptions: LanguageClientOptions = {
+            documentSelector: ['wurst'],
+            synchronize: { configurationSection: 'wurst' },
+        };
+
+        client = new LanguageClient('Wurstscript Language Server', serverOptions, clientOptions);
+        clientRef = client;
+
         const startResult = client.start();
         if (isDisposable(startResult)) {
             context.subscriptions.push(startResult);
@@ -52,8 +93,10 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
     } catch (error) {
         clientRef = null;
         appendDiagnostic('VS Code extension', `Wurst language server failed to start: ${formatDiagnosticError(error)}`);
+        clientDeferred.reject(error);
         throw error;
     }
+    clientDeferred.resolve(client);
 
     const sb = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     let installedVersion = 'detecting...';
@@ -77,12 +120,11 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
         workspace.getConfiguration().update('wurst.wc3path', params);
     });
 
-    context.subscriptions.push(registerCommands(client));
-    context.subscriptions.push(registerFileCreation());
     context.subscriptions.push(registerFileChanges(client));
 
-    // Version detection starts a JVM and the update check performs network I/O.
-    // Neither should delay language features or block the extension host.
+    // Version detection may start a JVM (once per installed jar, then served from a disk cache) and
+    // the update check performs network I/O. Neither should delay language features or block the
+    // extension host.
     void getInstalledVersionString().then((version) => {
         try {
             installedVersion = version ?? 'unknown';

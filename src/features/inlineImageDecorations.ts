@@ -460,7 +460,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
     const scanRanges = getScanRanges(editor);
     const text = document.getText();
     const useAssetIndex = shouldUseAssetIndex(text);
-    const index = useAssetIndex ? getAssetIndex() : undefined;
+    const index = useAssetIndex ? await getAssetIndex() : undefined;
     if (useAssetIndex) log(`asset index enabled for ${path.basename(document.uri.fsPath)}`);
 
     const { resolved, pending, mdxResolved, mdxPending } = await collectImageRanges(document, roots, scanRanges, index);

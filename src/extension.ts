@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import { workspace, ExtensionContext } from 'vscode';
 import { initPathManager } from './install/pathManager';
 import { installWithRetry } from './install/installer';
-import { startLanguageClient, stopLanguageServerIfRunning } from './languageServer';
+import { getLanguageClient, startLanguageClient, stopLanguageServerIfRunning } from './languageServer';
 import {
     findConflictingWurstProcesses,
     forceStopWurstProcesses,
@@ -25,9 +25,10 @@ import { registerTriggerPreview } from './features/triggerPreview';
 import { registerMapDataPreview } from './features/mapDataPreview';
 import { registerMapPreview } from './features/mapPreview';
 import { registerAgentsGuideOffer } from './features/agentsGuide';
-import { registerWurstDiagnosticsCommands } from './features/commands';
+import { registerCommands, registerWurstDiagnosticsCommands } from './features/commands';
+import { registerFileCreation } from './features/fileCreation';
 import { openIssueReport } from './features/issueReporting';
-import { registerCascDiagnosticsCommand } from './features/preview/cascStorage';
+import { registerCascDiagnosticsCommand, registerGameDataSettingsWatcher } from './features/preview/cascStorage';
 import { formatDiagnosticError, showErrorWithLogs, showWarningWithLogs } from './features/diagnostics';
 
 export async function activate(context: ExtensionContext) {
@@ -49,12 +50,20 @@ export async function activate(context: ExtensionContext) {
     context.subscriptions.push(registerMapPreview(context));
     context.subscriptions.push(registerAgentsGuideOffer(context));
     context.subscriptions.push(registerCascDiagnosticsCommand());
+    context.subscriptions.push(registerGameDataSettingsWatcher());
     registerWurstDiagnosticsCommands(context);
 
     registerBasicCommands(context);
+    // Server-backed commands (run map, tests, quickfixes) and the package-header helper are
+    // registered up front so they exist even while the JVM is still starting or if it failed;
+    // each command awaits the client handle when invoked.
+    context.subscriptions.push(registerCommands(getLanguageClient));
+    context.subscriptions.push(registerFileCreation());
     openObjModE2eFixture();
 
-    await startLanguageClientWhenWorkspaceIsOpen(context);
+    // Everything above is usable without the language server. Starting the JVM (and, on first run,
+    // the install dialog) must not hold activation hostage, so it runs detached.
+    void startLanguageClientWhenWorkspaceIsOpen(context);
 }
 
 function openObjModE2eFixture(): void {
@@ -136,10 +145,10 @@ function registerBasicCommands(context: ExtensionContext) {
 
 async function startLanguageClientWhenWorkspaceIsOpen(context: ExtensionContext): Promise<void> {
     if (!workspace.workspaceFolders?.length) {
-        const listener = workspace.onDidChangeWorkspaceFolders(async () => {
+        const listener = workspace.onDidChangeWorkspaceFolders(() => {
             if (workspace.workspaceFolders?.length) {
                 listener.dispose();
-                await startLanguageClientWhenWorkspaceIsOpen(context);
+                void startLanguageClientWhenWorkspaceIsOpen(context);
             }
         });
         context.subscriptions.push(listener);

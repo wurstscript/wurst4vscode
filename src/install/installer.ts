@@ -7,7 +7,7 @@ import { execFile, spawnSync } from 'child_process';
 import * as vscode from 'vscode';
 import { workspace } from 'vscode';
 import {
-    WURST_HOME, RUNTIME_DIR, COMPILER_DIR, COMPILER_JAR, GRILL_HOME_DIR, UPDATE_SNOOZE_FILE,
+    WURST_HOME, RUNTIME_DIR, COMPILER_DIR, COMPILER_JAR, GRILL_HOME_DIR, UPDATE_SNOOZE_FILE, INSTALLED_VERSION_CACHE_FILE,
 } from '../paths';
 import {
     normalizeInstallerPaths, migrateLegacyGrillLayout, installLauncherExecutable,
@@ -142,6 +142,11 @@ export function getInstalledVersionString(): Promise<string | null> {
     }
 
     installedVersionCacheKey = cacheKey;
+    const persisted = readPersistedInstalledVersion(cacheKey);
+    if (persisted) {
+        installedVersionPromise = Promise.resolve(persisted);
+        return installedVersionPromise;
+    }
     installedVersionPromise = new Promise((resolve) => {
         execFile(java, ['-jar', COMPILER_JAR, '-version'], { encoding: 'utf8', windowsHide: true }, (error, stdout, stderr) => {
             if (error) {
@@ -155,10 +160,34 @@ export function getInstalledVersionString(): Promise<string | null> {
                 return;
             }
             const out = `${stdout || ''}\n${stderr || ''}`.trim();
-            resolve(out ? (out.split(/\r?\n/).pop() || out) : null);
+            const version = out ? (out.split(/\r?\n/).pop() || out) : null;
+            if (version) writePersistedInstalledVersion(cacheKey, version);
+            resolve(version);
         });
     });
     return installedVersionPromise;
+}
+
+// The compiler jar carries no version resource and the language server does not report one, so the
+// only source is `java -jar wurstscript.jar -version`. That boots a second JVM right when the
+// language server's own JVM is starting, the single most expensive thing this extension did at
+// startup. Persist the answer keyed by the jar's identity so it runs once per installed build.
+function readPersistedInstalledVersion(cacheKey: string): string | null {
+    try {
+        const data = JSON.parse(fs.readFileSync(INSTALLED_VERSION_CACHE_FILE, 'utf8'));
+        return data && data.cacheKey === cacheKey && typeof data.version === 'string' ? data.version : null;
+    } catch {
+        return null;
+    }
+}
+
+function writePersistedInstalledVersion(cacheKey: string, version: string): void {
+    try {
+        fs.mkdirSync(path.dirname(INSTALLED_VERSION_CACHE_FILE), { recursive: true });
+        fs.writeFileSync(INSTALLED_VERSION_CACHE_FILE, JSON.stringify({ cacheKey, version }));
+    } catch (e) {
+        console.warn('Failed to persist installed WurstScript version:', e);
+    }
 }
 
 export function extractGitSha(versionString: string): string | null {

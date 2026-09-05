@@ -6,7 +6,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { BinReader, BinWriter, parseW3i as parseW3iFile, serializeW3i, W3iFile, W3iPlayer, W3iForce } from 'casc-ts/formats';
-import { ParsedPreviewContext, registerParsedPreviewer } from './preview/framework';
+import { BinaryEdit, EditableBinaryDocument, EditableBinaryEditorProvider, ParsedPreviewContext, registerParsedPreviewer } from './preview/framework';
 import {
     loadTriggerStringsForUri, resolveTriggerString, ResolvedText, TriggerStringTable,
     findWtsUri, applyWtsEdits,
@@ -1239,7 +1239,7 @@ function resolveEditableTriggerString(raw: string, triggerStrings: TriggerString
     return resolved.missing ? raw : String(resolved.value ?? '');
 }
 
-function makeTriggerStringEdit(raw: string, triggerStrings: TriggerStringTable, wtsEdits: Map<number, string>, value: string): W3cEdit | undefined {
+function makeTriggerStringEdit(raw: string, triggerStrings: TriggerStringTable, wtsEdits: Map<number, string>, value: string): BinaryEdit | undefined {
     const match = /^TRIGSTR_(\d+)$/i.exec(raw.trim());
     if (!match) return undefined;
     const id = Number(match[1]);
@@ -1297,127 +1297,80 @@ function renderW3cEditor(doc: W3cDocument, fileName: string): string {
 `);
 }
 
-class W3cDocument implements vscode.CustomDocument {
-    currentRevision = 0;
-    savedRevision = 0;
-    nextRevision = 1;
-    webview?: vscode.Webview;
+class W3cDocument extends EditableBinaryDocument<W3cFile> {
+    wtsTable: TriggerStringTable = loadTriggerStringsForUri(this.uri);
+    wtsUri: vscode.Uri | undefined = findWtsUri(this.uri).uri;
+    wtsExists = findWtsUri(this.uri).exists;
     wtsEdits = new Map<number, string>();
-    constructor(readonly uri: vscode.Uri, public file: W3cFile, public wtsTable: TriggerStringTable, public wtsUri: vscode.Uri | undefined, public wtsExists: boolean) {}
-    dispose(): void {}
+
+    reloadTriggerStrings(): void {
+        this.wtsTable = loadTriggerStringsForUri(this.uri);
+        const { uri, exists } = findWtsUri(this.uri);
+        this.wtsUri = uri;
+        this.wtsExists = exists;
+        this.wtsEdits.clear();
+    }
 }
 
-interface W3cEdit { apply: () => void; revert: () => void; }
+function validListIndex(index: number | undefined, length: number): index is number {
+    return Number.isInteger(index) && (index as number) >= 0 && (index as number) < length;
+}
 
-class W3cEditorProvider implements vscode.CustomEditorProvider<W3cDocument> {
-    private readonly _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<W3cDocument>>();
-    readonly onDidChangeCustomDocument = this._onDidChange.event;
+function handleW3cMessage(message: unknown, doc: W3cDocument, provider: W3cEditorProvider): void {
+    if (!message || typeof message !== 'object' || doc.file.error) return;
+    const msg = message as { type?: string; index?: number; field?: string; value?: string };
+    if (msg.type === 'add') return addW3cCamera(doc, provider);
+    if (!validListIndex(msg.index, doc.file.cameras.length)) return;
+    const index = msg.index;
+    if (msg.type === 'remove') return removeW3cCamera(doc, provider, index);
+    if (msg.type === 'edit' && typeof msg.field === 'string' && typeof msg.value === 'string') editW3cCameraField(doc, provider, index, msg.field, msg.value);
+}
 
-    async openCustomDocument(uri: vscode.Uri, openContext: vscode.CustomDocumentOpenContext): Promise<W3cDocument> {
-        const source = openContext.backupId ? vscode.Uri.parse(openContext.backupId) : uri;
-        const { uri: wtsUri, exists } = findWtsUri(uri);
-        const doc = new W3cDocument(uri, parseW3cFile(Buffer.from(await vscode.workspace.fs.readFile(source))), loadTriggerStringsForUri(uri), wtsUri, exists);
-        if (openContext.backupId) { doc.currentRevision = 1; doc.nextRevision = 2; }
-        return doc;
-    }
+function addW3cCamera(doc: W3cDocument, provider: W3cEditorProvider): void {
+    const camera: W3cCamera = { targetX: 0, targetY: 0, zOffset: 0, rotation: 270, angleOfAttack: 304, distance: 1650, roll: 0, fieldOfView: 70, farZ: 5000, unknown: 0, name: 'New Camera' };
+    const index = doc.file.cameras.length;
+    provider.pushEdit(doc, 'Add camera', { apply: () => { doc.file.cameras.push(camera); }, revert: () => { doc.file.cameras.splice(index, 1); } });
+}
 
-    async resolveCustomEditor(doc: W3cDocument, panel: vscode.WebviewPanel): Promise<void> {
-        panel.webview.options = { enableScripts: true, localResourceRoots: [] };
-        doc.webview = panel.webview;
-        panel.onDidDispose(() => { if (doc.webview === panel.webview) doc.webview = undefined; });
-        panel.webview.onDidReceiveMessage((message) => this.handleMessage(message, doc));
-        this.render(doc, panel.webview);
-    }
+function removeW3cCamera(doc: W3cDocument, provider: W3cEditorProvider, index: number): void {
+    const removed = { ...doc.file.cameras[index] };
+    provider.pushEdit(doc, 'Remove camera', { apply: () => { doc.file.cameras.splice(index, 1); }, revert: () => { doc.file.cameras.splice(index, 0, removed); } });
+}
 
-    private render(doc: W3cDocument, webview: vscode.Webview): void {
-        const fileName = doc.uri.path.slice(doc.uri.path.lastIndexOf('/') + 1);
-        webview.html = doc.file.error
-            ? buildPage({ csp: "default-src 'none'; style-src 'unsafe-inline';", title: escapeHtml(fileName), body: `<div class="wv-state"><span>Failed to parse W3C cameras</span><span class="err">${escapeHtml(doc.file.error)}</span></div>` })
-            : renderW3cEditor(doc, fileName);
-    }
+function editW3cCameraField(doc: W3cDocument, provider: W3cEditorProvider, index: number, field: string, rawValue: string): void {
+    const before = { ...doc.file.cameras[index] };
+    const after = { ...before };
+    if (field === 'name') {
+        const triggerEdit = makeTriggerStringEdit(before.name, doc.wtsTable, doc.wtsEdits, rawValue);
+        if (triggerEdit) return provider.pushEdit(doc, `Edit camera ${field}`, triggerEdit);
+        after.name = rawValue;
+    } else if (W3C_NUMERIC_FIELDS.has(field as keyof W3cCamera)) {
+        const value = Number(rawValue);
+        if (!Number.isFinite(value) || !Number.isFinite(Math.fround(value))) return;
+        after[field as keyof W3cCamera] = value as never;
+    } else return;
+    if (JSON.stringify(before) === JSON.stringify(after)) return;
+    provider.pushEdit(doc, `Edit camera ${field}`, { apply: () => { doc.file.cameras[index] = { ...after }; }, revert: () => { doc.file.cameras[index] = { ...before }; } });
+}
 
-    private handleMessage(message: unknown, doc: W3cDocument): void {
-        if (!message || typeof message !== 'object' || doc.file.error) return;
-        const msg = message as { type?: string; index?: number; field?: string; value?: string };
-        if (msg.type === 'add') return this.addCamera(doc);
-        if (!this.validIndex(msg.index, doc.file.cameras.length)) return;
-        const index = msg.index as number;
-        if (msg.type === 'remove') return this.removeCamera(doc, index);
-        if (msg.type === 'edit' && typeof msg.field === 'string' && typeof msg.value === 'string') this.editCameraField(doc, index, msg.field, msg.value);
-    }
-
-    private validIndex(index: number | undefined, length: number): index is number {
-        return Number.isInteger(index) && (index as number) >= 0 && (index as number) < length;
-    }
-
-    private addCamera(doc: W3cDocument): void {
-        const camera: W3cCamera = { targetX: 0, targetY: 0, zOffset: 0, rotation: 270, angleOfAttack: 304, distance: 1650, roll: 0, fieldOfView: 70, farZ: 5000, unknown: 0, name: 'New Camera' };
-        const index = doc.file.cameras.length;
-        this.pushEdit(doc, 'Add camera', { apply: () => { doc.file.cameras.push(camera); }, revert: () => { doc.file.cameras.splice(index, 1); } });
-    }
-
-    private removeCamera(doc: W3cDocument, index: number): void {
-        const removed = { ...doc.file.cameras[index] };
-        this.pushEdit(doc, 'Remove camera', { apply: () => { doc.file.cameras.splice(index, 1); }, revert: () => { doc.file.cameras.splice(index, 0, removed); } });
-    }
-
-    private editCameraField(doc: W3cDocument, index: number, field: string, rawValue: string): void {
-        const before = { ...doc.file.cameras[index] };
-        const after = { ...before };
-        if (field === 'name') {
-            const triggerEdit = makeTriggerStringEdit(before.name, doc.wtsTable, doc.wtsEdits, rawValue);
-            if (triggerEdit) return this.pushEdit(doc, `Edit camera ${field}`, triggerEdit);
-            after.name = rawValue;
-        }
-        else if (W3C_NUMERIC_FIELDS.has(field as keyof W3cCamera)) {
-            const value = Number(rawValue);
-            if (!Number.isFinite(value) || !Number.isFinite(Math.fround(value))) return;
-            after[field as keyof W3cCamera] = value as never;
-        } else return;
-        if (JSON.stringify(before) === JSON.stringify(after)) return;
-        this.pushEdit(doc, `Edit camera ${field}`, { apply: () => { doc.file.cameras[index] = { ...after }; }, revert: () => { doc.file.cameras[index] = { ...before }; } });
-    }
-
-    private pushEdit(doc: W3cDocument, label: string, edit: W3cEdit): void {
-        const beforeRevision = doc.currentRevision;
-        const afterRevision = doc.nextRevision++;
-        edit.apply(); doc.currentRevision = afterRevision; this.postState(doc);
-        this._onDidChange.fire({ document: doc, label, undo: () => { edit.revert(); doc.currentRevision = beforeRevision; this.postState(doc); }, redo: () => { edit.apply(); doc.currentRevision = afterRevision; this.postState(doc); } });
-    }
-
-    private postState(doc: W3cDocument): void {
-        void doc.webview?.postMessage({ type: 'editorStateChanged', listHtml: renderW3cList(doc.file, doc.wtsTable, doc.wtsEdits), count: doc.file.cameras.length, isDirty: doc.currentRevision !== doc.savedRevision });
-    }
-
-    async saveCustomDocument(doc: W3cDocument): Promise<void> {
-        await this.write(doc, doc.uri);
-        await writeTriggerStringEdits(doc.wtsEdits, doc.wtsUri, doc.wtsExists);
-        doc.savedRevision = doc.currentRevision;
-        this.postState(doc);
-    }
-
-    async saveCustomDocumentAs(doc: W3cDocument, target: vscode.Uri): Promise<void> {
-        await vscode.workspace.fs.writeFile(target, serializeValidatedW3c(doc.file, target.path));
-        const { uri, exists } = findWtsUri(target);
-        await writeTriggerStringEdits(doc.wtsEdits, uri, exists);
-    }
-
-    private async write(doc: W3cDocument, uri: vscode.Uri): Promise<void> {
-        const bytes = serializeValidatedW3c(doc.file, uri.path);
-        try { if (Buffer.from(await vscode.workspace.fs.readFile(uri)).equals(bytes)) return; } catch { /* missing → write */ }
-        await vscode.workspace.fs.writeFile(uri, bytes);
-    }
-
-    async revertCustomDocument(doc: W3cDocument): Promise<void> {
-        doc.file = parseW3cFile(Buffer.from(await vscode.workspace.fs.readFile(doc.uri)));
-        doc.wtsTable = loadTriggerStringsForUri(doc.uri); doc.wtsEdits.clear();
-        const { uri, exists } = findWtsUri(doc.uri); doc.wtsUri = uri; doc.wtsExists = exists;
-        doc.currentRevision = 0; doc.savedRevision = 0; doc.nextRevision = 1; if (doc.webview) this.render(doc, doc.webview);
-    }
-
-    async backupCustomDocument(doc: W3cDocument, context: vscode.CustomDocumentBackupContext): Promise<vscode.CustomDocumentBackup> {
-        await vscode.workspace.fs.writeFile(context.destination, serializeValidatedW3c(doc.file, doc.uri.path));
-        return { id: context.destination.toString(), delete: () => vscode.workspace.fs.delete(context.destination).then(() => undefined, () => undefined) };
+class W3cEditorProvider extends EditableBinaryEditorProvider<W3cFile, W3cDocument> {
+    constructor() {
+        super({
+            label: 'W3C cameras',
+            parse: parseW3cFile,
+            serialize: serializeValidatedW3c,
+            createDocument: (uri, file) => new W3cDocument(uri, file),
+            render: (doc) => renderW3cEditor(doc, doc.fileName),
+            postState: (doc) => {
+                void doc.webview?.postMessage({ type: 'editorStateChanged', listHtml: renderW3cList(doc.file, doc.wtsTable, doc.wtsEdits), count: doc.file.cameras.length, isDirty: doc.isDirty });
+            },
+            onSave: async (doc, target) => {
+                const { uri, exists } = findWtsUri(target);
+                await writeTriggerStringEdits(doc.wtsEdits, uri, exists);
+            },
+            onRevert: (doc) => doc.reloadTriggerStrings(),
+            handleMessage: handleW3cMessage,
+        });
     }
 }
 

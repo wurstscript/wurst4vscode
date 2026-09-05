@@ -4,8 +4,7 @@
 
 import * as vscode from 'vscode';
 import { parseWpm, serializeWpm, WpmFile } from 'casc-ts/formats';
-import { showErrorWithLogs } from './diagnostics';
-import { buildPage } from './webviewShared';
+import { EditableBinaryDocument, EditableBinaryEditorProvider } from './preview/framework';
 import { escapeHtml } from './webviewUtils';
 export { WpmFile } from 'casc-ts/formats';
 
@@ -678,16 +677,7 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean): string 
 
 // ── Editable document ─────────────────────────────────────────────────────────
 
-class WpmDocument implements vscode.CustomDocument {
-    currentRevision = 0;
-    savedRevision = 0;
-    nextRevision = 1;
-    webview?: vscode.Webview;
-
-    constructor(readonly uri: vscode.Uri, public file: WpmFile) {}
-
-    dispose(): void {}
-}
+class WpmDocument extends EditableBinaryDocument<WpmFile> {}
 
 interface WpmRequestedRun {
     start: number;
@@ -781,123 +771,43 @@ function wpmRunCellCount(changes: WpmRunChange[]): number {
     return changes.reduce((total, change) => total + change.length, 0);
 }
 
-class WpmEditorProvider implements vscode.CustomEditorProvider<WpmDocument> {
-    private readonly _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<WpmDocument>>();
-    readonly onDidChangeCustomDocument = this._onDidChange.event;
-
-    async openCustomDocument(uri: vscode.Uri, openContext: vscode.CustomDocumentOpenContext): Promise<WpmDocument> {
-        const source = openContext.backupId ? vscode.Uri.parse(openContext.backupId) : uri;
-        const doc = new WpmDocument(uri, parseWpm(Buffer.from(await vscode.workspace.fs.readFile(source))));
-        if (openContext.backupId) {
-            doc.currentRevision = 1;
-            doc.nextRevision = 2;
-        }
-        return doc;
+/** Write one direction of a run change into the grid and mirror it to the webview canvas. */
+function applyWpmRuns(doc: WpmDocument, changes: WpmRunChange[], useBefore: boolean): void {
+    const patches: WpmRequestedRun[] = [];
+    for (const change of changes) {
+        const value = useBefore ? change.before : change.after;
+        for (let index = change.start; index < change.start + change.length; index++) doc.file.data[index] = value;
+        patches.push({ start: change.start, length: change.length, value });
     }
+    void doc.webview?.postMessage({ type: 'applyRuns', runs: patches });
+}
 
-    async resolveCustomEditor(doc: WpmDocument, panel: vscode.WebviewPanel): Promise<void> {
-        panel.webview.options = { enableScripts: true, localResourceRoots: [] };
-        doc.webview = panel.webview;
-        panel.onDidDispose(() => { if (doc.webview === panel.webview) doc.webview = undefined; });
-        panel.webview.onDidReceiveMessage((message) => this.handleMessage(message, doc));
-        this.render(doc, panel.webview);
-    }
+function handleWpmMessage(message: unknown, doc: WpmDocument, provider: WpmEditorProvider): void {
+    if (!message || typeof message !== 'object') return;
+    const requested = collectWpmRequests(message as WpmEditMessage, doc.file.data.length);
+    if (!requested.length) return;
+    const changes = buildWpmRunChanges(doc.file.data, requested);
+    if (!changes.length) return;
+    const changedCells = wpmRunCellCount(changes);
+    const verb = changes.every((change) => change.after === 0) ? 'Erase' : 'Paint';
+    provider.pushEdit(doc, `${verb} ${changedCells} pathing cell${changedCells === 1 ? '' : 's'}`, {
+        apply: () => applyWpmRuns(doc, changes, false),
+        revert: () => applyWpmRuns(doc, changes, true),
+    });
+}
 
-    private render(doc: WpmDocument, webview: vscode.Webview): void {
-        const fileName = doc.uri.path.slice(doc.uri.path.lastIndexOf('/') + 1);
-        webview.html = doc.file.error
-            ? buildPage({
-                csp: "default-src 'none'; style-src 'unsafe-inline';",
-                title: escapeHtml(fileName),
-                body: `<div class="wv-state">
-  <span>Failed to parse WPM</span>
-  <span class="err">${escapeHtml(doc.file.error)}</span>
-</div>`,
-            })
-            : buildWpmHtml(doc.file, fileName, doc.currentRevision !== doc.savedRevision);
-    }
-
-    private handleMessage(message: unknown, doc: WpmDocument): void {
-        if (!message || typeof message !== 'object') return;
-        const requested = collectWpmRequests(message as WpmEditMessage, doc.file.data.length);
-        if (!requested.length) return;
-        const changes = buildWpmRunChanges(doc.file.data, requested);
-        if (!changes.length) return;
-
-        const beforeRevision = doc.currentRevision;
-        const afterRevision = doc.nextRevision++;
-        this.applyRuns(doc, changes, false);
-        doc.currentRevision = afterRevision;
-        this.postDirtyState(doc);
-        const changedCells = wpmRunCellCount(changes);
-        this._onDidChange.fire({
-            document: doc,
-            label: `${changes.every((change) => change.after === 0) ? 'Erase' : 'Paint'} ${changedCells} pathing cell${changedCells === 1 ? '' : 's'}`,
-            undo: () => {
-                this.applyRuns(doc, changes, true);
-                doc.currentRevision = beforeRevision;
-                this.postDirtyState(doc);
-            },
-            redo: () => {
-                this.applyRuns(doc, changes, false);
-                doc.currentRevision = afterRevision;
-                this.postDirtyState(doc);
-            },
+class WpmEditorProvider extends EditableBinaryEditorProvider<WpmFile, WpmDocument> {
+    constructor() {
+        super({
+            label: 'pathing map',
+            parse: parseWpm,
+            serialize: serializeValidatedWpm,
+            createDocument: (uri, file) => new WpmDocument(uri, file),
+            render: (doc) => buildWpmHtml(doc.file, doc.fileName, doc.isDirty),
+            // The canvas is patched incrementally through `applyRuns`; only the badge needs the state.
+            postState: (doc) => { void doc.webview?.postMessage({ type: 'dirtyStateChanged', isDirty: doc.isDirty }); },
+            handleMessage: handleWpmMessage,
         });
-    }
-
-    private applyRuns(doc: WpmDocument, changes: WpmRunChange[], useBefore: boolean): void {
-        const patches: WpmRequestedRun[] = [];
-        for (const change of changes) {
-            const value = useBefore ? change.before : change.after;
-            for (let index = change.start; index < change.start + change.length; index++) doc.file.data[index] = value;
-            patches.push({ start: change.start, length: change.length, value });
-        }
-        void doc.webview?.postMessage({ type: 'applyRuns', runs: patches });
-    }
-
-    private postDirtyState(doc: WpmDocument): void {
-        void doc.webview?.postMessage({ type: 'dirtyStateChanged', isDirty: doc.currentRevision !== doc.savedRevision });
-    }
-
-    async saveCustomDocument(doc: WpmDocument): Promise<void> {
-        try {
-            await this.writeWpm(doc, doc.uri);
-            doc.savedRevision = doc.currentRevision;
-            this.postDirtyState(doc);
-        } catch (err) {
-            void showErrorWithLogs(`Pathing map not saved: ${err instanceof Error ? err.message : String(err)}`, err);
-            throw err;
-        }
-    }
-
-    async saveCustomDocumentAs(doc: WpmDocument, target: vscode.Uri): Promise<void> {
-        await vscode.workspace.fs.writeFile(target, serializeValidatedWpm(doc.file, target.path));
-    }
-
-    private async writeWpm(doc: WpmDocument, uri: vscode.Uri): Promise<void> {
-        const bytes = serializeValidatedWpm(doc.file, uri.path);
-        try {
-            const existing = Buffer.from(await vscode.workspace.fs.readFile(uri));
-            if (existing.equals(bytes)) return;
-        } catch { /* missing → write */ }
-        await vscode.workspace.fs.writeFile(uri, bytes);
-    }
-
-    async revertCustomDocument(doc: WpmDocument): Promise<void> {
-        doc.file = parseWpm(Buffer.from(await vscode.workspace.fs.readFile(doc.uri)));
-        doc.currentRevision = 0;
-        doc.savedRevision = 0;
-        doc.nextRevision = 1;
-        if (doc.webview) this.render(doc, doc.webview);
-    }
-
-    async backupCustomDocument(doc: WpmDocument, context: vscode.CustomDocumentBackupContext): Promise<vscode.CustomDocumentBackup> {
-        await vscode.workspace.fs.writeFile(context.destination, serializeValidatedWpm(doc.file, doc.uri.path));
-        return {
-            id: context.destination.toString(),
-            delete: () => vscode.workspace.fs.delete(context.destination).then(() => undefined, () => undefined),
-        };
     }
 }
 

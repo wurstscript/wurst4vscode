@@ -582,6 +582,7 @@ function testInstallerVersionShaParsing() {
 
 async function testInstalledVersionDetection() {
     let invocation;
+    let persisted;
     const diagnostics = [];
     const commonMocks = {
         vscode: {
@@ -592,10 +593,15 @@ async function testInstalledVersionDetection() {
         fs: {
             existsSync: () => true,
             statSync: () => ({ size: 123, mtimeMs: 456 }),
+            // No persisted version cache in this fake home: detection must fall through to the JVM.
+            readFileSync: () => { throw new Error('ENOENT'); },
+            mkdirSync: () => undefined,
+            writeFileSync: (file, contents) => { persisted = { file, contents: JSON.parse(contents) }; },
         },
         '../paths': {
             WURST_HOME: 'wurst-home', RUNTIME_DIR: 'runtime', COMPILER_DIR: 'compiler',
             COMPILER_JAR: 'wurstscript.jar', GRILL_HOME_DIR: 'grill', UPDATE_SNOOZE_FILE: 'snooze.json',
+            INSTALLED_VERSION_CACHE_FILE: 'compiler/installed-version.json',
         },
         './fsUtils': {},
         './pathManager': {},
@@ -622,6 +628,25 @@ async function testInstalledVersionDetection() {
         args: ['-jar', 'wurstscript.jar', '-version'],
     }, 'version detection must use the compiler-supported -version flag');
     assert.deepEqual(diagnostics, []);
+    assert.equal(persisted?.file, 'compiler/installed-version.json', 'a successful detection must be persisted for later sessions');
+    assert.equal(persisted?.contents.version, '1.9.0.0-v0.0.0-6-b36c3461-61-gba83111da');
+
+    // A later session with the same jar must answer from the cache instead of starting another JVM.
+    let cachedInvocations = 0;
+    const cachedMod = loadTsModuleWithMocks('src/install/installer.ts', {
+        ...commonMocks,
+        fs: {
+            ...commonMocks.fs,
+            readFileSync: () => JSON.stringify(persisted.contents),
+        },
+        child_process: {
+            spawnSync: () => ({ status: 0 }),
+            execFile: () => { cachedInvocations++; },
+        },
+        './downloader': {},
+    });
+    assert.equal(await cachedMod.getInstalledVersionString(), '1.9.0.0-v0.0.0-6-b36c3461-61-gba83111da');
+    assert.equal(cachedInvocations, 0, 'a persisted version for the installed jar must not start a JVM');
 
     let fetchedLatest = false;
     let prompted = false;
@@ -653,6 +678,10 @@ function testNonBlockingStartupAndForcedReinstallWiring() {
     const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
     assert.ok(extension.includes('await installWithRetry({ offerPostInstallActions: false })'), 'manual install/update must force installation');
+    assert.ok(!extension.includes('await startLanguageClientWhenWorkspaceIsOpen('), 'activation must not wait for the language server JVM');
+    assert.ok(extension.includes('void startLanguageClientWhenWorkspaceIsOpen('), 'the language server must still be started at activation');
+    assert.ok(extension.includes('registerCommands(getLanguageClient)'), 'server-backed commands must be registered at activation, not after the server is up');
+    assert.ok(!languageServer.includes('registerCommands('), 'command registration must not depend on a successful server start');
     assert.ok(extension.includes("workbench.action.reloadWindow"), 'forced reinstall must reload the stopped language server');
     assert.ok(!extension.includes('ensureInstalledOrOfferMigration(true)'), 'manual install/update must not use the no-op ensure path');
     assert.ok(!languageServer.includes('await maybeOfferUpdate(context)'), 'update checks must not delay language-client startup');
@@ -1160,9 +1189,13 @@ function testWpmEditorInlineScriptAndRecoveryGuards() {
         .replace(/\\\$\{/g, '${');
     // eslint-disable-next-line sonarjs/constructor-for-side-effects -- parsing the real inline script is the assertion.
     new vm.Script(script);
-    assert.ok(host.includes('openContext.backupId'), 'WPM documents must restore VS Code hot-exit backups');
-    assert.ok(host.includes('currentRevision !== doc.savedRevision'), 'WPM dirty tracking must distinguish edit-history branches');
-    assert.ok(!host.includes('doc.editDepth'), 'WPM dirty tracking must not use branch-unsafe edit depth');
+    // The lifecycle lives in the shared editable-editor base now; the WPM module only contributes
+    // parse/serialize/render/edit translation on top of it.
+    const framework = fs.readFileSync(path.join(root, 'src/features/preview/framework.ts'), 'utf8');
+    assert.ok(host.includes('extends EditableBinaryEditorProvider<WpmFile, WpmDocument>'), 'WPM editor must be built on the shared editable provider');
+    assert.ok(framework.includes('openContext.backupId'), 'editable documents must restore VS Code hot-exit backups');
+    assert.ok(framework.includes('this.currentRevision !== this.savedRevision'), 'dirty tracking must distinguish edit-history branches');
+    assert.ok(!host.includes('doc.editDepth') && !framework.includes('editDepth'), 'dirty tracking must not use branch-unsafe edit depth');
 }
 
 function testWpmFlagSemantics() {

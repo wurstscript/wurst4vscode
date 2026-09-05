@@ -61,6 +61,8 @@ Preview features are split across focused modules — pick the slice you need:
 
 - **src/features/webviewUtils.ts** — `makeNonce()` + `escapeHtml()` only. Shared by all webview builders.
 
+- **Webview code belongs in `src/webview/` bundles, not in template literals.** Stylesheets are real `.css` files imported by the host (`import CSS from '../webview/x.css'`, inlined by webpack `asset/source` and by the test loader). Scripts are webpack entries in `webpack.config.js` (`viewerConfig.entry`), loaded via `webview.asWebviewUri(dist/webview/<name>.js)` under a nonce, with the page's data handed over through a small `window.__X_INITIAL__ = <json>` script carrying the same nonce; the CSP must not fall back to `script-src 'unsafe-inline'`. `wpmEditorWebview.ts` / `wpmPreview.ts` is the reference pair. Add every new bundle to `REQUIRED_BUNDLES` in `scripts/test-vsix-contents.js`. Remaining inline scripts to convert: model viewer (`blpPreview.ts`), map preview, code asset browser (`assetLinks.ts`), map-data editors, sound player.
+
 - **src/features/webviewShared.ts** — shared CSS (VS Code theme token mapping, `.wv-header`, `.wv-toolbar`, `.wv-btn`, `.wv-sep`, `.wv-scroll`, spinner overlay), plus `buildPage()`, `sep()`, `spinnerOverlay()` helpers. All webview panels use this as their CSS/HTML base.
   Touch for: cross-viewer style changes, new shared components, VS Code theme token additions.
   Do NOT put viewer-specific CSS here — pass it via `buildPage({ extraCss })` instead.

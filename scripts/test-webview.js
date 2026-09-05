@@ -1245,18 +1245,12 @@ function testObjModEditorTypeAndRecoveryGuards() {
 
 function testWpmEditorInlineScriptAndRecoveryGuards() {
     const host = fs.readFileSync(path.join(root, 'src/features/wpmPreview.ts'), 'utf8');
-    const match = host.match(/<script>\r?\n([\s\S]*?)\r?\n {2}<\/script>/);
-    assert.ok(match, 'WPM editor inline script should be present');
-    const script = match[1]
-        .replace('${wpm.width}', '4')
-        .replace('${wpm.height}', '4')
-        .replace('${dataBase64}', 'AAAAAAAAAAAAAAAAAAAAAA==')
-        .replace('${JSON.stringify(colorTable)}', '[[0, 0, 0]]')
-        .replace('${JSON.stringify(WPM_FLAG_DEFS.map(({ bit, label }) => ({ bit, label })))}', '[]')
-        .replace(/\\`/g, '`')
-        .replace(/\\\$\{/g, '${');
-    // eslint-disable-next-line sonarjs/constructor-for-side-effects -- parsing the real inline script is the assertion.
-    new vm.Script(script);
+    // The editor script is a real webview bundle (src/webview/wpmEditorWebview.ts); the host only
+    // hands over the grid and loads it under a nonce.
+    assert.ok(host.includes("'wpmEditorWebview.js'"), 'WPM host must load the bundled editor script');
+    assert.ok(host.includes('window.__WPM_INITIAL__ ='), 'WPM host must hand the grid to the bundle');
+    assert.ok(!host.includes("script-src 'unsafe-inline'"), 'WPM page must not allow arbitrary inline scripts');
+    assert.ok(fs.existsSync(path.join(root, 'src/webview/wpmEditorWebview.ts')), 'WPM editor bundle source must exist');
     // The lifecycle lives in the shared editable-editor base now; the WPM module only contributes
     // parse/serialize/render/edit translation on top of it.
     const framework = fs.readFileSync(path.join(root, 'src/features/preview/framework.ts'), 'utf8');

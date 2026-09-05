@@ -169,10 +169,10 @@ const candidateRootsCache = new Map<string, Promise<string[]>>();
  */
 export function registerAssetRootInvalidation(): vscode.Disposable {
     const invalidate = () => candidateRootsCache.clear();
-    // Map extensions are matched case-insensitively by getCandidateRootsUncached, so the watcher
-    // has to cover both spellings on case-sensitive hosts; the asset sub-directory names are exact
-    // there as well, matching the scan.
-    const watcher = vscode.workspace.createFileSystemWatcher('**/{imports,war3mapImported,war3map,assets,UI,*.w3x,*.W3X,*.w3m,*.W3M}', false, true, false);
+    // getCandidateRootsUncached accepts the map-folder extension in any casing, so the watcher uses
+    // character classes rather than an enumeration of spellings; the asset sub-directory names are
+    // matched exactly by the scan and therefore exactly here as well.
+    const watcher = vscode.workspace.createFileSystemWatcher('**/{imports,war3mapImported,war3map,assets,UI,*.[wW]3[xXmM]}', false, true, false);
     return vscode.Disposable.from(
         vscode.workspace.onDidChangeWorkspaceFolders(invalidate),
         watcher,

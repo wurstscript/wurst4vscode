@@ -66,6 +66,8 @@ function createTsLoader(options = {}) {
                 const target = resolveRelative(abs, request);
                 const targetRel = toRepoRelative(target);
                 if (Object.prototype.hasOwnProperty.call(mocks, targetRel)) return mocks[targetRel];
+                // Mirrors webpack's `asset/source` rule for stylesheets: the import is the file's text.
+                if (target.endsWith('.css')) return { __esModule: true, default: fs.readFileSync(target, 'utf8') };
                 return load(targetRel);
             }
             return repoRequire(request);

@@ -131,6 +131,8 @@ const nodeExtensionConfig = {
 				exclude: /node_modules/,
 				use: [{ loader: 'ts-loader' }],
 			},
+			// Viewer stylesheets live in .css files and are inlined into the host bundle as strings.
+			{ test: /\.css$/, type: 'asset/source' },
 		],
 	},
 	externals: {

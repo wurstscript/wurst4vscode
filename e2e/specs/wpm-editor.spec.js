@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('fs');
+
 /**
  * The editable .wpm pathing-map editor.
  *
@@ -51,6 +53,23 @@ test('renders the pathing grid with its dimensions and the blocked block from th
     expect(host.doc.file.width).toBe(16);
     expect(Array.from(host.doc.file.data).filter((v) => v === NO_WALK)).toHaveLength(16);
     expect(pageErrors).toEqual([]);
+});
+
+test('shows a friendly state when an extracted file was deleted before opening', async ({ openWpm }) => {
+    const { page, pageErrors } = await openWpm({ fileName: 'deleted.wpm' });
+
+    await expect(page.getByRole('alert')).toContainText('Could not load pathing map');
+    await expect(page.getByRole('alert')).toContainText('The file no longer exists');
+    expect(pageErrors).toEqual([]);
+});
+
+test('shows a friendly state when an open file is deleted before revert', async ({ openWpm }) => {
+    const { host } = await openWpm();
+    fs.rmSync(host.filePath);
+
+    await expect(host.provider.revertCustomDocument(host.doc)).resolves.toBeUndefined();
+    expect(host.html).toContain('Could not load pathing map');
+    expect(host.html).toContain('The file no longer exists');
 });
 
 test('the dirty badge stays hidden until something is painted', async ({ openWpm }) => {

@@ -146,6 +146,7 @@ export class EditableBinaryDocument<TFile> implements vscode.CustomDocument {
     savedRevision = 0;
     nextRevision = 1;
     webview?: vscode.Webview;
+    loadError?: string;
 
     constructor(readonly uri: vscode.Uri, public file: TFile) {}
 
@@ -194,6 +195,14 @@ function sidecarBackupUri(destination: vscode.Uri): vscode.Uri {
     return destination.with({ path: `${destination.path}.sidecar.json` });
 }
 
+function isFileNotFoundError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    const code = (error as Error & { code?: string }).code;
+    return code === 'FileNotFound' || code === 'ENOENT' || error.name === 'EntryNotFound (FileSystemError)' || error.message.includes('ENOENT');
+}
+
+const MISSING_FILE_MESSAGE = 'The file no longer exists. Close this editor and open it again from its source.';
+
 export class EditableBinaryEditorProvider<TFile extends { error?: string }, TDoc extends EditableBinaryDocument<TFile>>
     implements vscode.CustomEditorProvider<TDoc> {
     private readonly _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<TDoc>>();
@@ -203,7 +212,17 @@ export class EditableBinaryEditorProvider<TFile extends { error?: string }, TDoc
 
     async openCustomDocument(uri: vscode.Uri, openContext: vscode.CustomDocumentOpenContext): Promise<TDoc> {
         const source = openContext.backupId ? vscode.Uri.parse(openContext.backupId) : uri;
-        const doc = this.opts.createDocument(uri, this.opts.parse(Buffer.from(await vscode.workspace.fs.readFile(source))));
+        let file: TFile;
+        let missing = false;
+        try {
+            file = this.opts.parse(Buffer.from(await vscode.workspace.fs.readFile(source)));
+        } catch (error) {
+            if (!isFileNotFoundError(error)) throw error;
+            file = this.opts.parse(Buffer.alloc(0));
+            missing = true;
+        }
+        const doc = this.opts.createDocument(uri, file);
+        if (missing) doc.loadError = MISSING_FILE_MESSAGE;
         // A restored hot-exit backup differs from what is on disk, so it has to open dirty.
         if (openContext.backupId) {
             doc.currentRevision = 1;
@@ -235,9 +254,13 @@ export class EditableBinaryEditorProvider<TFile extends { error?: string }, TDoc
     /** Replace the whole page (initial open, revert). Incremental updates go through `postState`. */
     render(doc: TDoc): void {
         if (!doc.webview) return;
-        doc.webview.html = doc.file.error
-            ? buildErrorHtml(doc.fileName, doc.file.error, `Failed to parse ${this.opts.label}`)
-            : this.opts.render(doc);
+        if (doc.loadError) {
+            doc.webview.html = buildErrorHtml(doc.fileName, doc.loadError, `Could not load ${this.opts.label}`);
+        } else if (doc.file.error) {
+            doc.webview.html = buildErrorHtml(doc.fileName, doc.file.error, `Failed to parse ${this.opts.label}`);
+        } else {
+            doc.webview.html = this.opts.render(doc);
+        }
     }
 
     /**
@@ -288,7 +311,15 @@ export class EditableBinaryEditorProvider<TFile extends { error?: string }, TDoc
     }
 
     async revertCustomDocument(doc: TDoc): Promise<void> {
-        doc.file = this.opts.parse(Buffer.from(await vscode.workspace.fs.readFile(doc.uri)));
+        try {
+            doc.file = this.opts.parse(Buffer.from(await vscode.workspace.fs.readFile(doc.uri)));
+        } catch (error) {
+            if (!isFileNotFoundError(error)) throw error;
+            doc.loadError = MISSING_FILE_MESSAGE;
+            this.render(doc);
+            return;
+        }
+        doc.loadError = undefined;
         this.opts.onRevert?.(doc);
         doc.currentRevision = 0;
         doc.savedRevision = 0;

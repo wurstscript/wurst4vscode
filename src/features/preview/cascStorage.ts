@@ -1,6 +1,7 @@
 'use strict';
 
 import * as child_process from 'child_process';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -21,7 +22,10 @@ type GameStorageKind = 'casc' | 'mpq';
 
 interface GameDataRoot {
     kind: GameStorageKind;
+    /** The installation directory as detected, and what the storage openers are given. */
     root: string;
+    /** `root` resolved through `realpath` — the spelling the disk cache is namespaced by. */
+    canonicalRoot: string;
 }
 
 interface GameStorage {
@@ -304,6 +308,26 @@ async function computeDefaultWarcraftPaths(): Promise<string[]> {
     return candidates;
 }
 
+/**
+ * Builds the detection result, pairing the root as discovered with the canonical spelling used to
+ * key its cache bucket. The same install arrives here spelled several ways — a hand-typed
+ * `wurst.wc3path`, an uppercase drive letter from the default-path scan, a registry value, a symlink
+ * — and hashing the spelling verbatim would give each one its own bucket, re-extracting the same
+ * install into another full copy on disk. `realpath` settles them on the filesystem's own canonical
+ * form without guessing at case sensitivity, falling back to the path as given if it can't be
+ * canonicalised. Only the cache tag uses it: `root` stays exactly as detected, since that is what
+ * gets handed to the native storage openers.
+ */
+async function makeGameDataRoot(kind: GameStorageKind, root: string): Promise<GameDataRoot> {
+    let canonicalRoot = root;
+    try {
+        canonicalRoot = await fs.promises.realpath(root);
+    } catch {
+        // Keep the discovered spelling; a bucket keyed on it is still correct, just not deduplicated.
+    }
+    return { kind, root, canonicalRoot };
+}
+
 /** Walk up from `startPath` until we find a WC3 CASC root (has Data/ AND .build.info or .build.db). */
 async function findCascDataRoot(startPath: string): Promise<string | null> {
     let dir = startPath;
@@ -378,25 +402,35 @@ function getCachedAssetPath(cacheDir: string, normalizedAssetPath: string): stri
     return path.join(cacheDir, ...normalizedAssetPath.replace(/:/g, '$').split('\\'));
 }
 
-function getSourceCachePath(kind: GameStorageKind, normalizedAssetPath: string): string {
-    return getCachedAssetPath(path.join(getCacheDir(), kind), normalizedAssetPath);
+/**
+ * Short, filesystem-safe tag distinguishing this game-data root from any other of the same storage
+ * kind, so switching `wurst.wc3path` between two installs of the same kind (two Reforged builds, or
+ * a PTR next to retail) can't serve assets that were extracted from the other one. The path is hashed
+ * exactly as resolved, with no case folding: two spellings that differ only in case are separate
+ * directories on a case-sensitive filesystem and must never share a bucket. On a case-insensitive one
+ * they can at worst produce two buckets for the same install, which costs a re-extraction — the safe
+ * direction, and not worth a filesystem-behaviour probe to avoid.
+ */
+function installRootTag(root: string): string {
+    return crypto.createHash('sha1').update(path.resolve(root)).digest('hex').slice(0, 8);
+}
+
+function getSourceCachePath(root: GameDataRoot, normalizedAssetPath: string): string {
+    return getCachedAssetPath(path.join(getCacheDir(), root.kind, installRootTag(root.canonicalRoot)), normalizedAssetPath);
 }
 
 export async function findCachedGameAsset(assetPath: string): Promise<string | undefined> {
     const normalized = normalizeCascAssetPath(assetPath);
     const root = await getGameDataRoot(defaultCascLog);
-    const candidates = [
-        root?.kind ? getSourceCachePath(root.kind, normalized) : '',
-        // Preserve assets extracted by older extension versions when CASC is active.
-        root?.kind === 'casc' ? getCachedAssetPath(getCacheDir(), normalized) : '',
-    ].filter(Boolean);
-    for (const candidate of candidates) {
-        try {
-            await fs.promises.access(candidate, fs.constants.F_OK);
-            return candidate;
-        } catch {}
+    // No live root, no namespace to check — see the comment on readCachedGameBuffer.
+    if (!root) return undefined;
+    const candidate = getSourceCachePath(root, normalized);
+    try {
+        await fs.promises.access(candidate, fs.constants.F_OK);
+        return candidate;
+    } catch {
+        return undefined;
     }
-    return undefined;
 }
 
 function rememberMiss(cache: Set<string>, key: string): void {
@@ -458,12 +492,12 @@ async function detectGameDataRoot(log: (msg: string) => void): Promise<GameDataR
         const dataRoot = await findCascDataRoot(wc3path);
         if (dataRoot) {
             if (dataRoot !== wc3path) logCascRootOnce(`CASC root: ${dataRoot} (from ${wc3path})`, log);
-            return { kind: 'casc', root: dataRoot };
+            return makeGameDataRoot('casc', dataRoot);
         }
         const mpqRoot = await findMpqDataRoot(wc3path);
         if (mpqRoot) {
             logCascRootOnce(`Legacy MPQ root: ${mpqRoot} (from ${wc3path})`, log);
-            return { kind: 'mpq', root: mpqRoot };
+            return makeGameDataRoot('mpq', mpqRoot);
         }
         log(`CASC wurst.wc3path "${wc3path}" has no WC3 CASC root — falling back to default paths`);
         channelLog(`wurst.wc3path "${wc3path}" has no WC3 CASC root (looked for Data/ + .build.info|.build.db) — falling back to default paths`);
@@ -473,12 +507,12 @@ async function detectGameDataRoot(log: (msg: string) => void): Promise<GameDataR
         const dataRoot = await findCascDataRoot(p);
         if (dataRoot) {
             logCascRootOnce(`CASC root: ${dataRoot}`, log);
-            return { kind: 'casc', root: dataRoot };
+            return makeGameDataRoot('casc', dataRoot);
         }
         const mpqRoot = await findMpqDataRoot(p);
         if (mpqRoot) {
             logCascRootOnce(`Legacy MPQ root: ${mpqRoot}`, log);
-            return { kind: 'mpq', root: mpqRoot };
+            return makeGameDataRoot('mpq', mpqRoot);
         }
     }
     logCascRootOnce(`CASC skip: no WC3 install found (${defaultPaths.length} default paths checked)`, log);
@@ -626,10 +660,8 @@ type TextureExt = 'dds' | 'blp' | 'tga';
 
 /** Look up a texture. Checks disk cache first; if missing, extracts in-process and caches to disk. */
 // eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
-export async function findCascTexture(texPath: string, log: (msg: string) => void): Promise<{ buf: Buffer; ext: TextureExt } | null> {
-    const cacheDir = getCacheDir();
+export async function findCascTexture(texPath: string, log: (msg: string) => void): Promise<{ buf: Buffer; ext: TextureExt; cachePath: string } | null> {
     const gameRoot = await getGameDataRoot(log);
-    const cacheKind = gameRoot?.kind ?? 'casc';
     // CASC paths are lowercase with backslash separators
     const basePath = textureBasePath(texPath);
     const ddsPath = `${basePath}.dds`;
@@ -652,13 +684,14 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
     if (fallbackDdsPath) cacheCandidates.push([fallbackDdsPath, 'dds']);
     if (fallbackBlpPath) cacheCandidates.push([fallbackBlpPath, 'blp']);
     if (fallbackTgaPath) cacheCandidates.push([fallbackTgaPath, 'tga']);
-    for (const [rel, ext] of cacheCandidates) {
-        const cachePaths = [getSourceCachePath(cacheKind, rel)];
-        if (cacheKind === 'casc') cachePaths.push(getCachedAssetPath(cacheDir, rel));
-        for (const cachePath of cachePaths) {
+    // Disk-cache paths are namespaced by install root, so a lookup needs a live root to know which
+    // bucket to check — without one we can't tell which install a stale cache entry came from.
+    if (gameRoot) {
+        for (const [rel, ext] of cacheCandidates) {
+            const cachePath = getSourceCachePath(gameRoot, rel);
             try {
                 const buf = await fs.promises.readFile(cachePath);
-                return { buf, ext };
+                return { buf, ext, cachePath };
             } catch {}
         }
     }
@@ -687,13 +720,13 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
 
     for (const [gamePath, ext] of candidates) {
         const rel = pathForExt(ext);
-        const cachePath = getSourceCachePath(gameRoot!.kind, rel);
+        const cachePath = getSourceCachePath(gameRoot!, rel);
         const buf = await gameReadDirect(gameRoot!, gamePath, log);
         if (buf) {
             log(`${gameRoot!.kind.toUpperCase()} extracted: ${gamePath} (${buf.length} bytes) -> ${cachePath}`);
             await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
             await fs.promises.writeFile(cachePath, buf);
-            return { buf, ext };
+            return { buf, ext, cachePath };
         }
     }
 
@@ -707,11 +740,11 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
             const buf = await gameReadDirect(gameRoot!, found, log);
             if (!buf) continue;
             const rel = pathForExt(ext);
-            const cachePath = getSourceCachePath(gameRoot!.kind, rel);
+            const cachePath = getSourceCachePath(gameRoot!, rel);
             log(`${gameRoot!.kind.toUpperCase()} basename-resolved texture: ${baseNoExt}.${ext} -> ${found} (${buf.length} bytes)`);
             await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
             await fs.promises.writeFile(cachePath, buf);
-            return { buf, ext };
+            return { buf, ext, cachePath };
         }
     }
     rememberMiss(cascTextureMissCache, missKey);
@@ -721,16 +754,17 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
 
 export const findGameTexture = findCascTexture;
 
-async function readCachedGameBuffer(assetPath: string, root: GameDataRoot | null): Promise<Buffer | null> {
+async function readCachedGameBuffer(assetPath: string, root: GameDataRoot | null): Promise<{ buf: Buffer; cachePath: string } | null> {
+    // Namespaced cache paths need a known install root — without a live one we can't tell whose
+    // cache we would be reading, so there is nothing safe to check.
+    if (!root) return null;
     const normalized = normalizeCascAssetPath(assetPath);
-    const cachePaths = [getSourceCachePath(root?.kind ?? 'casc', normalized)];
-    if (root?.kind === 'casc') cachePaths.push(getCachedAssetPath(getCacheDir(), normalized));
-    for (const cachePath of cachePaths) {
-        try {
-            return await fs.promises.readFile(cachePath);
-        } catch {}
+    const cachePath = getSourceCachePath(root, normalized);
+    try {
+        return { buf: await fs.promises.readFile(cachePath), cachePath };
+    } catch {
+        return null;
     }
-    return null;
 }
 
 function gameAssetCandidates(root: GameDataRoot, normalized: string): string[] {
@@ -762,13 +796,19 @@ function gameAssetCandidates(root: GameDataRoot, normalized: string): string[] {
 }
 
 async function writeGameCache(root: GameDataRoot, assetPath: string, data: Buffer): Promise<string> {
-    const cachePath = getSourceCachePath(root.kind, assetPath);
+    const cachePath = getSourceCachePath(root, assetPath);
     await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
     await fs.promises.writeFile(cachePath, data);
     return cachePath;
 }
 
-export async function findCascAsset(assetPath: string, log: (msg: string) => void): Promise<Buffer | null> {
+/**
+ * Returns the cache path alongside the buffer so callers that need the on-disk location (e.g.
+ * `ensureCascAssetCached`) use exactly the path this lookup actually read from or wrote to, instead
+ * of re-deriving it from the live game-data root afterwards — which can have moved on if
+ * `wurst.wc3path` changed in between.
+ */
+async function findCascAssetWithPath(assetPath: string, log: (msg: string) => void): Promise<{ buf: Buffer; cachePath: string } | null> {
     const normalized = normalizeCascAssetPath(assetPath);
     const gameRoot = await getGameDataRoot(log);
     const cached = await readCachedGameBuffer(normalized, gameRoot);
@@ -786,7 +826,7 @@ export async function findCascAsset(assetPath: string, log: (msg: string) => voi
         if (buf) {
             const cachePath = await writeGameCache(gameRoot, normalized, buf);
             log(`${gameRoot.kind.toUpperCase()} extracted: ${gamePath} (${buf.length} bytes) -> ${cachePath}`);
-            return buf;
+            return { buf, cachePath };
         }
     }
 
@@ -800,8 +840,8 @@ export async function findCascAsset(assetPath: string, log: (msg: string) => voi
             const buf = await gameReadDirect(gameRoot, found, log);
             if (buf) {
                 log(`${gameRoot.kind.toUpperCase()} basename-resolved: ${basename} -> ${found} (${buf.length} bytes)`);
-                await writeGameCache(gameRoot, normalized, buf);
-                return buf;
+                const cachePath = await writeGameCache(gameRoot, normalized, buf);
+                return { buf, cachePath };
             }
         }
     }
@@ -809,6 +849,10 @@ export async function findCascAsset(assetPath: string, log: (msg: string) => voi
     rememberMiss(cascAssetMissCache, normalized);
     log(`${gameRoot.kind.toUpperCase()} asset not found after ${candidates.length} candidates: ${assetPath}`);
     return null;
+}
+
+export async function findCascAsset(assetPath: string, log: (msg: string) => void): Promise<Buffer | null> {
+    return (await findCascAssetWithPath(assetPath, log))?.buf ?? null;
 }
 
 export const findGameAsset = findCascAsset;
@@ -872,19 +916,14 @@ export function logGameData(message: string): void {
  */
 export async function ensureCascCached(assetPath: string): Promise<string | undefined> {
     const result = await findCascTexture(assetPath, defaultCascLog);
-    if (!result) return undefined;
-    const rel = `${textureBasePath(assetPath)}.${result.ext}`;
-    const kind = (await getGameDataRoot(defaultCascLog))?.kind ?? 'casc';
-    return getSourceCachePath(kind, rel);
+    return result?.cachePath;
 }
 
 export const ensureGameTextureCached = ensureCascCached;
 
 export async function ensureCascAssetCached(assetPath: string): Promise<string | undefined> {
-    const result = await findCascAsset(assetPath, defaultCascLog);
-    if (!result) return undefined;
-    const kind = (await getGameDataRoot(defaultCascLog))?.kind ?? 'casc';
-    return getSourceCachePath(kind, normalizeCascAssetPath(assetPath));
+    const result = await findCascAssetWithPath(assetPath, defaultCascLog);
+    return result?.cachePath;
 }
 
 export const ensureGameAssetCached = ensureCascAssetCached;

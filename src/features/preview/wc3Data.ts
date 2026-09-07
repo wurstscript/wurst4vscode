@@ -84,6 +84,17 @@ const DEFAULT_WATER_LEVEL_UNITS = 89.6;
 let terrainWaterLevelsPromise: Promise<Map<string, number>> | undefined;
 let tilesetBlightTexturesPromise: Promise<Map<string, string>> | undefined;
 
+/**
+ * Drops everything parsed out of the game files. These tables describe the installation they were
+ * read from, so they have to go when `wurst.wc3path` moves to another one — `resetCascStorage()`
+ * only clears the raw byte layer underneath them.
+ */
+export function resetGameDataCaches(): void {
+    terrainWaterLevelsPromise = undefined;
+    tilesetBlightTexturesPromise = undefined;
+    worldEditStringsPromise = undefined;
+}
+
 export async function loadTerrainWaterLevel(tileset: string): Promise<number> {
     if (!terrainWaterLevelsPromise) terrainWaterLevelsPromise = loadTerrainWaterLevelsUncached();
     const levels = await terrainWaterLevelsPromise;

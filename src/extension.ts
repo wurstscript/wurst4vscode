@@ -18,7 +18,9 @@ import { registerMpqViewer } from './features/mpqViewer';
 import { registerAssetLinks } from './features/assetLinks';
 import { registerImagePreviewHover } from './features/imagePreviewHover';
 import { registerInlineImageDecorations } from './features/inlineImageDecorations';
-import { registerObjModPreview } from './features/objModPreview';
+import { registerObjModPreview, resetObjModGameDataCaches } from './features/objModPreview';
+import { resetGameDataCaches } from './features/preview/wc3Data';
+import { resetObjectCatalog } from './features/preview/objectCatalog';
 import { registerWpmPreview } from './features/wpmPreview';
 import { registerDooPreview } from './features/dooPreview';
 import { registerTriggerPreview } from './features/triggerPreview';
@@ -55,6 +57,7 @@ export async function activate(context: ExtensionContext) {
     context.subscriptions.push(registerGameDataSettingsWatcher());
     context.subscriptions.push(registerAssetRootInvalidation());
     context.subscriptions.push(registerTextureCacheInvalidation());
+    context.subscriptions.push(registerGameDataCacheInvalidation());
     registerWurstDiagnosticsCommands(context);
 
     registerBasicCommands(context);
@@ -68,6 +71,22 @@ export async function activate(context: ExtensionContext) {
     // Everything above is usable without the language server. Starting the JVM (and, on first run,
     // the install dialog) must not hold activation hostage, so it runs detached.
     void startLanguageClientWhenWorkspaceIsOpen(context);
+}
+
+/**
+ * `resetCascStorage` drops the raw game-file layer when `wurst.wc3path` changes, but everything
+ * parsed out of it — SLK tables, WorldEditStrings, profiles, object catalogs — is cached separately
+ * and would keep answering with the previous installation's names, icons and models until the
+ * window was reloaded. Composed here because these modules already depend on the game-data layer
+ * and must not depend on each other.
+ */
+function registerGameDataCacheInvalidation(): vscode.Disposable {
+    return vscode.workspace.onDidChangeConfiguration((event) => {
+        if (!event.affectsConfiguration('wurst.wc3path')) return;
+        resetGameDataCaches();
+        resetObjectCatalog();
+        resetObjModGameDataCaches();
+    });
 }
 
 function openObjModE2eFixture(): void {

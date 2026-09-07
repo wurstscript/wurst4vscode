@@ -257,6 +257,18 @@ const objSummaryDataCache = new Map<string, Promise<ObjSummaryData | undefined>>
 const objProfileCache = new Map<string, Promise<ProfileTable>>();
 const objCatalogCache = new Map<string, Promise<ObjValueCatalog>>();
 
+/**
+ * Object-editor metadata, summaries, profiles and value catalogs all come out of the game files, so
+ * they belong to one installation. Dropped when `wurst.wc3path` points somewhere else; otherwise an
+ * already-open editor keeps showing the previous installation's field names, icons and models.
+ */
+export function resetObjModGameDataCaches(): void {
+    objEditorDataCache.clear();
+    objSummaryDataCache.clear();
+    objProfileCache.clear();
+    objCatalogCache.clear();
+}
+
 /** Live obj-mod editors, keyed by their main file's uri — lets a cross-reference jump (see
  *  locateObjectAcrossSiblings) find an already-open sibling editor and select the target object in
  *  it directly, instead of only being able to affect a freshly-opened one. */

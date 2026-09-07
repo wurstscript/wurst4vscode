@@ -1,6 +1,9 @@
 .vscode/**
 .github/**
 .claude/**
+# CI-only stand-ins for the private sibling packages. Shipping them leaks the
+# type surface of casc-ts and war3-model, and nothing loads them at runtime.
+.ci/**
 src/**
 out/**
 node_modules/**

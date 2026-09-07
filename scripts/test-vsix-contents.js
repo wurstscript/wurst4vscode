@@ -22,6 +22,8 @@ const files = result.stdout
 
 const forbidden = [
     /^(?:src|scripts|e2e|wc3data|test|tests|__tests__|fixtures|docs)\//i,
+    // The CI mocks carry the .d.ts surface of the private sibling packages.
+    /^\.ci\//i,
     /^images\/marketplace\//i,
     /(?:^|\/)(?:AGENTS|CLAUDE)\.md$/i,
     /(?:^|\/)vsc-extension-quickstart\.md$/i,
@@ -45,7 +47,9 @@ const REQUIRED_BUNDLES = [
     'dist/webview/mdxThumbnailWorker.js',
     'dist/webview/wpmEditorWebview.js',
 ];
-for (const required of ['package.json', 'README.md', ...REQUIRED_BUNDLES]) {
+// LICENSE.txt covers the extension; THIRD-PARTY-NOTICES.txt carries the MIT notices for the
+// bundled dependencies (war3-model and friends), which those licences require us to ship.
+for (const required of ['package.json', 'README.md', 'LICENSE.txt', 'THIRD-PARTY-NOTICES.txt', ...REQUIRED_BUNDLES]) {
     assert(files.includes(required), `Required release file is missing: ${required}`);
 }
 assert(

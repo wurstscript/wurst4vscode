@@ -204,11 +204,24 @@ export async function getCandidateRoots(documentFsPath: string, options: Candida
     return [...await promise];
 }
 
+/** Is `candidate` the extracted game-asset cache directory, or anything beneath it? */
+function isInsideGameAssetCache(candidate: string): boolean {
+    const forCompare = (p: string) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
+    const rel = path.relative(forCompare(getGameAssetCacheDir()), forCompare(candidate));
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 async function getCandidateRootsUncached(documentFsPath: string, options: CandidateRootOptions): Promise<string[]> {
     const seen = new Set<string>();
     const roots: string[] = [];
     const add = (candidate: string) => {
-        if (candidate && !seen.has(candidate)) {
+        // Never let generic local resolution reach into the extracted game-asset cache. Its entries
+        // are namespaced by installation root and must only be read back through the game-data
+        // lookups that know which namespace is active — joining an asset path onto the cache dir (or
+        // onto one installation's bucket) would serve another installation's bytes. This guards every
+        // source of roots at once, including a document that itself lives inside the cache and the
+        // ancestor walk below.
+        if (candidate && !seen.has(candidate) && !isInsideGameAssetCache(candidate)) {
             seen.add(candidate);
             roots.push(candidate);
         }
@@ -263,7 +276,6 @@ async function getCandidateRootsUncached(documentFsPath: string, options: Candid
         }
     }));
 
-    add(getGameAssetCacheDir());
     return roots;
 }
 
@@ -277,12 +289,10 @@ const IMPORT_SKIP_DIRS = new Set(['node_modules', '.git', '.svn', 'dist', 'out',
  * root (map-relative, WC3 style) so they resolve and serialize correctly. Bounded to keep it cheap.
  */
 export async function gatherImportedAssets(documentFsPath: string): Promise<{ model: ImportedAsset[]; icon: ImportedAsset[]; sound: ImportedAsset[] }> {
-    const cacheDir = getGameAssetCacheDir();
     // Prefer the most specific root. A file under `imports\btn` is reachable both from the workspace
     // root (`imports\btn\x.blp`) and the dedicated imports root (`btn\x.blp`); the latter is the useful
     // WC3 asset path. Walking child roots first also lets the physical-path guard below keep that form.
     const roots = (await getCandidateRoots(documentFsPath))
-        .filter((r) => r !== cacheDir)
         .sort((a, b) => path.resolve(b).split(path.sep).length - path.resolve(a).split(path.sep).length);
     const model: ImportedAsset[] = [];
     const icon: ImportedAsset[] = [];
@@ -515,10 +525,8 @@ async function resolveCachedGameAsset(variant: string): Promise<string | undefin
  */
 export async function resolveAssetPathWithCasc(assetPath: string, roots: readonly string[], kind: AssetKind = 'any'): Promise<string | undefined> {
     const variants = assetPathVariants(assetPath, kind);
-    const cacheDir = getGameAssetCacheDir();
-    const localRoots = roots.filter((root) => root !== cacheDir);
     for (const variant of variants) {
-        const resolved = await resolveAssetPath(variant, localRoots, kind);
+        const resolved = await resolveAssetPath(variant, roots, kind);
         if (resolved) return resolved;
     }
     for (const variant of variants) {

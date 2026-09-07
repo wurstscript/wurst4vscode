@@ -29,6 +29,20 @@ module.exports = defineConfig({
         {
             name: 'webview',
             testDir: './e2e/specs',
+            // Only `vscode` is faked, so the objmod host runs the real cascStorage. On a machine
+            // that has Warcraft III installed, every host opens the install for itself
+            // (parseEncoding is ~120k entries) and then builds the object catalog before the first
+            // field rows can be posted. Machines without an install never feel any of this, because
+            // the knowledge-base path is cheap — which is why it only ever broke locally.
+            //
+            // Serial, because running those opens concurrently starves the lazy object-details
+            // requests: at the default worker count the field table renders far too late to assert
+            // on, and no timeout rescues it (verified: still fails with a 120s per-test timeout).
+            workers: 1,
+            // Even serial, a real game-data read lands within a second or two of the 7s default, so
+            // which assertion tips over wanders between runs. The assertions are right; they just
+            // have to outlast the read.
+            expect: { timeout: 25_000 },
         },
         {
             // Real VS Code / real Warcraft III data. Opt-in via WURST_OBJMOD_E2E=1 or

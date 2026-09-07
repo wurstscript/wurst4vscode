@@ -24,6 +24,10 @@ const forbidden = [
     /^(?:src|scripts|e2e|wc3data|test|tests|__tests__|fixtures|docs)\//i,
     // The CI mocks carry the .d.ts surface of the private sibling packages.
     /^\.ci\//i,
+    // Playwright output. Gitignored, but vsce only honours .vscodeignore, and a release is cut
+    // straight after a local e2e run — traces embed DOM and network snapshots.
+    /^(?:test-results|playwright-report)\//i,
+    /^(?:playwright|eslint|webpack)\.config\.[cm]?js$/i,
     /^images\/marketplace\//i,
     /(?:^|\/)(?:AGENTS|CLAUDE)\.md$/i,
     /(?:^|\/)vsc-extension-quickstart\.md$/i,

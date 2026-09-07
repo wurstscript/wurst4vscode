@@ -11,6 +11,10 @@ scripts/**
 e2e/**
 wc3data/**
 logs/**
+# Playwright leaves these behind locally, and release packaging happens right
+# after a local e2e run. Traces carry full DOM and network snapshots.
+test-results/**
+playwright-report/**
 resources/wc3-knowledge-base.json
 test/**
 tests/**
@@ -23,8 +27,10 @@ images/marketplace/**
 *.vsix
 tsconfig*.json
 webpack.config.js
+playwright.config.js
 .gitignore
 .eslintrc*
+eslint.config.js
 .editorconfig
 .prettierrc
 AGENTS.md

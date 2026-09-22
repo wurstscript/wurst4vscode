@@ -152,6 +152,22 @@ test('upgrade editors exclude skin-only records from base choices', async ({ ope
     await expect(page.locator('#add-object-base option[value="BP001"]')).toHaveCount(0);
 });
 
+test('a stale detail response cannot populate an object after its identity changes', async ({ openObjMod }) => {
+    const { page } = await openObjMod();
+    await expect(page.locator('#details .table-wrap tbody tr')).not.toHaveCount(0);
+    const selectedKey = await page.evaluate(() => window.__wurstModelThumbDebug.state().selectedKey);
+
+    await page.evaluate((key) => window.postMessage({
+        type: 'objectDetailsLoaded',
+        key,
+        identity: 'Custom:stale-object',
+        mods: [{ fieldId: 'zzzz', label: 'Stale field', category: 'data', type: 'int', value: 1 }],
+    }, '*'), selectedKey);
+
+    await expect.poll(() => page.evaluate(() => window.__wurstModelThumbDebug.detailsRows()
+        .some((row) => row.fieldId === 'zzzz'))).toBe(false);
+});
+
 test('technical mode swaps in the id/type columns and back', async ({ openObjMod }) => {
     const { page } = await openObjMod();
     await expect(page.locator('#details thead th')).toHaveText(['Field', 'Value']);

@@ -1955,10 +1955,10 @@ async function openObjModAsset(assetPath: string, uri: vscode.Uri): Promise<void
     }
 }
 
-async function loadObjectDetails(key: string, webview: vscode.Webview, doc: ObjModDocument): Promise<void> {
+async function loadObjectDetails(key: string, identity: string | undefined, webview: vscode.Webview, doc: ObjModDocument): Promise<void> {
     const entry = findEntryByKey(doc.displayFile, key);
     if (!entry) {
-        await webview.postMessage({ type: 'objectDetailsFailed', key, reason: 'Object not found' });
+        await webview.postMessage({ type: 'objectDetailsFailed', key, identity, reason: 'Object not found' });
         return;
     }
     try {
@@ -1982,12 +1982,12 @@ async function loadObjectDetails(key: string, webview: vscode.Webview, doc: ObjM
                 annotateEditable(row, mod, wts);
                 return row;
             });
-        await webview.postMessage({ type: 'objectDetailsLoaded', key, mods });
+        await webview.postMessage({ type: 'objectDetailsLoaded', key, identity, mods });
     } catch (err) {
         // Game-data/CASC lookups can throw (missing install, bad metadata); without this the webview
         // was left stuck on its "Loading fields..." spinner forever with no way out but reopening.
         console.error('[wurst-objmod] failed to build field rows for', key, err);
-        await webview.postMessage({ type: 'objectDetailsFailed', key, reason: err instanceof Error ? err.message : String(err) });
+        await webview.postMessage({ type: 'objectDetailsFailed', key, identity, reason: err instanceof Error ? err.message : String(err) });
     }
 }
 
@@ -2526,7 +2526,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             color?: string;
         };
         if (msg.type === 'loadObjectDetails' && msg.key) {
-            await loadObjectDetails(msg.key, webview, doc);
+            await loadObjectDetails(msg.key, msg.identity, webview, doc);
             return;
         }
         if (msg.type === 'openObjectReference' && msg.rawcode) {

@@ -190,11 +190,13 @@ export function setupMessageHandler() {
         scheduleModelThumbQueues(0);
       }
     } else if (msg.type === 'objectDetailsLoaded') {
+      if (!objects.some(obj => obj.key === msg.key && obj.identity === msg.identity)) return;
       pendingDetails.delete(msg.key);
       failedDetails.delete(msg.key);
       detailCache.set(msg.key, msg.mods || []);
       if (msg.key === ui.selectedKey) renderDetails();
     } else if (msg.type === 'objectDetailsFailed') {
+      if (!objects.some(obj => obj.key === msg.key && obj.identity === msg.identity)) return;
       pendingDetails.delete(msg.key);
       failedDetails.set(msg.key, msg.reason || '');
       if (msg.key === ui.selectedKey) renderDetails();
@@ -254,6 +256,8 @@ export function setupMessageHandler() {
       const removed = objects[index];
       objects.splice(index, 1);
       detailCache.delete(removed.key);
+      pendingDetails.delete(removed.key);
+      failedDetails.delete(removed.key);
       if (ui.selectedKey === removed.key) ui.selectedKey = objects[0]?.key || '';
       renderTree();
     } else if (msg.type === 'addObjectFailed') {

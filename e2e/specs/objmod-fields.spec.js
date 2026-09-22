@@ -14,7 +14,7 @@ const { repoRequire } = require('../harness/tsLoader');
 const fs = require('fs');
 const path = require('path');
 
-const { parseObjMod } = repoRequire('casc-ts/formats');
+const { parseObjMod, serializeObjMod } = repoRequire('casc-ts/formats');
 
 /** Selects a custom object by rawcode and waits for its field rows to land. */
 async function selectObject(page, rawcode) {
@@ -106,6 +106,30 @@ test('Save As preserves an object created while editing the skin sibling', async
     await host.saveAs('copiedSkin.w3u');
     const copied = parseObjMod(host.readFile('copiedSkin.w3u'), '.w3u');
     expect(copied.customObjs.find((obj) => obj.newId === 'Z902'), 'Save As should include the new object').toBeTruthy();
+});
+
+test('ability editors exclude buff-only bases', async ({ openObjMod }) => {
+    const { page } = await openObjMod({
+        fileName: 'war3map.w3a',
+        setupFixture: (dir) => fs.writeFileSync(path.join(dir, 'war3map.w3a'), serializeObjMod({
+            version: 3, ext: '.w3a', extended: true, origObjs: [], customObjs: [],
+        })),
+    });
+    await page.locator('#add-object').click();
+    await expect(page.locator('#add-object-base option[value="Amls"]')).toHaveCount(1);
+    await expect(page.locator('#add-object-base option[value="Bmlc"]')).toHaveCount(0);
+});
+
+test('buff editors exclude ability-only bases', async ({ openObjMod }) => {
+    const { page } = await openObjMod({
+        fileName: 'war3map.w3h',
+        setupFixture: (dir) => fs.writeFileSync(path.join(dir, 'war3map.w3h'), serializeObjMod({
+            version: 3, ext: '.w3h', extended: false, origObjs: [], customObjs: [],
+        })),
+    });
+    await page.locator('#add-object').click();
+    await expect(page.locator('#add-object-base option[value="Bmlc"]')).toHaveCount(1);
+    await expect(page.locator('#add-object-base option[value="Amls"]')).toHaveCount(0);
 });
 
 test('technical mode swaps in the id/type columns and back', async ({ openObjMod }) => {

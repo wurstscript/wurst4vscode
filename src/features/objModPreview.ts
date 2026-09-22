@@ -490,13 +490,21 @@ async function buildModel(parsed: ObjModFile, triggerStrings: TriggerStringTable
 }
 
 /** Stock objects that can serve as the required base for a new custom object. */
-function buildBaseObjectOptions(summaryData: ObjSummaryData | undefined): ValueOption[] {
+function buildBaseObjectOptions(summaryData: ObjSummaryData | undefined, ext: string): ValueOption[] {
     if (!summaryData) return [];
     const canonicalIds = new Map([...summaryData.profile.keys()].map((id) => [id.toLowerCase(), id]));
     // The compiler knowledge base supplies the broadest catalog when available. Doodads are not in
     // that catalog, however, so fall back to the format's game profile rather than disabling object
     // creation for .w3d files (and for any future format absent from the compiler snapshot).
-    const ids = summaryData.baseObjects ? [...summaryData.baseObjects.keys()].map((key) => canonicalIds.get(key) ?? key) : [...summaryData.profile.keys()];
+    const ids = summaryData.baseObjects
+        ? [...summaryData.baseObjects.entries()]
+            // AbilityMetaData and AbilityBuffMetaData are supplemented with skin records. A skin-only
+            // record can belong to the opposite editor kind, so only a real base record is valid here.
+            .filter(([id, record]) => ext !== '.w3a' && ext !== '.w3h'
+                || String(record.alias).toLowerCase() === id
+                || String(record.code).toLowerCase() === id)
+            .map(([key]) => canonicalIds.get(key) ?? key)
+        : [...summaryData.profile.keys()];
     return ids
         .filter((id) => id.length === 4)
         .sort((a, b) => {
@@ -1772,7 +1780,7 @@ async function buildHtml(
     const typeLabel = TYPE_LABELS[parsed.ext.slice(1)] ?? parsed.ext.slice(1).toUpperCase();
     const triggerStrings = loadTriggerStringsForUri(context.uri);
     const { objects, metadataSource, summaryData } = await buildModel(parsed, triggerStrings);
-    const baseObjects = buildBaseObjectOptions(summaryData);
+    const baseObjects = buildBaseObjectOptions(summaryData, parsed.ext);
     const addObjectControls = buildAddObjectControlsHtml(baseObjects.length > 0);
     const tooltipFontUri = await resolveTooltipFontUri(context.uri, context.webview);
     const configuredTooltipWidth = vscode.workspace.getConfiguration('wurst', context.uri)
@@ -2606,7 +2614,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             const baseId = msg.baseId.trim();
             const requestedRawcode = msg.rawcode?.trim() ?? '';
             const summaryData = await loadObjSummaryData(doc.displayFile.ext);
-            const baseOptions = buildBaseObjectOptions(summaryData);
+            const baseOptions = buildBaseObjectOptions(summaryData, doc.displayFile.ext);
             const baseIds = new Set(baseOptions.map((option) => option.value.toLowerCase()));
             if (!baseIds.has(baseId.toLowerCase())) {
                 void webview.postMessage({ type: 'addObjectFailed', reason: 'Choose a valid base object.' });

@@ -120,6 +120,14 @@ test('base picker searches friendly names and rawcodes', async ({ openObjMod }) 
     await expect(page.locator(`#add-object-base option[value="${base.rawcode}"]`)).toHaveCount(1);
 });
 
+test('base picker prioritizes human-readable prefix matches and shows the base race', async ({ openObjMod }) => {
+    const { page } = await openObjMod();
+    await page.locator('#add-object').click();
+    await page.locator('#add-object-base-search').fill('guard');
+    await expect(page.locator('#add-object-base option').nth(1)).toHaveAttribute('value', 'hgtw');
+    await expect(page.locator('#add-object-base option[value="hgtw"]')).toHaveText(/Guard Tower.*Human.*hgtw/);
+});
+
 test('generated rawcodes reserve custom rawcodes from every object-data sibling in the map', async ({ openObjMod }) => {
     const reserved = Array.from({ length: 36 }, (_, index) => `h0${index.toString(36).toUpperCase().padStart(2, '0')}`);
     const { page, host } = await openObjMod({

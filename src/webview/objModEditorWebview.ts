@@ -86,7 +86,9 @@ function renderBaseOptions(query = '') {
   const needle = query.trim().toLowerCase();
   const matches = baseObjects.filter(base => !needle
     || String(base.label || '').toLowerCase().includes(needle)
-    || String(base.detail || base.value).toLowerCase().includes(needle));
+    || String(base.detail || base.value).toLowerCase().includes(needle))
+    .sort((left, right) => baseSearchRank(left, needle) - baseSearchRank(right, needle)
+      || String(left.label || left.value).localeCompare(String(right.label || right.value)));
   addObjectBase.replaceChildren();
   const placeholder = document.createElement('option');
   placeholder.value = '';
@@ -105,6 +107,16 @@ function renderBaseOptions(query = '') {
   // Filtering can remove the selected base. Clear the rawcode preview immediately rather than
   // leaving a candidate that belongs to a base object which is no longer selected.
   if (!matches.some(base => base.value === selected)) updateGeneratedRawcodeHint();
+}
+function baseSearchRank(base: { value: string; label?: string; detail?: string }, needle: string) {
+  if (!needle) return 0;
+  const label = String(base.label || '').toLowerCase();
+  const rawcode = String(base.detail || base.value).toLowerCase();
+  if (label === needle || rawcode === needle) return 0;
+  if (label.startsWith(needle)) return 1;
+  if (rawcode.startsWith(needle)) return 2;
+  if (label.includes(needle)) return 3;
+  return 4;
 }
 function requestGeneratedRawcode() {
   const baseId = addObjectBase?.value;

@@ -106,6 +106,11 @@ const CLASSIFICATION_FIELDS = new Set(['ucam', 'uspe']);
 // Profile keys holding an object's display name, in priority order. Casing varies across WC3
 // profile/skin TXTs; buffs use Bufftip, some doodads use comment — try them all.
 const DISPLAY_NAME_FIELDS = ['Name', 'name', 'EditorName', 'Editorname', 'Bufftip', 'BuffTip', 'Tip', 'tip', 'comment', 'comments'];
+// The compiler knowledge base has compact ids in `name` (for example `guardtower`) but retains
+// World Editor's readable label in its comment field. Prefer that descriptive source only in the
+// new-object picker; the regular display-name resolver remains faithful to a map's actual object
+// name overrides.
+const BASE_PICKER_NAME_FIELDS = ['EditorName', 'Editorname', 'comment(s)', 'comments', 'comment', ...DISPLAY_NAME_FIELDS];
 
 const FIELD_LABELS: Record<string, string> = {
     unam: 'Name',
@@ -517,11 +522,19 @@ function buildBaseObjectOptions(summaryData: ObjSummaryData | undefined, ext: st
     return ids
         .filter((id) => id.length === 4)
         .sort((a, b) => {
-            const aName = resolveBaseDisplayName(a, summaryData) ?? a;
-            const bName = resolveBaseDisplayName(b, summaryData) ?? b;
+            const aName = resolveBasePickerName(a, summaryData) ?? a;
+            const bName = resolveBasePickerName(b, summaryData) ?? b;
             return aName.localeCompare(bName) || a.localeCompare(b);
         })
-        .map((id) => ({ value: id, label: resolveBaseDisplayName(id, summaryData) ?? id, detail: id }));
+        .map((id) => {
+            const race = resolveBaseRace(id, summaryData);
+            const raceLabel = RACE_OPTIONS.find((option) => option.value === race)?.label ?? race;
+            return {
+                value: id,
+                label: [resolveBasePickerName(id, summaryData) ?? id, raceLabel].filter(Boolean).join(' — '),
+                detail: id,
+            };
+        });
 }
 
 function buildObject(
@@ -1750,6 +1763,19 @@ async function resolveTooltipFontUri(
     const compatibleUri = await chromiumCompatibleTooltipFont(fontUri);
     console.info(`[wurst-objmod] using tooltip font: ${configuredPath}`);
     return webview.asWebviewUri(compatibleUri).toString();
+}
+
+function resolveBasePickerName(baseId: string, summaryData: Pick<ObjSummaryData, 'worldStrings' | 'profile'>): string | undefined {
+    const value = getAnyProfileValue(baseId, BASE_PICKER_NAME_FIELDS, summaryData);
+    const resolved = value ? resolveWorldEditString(value, summaryData.worldStrings) : undefined;
+    if (!resolved || resolved === '-' || resolved === '_') return undefined;
+    return resolved.replace(/([a-z])([A-Z])/g, '$1 $2')
+        .split('(').map((part) => part.trim()).join(' (')
+        .replace(/(^|[\s-])([a-z])/g, (_match, prefix: string, letter: string) => prefix + letter.toUpperCase());
+}
+
+function resolveBaseRace(baseId: string, summaryData: Pick<ObjSummaryData, 'profile'>): string {
+    return normalizeRace(getAnyProfileValue(baseId, ['race', 'Race'], summaryData)) || raceFromRawcode(baseId);
 }
 
 function buildAddObjectControlsHtml(hasBaseObjects: boolean): string {

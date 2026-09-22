@@ -79,6 +79,8 @@
   --add-base-race-pad: 1px 5px;
   --add-base-rawcode-pad: 1px 4px;
   --add-object-button-h: 26px;
+  --add-object-button-pad: 0 7px;
+  --object-action-button-pad: 0 6px;
   --object-action-gap: 3px;
 }
 body.density-cozy {
@@ -119,6 +121,8 @@ body.density-cozy {
   --add-base-race-pad: 2px 6px;
   --add-base-rawcode-pad: 2px 5px;
   --add-object-button-h: 32px;
+  --add-object-button-pad: 0 9px;
+  --object-action-button-pad: 0 8px;
   --object-action-gap: 5px;
 }
 .content {
@@ -1034,8 +1038,8 @@ tr.hidden { display: none; }
   font-size: var(--meta-fs);
   cursor: pointer;
 }
-.add-object-button { padding: 0 7px; font-weight: 600; color: var(--fg); }
-.object-action-button { padding: 0 6px; }
+.add-object-button { padding: var(--add-object-button-pad); font-weight: 600; color: var(--fg); }
+.object-action-button { padding: var(--object-action-button-pad); }
 .add-object-button:hover:not(:disabled),
 .object-action-button:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
 .add-object-button:focus-visible,

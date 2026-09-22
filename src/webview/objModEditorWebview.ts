@@ -76,6 +76,7 @@ const pasteObjectButton = document.getElementById('paste-object') as HTMLButtonE
 const deleteObjectButton = document.getElementById('delete-object') as HTMLButtonElement | null;
 const baseObjects = initial.baseObjects || [];
 let copiedObjectIdentity = '';
+let deletingObjectIdentity = '';
 let addObjectSubmissionPending = false;
 function setAddObjectSubmissionPending(pending: boolean) {
   addObjectSubmissionPending = pending;
@@ -187,15 +188,17 @@ addObjectBaseList?.addEventListener('keydown', event => {
   if (!addObjectBase) return;
   const rows = Array.from(addObjectBaseList.querySelectorAll<HTMLElement>('[data-base-id]'));
   if (!rows.length) return;
-  const current = Math.max(0, rows.findIndex(row => row.dataset.baseId === addObjectBase.value));
+  const current = rows.findIndex(row => row.dataset.baseId === addObjectBase.value);
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault();
-    const next = Math.max(0, Math.min(rows.length - 1, current + (event.key === 'ArrowDown' ? 1 : -1)));
+    const next = current < 0
+      ? (event.key === 'ArrowDown' ? 0 : rows.length - 1)
+      : Math.max(0, Math.min(rows.length - 1, current + (event.key === 'ArrowDown' ? 1 : -1)));
     selectBaseObject(rows[next].dataset.baseId || '', true);
     rows[next].scrollIntoView({ block: 'nearest' });
   } else if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault();
-    selectBaseObject(rows[current].dataset.baseId || '', true);
+    selectBaseObject(rows[Math.max(0, current)].dataset.baseId || '', true);
   }
 });
 addObjectId?.addEventListener('input', updateGeneratedRawcodeHint);
@@ -226,12 +229,17 @@ function updatePasteObjectAvailability() {
 }
 function deleteSelectedObject() {
   const selected = objects.find(object => object.key === ui.selectedKey);
-  if (!selected || selected.group !== 'Custom') return;
+  if (!selected || selected.group !== 'Custom' || deletingObjectIdentity) return;
+  deletingObjectIdentity = selected.identity;
+  updateDeleteObjectAvailability();
   vscodeApi.postMessage({ type: 'deleteObject', key: selected.key });
 }
-effect(() => {
+function updateDeleteObjectAvailability() {
   const selected = objects.find(object => object.key === ui.selectedKey);
-  if (deleteObjectButton) deleteObjectButton.disabled = !selected || selected.group !== 'Custom';
+  if (deleteObjectButton) deleteObjectButton.disabled = !!deletingObjectIdentity || !selected || selected.group !== 'Custom';
+}
+effect(() => {
+  updateDeleteObjectAvailability();
 }, 'objModEditor.deleteObjectAvailability');
 function closeAddObjectDialog() {
   if (addObjectSubmissionPending) return;
@@ -274,6 +282,10 @@ if (addObjectDialog) addObjectDialog.addEventListener('submit', event => {
 });
 window.addEventListener('objmod-add-object-finished', () => setAddObjectSubmissionPending(false));
 window.addEventListener('objmod-objects-replaced', updatePasteObjectAvailability);
+window.addEventListener('objmod-delete-object-finished', () => {
+  deletingObjectIdentity = '';
+  updateDeleteObjectAvailability();
+});
 document.addEventListener('keydown', event => {
   if (addObjectOverlay && !addObjectOverlay.hidden) {
     if (event.key === 'Escape') closeAddObjectDialog();

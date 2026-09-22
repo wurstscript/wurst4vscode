@@ -137,6 +137,20 @@ test('base picker prioritizes human-readable prefix matches and shows the base r
     await expect(guardTower).toHaveAttribute('aria-selected', 'true');
 });
 
+test('base picker starts keyboard navigation on the first result and follows density spacing', async ({ openObjMod }) => {
+    const { page } = await openObjMod();
+    await page.locator('#add-object').click();
+    const first = page.locator('#add-object-base-list [data-base-id]').first();
+    const firstId = await first.getAttribute('data-base-id');
+    const compactPadding = await first.evaluate((element) => getComputedStyle(element).padding);
+    await page.locator('#add-object-base-list').focus();
+    await page.keyboard.press('ArrowDown');
+    await expect(page.locator('#add-object-base')).toHaveValue(firstId);
+    await page.keyboard.press('Escape');
+    await page.locator('#density-toggle').click();
+    await expect.poll(() => first.evaluate((element) => getComputedStyle(element).padding)).not.toBe(compactPadding);
+});
+
 test('generated rawcodes reserve custom rawcodes from every object-data sibling in the map', async ({ openObjMod }) => {
     const reserved = Array.from({ length: 36 }, (_, index) => `h0${index.toString(36).toUpperCase().padStart(2, '0')}`);
     const { page, host } = await openObjMod({
@@ -210,6 +224,15 @@ test('deleting a custom object is undoable, redoable, and persisted', async ({ o
     await expect(page.locator('#tree .object-row')).toHaveCount(initialCount - 1);
     await host.save();
     expect(parseObjMod(host.readFile(), '.w3u').customObjs.some((obj) => obj.newId === 'h004')).toBe(false);
+});
+
+test('deleting a custom object is single-flight', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod();
+    await selectObject(page, 'h004');
+    const initialCount = await page.locator('#tree .object-row').count();
+    await page.locator('#delete-object').evaluate((button) => { button.click(); button.click(); });
+    await expect.poll(() => host.editLabels).toEqual(['Delete h004']);
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialCount - 1);
 });
 
 test('deleting a custom object reindexes later objects before they can be edited or pasted', async ({ openObjMod }) => {

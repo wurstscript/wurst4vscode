@@ -2750,6 +2750,9 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             const entry = parts?.group === 'Custom' ? findEntryByKey(doc.displayFile, msg.key) : undefined;
             if (!entry) return;
             const identity = entryKey(entry);
+            const summaryData = await loadObjSummaryData(doc.displayFile.ext);
+            const currentEntry = doc.displayFile.customObjs.find(candidate => entryKey(candidate) === identity);
+            if (!currentEntry) return;
             const files = Array.from(new Set([doc.mainFile, doc.skinFile, doc.displayFile].filter((file): file is ObjModFile => !!file)));
             const removals = files.map((file) => {
                 const index = file.customObjs.findIndex((candidate) => entryKey(candidate) === identity);
@@ -2771,7 +2774,6 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
                 }
                 doc.objectCatalog = undefined;
             };
-            const summaryData = await loadObjSummaryData(doc.displayFile.ext);
             const beforeRevision = doc.currentRevision;
             const afterRevision = doc.nextRevision++;
             const postObjects = (preferredIdentity = '') => {

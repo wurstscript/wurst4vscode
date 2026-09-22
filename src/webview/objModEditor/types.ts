@@ -57,6 +57,7 @@ export interface ObjModInitial {
   customColors?: string[];
   fileInfo?: Record<string, unknown>;
   thumbnailWorkerUri?: string;
+  baseObjects?: AssetOption[];
 }
 
 declare global {

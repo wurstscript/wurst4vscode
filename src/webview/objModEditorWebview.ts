@@ -1,5 +1,5 @@
 import { effect } from './signals';
-import { objects, ui, vscodeApi, details, search } from './objModEditor/state';
+import { initial, objects, ui, vscodeApi, details, search } from './objModEditor/state';
 import { commitActiveEditor } from './objModEditor/fieldDisplay';
 import { matches, revealRow, setActiveRow, setupTree } from './objModEditor/objectTree';
 import { setupDetails } from './objModEditor/detailsPanel';
@@ -54,6 +54,58 @@ if (searchClear) {
     search.focus();
   });
 }
+
+// Creating an object is deliberately a short, explicit two-step choice: the base is required so the
+// resulting entry has meaningful inherited fields; the new rawcode is optional because the host can
+// safely choose an unused one. Populate choices through DOM APIs, not HTML interpolation, because
+// game-data names are external text.
+const addObjectButton = document.getElementById('add-object') as HTMLButtonElement | null;
+const addObjectOverlay = document.getElementById('add-object-overlay') as HTMLElement | null;
+const addObjectDialog = document.getElementById('add-object-dialog') as HTMLFormElement | null;
+const addObjectBase = document.getElementById('add-object-base') as HTMLSelectElement | null;
+const addObjectId = document.getElementById('add-object-id') as HTMLInputElement | null;
+const addObjectError = document.getElementById('add-object-error') as HTMLElement;
+const addObjectCancel = document.getElementById('add-object-cancel') as HTMLButtonElement | null;
+if (addObjectBase) {
+  for (const base of initial.baseObjects || []) {
+    const option = document.createElement('option');
+    option.value = base.value;
+    option.textContent = base.label + (base.detail ? ' (' + base.detail + ')' : '');
+    addObjectBase.appendChild(option);
+  }
+}
+function closeAddObjectDialog() {
+  if (!addObjectOverlay) return;
+  addObjectOverlay.hidden = true;
+  addObjectError.textContent = '';
+  addObjectButton?.focus();
+}
+if (addObjectButton) addObjectButton.addEventListener('click', () => {
+  if (!addObjectOverlay) return;
+  addObjectOverlay.hidden = false;
+  addObjectError.textContent = '';
+  addObjectBase.focus();
+});
+if (addObjectCancel) addObjectCancel.addEventListener('click', closeAddObjectDialog);
+if (addObjectOverlay) addObjectOverlay.addEventListener('mousedown', event => {
+  if (event.target === addObjectOverlay) closeAddObjectDialog();
+});
+if (addObjectDialog) addObjectDialog.addEventListener('submit', event => {
+  event.preventDefault();
+  const baseId = addObjectBase.value;
+  const rawcode = addObjectId.value.trim();
+  if (!baseId) { addObjectError.textContent = 'Select a base object.'; addObjectBase.focus(); return; }
+  if (rawcode && !/^[\x20-\x7e]{4}$/.test(rawcode)) {
+    addObjectError.textContent = 'A rawcode must be exactly four printable characters.';
+    addObjectId.focus();
+    return;
+  }
+  addObjectError.textContent = '';
+  vscodeApi.postMessage({ type: 'addObject', baseId, rawcode });
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && addObjectOverlay && !addObjectOverlay.hidden) closeAddObjectDialog();
+});
 
 // Side-by-side survives all the way down to a very narrow pane now (the browse list is capped at 46%
 // of the editor by CSS and the field table's compact 2-column mode no longer demands 620px), so this

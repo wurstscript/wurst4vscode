@@ -990,6 +990,21 @@ tr.hidden { display: none; }
   flex-direction: column;
   overflow: hidden;
 }
+.add-object-button {
+  flex: 0 0 auto;
+  margin: var(--search-pad) var(--search-pad) 0;
+  min-height: 28px;
+  border: 1px solid var(--vscode-button-border, var(--accent));
+  border-radius: 3px;
+  background: var(--vscode-button-background, var(--accent));
+  color: var(--vscode-button-foreground, #fff);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.add-object-button:hover:not(:disabled) { background: var(--vscode-button-hoverBackground, var(--accent)); filter: brightness(1.08); }
+.add-object-button:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: 2px; }
+.add-object-button:disabled { opacity: .55; cursor: not-allowed; }
 .search-wrap {
   position: relative;
   display: flex;
@@ -999,6 +1014,36 @@ tr.hidden { display: none; }
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
+.add-object-overlay {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: color-mix(in srgb, #000 45%, transparent);
+}
+.add-object-overlay[hidden] { display: none; }
+.add-object-dialog {
+  width: min(460px, 100%);
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background, var(--bg));
+  box-shadow: 0 8px 28px #0008;
+}
+.add-object-dialog h2 { margin: 0 0 4px; font-size: 15px; }
+.add-object-dialog label { font-weight: 600; }
+.add-object-dialog select,
+.add-object-dialog input { min-width: 0; min-height: 27px; padding: 3px 6px; border: 1px solid var(--input-border); border-radius: 2px; background: var(--input-bg); color: var(--input-fg); font: inherit; }
+.add-object-optional { color: var(--muted); font-weight: normal; }
+.add-object-dialog p { margin: 0; color: var(--muted); font-size: 11px; }
+.add-object-dialog .add-object-error { min-height: 1.2em; color: var(--vscode-errorForeground, #f14c4c); }
+.add-object-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.add-object-actions button { min-height: 27px; padding: 3px 10px; border: 1px solid var(--border); border-radius: 2px; background: var(--button-bg); color: var(--fg); font: inherit; cursor: pointer; }
+.add-object-actions .add-object-confirm { border-color: var(--accent); background: var(--vscode-button-background, var(--accent)); color: var(--vscode-button-foreground, #fff); }
 .search-input {
   flex: 1;
   min-width: 0;

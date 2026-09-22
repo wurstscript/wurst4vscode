@@ -241,6 +241,23 @@ export function setupMessageHandler() {
       if (oldBranch !== newBranch) renderTree();
       else updateObjectRow(objects[index]);
       updateDetailsHeader(objects[index]);
+    } else if (msg.type === 'objectAdded' && msg.object && msg.object.key) {
+      objects.push(msg.object);
+      renderTree();
+      selectObject(msg.object.key);
+      const overlay = document.getElementById('add-object-overlay');
+      if (overlay) overlay.hidden = true;
+    } else if (msg.type === 'objectRemoved' && msg.identity) {
+      const index = objects.findIndex(obj => obj.identity === msg.identity);
+      if (index < 0) return;
+      const removed = objects[index];
+      objects.splice(index, 1);
+      detailCache.delete(removed.key);
+      if (ui.selectedKey === removed.key) ui.selectedKey = objects[0]?.key || '';
+      renderTree();
+    } else if (msg.type === 'addObjectFailed') {
+      const error = document.getElementById('add-object-error');
+      if (error) error.textContent = msg.reason || 'Could not create object.';
     } else if (msg.type === 'dirtyStateChanged') {
       const badge = document.getElementById('editable-badge');
       if (badge) {

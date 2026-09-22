@@ -477,7 +477,7 @@ function entryKey(entry: ObjModEntry): string {
     return `${entry.baseId}|${entry.newId ?? ''}`;
 }
 
-async function buildModel(parsed: ObjModFile, triggerStrings: TriggerStringTable): Promise<{ objects: PreviewObject[]; metadataSource: string }> {
+async function buildModel(parsed: ObjModFile, triggerStrings: TriggerStringTable): Promise<{ objects: PreviewObject[]; metadataSource: string; summaryData?: ObjSummaryData }> {
     const summaryData = await loadObjSummaryData(parsed.ext);
     return {
         objects: [
@@ -485,7 +485,26 @@ async function buildModel(parsed: ObjModFile, triggerStrings: TriggerStringTable
             ...parsed.customObjs.map((entry, index) => buildObject(entry, 'Custom', index, triggerStrings, summaryData, parsed.ext)),
         ],
         metadataSource: summaryData?.metadataSource ?? 'override file only',
+        summaryData,
     };
+}
+
+/** Stock objects that can serve as the required base for a new custom object. */
+function buildBaseObjectOptions(summaryData: ObjSummaryData | undefined): ValueOption[] {
+    if (!summaryData) return [];
+    const canonicalIds = new Map([...summaryData.profile.keys()].map((id) => [id.toLowerCase(), id]));
+    // The compiler knowledge base supplies the broadest catalog when available. Doodads are not in
+    // that catalog, however, so fall back to the format's game profile rather than disabling object
+    // creation for .w3d files (and for any future format absent from the compiler snapshot).
+    const ids = summaryData.baseObjects ? [...summaryData.baseObjects.keys()].map((key) => canonicalIds.get(key) ?? key) : [...summaryData.profile.keys()];
+    return ids
+        .filter((id) => id.length === 4)
+        .sort((a, b) => {
+            const aName = resolveBaseDisplayName(a, summaryData) ?? a;
+            const bName = resolveBaseDisplayName(b, summaryData) ?? b;
+            return aName.localeCompare(bName) || a.localeCompare(b);
+        })
+        .map((id) => ({ value: id, label: resolveBaseDisplayName(id, summaryData) ?? id, detail: id }));
 }
 
 function buildObject(
@@ -1716,6 +1735,28 @@ async function resolveTooltipFontUri(
     return webview.asWebviewUri(compatibleUri).toString();
 }
 
+function buildAddObjectControlsHtml(hasBaseObjects: boolean): string {
+    const disabled = hasBaseObjects ? '' : 'disabled';
+    return `<button id="add-object" class="add-object-button" type="button" title="Create a custom object" ${disabled}>+ Add object</button>
+<div id="add-object-overlay" class="add-object-overlay" hidden>
+  <form id="add-object-dialog" class="add-object-dialog" aria-labelledby="add-object-title">
+    <h2 id="add-object-title">Create custom object</h2>
+    <label for="add-object-base">Base object <span aria-hidden="true">*</span></label>
+    <select id="add-object-base" required ${disabled}>
+      <option value="">Select a base object…</option>
+    </select>
+    <label for="add-object-id">New rawcode <span class="add-object-optional">optional</span></label>
+    <input id="add-object-id" type="text" maxlength="4" autocomplete="off" spellcheck="false" placeholder="Auto-generated" aria-describedby="add-object-help">
+    <p id="add-object-help">Use exactly four printable characters, or leave blank to generate an unused rawcode.</p>
+    <p id="add-object-error" class="add-object-error" role="alert"></p>
+    <div class="add-object-actions">
+      <button id="add-object-cancel" type="button">Cancel</button>
+      <button type="submit" class="add-object-confirm" ${disabled}>Create object</button>
+    </div>
+  </form>
+</div>`;
+}
+
 async function buildHtml(
     parsed: ObjModFile,
     fileName: string,
@@ -1730,7 +1771,9 @@ async function buildHtml(
 ): Promise<string> {
     const typeLabel = TYPE_LABELS[parsed.ext.slice(1)] ?? parsed.ext.slice(1).toUpperCase();
     const triggerStrings = loadTriggerStringsForUri(context.uri);
-    const { objects, metadataSource } = await buildModel(parsed, triggerStrings);
+    const { objects, metadataSource, summaryData } = await buildModel(parsed, triggerStrings);
+    const baseObjects = buildBaseObjectOptions(summaryData);
+    const addObjectControls = buildAddObjectControlsHtml(baseObjects.length > 0);
     const tooltipFontUri = await resolveTooltipFontUri(context.uri, context.webview);
     const configuredTooltipWidth = vscode.workspace.getConfiguration('wurst', context.uri)
         .get<number>(TOOLTIP_WIDTH_SETTING, DEFAULT_TOOLTIP_WIDTH_PX);
@@ -1752,6 +1795,7 @@ async function buildHtml(
         customColors,
         fileInfo: combined ?? { mainName: fileName },
         thumbnailWorkerUri,
+        baseObjects,
     })
         .replace(/</g, '\\u003c')
         .replace(/>/g, '\\u003e')
@@ -1816,6 +1860,7 @@ ${warningBanner}
 ${gameDataBanner}
 <div class="object-editor" id="object-editor">
   <aside class="object-list">
+    ${addObjectControls}
     <div class="search-wrap">
       <input id="search" class="search-input" placeholder="Search objects or IDs" aria-label="Search objects">
       <span id="search-match" class="search-match" role="status" aria-live="polite"></span>
@@ -2083,6 +2128,56 @@ function applyFieldEdit(doc: ObjModDocument, p: EditFieldMessage): ModEditUndo |
     };
     apply();
     return { apply, revert, mod };
+}
+
+function isValidRawcode(rawcode: string): boolean {
+    return /^[\x20-\x7e]{4}$/.test(rawcode);
+}
+
+function generateRawcode(doc: ObjModDocument, baseId: string, reservedRawcodes: Iterable<string> = []): string | undefined {
+    const used = new Set([...reservedRawcodes].map((id) => id.toLowerCase()));
+    for (const file of [doc.mainFile, doc.skinFile]) {
+        if (!file) continue;
+        for (const entry of [...file.origObjs, ...file.customObjs]) {
+            used.add(entry.baseId.toLowerCase());
+            if (entry.newId) used.add(entry.newId.toLowerCase());
+        }
+    }
+    const prefix = /^[A-Za-z0-9]$/.test(baseId[0] ?? '') ? baseId[0] : 'X';
+    for (let n = 0; n < 36 ** 3; n++) {
+        const candidate = `${prefix}${n.toString(36).toUpperCase().padStart(3, '0')}`;
+        if (!used.has(candidate.toLowerCase())) return candidate;
+    }
+    return undefined;
+}
+
+function applyAddObject(
+    doc: ObjModDocument,
+    baseId: string,
+    requestedRawcode: string,
+    reservedRawcodes: Iterable<string>,
+): { entry: ObjModEntry; key: string; apply(): void; revert(): void } | undefined {
+    const base = baseId.trim();
+    if (!isValidRawcode(base)) return undefined;
+    const rawcode = requestedRawcode.trim() || generateRawcode(doc, base, reservedRawcodes);
+    if (!rawcode || !isValidRawcode(rawcode)) return undefined;
+    const duplicate = [...reservedRawcodes, ...doc.displayFile.origObjs, ...doc.displayFile.customObjs]
+        .map((entry) => typeof entry === 'string' ? entry : (entry.newId || entry.baseId))
+        .some((id) => id.toLowerCase() === rawcode.toLowerCase());
+    if (duplicate) return undefined;
+    const entry: ObjModEntry = { baseId: base, newId: rawcode, mods: [] };
+    const add = (entries: ObjModEntry[]) => { if (!entries.includes(entry)) entries.push(entry); };
+    const remove = (entries: ObjModEntry[]) => {
+        const index = entries.indexOf(entry);
+        if (index >= 0) entries.splice(index, 1);
+    };
+    // New objects are owned by the main map file even when the skin sibling is open. This mirrors
+    // how the merge model already routes edits and prevents a skin-only object from vanishing when
+    // the base file is opened on another machine.
+    const apply = () => { add(doc.mainFile.customObjs); add(doc.displayFile.customObjs); doc.objectCatalog = undefined; };
+    const revert = () => { remove(doc.mainFile.customObjs); remove(doc.displayFile.customObjs); doc.objectCatalog = undefined; };
+    apply();
+    return { entry, key: `Custom:${doc.displayFile.customObjs.indexOf(entry)}`, apply, revert };
 }
 
 /** Display value (resolved string / numeric text) of a mod for in-place webview updates. */
@@ -2410,6 +2505,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             cacheKey?: string; aliasKey?: string; webpBase64?: string; thumbKey?: string; phase?: string; elapsedMs?: number; deltaMs?: number; detail?: string;
             fieldId?: string; varType?: string; level?: number | null; dataPt?: number | null; value?: string;
             rawcode?: string; label?: string;
+            baseId?: string;
             identity?: string;
             color?: string;
         };
@@ -2505,6 +2601,51 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         if (msg.type === 'refresh') {
             clearTextureMissCache();
             await this.refreshFromDisk(doc);
+            return;
+        }
+        if (msg.type === 'addObject' && msg.baseId) {
+            const baseId = msg.baseId.trim();
+            const requestedRawcode = msg.rawcode?.trim() ?? '';
+            const summaryData = await loadObjSummaryData(doc.displayFile.ext);
+            const baseOptions = buildBaseObjectOptions(summaryData);
+            const baseIds = new Set(baseOptions.map((option) => option.value.toLowerCase()));
+            if (!baseIds.has(baseId.toLowerCase())) {
+                void webview.postMessage({ type: 'addObjectFailed', reason: 'Choose a valid base object.' });
+                return;
+            }
+            if (requestedRawcode && !isValidRawcode(requestedRawcode)) {
+                void webview.postMessage({ type: 'addObjectFailed', reason: 'A rawcode must be exactly four printable characters.' });
+                return;
+            }
+            const edit = applyAddObject(doc, baseId, requestedRawcode, baseIds);
+            if (!edit) {
+                void webview.postMessage({ type: 'addObjectFailed', reason: requestedRawcode
+                    ? 'That rawcode is already in use.'
+                    : 'Could not generate an unused rawcode.' });
+                return;
+            }
+            const beforeRevision = doc.currentRevision;
+            const afterRevision = doc.nextRevision++;
+            const postAdded = () => {
+                const index = doc.displayFile.customObjs.indexOf(edit.entry);
+                if (index < 0) return;
+                const object = buildObject(edit.entry, 'Custom', index, doc.wtsTable, summaryData, doc.displayFile.ext);
+                void webview.postMessage({ type: 'objectAdded', object });
+            };
+            this._onDidChange.fire({
+                document: doc,
+                label: `Create ${edit.entry.newId}`,
+                undo: () => {
+                    edit.revert();
+                    doc.currentRevision = beforeRevision;
+                    void webview.postMessage({ type: 'objectRemoved', identity: `Custom:${entryKey(edit.entry)}` });
+                    this.postDirtyState(doc);
+                },
+                redo: () => { edit.apply(); doc.currentRevision = afterRevision; postAdded(); this.postDirtyState(doc); },
+            });
+            doc.currentRevision = afterRevision;
+            this.postDirtyState(doc);
+            postAdded();
             return;
         }
         if (msg.type === 'undo') { void vscode.commands.executeCommand('undo'); return; }

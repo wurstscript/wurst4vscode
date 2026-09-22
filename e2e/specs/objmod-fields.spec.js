@@ -26,6 +26,67 @@ function rowForField(page, fieldId) {
     return page.locator('#details tbody tr', { has: page.locator(`td.id:text-is("${fieldId}")`) });
 }
 
+test('creating a custom object requires a base, accepts an optional rawcode, and round-trips through undo/save', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod();
+    await expect(page.locator('#add-object')).toBeVisible();
+    await page.locator('#add-object').click();
+    await expect(page.locator('#add-object-overlay')).toBeVisible();
+
+    // The selector is populated from stock game data; its placeholder is followed by real base objects.
+    expect(await page.locator('#add-object-base option').count()).toBeGreaterThan(1);
+    await page.locator('#add-object-base').selectOption({ index: 1 });
+    await page.locator('#add-object-id').fill('h004');
+    await page.locator('#add-object-dialog').evaluate((form) => form.requestSubmit());
+    await expect(page.locator('#add-object-error')).toHaveText('That rawcode is already in use.');
+    expect(host.isDirty).toBe(false);
+
+    await page.locator('#add-object-id').fill('Z901');
+    await page.locator('#add-object-dialog').evaluate((form) => form.requestSubmit());
+
+    await expect.poll(() => host.isDirty).toBe(true);
+    expect(host.editLabels).toEqual(['Create Z901']);
+    await expect(page.locator('#tree .object-row', { hasText: 'Z901' })).toHaveCount(1);
+
+    host.undo();
+    await expect.poll(() => host.isDirty).toBe(false);
+    await expect(page.locator('#tree .object-row', { hasText: 'Z901' })).toHaveCount(0);
+
+    host.redo();
+    await expect(page.locator('#tree .object-row', { hasText: 'Z901' })).toHaveCount(1);
+    await host.save();
+    const created = parseObjMod(host.readFile(), '.w3u').customObjs.find((obj) => obj.newId === 'Z901');
+    expect(created, 'created custom object should be serialized').toBeTruthy();
+    expect(created.mods).toEqual([]);
+});
+
+test('creating an object without a rawcode generates, reverts, and saves a collision-free id', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod();
+    const initialObjectCount = await page.locator('#tree .object-row').count();
+    await page.locator('#add-object').click();
+
+    // The native required constraint must stop an empty-base submission before it reaches the host.
+    await page.locator('#add-object-dialog').evaluate((form) => form.requestSubmit());
+    expect(host.isDirty).toBe(false);
+    await expect(page.locator('#add-object-overlay')).toBeVisible();
+
+    await page.locator('#add-object-base').selectOption({ index: 1 });
+    await page.locator('#add-object-dialog').evaluate((form) => form.requestSubmit());
+    await expect.poll(() => host.isDirty).toBe(true);
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialObjectCount + 1);
+    const generatedId = (await page.locator('#tree .object-row.active .object-id').textContent()).trim();
+    expect(generatedId).toMatch(/^[A-Za-z0-9]{4}$/);
+
+    host.undo();
+    await expect.poll(() => host.isDirty).toBe(false);
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialObjectCount);
+
+    host.redo();
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialObjectCount + 1);
+    await host.save();
+    const created = parseObjMod(host.readFile(), '.w3u').customObjs.find((obj) => obj.newId === generatedId);
+    expect(created, 'generated id should be persisted as a custom object').toBeTruthy();
+});
+
 test('technical mode swaps in the id/type columns and back', async ({ openObjMod }) => {
     const { page } = await openObjMod();
     await expect(page.locator('#details thead th')).toHaveText(['Field', 'Value']);

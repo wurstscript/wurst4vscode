@@ -63,23 +63,84 @@ const addObjectButton = document.getElementById('add-object') as HTMLButtonEleme
 const addObjectOverlay = document.getElementById('add-object-overlay') as HTMLElement | null;
 const addObjectDialog = document.getElementById('add-object-dialog') as HTMLFormElement | null;
 const addObjectBase = document.getElementById('add-object-base') as HTMLSelectElement | null;
+const addObjectBaseSearch = document.getElementById('add-object-base-search') as HTMLInputElement | null;
 const addObjectId = document.getElementById('add-object-id') as HTMLInputElement | null;
+const addObjectGenerated = document.getElementById('add-object-generated') as HTMLElement | null;
+const addObjectBaseStatus = document.getElementById('add-object-base-status') as HTMLElement | null;
 const addObjectError = document.getElementById('add-object-error') as HTMLElement;
 const addObjectCancel = document.getElementById('add-object-cancel') as HTMLButtonElement | null;
 const addObjectConfirm = addObjectDialog?.querySelector('.add-object-confirm') as HTMLButtonElement | null;
+const copyObjectButton = document.getElementById('copy-object') as HTMLButtonElement | null;
+const pasteObjectButton = document.getElementById('paste-object') as HTMLButtonElement | null;
+const baseObjects = initial.baseObjects || [];
+let copiedObjectKey = '';
 let addObjectSubmissionPending = false;
 function setAddObjectSubmissionPending(pending: boolean) {
   addObjectSubmissionPending = pending;
   if (addObjectConfirm) addObjectConfirm.disabled = pending;
   if (addObjectCancel) addObjectCancel.disabled = pending;
 }
-if (addObjectBase) {
-  for (const base of initial.baseObjects || []) {
+function renderBaseOptions(query = '') {
+  if (!addObjectBase) return;
+  const selected = addObjectBase.value;
+  const needle = query.trim().toLowerCase();
+  const matches = baseObjects.filter(base => !needle
+    || String(base.label || '').toLowerCase().includes(needle)
+    || String(base.detail || base.value).toLowerCase().includes(needle));
+  addObjectBase.replaceChildren();
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = matches.length ? 'Select a base object…' : 'No matching base objects';
+  addObjectBase.appendChild(placeholder);
+  for (const base of matches) {
     const option = document.createElement('option');
     option.value = base.value;
     option.textContent = base.label + (base.detail ? ' (' + base.detail + ')' : '');
     addObjectBase.appendChild(option);
   }
+  if (matches.some(base => base.value === selected)) addObjectBase.value = selected;
+  if (addObjectBaseStatus) addObjectBaseStatus.textContent = needle
+    ? `${matches.length} matching base object${matches.length === 1 ? '' : 's'}`
+    : `${matches.length} base objects`;
+  // Filtering can remove the selected base. Clear the rawcode preview immediately rather than
+  // leaving a candidate that belongs to a base object which is no longer selected.
+  if (!matches.some(base => base.value === selected)) updateGeneratedRawcodeHint();
+}
+function requestGeneratedRawcode() {
+  const baseId = addObjectBase?.value;
+  if (!baseId || addObjectId?.value.trim()) return;
+  if (addObjectGenerated) addObjectGenerated.textContent = 'checking…';
+  vscodeApi.postMessage({ type: 'requestGeneratedRawcode', baseId });
+}
+function updateGeneratedRawcodeHint() {
+  if (!addObjectGenerated) return;
+  if (addObjectId?.value.trim()) {
+    addObjectGenerated.textContent = 'your chosen rawcode';
+    return;
+  }
+  if (!addObjectBase?.value) {
+    addObjectGenerated.textContent = 'an available rawcode';
+    return;
+  }
+  requestGeneratedRawcode();
+}
+renderBaseOptions();
+addObjectBaseSearch?.addEventListener('input', () => renderBaseOptions(addObjectBaseSearch.value));
+addObjectBase?.addEventListener('change', updateGeneratedRawcodeHint);
+addObjectId?.addEventListener('input', updateGeneratedRawcodeHint);
+window.addEventListener('objmod-generated-rawcode', (event: Event) => {
+  const detail = (event as CustomEvent<{ baseId?: string; rawcode?: string }>).detail;
+  if (!detail || detail.baseId !== addObjectBase?.value || addObjectId?.value.trim()) return;
+  if (addObjectGenerated) addObjectGenerated.textContent = detail.rawcode || 'no unused rawcode is available';
+});
+function copySelectedObject() {
+  if (!ui.selectedKey || !objects.some(object => object.key === ui.selectedKey)) return;
+  copiedObjectKey = ui.selectedKey;
+  if (pasteObjectButton) pasteObjectButton.disabled = false;
+}
+function pasteCopiedObject() {
+  if (!copiedObjectKey) return;
+  vscodeApi.postMessage({ type: 'duplicateObject', key: copiedObjectKey });
 }
 function closeAddObjectDialog() {
   if (addObjectSubmissionPending) return;
@@ -92,8 +153,14 @@ if (addObjectButton) addObjectButton.addEventListener('click', () => {
   if (!addObjectOverlay) return;
   addObjectOverlay.hidden = false;
   addObjectError.textContent = '';
-  addObjectBase.focus();
+  if (addObjectBaseSearch) addObjectBaseSearch.value = '';
+  renderBaseOptions();
+  if (addObjectId) addObjectId.value = '';
+  updateGeneratedRawcodeHint();
+  addObjectBaseSearch?.focus();
 });
+copyObjectButton?.addEventListener('click', copySelectedObject);
+pasteObjectButton?.addEventListener('click', pasteCopiedObject);
 if (addObjectCancel) addObjectCancel.addEventListener('click', closeAddObjectDialog);
 if (addObjectOverlay) addObjectOverlay.addEventListener('mousedown', event => {
   if (event.target === addObjectOverlay) closeAddObjectDialog();
@@ -116,6 +183,16 @@ if (addObjectDialog) addObjectDialog.addEventListener('submit', event => {
 window.addEventListener('objmod-add-object-finished', () => setAddObjectSubmissionPending(false));
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && addObjectOverlay && !addObjectOverlay.hidden) closeAddObjectDialog();
+  const target = event.target as HTMLElement | null;
+  const editingText = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable;
+  if (editingText || !event.ctrlKey && !event.metaKey) return;
+  if (event.key.toLowerCase() === 'c') {
+    event.preventDefault();
+    copySelectedObject();
+  } else if (event.key.toLowerCase() === 'v' && copiedObjectKey) {
+    event.preventDefault();
+    pasteCopiedObject();
+  }
 });
 
 // Side-by-side survives all the way down to a very narrow pane now (the browse list is capped at 46%

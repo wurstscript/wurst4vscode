@@ -75,6 +75,7 @@
   --add-dialog-input-pad: 3px 6px;
   --add-dialog-button-pad: 3px 10px;
   --add-object-button-h: 26px;
+  --object-action-gap: 3px;
 }
 body.density-cozy {
   --pad-x: 16px;
@@ -110,6 +111,7 @@ body.density-cozy {
   --add-dialog-input-pad: 4px 8px;
   --add-dialog-button-pad: 4px 12px;
   --add-object-button-h: 32px;
+  --object-action-gap: 5px;
 }
 .content {
   flex: 1;
@@ -1006,21 +1008,32 @@ tr.hidden { display: none; }
   flex-direction: column;
   overflow: hidden;
 }
-.add-object-button {
+.object-list-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--object-action-gap);
+  padding: var(--search-pad) var(--search-pad) 0;
   flex: 0 0 auto;
-  margin: var(--search-pad) var(--search-pad) 0;
+}
+.add-object-button,
+.object-action-button {
   min-height: var(--add-object-button-h);
-  border: 1px solid var(--vscode-button-border, var(--accent));
+  border: 1px solid transparent;
   border-radius: 3px;
-  background: var(--vscode-button-background, var(--accent));
-  color: var(--vscode-button-foreground, #fff);
+  background: transparent;
+  color: var(--muted);
   font: inherit;
-  font-weight: 600;
+  font-size: var(--meta-fs);
   cursor: pointer;
 }
-.add-object-button:hover:not(:disabled) { background: var(--vscode-button-hoverBackground, var(--accent)); filter: brightness(1.08); }
-.add-object-button:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: 2px; }
-.add-object-button:disabled { opacity: .55; cursor: not-allowed; }
+.add-object-button { padding: 0 7px; font-weight: 600; color: var(--fg); }
+.object-action-button { padding: 0 6px; }
+.add-object-button:hover:not(:disabled),
+.object-action-button:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
+.add-object-button:focus-visible,
+.object-action-button:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: 2px; }
+.add-object-button:disabled,
+.object-action-button:disabled { opacity: .45; cursor: not-allowed; }
 .search-wrap {
   position: relative;
   display: flex;
@@ -1041,7 +1054,7 @@ tr.hidden { display: none; }
 }
 .add-object-overlay[hidden] { display: none; }
 .add-object-dialog {
-  width: min(460px, 100%);
+  width: min(480px, 100%);
   display: grid;
   gap: var(--add-dialog-gap);
   padding: var(--add-dialog-pad);
@@ -1054,8 +1067,10 @@ tr.hidden { display: none; }
 .add-object-dialog label { font-weight: 600; }
 .add-object-dialog select,
 .add-object-dialog input { min-width: 0; min-height: var(--add-dialog-control-h); padding: var(--add-dialog-input-pad); border: 1px solid var(--input-border); border-radius: 2px; background: var(--input-bg); color: var(--input-fg); font: inherit; }
+.add-object-dialog select { height: calc(var(--add-dialog-control-h) * 7); }
 .add-object-optional { color: var(--muted); font-weight: normal; }
 .add-object-dialog p { margin: 0; color: var(--muted); font-size: 11px; }
+.add-object-base-status { min-height: 1.2em; margin-top: calc(var(--add-dialog-gap) * -1 + 2px) !important; }
 .add-object-dialog .add-object-error { min-height: 1.2em; color: var(--vscode-errorForeground, #f14c4c); }
 .add-object-actions { display: flex; justify-content: flex-end; gap: var(--add-dialog-action-gap); margin-top: calc(var(--add-dialog-gap) / 2); }
 .add-object-actions button { min-height: var(--add-dialog-control-h); padding: var(--add-dialog-button-pad); border: 1px solid var(--border); border-radius: 2px; background: var(--button-bg); color: var(--fg); font: inherit; cursor: pointer; }

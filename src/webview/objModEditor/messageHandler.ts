@@ -264,6 +264,8 @@ export function setupMessageHandler() {
       const error = document.getElementById('add-object-error');
       if (error) error.textContent = msg.reason || 'Could not create object.';
       window.dispatchEvent(new Event('objmod-add-object-finished'));
+    } else if (msg.type === 'generatedRawcode') {
+      window.dispatchEvent(new CustomEvent('objmod-generated-rawcode', { detail: msg }));
     } else if (msg.type === 'dirtyStateChanged') {
       const badge = document.getElementById('editable-badge');
       if (badge) {

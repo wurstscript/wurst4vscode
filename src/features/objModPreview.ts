@@ -1754,17 +1754,23 @@ async function resolveTooltipFontUri(
 
 function buildAddObjectControlsHtml(hasBaseObjects: boolean): string {
     const disabled = hasBaseObjects ? '' : 'disabled';
-    return `<button id="add-object" class="add-object-button" type="button" title="Create a custom object" ${disabled}>+ Add object</button>
+    return `<div class="object-list-actions" role="toolbar" aria-label="Object actions">
+  <button id="add-object" class="add-object-button" type="button" title="Create a custom object" ${disabled}><span aria-hidden="true">＋</span> New</button>
+  <button id="copy-object" class="object-action-button" type="button" title="Copy selected object (Ctrl+C)">Copy</button>
+  <button id="paste-object" class="object-action-button" type="button" title="Paste as a new object (Ctrl+V)" disabled>Paste</button>
+</div>
 <div id="add-object-overlay" class="add-object-overlay" hidden>
   <form id="add-object-dialog" class="add-object-dialog" aria-labelledby="add-object-title">
     <h2 id="add-object-title">Create custom object</h2>
-    <label for="add-object-base">Base object <span aria-hidden="true">*</span></label>
-    <select id="add-object-base" required ${disabled}>
+    <label for="add-object-base-search">Find base object <span aria-hidden="true">*</span></label>
+    <input id="add-object-base-search" type="search" autocomplete="off" spellcheck="false" placeholder="Search name or rawcode" aria-describedby="add-object-base-status" ${disabled}>
+    <select id="add-object-base" required size="7" ${disabled}>
       <option value="">Select a base object…</option>
     </select>
+    <p id="add-object-base-status" class="add-object-base-status" role="status"></p>
     <label for="add-object-id">New rawcode <span class="add-object-optional">optional</span></label>
     <input id="add-object-id" type="text" maxlength="4" autocomplete="off" spellcheck="false" placeholder="Auto-generated" aria-describedby="add-object-help">
-    <p id="add-object-help">Use exactly four printable characters, or leave blank to generate an unused rawcode.</p>
+    <p id="add-object-help">Use exactly four printable characters, or leave blank to use <code id="add-object-generated">an available rawcode</code>.</p>
     <p id="add-object-error" class="add-object-error" role="alert"></p>
     <div class="add-object-actions">
       <button id="add-object-cancel" type="button">Cancel</button>
@@ -2168,11 +2174,38 @@ function generateRawcode(doc: ObjModDocument, baseId: string, reservedRawcodes: 
     return undefined;
 }
 
+function addFileRawcodes(file: ObjModFile, into: Set<string>): void {
+    for (const entry of [...file.origObjs, ...file.customObjs]) {
+        into.add(entry.baseId.toLowerCase());
+        if (entry.newId) into.add(entry.newId.toLowerCase());
+    }
+}
+
+/** Includes every object-data sibling present beside this map, not merely the editor's current kind. */
+async function collectMapRawcodes(doc: ObjModDocument): Promise<Set<string>> {
+    const rawcodes = new Set<string>();
+    addFileRawcodes(doc.mainFile, rawcodes);
+    if (doc.skinFile) addFileRawcodes(doc.skinFile, rawcodes);
+    const knownUris = new Set([doc.mainUri.toString(), doc.skinUri?.toString()]);
+    const dir = vscode.Uri.joinPath(doc.uri, '..');
+    await Promise.all(CATALOG_EXTS.flatMap((ext) => ['war3map', 'war3mapSkin'].map(async (prefix) => {
+        const uri = vscode.Uri.joinPath(dir, `${prefix}${ext}`);
+        if (knownUris.has(uri.toString())) return;
+        try {
+            addFileRawcodes(parseObjMod(Buffer.from(await vscode.workspace.fs.readFile(uri)), ext), rawcodes);
+        } catch {
+            // An absent or malformed sibling must not prevent editing the object file that did open.
+        }
+    })));
+    return rawcodes;
+}
+
 function applyAddObject(
     doc: ObjModDocument,
     baseId: string,
     requestedRawcode: string,
     reservedRawcodes: Iterable<string>,
+    copiedMods: ObjModMod[] = [],
 ): { entry: ObjModEntry; key: string; apply(): void; revert(): void } | undefined {
     const base = baseId.trim();
     if (!isValidRawcode(base)) return undefined;
@@ -2182,7 +2215,7 @@ function applyAddObject(
         .map((entry) => typeof entry === 'string' ? entry : (entry.newId || entry.baseId))
         .some((id) => id.toLowerCase() === rawcode.toLowerCase());
     if (duplicate) return undefined;
-    const entry: ObjModEntry = { baseId: base, newId: rawcode, mods: [] };
+    const entry: ObjModEntry = { baseId: base, newId: rawcode, mods: copiedMods.map((mod) => ({ ...mod })) };
     const add = (entries: ObjModEntry[]) => { if (!entries.includes(entry)) entries.push(entry); };
     const remove = (entries: ObjModEntry[]) => {
         const index = entries.indexOf(entry);
@@ -2619,21 +2652,37 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             await this.refreshFromDisk(doc);
             return;
         }
-        if (msg.type === 'addObject' && msg.baseId) {
+        if (msg.type === 'requestGeneratedRawcode' && msg.baseId) {
             const baseId = msg.baseId.trim();
-            const requestedRawcode = msg.rawcode?.trim() ?? '';
             const summaryData = await loadObjSummaryData(doc.displayFile.ext);
             const baseOptions = buildBaseObjectOptions(summaryData, doc.displayFile.ext);
             const baseIds = new Set(baseOptions.map((option) => option.value.toLowerCase()));
             if (!baseIds.has(baseId.toLowerCase())) {
-                void webview.postMessage({ type: 'addObjectFailed', reason: 'Choose a valid base object.' });
+                void webview.postMessage({ type: 'generatedRawcode', baseId, rawcode: '' });
+                return;
+            }
+            const mapRawcodes = await collectMapRawcodes(doc);
+            const rawcode = generateRawcode(doc, baseId, [...baseIds, ...mapRawcodes]);
+            void webview.postMessage({ type: 'generatedRawcode', baseId, rawcode: rawcode ?? '' });
+            return;
+        }
+        if ((msg.type === 'addObject' && msg.baseId) || (msg.type === 'duplicateObject' && msg.key)) {
+            const source = msg.type === 'duplicateObject' ? findEntryByKey(doc.displayFile, msg.key!) : undefined;
+            const baseId = (source?.baseId ?? msg.baseId ?? '').trim();
+            const requestedRawcode = msg.type === 'addObject' ? (msg.rawcode?.trim() ?? '') : '';
+            const summaryData = await loadObjSummaryData(doc.displayFile.ext);
+            const baseOptions = buildBaseObjectOptions(summaryData, doc.displayFile.ext);
+            const baseIds = new Set(baseOptions.map((option) => option.value.toLowerCase()));
+            if (!baseIds.has(baseId.toLowerCase())) {
+                void webview.postMessage({ type: 'addObjectFailed', reason: source ? 'The copied object can no longer be duplicated.' : 'Choose a valid base object.' });
                 return;
             }
             if (requestedRawcode && !isValidRawcode(requestedRawcode)) {
                 void webview.postMessage({ type: 'addObjectFailed', reason: 'A rawcode must be exactly four printable characters.' });
                 return;
             }
-            const edit = applyAddObject(doc, baseId, requestedRawcode, baseIds);
+            const mapRawcodes = await collectMapRawcodes(doc);
+            const edit = applyAddObject(doc, baseId, requestedRawcode, [...baseIds, ...mapRawcodes], source?.mods);
             if (!edit) {
                 void webview.postMessage({ type: 'addObjectFailed', reason: requestedRawcode
                     ? 'That rawcode is already in use.'
@@ -2650,7 +2699,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             };
             this._onDidChange.fire({
                 document: doc,
-                label: `Create ${edit.entry.newId}`,
+                label: `${source ? 'Duplicate' : 'Create'} ${edit.entry.newId}`,
                 undo: () => {
                     edit.revert();
                     doc.currentRevision = beforeRevision;

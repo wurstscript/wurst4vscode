@@ -1786,6 +1786,7 @@ function buildAddObjectControlsHtml(hasBaseObjects: boolean): string {
   <button id="add-object" class="add-object-button" type="button" title="Create a custom object" ${disabled}><span aria-hidden="true">＋</span> New</button>
   <button id="copy-object" class="object-action-button" type="button" title="Copy selected object (Ctrl+C)">Copy</button>
   <button id="paste-object" class="object-action-button" type="button" title="Paste as a new object (Ctrl+V)" disabled>Paste</button>
+  <button id="delete-object" class="object-action-button object-delete-button" type="button" title="Delete selected custom object (Delete)" disabled>Delete</button>
 </div>
 <div id="add-object-overlay" class="add-object-overlay" hidden>
   <form id="add-object-dialog" class="add-object-dialog" aria-labelledby="add-object-title">
@@ -2740,6 +2741,53 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             doc.currentRevision = afterRevision;
             this.postDirtyState(doc);
             postAdded();
+            return;
+        }
+        if (msg.type === 'deleteObject' && msg.key) {
+            const parts = objectKeyParts(msg.key);
+            const entry = parts?.group === 'Custom' ? findEntryByKey(doc.displayFile, msg.key) : undefined;
+            if (!entry) return;
+            const identity = entryKey(entry);
+            const files = Array.from(new Set([doc.mainFile, doc.skinFile, doc.displayFile].filter((file): file is ObjModFile => !!file)));
+            const removals = files.map((file) => {
+                const index = file.customObjs.findIndex((candidate) => entryKey(candidate) === identity);
+                return index < 0 ? undefined : { file, entry: file.customObjs[index], index };
+            }).filter((removal): removal is { file: ObjModFile; entry: ObjModEntry; index: number } => !!removal);
+            if (!removals.some((removal) => removal.file === doc.displayFile)) return;
+            const remove = () => {
+                for (const removal of removals) {
+                    const index = removal.file.customObjs.indexOf(removal.entry);
+                    if (index >= 0) removal.file.customObjs.splice(index, 1);
+                }
+                doc.objectCatalog = undefined;
+            };
+            const restore = () => {
+                for (const removal of removals) {
+                    if (!removal.file.customObjs.includes(removal.entry)) {
+                        removal.file.customObjs.splice(Math.min(removal.index, removal.file.customObjs.length), 0, removal.entry);
+                    }
+                }
+                doc.objectCatalog = undefined;
+            };
+            const summaryData = await loadObjSummaryData(doc.displayFile.ext);
+            const beforeRevision = doc.currentRevision;
+            const afterRevision = doc.nextRevision++;
+            const postRemoved = () => { void webview.postMessage({ type: 'objectRemoved', identity: `Custom:${identity}` }); };
+            const postRestored = () => {
+                const index = doc.displayFile.customObjs.findIndex((candidate) => entryKey(candidate) === identity);
+                if (index < 0) return;
+                void webview.postMessage({ type: 'objectAdded', object: buildObject(doc.displayFile.customObjs[index], 'Custom', index, doc.wtsTable, summaryData, doc.displayFile.ext) });
+            };
+            remove();
+            this._onDidChange.fire({
+                document: doc,
+                label: `Delete ${entry.newId || entry.baseId}`,
+                undo: () => { restore(); doc.currentRevision = beforeRevision; postRestored(); this.postDirtyState(doc); },
+                redo: () => { remove(); doc.currentRevision = afterRevision; postRemoved(); this.postDirtyState(doc); },
+            });
+            doc.currentRevision = afterRevision;
+            this.postDirtyState(doc);
+            postRemoved();
             return;
         }
         if (msg.type === 'undo') { void vscode.commands.executeCommand('undo'); return; }

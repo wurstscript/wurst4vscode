@@ -189,6 +189,27 @@ test('copy and paste duplicate the selected object with independent serialized m
     expect(duplicate.mods).not.toBe(source.mods);
 });
 
+test('deleting a custom object is undoable, redoable, and persisted', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod();
+    await selectObject(page, 'h004');
+    await expect(page.locator('#delete-object')).toBeEnabled();
+    const initialCount = await page.locator('#tree .object-row').count();
+
+    await page.locator('#delete-object').click();
+    await expect.poll(() => host.isDirty).toBe(true);
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialCount - 1);
+    expect(host.editLabels).toEqual(['Delete h004']);
+
+    host.undo();
+    await expect.poll(() => host.isDirty).toBe(false);
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialCount);
+    host.redo();
+    await expect.poll(() => host.isDirty).toBe(true);
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialCount - 1);
+    await host.save();
+    expect(parseObjMod(host.readFile(), '.w3u').customObjs.some((obj) => obj.newId === 'h004')).toBe(false);
+});
+
 test('Save As preserves an object created while editing the skin sibling', async ({ openObjMod }) => {
     const { page, host } = await openObjMod({
         fileName: 'war3mapSkin.w3u',

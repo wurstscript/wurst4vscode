@@ -1034,6 +1034,7 @@ tr.hidden { display: none; }
 .object-action-button:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: 2px; }
 .add-object-button:disabled,
 .object-action-button:disabled { opacity: .45; cursor: not-allowed; }
+.object-delete-button:not(:disabled) { color: var(--vscode-errorForeground, #f14c4c); }
 .search-wrap {
   position: relative;
   display: flex;

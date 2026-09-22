@@ -73,6 +73,7 @@ const addObjectCancel = document.getElementById('add-object-cancel') as HTMLButt
 const addObjectConfirm = addObjectDialog?.querySelector('.add-object-confirm') as HTMLButtonElement | null;
 const copyObjectButton = document.getElementById('copy-object') as HTMLButtonElement | null;
 const pasteObjectButton = document.getElementById('paste-object') as HTMLButtonElement | null;
+const deleteObjectButton = document.getElementById('delete-object') as HTMLButtonElement | null;
 const baseObjects = initial.baseObjects || [];
 let copiedObjectKey = '';
 let addObjectSubmissionPending = false;
@@ -212,6 +213,15 @@ function pasteCopiedObject() {
   if (!copiedObjectKey) return;
   vscodeApi.postMessage({ type: 'duplicateObject', key: copiedObjectKey });
 }
+function deleteSelectedObject() {
+  const selected = objects.find(object => object.key === ui.selectedKey);
+  if (!selected || selected.group !== 'Custom') return;
+  vscodeApi.postMessage({ type: 'deleteObject', key: selected.key });
+}
+effect(() => {
+  const selected = objects.find(object => object.key === ui.selectedKey);
+  if (deleteObjectButton) deleteObjectButton.disabled = !selected || selected.group !== 'Custom';
+}, 'objModEditor.deleteObjectAvailability');
 function closeAddObjectDialog() {
   if (addObjectSubmissionPending) return;
   if (!addObjectOverlay) return;
@@ -231,6 +241,7 @@ if (addObjectButton) addObjectButton.addEventListener('click', () => {
 });
 copyObjectButton?.addEventListener('click', copySelectedObject);
 pasteObjectButton?.addEventListener('click', pasteCopiedObject);
+deleteObjectButton?.addEventListener('click', deleteSelectedObject);
 if (addObjectCancel) addObjectCancel.addEventListener('click', closeAddObjectDialog);
 if (addObjectOverlay) addObjectOverlay.addEventListener('mousedown', event => {
   if (event.target === addObjectOverlay) closeAddObjectDialog();
@@ -255,7 +266,13 @@ document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && addObjectOverlay && !addObjectOverlay.hidden) closeAddObjectDialog();
   const target = event.target as HTMLElement | null;
   const editingText = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable;
-  if (editingText || !event.ctrlKey && !event.metaKey) return;
+  if (editingText) return;
+  if (event.key === 'Delete') {
+    event.preventDefault();
+    deleteSelectedObject();
+    return;
+  }
+  if (!event.ctrlKey && !event.metaKey) return;
   if (event.key.toLowerCase() === 'c') {
     event.preventDefault();
     copySelectedObject();

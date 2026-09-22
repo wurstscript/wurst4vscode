@@ -51,6 +51,17 @@ const TYPE_LABELS: Record<string, string> = {
     w3q: 'Upgrade',
 };
 
+// Compiler catalog views include skin and dependency rows alongside each format's base objects.
+// These fields identify the canonical records that can actually be inherited by objmod files.
+const BASE_OBJECT_ID_FIELDS: Partial<Record<string, readonly string[]>> = {
+    '.w3u': ['unitID'],
+    '.w3t': ['itemID'],
+    '.w3a': ['alias', 'code'],
+    '.w3b': ['DestructableID'],
+    '.w3h': ['alias', 'code'],
+    '.w3q': ['upgradeid'],
+};
+
 const TOOLTIP_FONT_SETTING = 'objModTooltipFont';
 const TOOLTIP_FONT_FAMILY = 'WurstProjectTooltip';
 const TOOLTIP_WIDTH_SETTING = 'objModTooltipWidth';
@@ -493,16 +504,14 @@ async function buildModel(parsed: ObjModFile, triggerStrings: TriggerStringTable
 function buildBaseObjectOptions(summaryData: ObjSummaryData | undefined, ext: string): ValueOption[] {
     if (!summaryData) return [];
     const canonicalIds = new Map([...summaryData.profile.keys()].map((id) => [id.toLowerCase(), id]));
+    const idFields = BASE_OBJECT_ID_FIELDS[ext];
     // The compiler knowledge base supplies the broadest catalog when available. Doodads are not in
     // that catalog, however, so fall back to the format's game profile rather than disabling object
     // creation for .w3d files (and for any future format absent from the compiler snapshot).
     const ids = summaryData.baseObjects
         ? [...summaryData.baseObjects.entries()]
-            // AbilityMetaData and AbilityBuffMetaData are supplemented with skin records. A skin-only
-            // record can belong to the opposite editor kind, so only a real base record is valid here.
-            .filter(([id, record]) => ext !== '.w3a' && ext !== '.w3h'
-                || String(record.alias).toLowerCase() === id
-                || String(record.code).toLowerCase() === id)
+            .filter(([id, record]) => !idFields
+                || idFields.some((field) => String(record[field]).toLowerCase() === id))
             .map(([key]) => canonicalIds.get(key) ?? key)
         : [...summaryData.profile.keys()];
     return ids

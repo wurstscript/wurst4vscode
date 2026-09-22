@@ -132,6 +132,26 @@ test('buff editors exclude ability-only bases', async ({ openObjMod }) => {
     await expect(page.locator('#add-object-base option[value="Amls"]')).toHaveCount(0);
 });
 
+test('unit editors exclude dependency and ability records from base choices', async ({ openObjMod }) => {
+    const { page } = await openObjMod();
+    await page.locator('#add-object').click();
+    await expect(page.locator('#add-object-base option[value="hpea"]')).toHaveCount(1);
+    await expect(page.locator('#add-object-base option[value="Aimp"]')).toHaveCount(0);
+    await expect(page.locator('#add-object-base option[value="HERO"]')).toHaveCount(0);
+});
+
+test('upgrade editors exclude skin-only records from base choices', async ({ openObjMod }) => {
+    const { page } = await openObjMod({
+        fileName: 'war3map.w3q',
+        setupFixture: (dir) => fs.writeFileSync(path.join(dir, 'war3map.w3q'), serializeObjMod({
+            version: 3, ext: '.w3q', extended: false, origObjs: [], customObjs: [],
+        })),
+    });
+    await page.locator('#add-object').click();
+    await expect(page.locator('#add-object-base option[value="Rhme"]')).toHaveCount(1);
+    await expect(page.locator('#add-object-base option[value="BP001"]')).toHaveCount(0);
+});
+
 test('technical mode swaps in the id/type columns and back', async ({ openObjMod }) => {
     const { page } = await openObjMod();
     await expect(page.locator('#details thead th')).toHaveText(['Field', 'Value']);

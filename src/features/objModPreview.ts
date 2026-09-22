@@ -104,7 +104,7 @@ const SUMMARY_MODEL_FIELDS = new Set(['umdl', 'amdl', 'ifil', 'bfil', 'dfil']);
 const CLASSIFICATION_FIELDS = new Set(['ucam', 'uspe']);
 
 // Profile keys holding an object's display name, in priority order. Casing varies across WC3
-// profile/skin TXTs; buffs use Bufftip, some doodads use comment — try them all.
+  // profile/skin TXTs; buffs use Bufftip, some doodads use comment - try them all.
 const DISPLAY_NAME_FIELDS = ['Name', 'name', 'EditorName', 'Editorname', 'Bufftip', 'BuffTip', 'Tip', 'tip', 'comment', 'comments'];
 // The compiler knowledge base has compact ids in `name` (for example `guardtower`) but retains
 // World Editor's readable label in its comment field. Prefer that descriptive source only in the

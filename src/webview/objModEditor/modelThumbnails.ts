@@ -641,6 +641,7 @@ export function finishModelThumb(rendered, reason = '', localUri = '') {
   const aliasKey = modelThumbJob.aliasKey;
   clearTimeout(modelThumbTextureTimer);
   if (!rendered) {
+    modelThumbWorker?.postMessage({ type: 'cancel', key });
     vscodeApi.postMessage({ type: 'modelThumbFailed', key, cacheKey, aliasKey, reason: reason || 'failed' });
     cancelQueuedModelThumbRequest(key);
     markModelThumbMissing(key, { reason: reason || 'failed' });

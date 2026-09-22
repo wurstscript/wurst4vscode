@@ -944,6 +944,14 @@ function testThumbnailLifecycleGuards() {
     assert.ok(viewer.includes('clearModel()'), 'the model viewer should expose an explicit stale-preview reset');
     assert.ok(modelPreviewPanel.includes('mpvViewer().clearModel()'), 'inline preview must clear the prior model before resolving a new path');
     assert.ok(
+        /onError\(message\)[\s\S]{0,260}finishModelThumb\(false, 'load-error: ' \+ message\)/.test(modelPreviewPanel),
+        'a parser failure reported through loadModel callbacks must release the active thumbnail job',
+    );
+    assert.ok(
+        /if \(!rendered\) \{\s*modelThumbWorker\?\.postMessage\(\{ type: 'cancel', key \}\)/.test(objmod),
+        'a failed thumbnail must cancel its worker job before allowing the next queued model to start',
+    );
+    assert.ok(
         /msg\.type === 'mdxModelMissing'[\s\S]{0,120}clearModel\(\)/.test(messageHandler),
         'a missing full preview must not leave the previous successful model visible',
     );

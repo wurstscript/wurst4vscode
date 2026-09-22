@@ -91,6 +91,16 @@ interface MpqDocument extends vscode.CustomDocument {
     parseError: string | null;
     archiveSize: number;
     loaded: boolean;
+    /** Current extraction root. Rotated when an opened output was deleted, so VS Code gets a new URI. */
+    extractionRoot: string | undefined;
+    extractedPaths: Map<string, string>;
+}
+
+function extractionRootForOpen(currentRoot: string | undefined, previousPath: string | undefined): string {
+    if (!currentRoot || (previousPath && !fs.existsSync(previousPath))) {
+        return fs.mkdtempSync(path.join(os.tmpdir(), 'wurst_mpq_extract-'));
+    }
+    return currentRoot;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,7 +116,17 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
         _token: vscode.CancellationToken,
     ): Promise<MpqDocument> {
         log(`openCustomDocument: ${uri.fsPath}`);
-        return { uri, entries: [], reader: null, parseError: null, archiveSize: 0, loaded: false, dispose() {} };
+        return {
+            uri,
+            entries: [],
+            reader: null,
+            parseError: null,
+            archiveSize: 0,
+            loaded: false,
+            extractionRoot: undefined,
+            extractedPaths: new Map(),
+            dispose() {},
+        };
     }
 
     async resolveCustomEditor(
@@ -183,13 +203,19 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
                 if (!name || !document.reader) return;
                 try {
                     const data = await document.reader.readFileAsync(name);
-                    const tmpDir = path.join(os.tmpdir(), 'wurst_mpq_extract', archiveName);
+                    const previousPath = document.extractedPaths.get(name);
+                    // `openWith` reuses a custom editor by URI. If its temporary source was deleted,
+                    // overwriting the old path only focuses that broken editor; rotate the root so the
+                    // fresh extraction has a distinct URI and is opened as a new document.
+                    document.extractionRoot = extractionRootForOpen(document.extractionRoot, previousPath);
+                    const tmpDir = document.extractionRoot;
                     const outPath = getArchiveOutputPath(tmpDir, name);
                     if (!outPath) {
                         throw new Error(`Unsafe archive path: ${name}`);
                     }
                     fs.mkdirSync(path.dirname(outPath), { recursive: true });
                     fs.writeFileSync(outPath, data);
+                    document.extractedPaths.set(name, outPath);
                     if (shouldExtractTriggerStrings(name)) {
                         await extractTriggerStringsSidecar(document.reader, document.entries, tmpDir);
                     }

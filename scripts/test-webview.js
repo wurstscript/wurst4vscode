@@ -1275,6 +1275,37 @@ function testWpmFlagSemantics() {
     assert.notDeepStrictEqual(wpmCellRgb(0x80), [0, 0, 0], 'amphibious cells must not render as an anonymous black cell');
 }
 
+function testMpqReextractUsesFreshUriAfterDeletedOutput() {
+    const loadMpq = createTsLoader({
+        mocks: {
+            vscode: {},
+            'casc-ts/formats': {},
+            './diagnostics': {},
+            './webviewUtils': {},
+            './webviewShared': {},
+            './issueReporting': {},
+        },
+        augment: {
+            'src/features/mpqViewer.ts': 'export const __e2e = { extractionRootForOpen };',
+        },
+    });
+    const { extractionRootForOpen } = loadMpq('src/features/mpqViewer.ts').__e2e;
+    const initialRoot = extractionRootForOpen(undefined, undefined);
+    const extracted = path.join(initialRoot, 'war3map.w3u');
+    try {
+        fs.writeFileSync(extracted, 'fixture');
+        assert.strictEqual(extractionRootForOpen(initialRoot, extracted), initialRoot,
+            'an intact extracted file should keep its URI');
+        fs.unlinkSync(extracted);
+        const refreshedRoot = extractionRootForOpen(initialRoot, extracted);
+        assert.notStrictEqual(refreshedRoot, initialRoot,
+            'a deleted extracted file must receive a fresh URI instead of reopening the stale editor');
+        fs.rmSync(refreshedRoot, { recursive: true, force: true });
+    } finally {
+        fs.rmSync(initialRoot, { recursive: true, force: true });
+    }
+}
+
 async function main() {
     testAssetPathNormalization();
     testSignals();
@@ -1309,6 +1340,7 @@ async function main() {
     testImportedAssetDedupeSafety();
     testLocalE2eFixturesRemainOptIn();
     testWpmFlagSemantics();
+    testMpqReextractUsesFreshUriAfterDeletedOutput();
     console.log('webview harness tests passed');
 }
 

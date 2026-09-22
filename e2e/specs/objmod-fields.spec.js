@@ -69,10 +69,12 @@ test('creating an object without a rawcode generates, reverts, and saves a colli
     const initialObjectCount = await page.locator('#tree .object-row').count();
     await page.locator('#add-object').click();
 
-    // The native required constraint must stop an empty-base submission before it reaches the host.
+    // The visible picker owns validation, so an empty submission stays in the dialog with a useful error.
     await page.locator('#add-object-dialog').evaluate((form) => form.requestSubmit());
     expect(host.isDirty).toBe(false);
     await expect(page.locator('#add-object-overlay')).toBeVisible();
+    await expect(page.locator('#add-object-error')).toHaveText('Select a base object.');
+    await expect(page.locator('#add-object-base-list')).toBeFocused();
 
     await page.locator('#add-object-base').selectOption({ index: 1 });
     await expect(page.locator('#add-object-generated')).toHaveText(/^[\x20-\x7e]{4}$/);
@@ -210,8 +212,8 @@ test('deleting a custom object is undoable, redoable, and persisted', async ({ o
     expect(parseObjMod(host.readFile(), '.w3u').customObjs.some((obj) => obj.newId === 'h004')).toBe(false);
 });
 
-test('deleting a custom object reindexes later objects before they can be edited', async ({ openObjMod }) => {
-    const { page } = await openObjMod({
+test('deleting a custom object reindexes later objects before they can be edited or pasted', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod({
         setupFixture: (dir) => {
             const filePath = path.join(dir, 'war3map.w3u');
             const file = parseObjMod(fs.readFileSync(filePath), '.w3u');
@@ -222,6 +224,9 @@ test('deleting a custom object reindexes later objects before they can be edited
     const h004Before = await page.locator('#tree .object-row', { has: page.locator('.object-id', { hasText: 'h004' }) }).getAttribute('data-key');
     expect(h004Before).toMatch(/^Custom:\d+$/);
     const expectedKey = `Custom:${Number(h004Before.slice('Custom:'.length)) - 1}`;
+    await selectObject(page, 'h004');
+    await page.locator('#copy-object').click();
+    await expect(page.locator('#paste-object')).toBeEnabled();
     await page.fill('#search', 'Z903');
     await page.locator('#tree .object-row', { has: page.locator('.object-id', { hasText: 'Z903' }) }).click();
     await expect(page.locator('#delete-object')).toBeEnabled();
@@ -231,6 +236,28 @@ test('deleting a custom object reindexes later objects before they can be edited
     await expect(h004).toHaveAttribute('data-key', expectedKey);
     await h004.click();
     await expect(page.locator('#tree .object-row.active')).toHaveAttribute('data-key', expectedKey);
+    await expect(page.locator('#paste-object')).toBeEnabled();
+    await page.locator('#paste-object').click();
+    await expect.poll(() => host.editLabels).toHaveLength(2);
+    const duplicateId = (await page.locator('#tree .object-row.active .object-id').textContent()).trim();
+    await host.save();
+    const parsed = parseObjMod(host.readFile(), '.w3u');
+    const source = parsed.customObjs.find((object) => object.newId === 'h004');
+    const duplicate = parsed.customObjs.find((object) => object.newId === duplicateId);
+    expect(duplicate.baseId).toBe(source.baseId);
+    expect(duplicate.mods).toEqual(source.mods);
+});
+
+test('object shortcuts do not act behind the create dialog', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod();
+    await selectObject(page, 'h004');
+    const initialCount = await page.locator('#tree .object-row').count();
+    await page.locator('#add-object').click();
+    await page.locator('#add-object-base-list').focus();
+    await page.keyboard.press('Delete');
+    await expect(page.locator('#add-object-overlay')).toBeVisible();
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialCount);
+    expect(host.isDirty).toBe(false);
 });
 
 test('Save As preserves an object created while editing the skin sibling', async ({ openObjMod }) => {

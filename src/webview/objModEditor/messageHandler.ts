@@ -259,6 +259,7 @@ export function setupMessageHandler() {
       const preferred = msg.preferredIdentity || previousIdentity;
       ui.selectedKey = objects.find(obj => obj.identity === preferred)?.key || objects[0]?.key || '';
       renderTree();
+      window.dispatchEvent(new Event('objmod-objects-replaced'));
     } else if (msg.type === 'objectRemoved' && msg.identity) {
       const index = objects.findIndex(obj => obj.identity === msg.identity);
       if (index < 0) return;

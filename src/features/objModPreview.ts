@@ -1795,7 +1795,7 @@ function buildAddObjectControlsHtml(hasBaseObjects: boolean): string {
     <h2 id="add-object-title">Create custom object</h2>
     <label for="add-object-base-search">Find base object <span aria-hidden="true">*</span></label>
     <input id="add-object-base-search" type="search" autocomplete="off" spellcheck="false" placeholder="Search name or rawcode" aria-describedby="add-object-base-status" ${disabled}>
-    <select id="add-object-base" class="add-object-base-native" required size="7" ${disabled} aria-hidden="true" tabindex="-1">
+    <select id="add-object-base" class="add-object-base-native" size="7" ${disabled} aria-hidden="true" tabindex="-1">
       <option value="">Select a base object…</option>
     </select>
     <div id="add-object-base-list" class="add-object-base-list" role="listbox" aria-label="Base objects" tabindex="0"></div>

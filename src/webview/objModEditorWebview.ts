@@ -75,7 +75,7 @@ const copyObjectButton = document.getElementById('copy-object') as HTMLButtonEle
 const pasteObjectButton = document.getElementById('paste-object') as HTMLButtonElement | null;
 const deleteObjectButton = document.getElementById('delete-object') as HTMLButtonElement | null;
 const baseObjects = initial.baseObjects || [];
-let copiedObjectKey = '';
+let copiedObjectIdentity = '';
 let addObjectSubmissionPending = false;
 function setAddObjectSubmissionPending(pending: boolean) {
   addObjectSubmissionPending = pending;
@@ -205,13 +205,24 @@ window.addEventListener('objmod-generated-rawcode', (event: Event) => {
   if (addObjectGenerated) addObjectGenerated.textContent = detail.rawcode || 'no unused rawcode is available';
 });
 function copySelectedObject() {
-  if (!ui.selectedKey || !objects.some(object => object.key === ui.selectedKey)) return;
-  copiedObjectKey = ui.selectedKey;
-  if (pasteObjectButton) pasteObjectButton.disabled = false;
+  const selected = objects.find(object => object.key === ui.selectedKey);
+  if (!selected) return;
+  copiedObjectIdentity = selected.identity;
+  updatePasteObjectAvailability();
 }
 function pasteCopiedObject() {
-  if (!copiedObjectKey) return;
-  vscodeApi.postMessage({ type: 'duplicateObject', key: copiedObjectKey });
+  const copied = objects.find(object => object.identity === copiedObjectIdentity);
+  if (!copied) {
+    copiedObjectIdentity = '';
+    updatePasteObjectAvailability();
+    return;
+  }
+  vscodeApi.postMessage({ type: 'duplicateObject', key: copied.key });
+}
+function updatePasteObjectAvailability() {
+  const copiedStillExists = !!copiedObjectIdentity && objects.some(object => object.identity === copiedObjectIdentity);
+  if (!copiedStillExists) copiedObjectIdentity = '';
+  if (pasteObjectButton) pasteObjectButton.disabled = !copiedStillExists;
 }
 function deleteSelectedObject() {
   const selected = objects.find(object => object.key === ui.selectedKey);
@@ -251,7 +262,7 @@ if (addObjectDialog) addObjectDialog.addEventListener('submit', event => {
   if (addObjectSubmissionPending) return;
   const baseId = addObjectBase.value;
   const rawcode = addObjectId.value.trim();
-  if (!baseId) { addObjectError.textContent = 'Select a base object.'; addObjectBase.focus(); return; }
+  if (!baseId) { addObjectError.textContent = 'Select a base object.'; addObjectBaseList?.focus(); return; }
   if (rawcode && !/^[\x20-\x7e]{4}$/.test(rawcode)) {
     addObjectError.textContent = 'A rawcode must be exactly four printable characters.';
     addObjectId.focus();
@@ -262,8 +273,12 @@ if (addObjectDialog) addObjectDialog.addEventListener('submit', event => {
   vscodeApi.postMessage({ type: 'addObject', baseId, rawcode });
 });
 window.addEventListener('objmod-add-object-finished', () => setAddObjectSubmissionPending(false));
+window.addEventListener('objmod-objects-replaced', updatePasteObjectAvailability);
 document.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && addObjectOverlay && !addObjectOverlay.hidden) closeAddObjectDialog();
+  if (addObjectOverlay && !addObjectOverlay.hidden) {
+    if (event.key === 'Escape') closeAddObjectDialog();
+    return;
+  }
   const target = event.target as HTMLElement | null;
   const editingText = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable;
   if (editingText) return;
@@ -276,7 +291,7 @@ document.addEventListener('keydown', event => {
   if (event.key.toLowerCase() === 'c') {
     event.preventDefault();
     copySelectedObject();
-  } else if (event.key.toLowerCase() === 'v' && copiedObjectKey) {
+  } else if (event.key.toLowerCase() === 'v' && copiedObjectIdentity) {
     event.preventDefault();
     pasteCopiedObject();
   }

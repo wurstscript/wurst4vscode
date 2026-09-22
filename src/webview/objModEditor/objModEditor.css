@@ -67,6 +67,14 @@
      and the breathing room above the rule separating it from the presets. */
   --palette-group-gap: 4px;
   --palette-group-pad: 2px;
+  --add-dialog-overlay-pad: 12px;
+  --add-dialog-pad: 12px;
+  --add-dialog-gap: 6px;
+  --add-dialog-action-gap: 6px;
+  --add-dialog-control-h: 24px;
+  --add-dialog-input-pad: 3px 6px;
+  --add-dialog-button-pad: 3px 10px;
+  --add-object-button-h: 26px;
 }
 body.density-cozy {
   --pad-x: 16px;
@@ -94,6 +102,14 @@ body.density-cozy {
   --cell-h: 24px;
   --palette-group-gap: 6px;
   --palette-group-pad: 4px;
+  --add-dialog-overlay-pad: 20px;
+  --add-dialog-pad: 20px;
+  --add-dialog-gap: 10px;
+  --add-dialog-action-gap: 10px;
+  --add-dialog-control-h: 30px;
+  --add-dialog-input-pad: 4px 8px;
+  --add-dialog-button-pad: 4px 12px;
+  --add-object-button-h: 32px;
 }
 .content {
   flex: 1;
@@ -993,7 +1009,7 @@ tr.hidden { display: none; }
 .add-object-button {
   flex: 0 0 auto;
   margin: var(--search-pad) var(--search-pad) 0;
-  min-height: 28px;
+  min-height: var(--add-object-button-h);
   border: 1px solid var(--vscode-button-border, var(--accent));
   border-radius: 3px;
   background: var(--vscode-button-background, var(--accent));
@@ -1020,29 +1036,29 @@ tr.hidden { display: none; }
   inset: 0;
   display: grid;
   place-items: center;
-  padding: 16px;
+  padding: var(--add-dialog-overlay-pad);
   background: color-mix(in srgb, #000 45%, transparent);
 }
 .add-object-overlay[hidden] { display: none; }
 .add-object-dialog {
   width: min(460px, 100%);
   display: grid;
-  gap: 8px;
-  padding: 16px;
+  gap: var(--add-dialog-gap);
+  padding: var(--add-dialog-pad);
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--vscode-editorWidget-background, var(--bg));
   box-shadow: 0 8px 28px #0008;
 }
-.add-object-dialog h2 { margin: 0 0 4px; font-size: 15px; }
+.add-object-dialog h2 { margin: 0 0 calc(var(--add-dialog-gap) / 2); font-size: 15px; }
 .add-object-dialog label { font-weight: 600; }
 .add-object-dialog select,
-.add-object-dialog input { min-width: 0; min-height: 27px; padding: 3px 6px; border: 1px solid var(--input-border); border-radius: 2px; background: var(--input-bg); color: var(--input-fg); font: inherit; }
+.add-object-dialog input { min-width: 0; min-height: var(--add-dialog-control-h); padding: var(--add-dialog-input-pad); border: 1px solid var(--input-border); border-radius: 2px; background: var(--input-bg); color: var(--input-fg); font: inherit; }
 .add-object-optional { color: var(--muted); font-weight: normal; }
 .add-object-dialog p { margin: 0; color: var(--muted); font-size: 11px; }
 .add-object-dialog .add-object-error { min-height: 1.2em; color: var(--vscode-errorForeground, #f14c4c); }
-.add-object-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
-.add-object-actions button { min-height: 27px; padding: 3px 10px; border: 1px solid var(--border); border-radius: 2px; background: var(--button-bg); color: var(--fg); font: inherit; cursor: pointer; }
+.add-object-actions { display: flex; justify-content: flex-end; gap: var(--add-dialog-action-gap); margin-top: calc(var(--add-dialog-gap) / 2); }
+.add-object-actions button { min-height: var(--add-dialog-control-h); padding: var(--add-dialog-button-pad); border: 1px solid var(--border); border-radius: 2px; background: var(--button-bg); color: var(--fg); font: inherit; cursor: pointer; }
 .add-object-actions .add-object-confirm { border-color: var(--accent); background: var(--vscode-button-background, var(--accent)); color: var(--vscode-button-foreground, #fff); }
 .search-input {
   flex: 1;

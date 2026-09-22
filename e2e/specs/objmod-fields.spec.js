@@ -11,6 +11,8 @@
 
 const { test, expect } = require('../fixtures');
 const { repoRequire } = require('../harness/tsLoader');
+const fs = require('fs');
+const path = require('path');
 
 const { parseObjMod } = repoRequire('casc-ts/formats');
 
@@ -41,7 +43,10 @@ test('creating a custom object requires a base, accepts an optional rawcode, and
     expect(host.isDirty).toBe(false);
 
     await page.locator('#add-object-id').fill('Z901');
-    await page.locator('#add-object-dialog').evaluate((form) => form.requestSubmit());
+    await Promise.all([
+        page.locator('#add-object-dialog').evaluate((form) => form.requestSubmit()),
+        page.locator('#add-object-dialog').evaluate((form) => form.requestSubmit()),
+    ]);
 
     await expect.poll(() => host.isDirty).toBe(true);
     expect(host.editLabels).toEqual(['Create Z901']);
@@ -85,6 +90,22 @@ test('creating an object without a rawcode generates, reverts, and saves a colli
     await host.save();
     const created = parseObjMod(host.readFile(), '.w3u').customObjs.find((obj) => obj.newId === generatedId);
     expect(created, 'generated id should be persisted as a custom object').toBeTruthy();
+});
+
+test('Save As preserves an object created while editing the skin sibling', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod({
+        fileName: 'war3mapSkin.w3u',
+        setupFixture: (dir) => fs.copyFileSync(path.join(dir, 'war3map.w3u'), path.join(dir, 'war3mapSkin.w3u')),
+    });
+    await page.locator('#add-object').click();
+    await page.locator('#add-object-base').selectOption({ index: 1 });
+    await page.locator('#add-object-id').fill('Z902');
+    await page.locator('#add-object-dialog').evaluate((form) => form.requestSubmit());
+    await expect.poll(() => host.isDirty).toBe(true);
+
+    await host.saveAs('copiedSkin.w3u');
+    const copied = parseObjMod(host.readFile('copiedSkin.w3u'), '.w3u');
+    expect(copied.customObjs.find((obj) => obj.newId === 'Z902'), 'Save As should include the new object').toBeTruthy();
 });
 
 test('technical mode swaps in the id/type columns and back', async ({ openObjMod }) => {

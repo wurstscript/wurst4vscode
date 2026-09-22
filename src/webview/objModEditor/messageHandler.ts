@@ -247,6 +247,7 @@ export function setupMessageHandler() {
       selectObject(msg.object.key);
       const overlay = document.getElementById('add-object-overlay');
       if (overlay) overlay.hidden = true;
+      window.dispatchEvent(new Event('objmod-add-object-finished'));
     } else if (msg.type === 'objectRemoved' && msg.identity) {
       const index = objects.findIndex(obj => obj.identity === msg.identity);
       if (index < 0) return;
@@ -258,6 +259,7 @@ export function setupMessageHandler() {
     } else if (msg.type === 'addObjectFailed') {
       const error = document.getElementById('add-object-error');
       if (error) error.textContent = msg.reason || 'Could not create object.';
+      window.dispatchEvent(new Event('objmod-add-object-finished'));
     } else if (msg.type === 'dirtyStateChanged') {
       const badge = document.getElementById('editable-badge');
       if (badge) {

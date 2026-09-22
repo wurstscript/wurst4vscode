@@ -2171,11 +2171,10 @@ function applyAddObject(
         const index = entries.indexOf(entry);
         if (index >= 0) entries.splice(index, 1);
     };
-    // New objects are owned by the main map file even when the skin sibling is open. This mirrors
-    // how the merge model already routes edits and prevents a skin-only object from vanishing when
-    // the base file is opened on another machine.
-    const apply = () => { add(doc.mainFile.customObjs); add(doc.displayFile.customObjs); doc.objectCatalog = undefined; };
-    const revert = () => { remove(doc.mainFile.customObjs); remove(doc.displayFile.customObjs); doc.objectCatalog = undefined; };
+    // Keep a new object in the file the user opened. Save As serializes that same file alone, while
+    // normal Save still writes both siblings, so this preserves the creation in both workflows.
+    const apply = () => { add(doc.openedFile.customObjs); add(doc.displayFile.customObjs); doc.objectCatalog = undefined; };
+    const revert = () => { remove(doc.openedFile.customObjs); remove(doc.displayFile.customObjs); doc.objectCatalog = undefined; };
     apply();
     return { entry, key: `Custom:${doc.displayFile.customObjs.indexOf(entry)}`, apply, revert };
 }

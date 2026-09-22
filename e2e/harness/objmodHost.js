@@ -55,6 +55,7 @@ function copyFixtureDir(fixtureDir, prefix) {
  */
 async function createObjModHost(opts) {
     const fixtureDir = copyFixtureDir(opts.fixtureDir || path.join(root, 'e2e'), 'wurst-e2e-objmod-');
+    if (typeof opts.setupFixture === 'function') await opts.setupFixture(fixtureDir);
     const fileName = opts.fileName || 'war3map.w3u';
     const target = path.join(fixtureDir, fileName);
 
@@ -93,6 +94,7 @@ async function createObjModHost(opts) {
         globalState,
         internals: mod.__e2e,
         readFile: (name) => fs.readFileSync(path.join(fixtureDir, name || fileName)),
+        saveAs: (name) => provider.saveCustomDocumentAs(mounted.doc, fileUri(path.join(fixtureDir, name))),
         dispose: () => {
             mounted.panel.dispose();
             mounted.doc.dispose();

@@ -66,6 +66,13 @@ const addObjectBase = document.getElementById('add-object-base') as HTMLSelectEl
 const addObjectId = document.getElementById('add-object-id') as HTMLInputElement | null;
 const addObjectError = document.getElementById('add-object-error') as HTMLElement;
 const addObjectCancel = document.getElementById('add-object-cancel') as HTMLButtonElement | null;
+const addObjectConfirm = addObjectDialog?.querySelector('.add-object-confirm') as HTMLButtonElement | null;
+let addObjectSubmissionPending = false;
+function setAddObjectSubmissionPending(pending: boolean) {
+  addObjectSubmissionPending = pending;
+  if (addObjectConfirm) addObjectConfirm.disabled = pending;
+  if (addObjectCancel) addObjectCancel.disabled = pending;
+}
 if (addObjectBase) {
   for (const base of initial.baseObjects || []) {
     const option = document.createElement('option');
@@ -75,6 +82,7 @@ if (addObjectBase) {
   }
 }
 function closeAddObjectDialog() {
+  if (addObjectSubmissionPending) return;
   if (!addObjectOverlay) return;
   addObjectOverlay.hidden = true;
   addObjectError.textContent = '';
@@ -92,6 +100,7 @@ if (addObjectOverlay) addObjectOverlay.addEventListener('mousedown', event => {
 });
 if (addObjectDialog) addObjectDialog.addEventListener('submit', event => {
   event.preventDefault();
+  if (addObjectSubmissionPending) return;
   const baseId = addObjectBase.value;
   const rawcode = addObjectId.value.trim();
   if (!baseId) { addObjectError.textContent = 'Select a base object.'; addObjectBase.focus(); return; }
@@ -101,8 +110,10 @@ if (addObjectDialog) addObjectDialog.addEventListener('submit', event => {
     return;
   }
   addObjectError.textContent = '';
+  setAddObjectSubmissionPending(true);
   vscodeApi.postMessage({ type: 'addObject', baseId, rawcode });
 });
+window.addEventListener('objmod-add-object-finished', () => setAddObjectSubmissionPending(false));
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && addObjectOverlay && !addObjectOverlay.hidden) closeAddObjectDialog();
 });

@@ -271,6 +271,8 @@ export function setupMessageHandler() {
       failedDetails.delete(removed.key);
       if (ui.selectedKey === removed.key) ui.selectedKey = objects[0]?.key || '';
       renderTree();
+    } else if (msg.type === 'deleteObjectFinished') {
+      window.dispatchEvent(new Event('objmod-delete-object-finished'));
     } else if (msg.type === 'addObjectFailed') {
       const error = document.getElementById('add-object-error');
       if (error) error.textContent = msg.reason || 'Could not create object.';

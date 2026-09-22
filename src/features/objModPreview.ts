@@ -2700,13 +2700,21 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         }
         if ((msg.type === 'addObject' && msg.baseId) || (msg.type === 'duplicateObject' && msg.key)) {
             const source = msg.type === 'duplicateObject' ? findEntryByKey(doc.displayFile, msg.key!) : undefined;
-            const baseId = (source?.baseId ?? msg.baseId ?? '').trim();
+            const sourceParts = source && msg.key ? objectKeyParts(msg.key) : undefined;
+            const sourceIdentity = source ? entryKey(source) : '';
             const requestedRawcode = msg.type === 'addObject' ? (msg.rawcode?.trim() ?? '') : '';
             const summaryData = await loadObjSummaryData(doc.displayFile.ext);
+            const sourceEntries = sourceParts?.group === 'Original' ? doc.displayFile.origObjs : doc.displayFile.customObjs;
+            const currentSource = sourceIdentity ? sourceEntries.find(candidate => entryKey(candidate) === sourceIdentity) : undefined;
+            if (source && !currentSource) {
+                void webview.postMessage({ type: 'addObjectFailed', reason: 'The copied object can no longer be duplicated.' });
+                return;
+            }
+            const baseId = (currentSource?.baseId ?? msg.baseId ?? '').trim();
             const baseOptions = buildBaseObjectOptions(summaryData, doc.displayFile.ext);
             const baseIds = new Set(baseOptions.map((option) => option.value.toLowerCase()));
-            if (!baseIds.has(baseId.toLowerCase())) {
-                void webview.postMessage({ type: 'addObjectFailed', reason: source ? 'The copied object can no longer be duplicated.' : 'Choose a valid base object.' });
+            if (!source && !baseIds.has(baseId.toLowerCase())) {
+                void webview.postMessage({ type: 'addObjectFailed', reason: 'Choose a valid base object.' });
                 return;
             }
             if (requestedRawcode && !isValidRawcode(requestedRawcode)) {
@@ -2714,7 +2722,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
                 return;
             }
             const mapRawcodes = await collectMapRawcodes(doc);
-            const edit = applyAddObject(doc, baseId, requestedRawcode, [...baseIds, ...mapRawcodes], source?.mods);
+            const edit = applyAddObject(doc, baseId, requestedRawcode, [...baseIds, ...mapRawcodes], currentSource?.mods);
             if (!edit) {
                 void webview.postMessage({ type: 'addObjectFailed', reason: requestedRawcode
                     ? 'That rawcode is already in use.'
@@ -2746,19 +2754,20 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             return;
         }
         if (msg.type === 'deleteObject' && msg.key) {
+            const finishDelete = () => { void webview.postMessage({ type: 'deleteObjectFinished' }); };
             const parts = objectKeyParts(msg.key);
             const entry = parts?.group === 'Custom' ? findEntryByKey(doc.displayFile, msg.key) : undefined;
-            if (!entry) return;
+            if (!entry) { finishDelete(); return; }
             const identity = entryKey(entry);
             const summaryData = await loadObjSummaryData(doc.displayFile.ext);
             const currentEntry = doc.displayFile.customObjs.find(candidate => entryKey(candidate) === identity);
-            if (!currentEntry) return;
+            if (!currentEntry) { finishDelete(); return; }
             const files = Array.from(new Set([doc.mainFile, doc.skinFile, doc.displayFile].filter((file): file is ObjModFile => !!file)));
             const removals = files.map((file) => {
                 const index = file.customObjs.findIndex((candidate) => entryKey(candidate) === identity);
                 return index < 0 ? undefined : { file, entry: file.customObjs[index], index };
             }).filter((removal): removal is { file: ObjModFile; entry: ObjModEntry; index: number } => !!removal);
-            if (!removals.some((removal) => removal.file === doc.displayFile)) return;
+            if (!removals.some((removal) => removal.file === doc.displayFile)) { finishDelete(); return; }
             const remove = () => {
                 for (const removal of removals) {
                     const index = removal.file.customObjs.indexOf(removal.entry);

@@ -216,6 +216,7 @@ export interface ValueOption {
     value: string;
     label: string;
     detail?: string;
+    race?: string;
     iconPath?: string;
     objectKey?: string;
     source?: 'import';
@@ -531,8 +532,9 @@ function buildBaseObjectOptions(summaryData: ObjSummaryData | undefined, ext: st
             const raceLabel = RACE_OPTIONS.find((option) => option.value === race)?.label ?? race;
             return {
                 value: id,
-                label: [resolveBasePickerName(id, summaryData) ?? id, raceLabel].filter(Boolean).join(' - '),
+                label: resolveBasePickerName(id, summaryData) ?? id,
                 detail: id,
+                race: raceLabel,
             };
         });
 }
@@ -1790,9 +1792,10 @@ function buildAddObjectControlsHtml(hasBaseObjects: boolean): string {
     <h2 id="add-object-title">Create custom object</h2>
     <label for="add-object-base-search">Find base object <span aria-hidden="true">*</span></label>
     <input id="add-object-base-search" type="search" autocomplete="off" spellcheck="false" placeholder="Search name or rawcode" aria-describedby="add-object-base-status" ${disabled}>
-    <select id="add-object-base" required size="7" ${disabled}>
+    <select id="add-object-base" class="add-object-base-native" required size="7" ${disabled} aria-hidden="true" tabindex="-1">
       <option value="">Select a base object…</option>
     </select>
+    <div id="add-object-base-list" class="add-object-base-list" role="listbox" aria-label="Base objects" tabindex="0"></div>
     <p id="add-object-base-status" class="add-object-base-status" role="status"></p>
     <label for="add-object-id">New rawcode <span class="add-object-optional">optional</span></label>
     <input id="add-object-id" type="text" maxlength="4" autocomplete="off" spellcheck="false" placeholder="Auto-generated" aria-describedby="add-object-help">

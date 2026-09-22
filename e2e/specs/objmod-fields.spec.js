@@ -126,6 +126,13 @@ test('base picker prioritizes human-readable prefix matches and shows the base r
     await page.locator('#add-object-base-search').fill('guard');
     await expect(page.locator('#add-object-base option').nth(1)).toHaveAttribute('value', 'hgtw');
     await expect(page.locator('#add-object-base option[value="hgtw"]')).toHaveText(/Guard Tower.*Human.*hgtw/);
+    const guardTower = page.locator('#add-object-base-list [data-base-id="hgtw"]');
+    await expect(guardTower.locator('.add-object-base-name')).toHaveText('Guard Tower');
+    await expect(guardTower.locator('.add-object-base-race')).toHaveText('Human');
+    await expect(guardTower.locator('.add-object-base-rawcode')).toHaveText('hgtw');
+    await guardTower.click();
+    await expect(page.locator('#add-object-base')).toHaveValue('hgtw');
+    await expect(guardTower).toHaveAttribute('aria-selected', 'true');
 });
 
 test('generated rawcodes reserve custom rawcodes from every object-data sibling in the map', async ({ openObjMod }) => {

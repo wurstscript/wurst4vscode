@@ -37,6 +37,7 @@ export interface AssetOption {
   value: string;
   label: string;
   detail?: string;
+  race?: string;
   source?: string;
   iconPath?: string;
 }

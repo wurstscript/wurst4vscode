@@ -63,6 +63,7 @@ const addObjectButton = document.getElementById('add-object') as HTMLButtonEleme
 const addObjectOverlay = document.getElementById('add-object-overlay') as HTMLElement | null;
 const addObjectDialog = document.getElementById('add-object-dialog') as HTMLFormElement | null;
 const addObjectBase = document.getElementById('add-object-base') as HTMLSelectElement | null;
+const addObjectBaseList = document.getElementById('add-object-base-list') as HTMLElement | null;
 const addObjectBaseSearch = document.getElementById('add-object-base-search') as HTMLInputElement | null;
 const addObjectId = document.getElementById('add-object-id') as HTMLInputElement | null;
 const addObjectGenerated = document.getElementById('add-object-generated') as HTMLElement | null;
@@ -90,6 +91,7 @@ function renderBaseOptions(query = '') {
     .sort((left, right) => baseSearchRank(left, needle) - baseSearchRank(right, needle)
       || String(left.label || left.value).localeCompare(String(right.label || right.value)));
   addObjectBase.replaceChildren();
+  addObjectBaseList?.replaceChildren();
   const placeholder = document.createElement('option');
   placeholder.value = '';
   placeholder.textContent = matches.length ? 'Select a base object…' : 'No matching base objects';
@@ -97,16 +99,53 @@ function renderBaseOptions(query = '') {
   for (const base of matches) {
     const option = document.createElement('option');
     option.value = base.value;
-    option.textContent = base.label + (base.detail ? ' (' + base.detail + ')' : '');
+    option.textContent = base.label + (base.race ? ' - ' + base.race : '') + (base.detail ? ' (' + base.detail + ')' : '');
     addObjectBase.appendChild(option);
+
+    const row = document.createElement('div');
+    row.className = 'add-object-base-row';
+    row.setAttribute('role', 'option');
+    row.dataset.baseId = base.value;
+    row.tabIndex = -1;
+    const name = document.createElement('span');
+    name.className = 'add-object-base-name';
+    name.textContent = base.label || base.value;
+    row.appendChild(name);
+    if (base.race) {
+      const race = document.createElement('span');
+      race.className = 'add-object-base-race';
+      race.textContent = base.race;
+      row.appendChild(race);
+    }
+    const rawcode = document.createElement('code');
+    rawcode.className = 'add-object-base-rawcode';
+    rawcode.textContent = base.detail || base.value;
+    row.appendChild(rawcode);
+    addObjectBaseList?.appendChild(row);
   }
   if (matches.some(base => base.value === selected)) addObjectBase.value = selected;
+  updateBaseObjectSelection();
   if (addObjectBaseStatus) addObjectBaseStatus.textContent = needle
     ? `${matches.length} matching base object${matches.length === 1 ? '' : 's'}`
     : `${matches.length} base objects`;
   // Filtering can remove the selected base. Clear the rawcode preview immediately rather than
   // leaving a candidate that belongs to a base object which is no longer selected.
   if (!matches.some(base => base.value === selected)) updateGeneratedRawcodeHint();
+}
+function updateBaseObjectSelection() {
+  const selected = addObjectBase?.value || '';
+  addObjectBaseList?.querySelectorAll<HTMLElement>('[data-base-id]').forEach(row => {
+    const active = row.dataset.baseId === selected;
+    row.classList.toggle('selected', active);
+    row.setAttribute('aria-selected', String(active));
+  });
+}
+function selectBaseObject(baseId: string, focus = false) {
+  if (!addObjectBase || !Array.from(addObjectBase.options).some(option => option.value === baseId)) return;
+  addObjectBase.value = baseId;
+  updateBaseObjectSelection();
+  updateGeneratedRawcodeHint();
+  if (focus) addObjectBaseList?.focus();
 }
 function baseSearchRank(base: { value: string; label?: string; detail?: string }, needle: string) {
   if (!needle) return 0;
@@ -138,7 +177,26 @@ function updateGeneratedRawcodeHint() {
 }
 renderBaseOptions();
 addObjectBaseSearch?.addEventListener('input', () => renderBaseOptions(addObjectBaseSearch.value));
-addObjectBase?.addEventListener('change', updateGeneratedRawcodeHint);
+addObjectBase?.addEventListener('change', () => { updateBaseObjectSelection(); updateGeneratedRawcodeHint(); });
+addObjectBaseList?.addEventListener('click', event => {
+  const row = (event.target as HTMLElement).closest<HTMLElement>('[data-base-id]');
+  if (row?.dataset.baseId) selectBaseObject(row.dataset.baseId, true);
+});
+addObjectBaseList?.addEventListener('keydown', event => {
+  if (!addObjectBase) return;
+  const rows = Array.from(addObjectBaseList.querySelectorAll<HTMLElement>('[data-base-id]'));
+  if (!rows.length) return;
+  const current = Math.max(0, rows.findIndex(row => row.dataset.baseId === addObjectBase.value));
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    const next = Math.max(0, Math.min(rows.length - 1, current + (event.key === 'ArrowDown' ? 1 : -1)));
+    selectBaseObject(rows[next].dataset.baseId || '', true);
+    rows[next].scrollIntoView({ block: 'nearest' });
+  } else if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    selectBaseObject(rows[current].dataset.baseId || '', true);
+  }
+});
 addObjectId?.addEventListener('input', updateGeneratedRawcodeHint);
 window.addEventListener('objmod-generated-rawcode', (event: Event) => {
   const detail = (event as CustomEvent<{ baseId?: string; rawcode?: string }>).detail;

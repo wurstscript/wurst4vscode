@@ -1065,9 +1065,16 @@ tr.hidden { display: none; }
 }
 .add-object-dialog h2 { margin: 0 0 calc(var(--add-dialog-gap) / 2); font-size: 15px; }
 .add-object-dialog label { font-weight: 600; }
-.add-object-dialog select,
 .add-object-dialog input { min-width: 0; min-height: var(--add-dialog-control-h); padding: var(--add-dialog-input-pad); border: 1px solid var(--input-border); border-radius: 2px; background: var(--input-bg); color: var(--input-fg); font: inherit; }
-.add-object-dialog select { height: calc(var(--add-dialog-control-h) * 7); }
+.add-object-base-native { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; pointer-events: none; }
+.add-object-base-list { max-height: calc(var(--add-dialog-control-h) * 7); overflow-y: auto; border: 1px solid var(--input-border); border-radius: 2px; background: var(--input-bg); }
+.add-object-base-list:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: 1px; }
+.add-object-base-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 7px; min-height: var(--add-dialog-control-h); padding: 3px 7px; cursor: pointer; border-left: 2px solid transparent; }
+.add-object-base-row:hover { background: var(--hover); }
+.add-object-base-row.selected { border-left-color: var(--accent); background: var(--vscode-list-activeSelectionBackground, var(--hover)); color: var(--vscode-list-activeSelectionForeground, var(--fg)); }
+.add-object-base-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.add-object-base-race { padding: 1px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 11px; line-height: 1.25; }
+.add-object-base-rawcode { padding: 1px 4px; border-radius: 2px; background: color-mix(in srgb, var(--fg) 9%, transparent); color: var(--vscode-textPreformat-foreground, var(--fg)); font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; }
 .add-object-optional { color: var(--muted); font-weight: normal; }
 .add-object-dialog p { margin: 0; color: var(--muted); font-size: 11px; }
 .add-object-base-status { min-height: 1.2em; margin-top: calc(var(--add-dialog-gap) * -1 + 2px) !important; }

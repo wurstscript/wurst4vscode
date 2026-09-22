@@ -13,7 +13,7 @@ export function requestDetails(obj) {
   if (!obj || detailCache.has(obj.key) || pendingDetails.has(obj.key)) return;
   failedDetails.delete(obj.key);
   pendingDetails.add(obj.key);
-  vscodeApi.postMessage({ type: 'loadObjectDetails', key: obj.key });
+  vscodeApi.postMessage({ type: 'loadObjectDetails', key: obj.key, identity: obj.identity });
 }
 
 export function retryDetails(key) {

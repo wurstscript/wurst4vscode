@@ -1,5 +1,5 @@
 import { effect } from './signals';
-import { objects, ui, vscodeApi, details, search } from './objModEditor/state';
+import { initial, objects, ui, vscodeApi, details, search } from './objModEditor/state';
 import { commitActiveEditor } from './objModEditor/fieldDisplay';
 import { matches, revealRow, setActiveRow, setupTree } from './objModEditor/objectTree';
 import { setupDetails } from './objModEditor/detailsPanel';
@@ -54,6 +54,260 @@ if (searchClear) {
     search.focus();
   });
 }
+
+// Creating an object is deliberately a short, explicit two-step choice: the base is required so the
+// resulting entry has meaningful inherited fields; the new rawcode is optional because the host can
+// safely choose an unused one. Populate choices through DOM APIs, not HTML interpolation, because
+// game-data names are external text.
+const addObjectButton = document.getElementById('add-object') as HTMLButtonElement | null;
+const addObjectOverlay = document.getElementById('add-object-overlay') as HTMLElement | null;
+const addObjectDialog = document.getElementById('add-object-dialog') as HTMLFormElement | null;
+const addObjectBase = document.getElementById('add-object-base') as HTMLSelectElement | null;
+const addObjectBaseList = document.getElementById('add-object-base-list') as HTMLElement | null;
+const addObjectBaseSearch = document.getElementById('add-object-base-search') as HTMLInputElement | null;
+const addObjectId = document.getElementById('add-object-id') as HTMLInputElement | null;
+const addObjectGenerated = document.getElementById('add-object-generated') as HTMLElement | null;
+const addObjectBaseStatus = document.getElementById('add-object-base-status') as HTMLElement | null;
+const addObjectError = document.getElementById('add-object-error') as HTMLElement;
+const addObjectCancel = document.getElementById('add-object-cancel') as HTMLButtonElement | null;
+const addObjectConfirm = addObjectDialog?.querySelector('.add-object-confirm') as HTMLButtonElement | null;
+const copyObjectButton = document.getElementById('copy-object') as HTMLButtonElement | null;
+const pasteObjectButton = document.getElementById('paste-object') as HTMLButtonElement | null;
+const deleteObjectButton = document.getElementById('delete-object') as HTMLButtonElement | null;
+const baseObjects = initial.baseObjects || [];
+let copiedObjectIdentity = '';
+let deletingObjectIdentity = '';
+let addObjectSubmissionPending = false;
+function setAddObjectSubmissionPending(pending: boolean) {
+  addObjectSubmissionPending = pending;
+  if (addObjectConfirm) addObjectConfirm.disabled = pending;
+  if (addObjectCancel) addObjectCancel.disabled = pending;
+}
+function renderBaseOptions(query = '') {
+  if (!addObjectBase) return;
+  const selected = addObjectBase.value;
+  const needle = query.trim().toLowerCase();
+  const matches = baseObjects.filter(base => !needle
+    || String(base.label || '').toLowerCase().includes(needle)
+    || String(base.detail || base.value).toLowerCase().includes(needle))
+    .sort((left, right) => baseSearchRank(left, needle) - baseSearchRank(right, needle)
+      || String(left.label || left.value).localeCompare(String(right.label || right.value)));
+  addObjectBase.replaceChildren();
+  addObjectBaseList?.replaceChildren();
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = matches.length ? 'Select a base object…' : 'No matching base objects';
+  addObjectBase.appendChild(placeholder);
+  for (const base of matches) {
+    const option = document.createElement('option');
+    option.value = base.value;
+    option.textContent = base.label + (base.race ? ' - ' + base.race : '') + (base.detail ? ' (' + base.detail + ')' : '');
+    addObjectBase.appendChild(option);
+
+    const row = document.createElement('div');
+    row.className = 'add-object-base-row';
+    row.setAttribute('role', 'option');
+    row.dataset.baseId = base.value;
+    row.tabIndex = -1;
+    const name = document.createElement('span');
+    name.className = 'add-object-base-name';
+    name.textContent = base.label || base.value;
+    row.appendChild(name);
+    if (base.race) {
+      const race = document.createElement('span');
+      race.className = 'add-object-base-race';
+      race.textContent = base.race;
+      row.appendChild(race);
+    }
+    const rawcode = document.createElement('code');
+    rawcode.className = 'add-object-base-rawcode';
+    rawcode.textContent = base.detail || base.value;
+    row.appendChild(rawcode);
+    addObjectBaseList?.appendChild(row);
+  }
+  if (matches.some(base => base.value === selected)) addObjectBase.value = selected;
+  updateBaseObjectSelection();
+  if (addObjectBaseStatus) addObjectBaseStatus.textContent = needle
+    ? `${matches.length} matching base object${matches.length === 1 ? '' : 's'}`
+    : `${matches.length} base objects`;
+  // Filtering can remove the selected base. Clear the rawcode preview immediately rather than
+  // leaving a candidate that belongs to a base object which is no longer selected.
+  if (!matches.some(base => base.value === selected)) updateGeneratedRawcodeHint();
+}
+function updateBaseObjectSelection() {
+  const selected = addObjectBase?.value || '';
+  addObjectBaseList?.querySelectorAll<HTMLElement>('[data-base-id]').forEach(row => {
+    const active = row.dataset.baseId === selected;
+    row.classList.toggle('selected', active);
+    row.setAttribute('aria-selected', String(active));
+  });
+}
+function selectBaseObject(baseId: string, focus = false) {
+  if (!addObjectBase || !Array.from(addObjectBase.options).some(option => option.value === baseId)) return;
+  addObjectBase.value = baseId;
+  updateBaseObjectSelection();
+  updateGeneratedRawcodeHint();
+  if (focus) addObjectBaseList?.focus();
+}
+function baseSearchRank(base: { value: string; label?: string; detail?: string }, needle: string) {
+  if (!needle) return 0;
+  const label = String(base.label || '').toLowerCase();
+  const rawcode = String(base.detail || base.value).toLowerCase();
+  if (label === needle || rawcode === needle) return 0;
+  if (label.startsWith(needle)) return 1;
+  if (rawcode.startsWith(needle)) return 2;
+  if (label.includes(needle)) return 3;
+  return 4;
+}
+function requestGeneratedRawcode() {
+  const baseId = addObjectBase?.value;
+  if (!baseId || addObjectId?.value.trim()) return;
+  if (addObjectGenerated) addObjectGenerated.textContent = 'checking…';
+  vscodeApi.postMessage({ type: 'requestGeneratedRawcode', baseId });
+}
+function updateGeneratedRawcodeHint() {
+  if (!addObjectGenerated) return;
+  if (addObjectId?.value.trim()) {
+    addObjectGenerated.textContent = 'your chosen rawcode';
+    return;
+  }
+  if (!addObjectBase?.value) {
+    addObjectGenerated.textContent = 'an available rawcode';
+    return;
+  }
+  requestGeneratedRawcode();
+}
+renderBaseOptions();
+addObjectBaseSearch?.addEventListener('input', () => renderBaseOptions(addObjectBaseSearch.value));
+addObjectBase?.addEventListener('change', () => { updateBaseObjectSelection(); updateGeneratedRawcodeHint(); });
+addObjectBaseList?.addEventListener('click', event => {
+  const row = (event.target as HTMLElement).closest<HTMLElement>('[data-base-id]');
+  if (row?.dataset.baseId) selectBaseObject(row.dataset.baseId, true);
+});
+addObjectBaseList?.addEventListener('keydown', event => {
+  if (!addObjectBase) return;
+  const rows = Array.from(addObjectBaseList.querySelectorAll<HTMLElement>('[data-base-id]'));
+  if (!rows.length) return;
+  const current = rows.findIndex(row => row.dataset.baseId === addObjectBase.value);
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    const next = current < 0
+      ? (event.key === 'ArrowDown' ? 0 : rows.length - 1)
+      : Math.max(0, Math.min(rows.length - 1, current + (event.key === 'ArrowDown' ? 1 : -1)));
+    selectBaseObject(rows[next].dataset.baseId || '', true);
+    rows[next].scrollIntoView({ block: 'nearest' });
+  } else if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    selectBaseObject(rows[Math.max(0, current)].dataset.baseId || '', true);
+  }
+});
+addObjectId?.addEventListener('input', updateGeneratedRawcodeHint);
+window.addEventListener('objmod-generated-rawcode', (event: Event) => {
+  const detail = (event as CustomEvent<{ baseId?: string; rawcode?: string }>).detail;
+  if (!detail || detail.baseId !== addObjectBase?.value || addObjectId?.value.trim()) return;
+  if (addObjectGenerated) addObjectGenerated.textContent = detail.rawcode || 'no unused rawcode is available';
+});
+function copySelectedObject() {
+  const selected = objects.find(object => object.key === ui.selectedKey);
+  if (!selected) return;
+  copiedObjectIdentity = selected.identity;
+  updatePasteObjectAvailability();
+}
+function pasteCopiedObject() {
+  const copied = objects.find(object => object.identity === copiedObjectIdentity);
+  if (!copied) {
+    copiedObjectIdentity = '';
+    updatePasteObjectAvailability();
+    return;
+  }
+  vscodeApi.postMessage({ type: 'duplicateObject', key: copied.key });
+}
+function updatePasteObjectAvailability() {
+  const copiedStillExists = !!copiedObjectIdentity && objects.some(object => object.identity === copiedObjectIdentity);
+  if (!copiedStillExists) copiedObjectIdentity = '';
+  if (pasteObjectButton) pasteObjectButton.disabled = !copiedStillExists;
+}
+function deleteSelectedObject() {
+  const selected = objects.find(object => object.key === ui.selectedKey);
+  if (!selected || selected.group !== 'Custom' || deletingObjectIdentity) return;
+  deletingObjectIdentity = selected.identity;
+  updateDeleteObjectAvailability();
+  vscodeApi.postMessage({ type: 'deleteObject', key: selected.key });
+}
+function updateDeleteObjectAvailability() {
+  const selected = objects.find(object => object.key === ui.selectedKey);
+  if (deleteObjectButton) deleteObjectButton.disabled = !!deletingObjectIdentity || !selected || selected.group !== 'Custom';
+}
+effect(() => {
+  updateDeleteObjectAvailability();
+}, 'objModEditor.deleteObjectAvailability');
+function closeAddObjectDialog() {
+  if (addObjectSubmissionPending) return;
+  if (!addObjectOverlay) return;
+  addObjectOverlay.hidden = true;
+  addObjectError.textContent = '';
+  addObjectButton?.focus();
+}
+if (addObjectButton) addObjectButton.addEventListener('click', () => {
+  if (!addObjectOverlay) return;
+  addObjectOverlay.hidden = false;
+  addObjectError.textContent = '';
+  if (addObjectBaseSearch) addObjectBaseSearch.value = '';
+  renderBaseOptions();
+  if (addObjectId) addObjectId.value = '';
+  updateGeneratedRawcodeHint();
+  addObjectBaseSearch?.focus();
+});
+copyObjectButton?.addEventListener('click', copySelectedObject);
+pasteObjectButton?.addEventListener('click', pasteCopiedObject);
+deleteObjectButton?.addEventListener('click', deleteSelectedObject);
+if (addObjectCancel) addObjectCancel.addEventListener('click', closeAddObjectDialog);
+if (addObjectOverlay) addObjectOverlay.addEventListener('mousedown', event => {
+  if (event.target === addObjectOverlay) closeAddObjectDialog();
+});
+if (addObjectDialog) addObjectDialog.addEventListener('submit', event => {
+  event.preventDefault();
+  if (addObjectSubmissionPending) return;
+  const baseId = addObjectBase.value;
+  const rawcode = addObjectId.value.trim();
+  if (!baseId) { addObjectError.textContent = 'Select a base object.'; addObjectBaseList?.focus(); return; }
+  if (rawcode && !/^[\x20-\x7e]{4}$/.test(rawcode)) {
+    addObjectError.textContent = 'A rawcode must be exactly four printable characters.';
+    addObjectId.focus();
+    return;
+  }
+  addObjectError.textContent = '';
+  setAddObjectSubmissionPending(true);
+  vscodeApi.postMessage({ type: 'addObject', baseId, rawcode });
+});
+window.addEventListener('objmod-add-object-finished', () => setAddObjectSubmissionPending(false));
+window.addEventListener('objmod-objects-replaced', updatePasteObjectAvailability);
+window.addEventListener('objmod-delete-object-finished', () => {
+  deletingObjectIdentity = '';
+  updateDeleteObjectAvailability();
+});
+document.addEventListener('keydown', event => {
+  if (addObjectOverlay && !addObjectOverlay.hidden) {
+    if (event.key === 'Escape') closeAddObjectDialog();
+    return;
+  }
+  const target = event.target as HTMLElement | null;
+  const editingText = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable;
+  if (editingText) return;
+  if (event.key === 'Delete') {
+    event.preventDefault();
+    deleteSelectedObject();
+    return;
+  }
+  if (!event.ctrlKey && !event.metaKey) return;
+  if (event.key.toLowerCase() === 'c') {
+    event.preventDefault();
+    copySelectedObject();
+  } else if (event.key.toLowerCase() === 'v' && copiedObjectIdentity) {
+    event.preventDefault();
+    pasteCopiedObject();
+  }
+});
 
 // Side-by-side survives all the way down to a very narrow pane now (the browse list is capped at 46%
 // of the editor by CSS and the field table's compact 2-column mode no longer demands 620px), so this

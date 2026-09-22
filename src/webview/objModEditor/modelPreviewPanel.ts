@@ -31,7 +31,12 @@ export function mpvEnsureInit() {
       onModelLoaded(info) { mpvStatus(''); mpvFillAnims((info && info.sequences) || []); },
       onFrameUpdate() {},
       onDebug() {},
-      onError(message) { mpvStatus('Preview error:\\n' + message); },
+      onError(message) {
+        mpvStatus('Preview error:\\n' + message);
+        // loadModel reports parse and renderer failures through this callback instead of throwing.
+        // Complete a fallback thumbnail job here so one bad model cannot block the queue.
+        finishModelThumb(false, 'load-error: ' + message);
+      },
     },
   });
   mpvInited = true;
@@ -59,9 +64,9 @@ export function mpvFillAnims(seqs) {
 export function showModelPreview(path) {
   if (!path) return;
   // Original code only called this when a model-thumb job was in flight; finishModelThumb() is
-  // itself a no-op when there's no active job, so the equivalent guard is folded into the call —
+  // itself a no-op when there's no active job, so the equivalent guard is folded into the call -
   // modelThumbJob lives in modelThumbnails.ts and isn't exposed outside that module.
-  finishModelThumb(false);
+  finishModelThumb(false, 'full-preview-opened');
   const box = document.getElementById('mpv-box');
   const name = document.getElementById('mpv-name');
   if (box) box.hidden = false;

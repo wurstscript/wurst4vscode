@@ -190,11 +190,13 @@ export function setupMessageHandler() {
         scheduleModelThumbQueues(0);
       }
     } else if (msg.type === 'objectDetailsLoaded') {
+      if (!objects.some(obj => obj.key === msg.key && obj.identity === msg.identity)) return;
       pendingDetails.delete(msg.key);
       failedDetails.delete(msg.key);
       detailCache.set(msg.key, msg.mods || []);
       if (msg.key === ui.selectedKey) renderDetails();
     } else if (msg.type === 'objectDetailsFailed') {
+      if (!objects.some(obj => obj.key === msg.key && obj.identity === msg.identity)) return;
       pendingDetails.delete(msg.key);
       failedDetails.set(msg.key, msg.reason || '');
       if (msg.key === ui.selectedKey) renderDetails();
@@ -241,6 +243,42 @@ export function setupMessageHandler() {
       if (oldBranch !== newBranch) renderTree();
       else updateObjectRow(objects[index]);
       updateDetailsHeader(objects[index]);
+    } else if (msg.type === 'objectAdded' && msg.object && msg.object.key) {
+      objects.push(msg.object);
+      renderTree();
+      selectObject(msg.object.key);
+      const overlay = document.getElementById('add-object-overlay');
+      if (overlay) overlay.hidden = true;
+      window.dispatchEvent(new Event('objmod-add-object-finished'));
+    } else if (msg.type === 'objectsReplaced' && Array.isArray(msg.objects)) {
+      const previousIdentity = objects.find(obj => obj.key === ui.selectedKey)?.identity || '';
+      objects.splice(0, objects.length, ...msg.objects);
+      detailCache.clear();
+      pendingDetails.clear();
+      failedDetails.clear();
+      const preferred = msg.preferredIdentity || previousIdentity;
+      ui.selectedKey = objects.find(obj => obj.identity === preferred)?.key || objects[0]?.key || '';
+      renderTree();
+      window.dispatchEvent(new Event('objmod-objects-replaced'));
+      window.dispatchEvent(new Event('objmod-delete-object-finished'));
+    } else if (msg.type === 'objectRemoved' && msg.identity) {
+      const index = objects.findIndex(obj => obj.identity === msg.identity);
+      if (index < 0) return;
+      const removed = objects[index];
+      objects.splice(index, 1);
+      detailCache.delete(removed.key);
+      pendingDetails.delete(removed.key);
+      failedDetails.delete(removed.key);
+      if (ui.selectedKey === removed.key) ui.selectedKey = objects[0]?.key || '';
+      renderTree();
+    } else if (msg.type === 'deleteObjectFinished') {
+      window.dispatchEvent(new Event('objmod-delete-object-finished'));
+    } else if (msg.type === 'addObjectFailed') {
+      const error = document.getElementById('add-object-error');
+      if (error) error.textContent = msg.reason || 'Could not create object.';
+      window.dispatchEvent(new Event('objmod-add-object-finished'));
+    } else if (msg.type === 'generatedRawcode') {
+      window.dispatchEvent(new CustomEvent('objmod-generated-rawcode', { detail: msg }));
     } else if (msg.type === 'dirtyStateChanged') {
       const badge = document.getElementById('editable-badge');
       if (badge) {

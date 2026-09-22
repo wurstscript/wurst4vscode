@@ -67,6 +67,21 @@
      and the breathing room above the rule separating it from the presets. */
   --palette-group-gap: 4px;
   --palette-group-pad: 2px;
+  --add-dialog-overlay-pad: 12px;
+  --add-dialog-pad: 12px;
+  --add-dialog-gap: 6px;
+  --add-dialog-action-gap: 6px;
+  --add-dialog-control-h: 24px;
+  --add-dialog-input-pad: 3px 6px;
+  --add-dialog-button-pad: 3px 10px;
+  --add-base-row-gap: 7px;
+  --add-base-row-pad: 3px 7px;
+  --add-base-race-pad: 1px 5px;
+  --add-base-rawcode-pad: 1px 4px;
+  --add-object-button-h: 26px;
+  --add-object-button-pad: 0 7px;
+  --object-action-button-pad: 0 6px;
+  --object-action-gap: 3px;
 }
 body.density-cozy {
   --pad-x: 16px;
@@ -94,6 +109,21 @@ body.density-cozy {
   --cell-h: 24px;
   --palette-group-gap: 6px;
   --palette-group-pad: 4px;
+  --add-dialog-overlay-pad: 20px;
+  --add-dialog-pad: 20px;
+  --add-dialog-gap: 10px;
+  --add-dialog-action-gap: 10px;
+  --add-dialog-control-h: 30px;
+  --add-dialog-input-pad: 4px 8px;
+  --add-dialog-button-pad: 4px 12px;
+  --add-base-row-gap: 9px;
+  --add-base-row-pad: 4px 9px;
+  --add-base-race-pad: 2px 6px;
+  --add-base-rawcode-pad: 2px 5px;
+  --add-object-button-h: 32px;
+  --add-object-button-pad: 0 9px;
+  --object-action-button-pad: 0 8px;
+  --object-action-gap: 5px;
 }
 .content {
   flex: 1;
@@ -990,6 +1020,33 @@ tr.hidden { display: none; }
   flex-direction: column;
   overflow: hidden;
 }
+.object-list-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--object-action-gap);
+  padding: var(--search-pad) var(--search-pad) 0;
+  flex: 0 0 auto;
+}
+.add-object-button,
+.object-action-button {
+  min-height: var(--add-object-button-h);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--meta-fs);
+  cursor: pointer;
+}
+.add-object-button { padding: var(--add-object-button-pad); font-weight: 600; color: var(--fg); }
+.object-action-button { padding: var(--object-action-button-pad); }
+.add-object-button:hover:not(:disabled),
+.object-action-button:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
+.add-object-button:focus-visible,
+.object-action-button:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: 2px; }
+.add-object-button:disabled,
+.object-action-button:disabled { opacity: .45; cursor: not-allowed; }
+.object-delete-button:not(:disabled) { color: var(--vscode-errorForeground, #f14c4c); }
 .search-wrap {
   position: relative;
   display: flex;
@@ -999,6 +1056,45 @@ tr.hidden { display: none; }
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
+.add-object-overlay {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--add-dialog-overlay-pad);
+  background: color-mix(in srgb, #000 45%, transparent);
+}
+.add-object-overlay[hidden] { display: none; }
+.add-object-dialog {
+  width: min(480px, 100%);
+  display: grid;
+  gap: var(--add-dialog-gap);
+  padding: var(--add-dialog-pad);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background, var(--bg));
+  box-shadow: 0 8px 28px #0008;
+}
+.add-object-dialog h2 { margin: 0 0 calc(var(--add-dialog-gap) / 2); font-size: 15px; }
+.add-object-dialog label { font-weight: 600; }
+.add-object-dialog input { min-width: 0; min-height: var(--add-dialog-control-h); padding: var(--add-dialog-input-pad); border: 1px solid var(--input-border); border-radius: 2px; background: var(--input-bg); color: var(--input-fg); font: inherit; }
+.add-object-base-native { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; pointer-events: none; }
+.add-object-base-list { max-height: calc(var(--add-dialog-control-h) * 7); overflow-y: auto; border: 1px solid var(--input-border); border-radius: 2px; background: var(--input-bg); }
+.add-object-base-list:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: 1px; }
+.add-object-base-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: var(--add-base-row-gap); min-height: var(--add-dialog-control-h); padding: var(--add-base-row-pad); cursor: pointer; border-left: 2px solid transparent; }
+.add-object-base-row:hover { background: var(--hover); }
+.add-object-base-row.selected { border-left-color: var(--accent); background: var(--vscode-list-activeSelectionBackground, var(--hover)); color: var(--vscode-list-activeSelectionForeground, var(--fg)); }
+.add-object-base-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.add-object-base-race { padding: var(--add-base-race-pad); border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 11px; line-height: 1.25; }
+.add-object-base-rawcode { padding: var(--add-base-rawcode-pad); border-radius: 2px; background: color-mix(in srgb, var(--fg) 9%, transparent); color: var(--vscode-textPreformat-foreground, var(--fg)); font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; }
+.add-object-optional { color: var(--muted); font-weight: normal; }
+.add-object-dialog p { margin: 0; color: var(--muted); font-size: 11px; }
+.add-object-base-status { min-height: 1.2em; margin-top: calc(var(--add-dialog-gap) * -1 + 2px) !important; }
+.add-object-dialog .add-object-error { min-height: 1.2em; color: var(--vscode-errorForeground, #f14c4c); }
+.add-object-actions { display: flex; justify-content: flex-end; gap: var(--add-dialog-action-gap); margin-top: calc(var(--add-dialog-gap) / 2); }
+.add-object-actions button { min-height: var(--add-dialog-control-h); padding: var(--add-dialog-button-pad); border: 1px solid var(--border); border-radius: 2px; background: var(--button-bg); color: var(--fg); font: inherit; cursor: pointer; }
+.add-object-actions .add-object-confirm { border-color: var(--accent); background: var(--vscode-button-background, var(--accent)); color: var(--vscode-button-foreground, #fff); }
 .search-input {
   flex: 1;
   min-width: 0;

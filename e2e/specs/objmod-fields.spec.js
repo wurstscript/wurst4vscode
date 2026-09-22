@@ -11,8 +11,10 @@
 
 const { test, expect } = require('../fixtures');
 const { repoRequire } = require('../harness/tsLoader');
+const fs = require('fs');
+const path = require('path');
 
-const { parseObjMod } = repoRequire('casc-ts/formats');
+const { parseObjMod, serializeObjMod } = repoRequire('casc-ts/formats');
 
 /** Selects a custom object by rawcode and waits for its field rows to land. */
 async function selectObject(page, rawcode) {
@@ -25,6 +27,337 @@ async function selectObject(page, rawcode) {
 function rowForField(page, fieldId) {
     return page.locator('#details tbody tr', { has: page.locator(`td.id:text-is("${fieldId}")`) });
 }
+
+test('creating a custom object requires a base, accepts an optional rawcode, and round-trips through undo/save', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod();
+    await expect(page.locator('#add-object')).toBeVisible();
+    await page.locator('#add-object').click();
+    await expect(page.locator('#add-object-overlay')).toBeVisible();
+
+    // The selector is populated from stock game data; its placeholder is followed by real base objects.
+    expect(await page.locator('#add-object-base option').count()).toBeGreaterThan(1);
+    await page.locator('#add-object-base').selectOption({ index: 1 });
+    await page.locator('#add-object-id').fill('h004');
+    await page.locator('#add-object-dialog').evaluate((form) => form.requestSubmit());
+    await expect(page.locator('#add-object-error')).toHaveText('That rawcode is already in use.');
+    expect(host.isDirty).toBe(false);
+
+    await page.locator('#add-object-id').fill('Z901');
+    await Promise.all([
+        page.locator('#add-object-dialog').evaluate((form) => form.requestSubmit()),
+        page.locator('#add-object-dialog').evaluate((form) => form.requestSubmit()),
+    ]);
+
+    await expect.poll(() => host.isDirty).toBe(true);
+    expect(host.editLabels).toEqual(['Create Z901']);
+    await expect(page.locator('#tree .object-row', { hasText: 'Z901' })).toHaveCount(1);
+
+    host.undo();
+    await expect.poll(() => host.isDirty).toBe(false);
+    await expect(page.locator('#tree .object-row', { hasText: 'Z901' })).toHaveCount(0);
+
+    host.redo();
+    await expect(page.locator('#tree .object-row', { hasText: 'Z901' })).toHaveCount(1);
+    await host.save();
+    const created = parseObjMod(host.readFile(), '.w3u').customObjs.find((obj) => obj.newId === 'Z901');
+    expect(created, 'created custom object should be serialized').toBeTruthy();
+    expect(created.mods).toEqual([]);
+});
+
+test('creating an object without a rawcode generates, reverts, and saves a collision-free id', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod();
+    const initialObjectCount = await page.locator('#tree .object-row').count();
+    await page.locator('#add-object').click();
+
+    // The visible picker owns validation, so an empty submission stays in the dialog with a useful error.
+    await page.locator('#add-object-dialog').evaluate((form) => form.requestSubmit());
+    expect(host.isDirty).toBe(false);
+    await expect(page.locator('#add-object-overlay')).toBeVisible();
+    await expect(page.locator('#add-object-error')).toHaveText('Select a base object.');
+    await expect(page.locator('#add-object-base-list')).toBeFocused();
+
+    await page.locator('#add-object-base').selectOption({ index: 1 });
+    await expect(page.locator('#add-object-generated')).toHaveText(/^[\x20-\x7e]{4}$/);
+    const previewedId = (await page.locator('#add-object-generated').textContent()).trim();
+    await page.locator('#add-object-dialog').evaluate((form) => form.requestSubmit());
+    await expect.poll(() => host.isDirty).toBe(true);
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialObjectCount + 1);
+    const generatedId = (await page.locator('#tree .object-row.active .object-id').textContent()).trim();
+    expect(generatedId).toBe(previewedId);
+    expect(generatedId).toMatch(/^[A-Za-z0-9]{4}$/);
+
+    host.undo();
+    await expect.poll(() => host.isDirty).toBe(false);
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialObjectCount);
+
+    host.redo();
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialObjectCount + 1);
+    await host.save();
+    const created = parseObjMod(host.readFile(), '.w3u').customObjs.find((obj) => obj.newId === generatedId);
+    expect(created, 'generated id should be persisted as a custom object').toBeTruthy();
+});
+
+test('base picker searches friendly names and rawcodes', async ({ openObjMod }) => {
+    const { page } = await openObjMod();
+    await page.locator('#add-object').click();
+    const base = await page.locator('#add-object-base option').evaluateAll((options) => {
+        const namedOptions = options.map((candidate) => {
+            const display = candidate.textContent?.trim() || '';
+            const rawcodeSuffix = ` (${candidate.value})`;
+            return { candidate, name: display.endsWith(rawcodeSuffix) ? display.slice(0, -rawcodeSuffix.length).trim() : display };
+        });
+        const named = namedOptions.find(({ candidate, name }) => candidate.value && name.toLowerCase() !== candidate.value.toLowerCase());
+        if (!named) throw new Error('Expected a named base object');
+        return {
+            rawcode: named.candidate.value,
+            name: named.name,
+        };
+    });
+
+    await page.locator('#add-object-base-search').fill(base.rawcode);
+    await expect(page.locator(`#add-object-base option[value="${base.rawcode}"]`)).toHaveCount(1);
+    await expect(page.locator('#add-object-base-status')).toContainText('matching base object');
+
+    await page.locator('#add-object-base-search').fill(base.name);
+    await expect(page.locator(`#add-object-base option[value="${base.rawcode}"]`)).toHaveCount(1);
+});
+
+test('base picker prioritizes human-readable prefix matches and shows the base race', async ({ openObjMod }) => {
+    const { page } = await openObjMod();
+    await page.locator('#add-object').click();
+    await page.locator('#add-object-base-search').fill('guard');
+    await expect(page.locator('#add-object-base option').nth(1)).toHaveAttribute('value', 'hgtw');
+    await expect(page.locator('#add-object-base option[value="hgtw"]')).toHaveText(/Guard Tower.*Human.*hgtw/);
+    const guardTower = page.locator('#add-object-base-list [data-base-id="hgtw"]');
+    await expect(guardTower.locator('.add-object-base-name')).toHaveText('Guard Tower');
+    await expect(guardTower.locator('.add-object-base-race')).toHaveText('Human');
+    await expect(guardTower.locator('.add-object-base-rawcode')).toHaveText('hgtw');
+    await guardTower.click();
+    await expect(page.locator('#add-object-base')).toHaveValue('hgtw');
+    await expect(guardTower).toHaveAttribute('aria-selected', 'true');
+});
+
+test('base picker starts keyboard navigation on the first result and follows density spacing', async ({ openObjMod }) => {
+    const { page } = await openObjMod();
+    await page.locator('#add-object').click();
+    const first = page.locator('#add-object-base-list [data-base-id]').first();
+    const firstId = await first.getAttribute('data-base-id');
+    const compactPadding = await first.evaluate((element) => getComputedStyle(element).padding);
+    await page.locator('#add-object-base-list').focus();
+    await page.keyboard.press('ArrowDown');
+    await expect(page.locator('#add-object-base')).toHaveValue(firstId);
+    await page.keyboard.press('Escape');
+    await page.locator('#density-toggle').click();
+    await expect.poll(() => first.evaluate((element) => getComputedStyle(element).padding)).not.toBe(compactPadding);
+});
+
+test('generated rawcodes reserve custom rawcodes from every object-data sibling in the map', async ({ openObjMod }) => {
+    const reserved = Array.from({ length: 36 }, (_, index) => `h0${index.toString(36).toUpperCase().padStart(2, '0')}`);
+    const { page, host } = await openObjMod({
+        setupFixture: (dir) => fs.writeFileSync(path.join(dir, 'war3map.w3a'), serializeObjMod({
+            version: 3,
+            ext: '.w3a',
+            extended: true,
+            origObjs: [],
+            customObjs: reserved.map((newId) => ({ baseId: 'Amls', newId, mods: [] })),
+        })),
+    });
+    await page.locator('#add-object').click();
+    await expect(page.locator('#add-object-base option[value="hpea"]')).toHaveCount(1);
+    await page.locator('#add-object-base').selectOption('hpea');
+    await expect(page.locator('#add-object-generated')).toHaveText(/^[\x20-\x7e]{4}$/);
+    const previewedId = (await page.locator('#add-object-generated').textContent()).trim();
+    expect(reserved).not.toContain(previewedId);
+
+    await page.locator('#add-object-dialog').evaluate((form) => form.requestSubmit());
+    await expect.poll(() => host.isDirty).toBe(true);
+    await expect(page.locator('#tree .object-row', { has: page.locator('.object-id', { hasText: previewedId }) })).toHaveCount(1);
+    await host.save();
+    expect(parseObjMod(host.readFile(), '.w3u').customObjs.some((object) => object.newId === previewedId)).toBe(true);
+});
+
+test('copy and paste duplicate the selected object with independent serialized mods', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod();
+    await selectObject(page, 'h004');
+    await page.fill('#search', '');
+    await expect(page.locator('#tree .object-row', { has: page.locator('.object-id', { hasText: 'h004' }) })).toHaveCount(1);
+    const initialCount = await page.locator('#tree .object-row').count();
+    await page.locator('#copy-object').click();
+    await expect(page.locator('#paste-object')).toBeEnabled();
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');
+    await expect.poll(() => host.isDirty).toBe(true);
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialCount + 1);
+    expect(host.editLabels).toEqual(['Duplicate ' + (await page.locator('#tree .object-row.active .object-id').textContent()).trim()]);
+
+    const createdId = (await page.locator('#tree .object-row.active .object-id').textContent()).trim();
+    host.undo();
+    await expect.poll(() => host.isDirty).toBe(false);
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialCount);
+    host.redo();
+    await expect.poll(() => host.isDirty).toBe(true);
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialCount + 1);
+    await host.save();
+    const parsed = parseObjMod(host.readFile(), '.w3u');
+    const source = parsed.customObjs.find((obj) => obj.newId === 'h004');
+    const duplicate = parsed.customObjs.find((obj) => obj.newId === createdId);
+    expect(duplicate.baseId).toBe(source.baseId);
+    expect(duplicate.mods).toEqual(source.mods);
+    expect(duplicate.mods).not.toBe(source.mods);
+});
+
+test('deleting a custom object is undoable, redoable, and persisted', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod();
+    await selectObject(page, 'h004');
+    await expect(page.locator('#delete-object')).toBeEnabled();
+    const initialCount = await page.locator('#tree .object-row').count();
+
+    await page.locator('#delete-object').click();
+    await expect.poll(() => host.isDirty).toBe(true);
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialCount - 1);
+    expect(host.editLabels).toEqual(['Delete h004']);
+
+    host.undo();
+    await expect.poll(() => host.isDirty).toBe(false);
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialCount);
+    host.redo();
+    await expect.poll(() => host.isDirty).toBe(true);
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialCount - 1);
+    await host.save();
+    expect(parseObjMod(host.readFile(), '.w3u').customObjs.some((obj) => obj.newId === 'h004')).toBe(false);
+});
+
+test('deleting a custom object is single-flight', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod();
+    await selectObject(page, 'h004');
+    const initialCount = await page.locator('#tree .object-row').count();
+    await page.locator('#delete-object').evaluate((button) => { button.click(); button.click(); });
+    await expect.poll(() => host.editLabels).toEqual(['Delete h004']);
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialCount - 1);
+});
+
+test('deleting a custom object reindexes later objects before they can be edited or pasted', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod({
+        setupFixture: (dir) => {
+            const filePath = path.join(dir, 'war3map.w3u');
+            const file = parseObjMod(fs.readFileSync(filePath), '.w3u');
+            file.customObjs.unshift({ baseId: 'hpea', newId: 'Z903', mods: [] });
+            fs.writeFileSync(filePath, serializeObjMod(file));
+        },
+    });
+    const h004Before = await page.locator('#tree .object-row', { has: page.locator('.object-id', { hasText: 'h004' }) }).getAttribute('data-key');
+    expect(h004Before).toMatch(/^Custom:\d+$/);
+    const expectedKey = `Custom:${Number(h004Before.slice('Custom:'.length)) - 1}`;
+    await selectObject(page, 'h004');
+    await page.locator('#copy-object').click();
+    await expect(page.locator('#paste-object')).toBeEnabled();
+    await page.fill('#search', 'Z903');
+    await page.locator('#tree .object-row', { has: page.locator('.object-id', { hasText: 'Z903' }) }).click();
+    await expect(page.locator('#delete-object')).toBeEnabled();
+    await page.locator('#delete-object').click();
+    await page.fill('#search', '');
+    const h004 = page.locator('#tree .object-row', { has: page.locator('.object-id', { hasText: 'h004' }) });
+    await expect(h004).toHaveAttribute('data-key', expectedKey);
+    await h004.click();
+    await expect(page.locator('#tree .object-row.active')).toHaveAttribute('data-key', expectedKey);
+    await expect(page.locator('#paste-object')).toBeEnabled();
+    await page.locator('#paste-object').click();
+    await expect.poll(() => host.editLabels).toHaveLength(2);
+    const duplicateId = (await page.locator('#tree .object-row.active .object-id').textContent()).trim();
+    await host.save();
+    const parsed = parseObjMod(host.readFile(), '.w3u');
+    const source = parsed.customObjs.find((object) => object.newId === 'h004');
+    const duplicate = parsed.customObjs.find((object) => object.newId === duplicateId);
+    expect(duplicate.baseId).toBe(source.baseId);
+    expect(duplicate.mods).toEqual(source.mods);
+});
+
+test('object shortcuts do not act behind the create dialog', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod();
+    await selectObject(page, 'h004');
+    const initialCount = await page.locator('#tree .object-row').count();
+    await page.locator('#add-object').click();
+    await page.locator('#add-object-base-list').focus();
+    await page.keyboard.press('Delete');
+    await expect(page.locator('#add-object-overlay')).toBeVisible();
+    await expect(page.locator('#tree .object-row')).toHaveCount(initialCount);
+    expect(host.isDirty).toBe(false);
+});
+
+test('Save As preserves an object created while editing the skin sibling', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod({
+        fileName: 'war3mapSkin.w3u',
+        setupFixture: (dir) => fs.copyFileSync(path.join(dir, 'war3map.w3u'), path.join(dir, 'war3mapSkin.w3u')),
+    });
+    await page.locator('#add-object').click();
+    await page.locator('#add-object-base').selectOption({ index: 1 });
+    await page.locator('#add-object-id').fill('Z902');
+    await page.locator('#add-object-dialog').evaluate((form) => form.requestSubmit());
+    await expect.poll(() => host.isDirty).toBe(true);
+
+    await host.saveAs('copiedSkin.w3u');
+    const copied = parseObjMod(host.readFile('copiedSkin.w3u'), '.w3u');
+    expect(copied.customObjs.find((obj) => obj.newId === 'Z902'), 'Save As should include the new object').toBeTruthy();
+});
+
+test('ability editors exclude buff-only bases', async ({ openObjMod }) => {
+    const { page } = await openObjMod({
+        fileName: 'war3map.w3a',
+        setupFixture: (dir) => fs.writeFileSync(path.join(dir, 'war3map.w3a'), serializeObjMod({
+            version: 3, ext: '.w3a', extended: true, origObjs: [], customObjs: [],
+        })),
+    });
+    await page.locator('#add-object').click();
+    await expect(page.locator('#add-object-base option[value="Amls"]')).toHaveCount(1);
+    await expect(page.locator('#add-object-base option[value="Bmlc"]')).toHaveCount(0);
+});
+
+test('buff editors exclude ability-only bases', async ({ openObjMod }) => {
+    const { page } = await openObjMod({
+        fileName: 'war3map.w3h',
+        setupFixture: (dir) => fs.writeFileSync(path.join(dir, 'war3map.w3h'), serializeObjMod({
+            version: 3, ext: '.w3h', extended: false, origObjs: [], customObjs: [],
+        })),
+    });
+    await page.locator('#add-object').click();
+    await expect(page.locator('#add-object-base option[value="Bmlc"]')).toHaveCount(1);
+    await expect(page.locator('#add-object-base option[value="Amls"]')).toHaveCount(0);
+});
+
+test('unit editors exclude dependency and ability records from base choices', async ({ openObjMod }) => {
+    const { page } = await openObjMod();
+    await page.locator('#add-object').click();
+    await expect(page.locator('#add-object-base option[value="hpea"]')).toHaveCount(1);
+    await expect(page.locator('#add-object-base option[value="Aimp"]')).toHaveCount(0);
+    await expect(page.locator('#add-object-base option[value="HERO"]')).toHaveCount(0);
+});
+
+test('upgrade editors exclude skin-only records from base choices', async ({ openObjMod }) => {
+    const { page } = await openObjMod({
+        fileName: 'war3map.w3q',
+        setupFixture: (dir) => fs.writeFileSync(path.join(dir, 'war3map.w3q'), serializeObjMod({
+            version: 3, ext: '.w3q', extended: false, origObjs: [], customObjs: [],
+        })),
+    });
+    await page.locator('#add-object').click();
+    await expect(page.locator('#add-object-base option[value="Rhme"]')).toHaveCount(1);
+    await expect(page.locator('#add-object-base option[value="BP001"]')).toHaveCount(0);
+});
+
+test('a stale detail response cannot populate an object after its identity changes', async ({ openObjMod }) => {
+    const { page } = await openObjMod();
+    await expect(page.locator('#details .table-wrap tbody tr')).not.toHaveCount(0);
+    const selectedKey = await page.evaluate(() => window.__wurstModelThumbDebug.state().selectedKey);
+
+    await page.evaluate((key) => window.postMessage({
+        type: 'objectDetailsLoaded',
+        key,
+        identity: 'Custom:stale-object',
+        mods: [{ fieldId: 'zzzz', label: 'Stale field', category: 'data', type: 'int', value: 1 }],
+    }, '*'), selectedKey);
+
+    await expect.poll(() => page.evaluate(() => window.__wurstModelThumbDebug.detailsRows()
+        .some((row) => row.fieldId === 'zzzz'))).toBe(false);
+});
 
 test('technical mode swaps in the id/type columns and back', async ({ openObjMod }) => {
     const { page } = await openObjMod();

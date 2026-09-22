@@ -37,6 +37,7 @@ export interface AssetOption {
   value: string;
   label: string;
   detail?: string;
+  race?: string;
   source?: string;
   iconPath?: string;
 }
@@ -57,6 +58,7 @@ export interface ObjModInitial {
   customColors?: string[];
   fileInfo?: Record<string, unknown>;
   thumbnailWorkerUri?: string;
+  baseObjects?: AssetOption[];
 }
 
 declare global {

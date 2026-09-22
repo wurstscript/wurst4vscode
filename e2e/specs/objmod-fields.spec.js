@@ -210,6 +210,29 @@ test('deleting a custom object is undoable, redoable, and persisted', async ({ o
     expect(parseObjMod(host.readFile(), '.w3u').customObjs.some((obj) => obj.newId === 'h004')).toBe(false);
 });
 
+test('deleting a custom object reindexes later objects before they can be edited', async ({ openObjMod }) => {
+    const { page } = await openObjMod({
+        setupFixture: (dir) => {
+            const filePath = path.join(dir, 'war3map.w3u');
+            const file = parseObjMod(fs.readFileSync(filePath), '.w3u');
+            file.customObjs.unshift({ baseId: 'hpea', newId: 'Z903', mods: [] });
+            fs.writeFileSync(filePath, serializeObjMod(file));
+        },
+    });
+    const h004Before = await page.locator('#tree .object-row', { has: page.locator('.object-id', { hasText: 'h004' }) }).getAttribute('data-key');
+    expect(h004Before).toMatch(/^Custom:\d+$/);
+    const expectedKey = `Custom:${Number(h004Before.slice('Custom:'.length)) - 1}`;
+    await page.fill('#search', 'Z903');
+    await page.locator('#tree .object-row', { has: page.locator('.object-id', { hasText: 'Z903' }) }).click();
+    await expect(page.locator('#delete-object')).toBeEnabled();
+    await page.locator('#delete-object').click();
+    await page.fill('#search', '');
+    const h004 = page.locator('#tree .object-row', { has: page.locator('.object-id', { hasText: 'h004' }) });
+    await expect(h004).toHaveAttribute('data-key', expectedKey);
+    await h004.click();
+    await expect(page.locator('#tree .object-row.active')).toHaveAttribute('data-key', expectedKey);
+});
+
 test('Save As preserves an object created while editing the skin sibling', async ({ openObjMod }) => {
     const { page, host } = await openObjMod({
         fileName: 'war3mapSkin.w3u',

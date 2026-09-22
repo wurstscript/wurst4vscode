@@ -250,6 +250,15 @@ export function setupMessageHandler() {
       const overlay = document.getElementById('add-object-overlay');
       if (overlay) overlay.hidden = true;
       window.dispatchEvent(new Event('objmod-add-object-finished'));
+    } else if (msg.type === 'objectsReplaced' && Array.isArray(msg.objects)) {
+      const previousIdentity = objects.find(obj => obj.key === ui.selectedKey)?.identity || '';
+      objects.splice(0, objects.length, ...msg.objects);
+      detailCache.clear();
+      pendingDetails.clear();
+      failedDetails.clear();
+      const preferred = msg.preferredIdentity || previousIdentity;
+      ui.selectedKey = objects.find(obj => obj.identity === preferred)?.key || objects[0]?.key || '';
+      renderTree();
     } else if (msg.type === 'objectRemoved' && msg.identity) {
       const index = objects.findIndex(obj => obj.identity === msg.identity);
       if (index < 0) return;

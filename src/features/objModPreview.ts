@@ -514,12 +514,14 @@ function buildBaseObjectOptions(summaryData: ObjSummaryData | undefined, ext: st
     // The compiler knowledge base supplies the broadest catalog when available. Doodads are not in
     // that catalog, however, so fall back to the format's game profile rather than disabling object
     // creation for .w3d files (and for any future format absent from the compiler snapshot).
+    const profileIds = [...summaryData.profile.keys()]
+        .filter((id) => !idFields || idFields.some((field) => String(getAnyProfileValue(id, [field], summaryData)).toLowerCase() === id.toLowerCase()));
     const ids = summaryData.baseObjects
         ? [...summaryData.baseObjects.entries()]
             .filter(([id, record]) => !idFields
                 || idFields.some((field) => String(record[field]).toLowerCase() === id))
             .map(([key]) => canonicalIds.get(key) ?? key)
-        : [...summaryData.profile.keys()];
+        : profileIds;
     return ids
         .filter((id) => id.length === 4)
         .sort((a, b) => {
@@ -2772,22 +2774,26 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             const summaryData = await loadObjSummaryData(doc.displayFile.ext);
             const beforeRevision = doc.currentRevision;
             const afterRevision = doc.nextRevision++;
-            const postRemoved = () => { void webview.postMessage({ type: 'objectRemoved', identity: `Custom:${identity}` }); };
-            const postRestored = () => {
-                const index = doc.displayFile.customObjs.findIndex((candidate) => entryKey(candidate) === identity);
-                if (index < 0) return;
-                void webview.postMessage({ type: 'objectAdded', object: buildObject(doc.displayFile.customObjs[index], 'Custom', index, doc.wtsTable, summaryData, doc.displayFile.ext) });
+            const postObjects = (preferredIdentity = '') => {
+                void webview.postMessage({
+                    type: 'objectsReplaced',
+                    objects: [
+                        ...doc.displayFile.origObjs.map((candidate, index) => buildObject(candidate, 'Original', index, doc.wtsTable, summaryData, doc.displayFile.ext)),
+                        ...doc.displayFile.customObjs.map((candidate, index) => buildObject(candidate, 'Custom', index, doc.wtsTable, summaryData, doc.displayFile.ext)),
+                    ],
+                    preferredIdentity,
+                });
             };
             remove();
             this._onDidChange.fire({
                 document: doc,
                 label: `Delete ${entry.newId || entry.baseId}`,
-                undo: () => { restore(); doc.currentRevision = beforeRevision; postRestored(); this.postDirtyState(doc); },
-                redo: () => { remove(); doc.currentRevision = afterRevision; postRemoved(); this.postDirtyState(doc); },
+                undo: () => { restore(); doc.currentRevision = beforeRevision; postObjects(`Custom:${identity}`); this.postDirtyState(doc); },
+                redo: () => { remove(); doc.currentRevision = afterRevision; postObjects(); this.postDirtyState(doc); },
             });
             doc.currentRevision = afterRevision;
             this.postDirtyState(doc);
-            postRemoved();
+            postObjects();
             return;
         }
         if (msg.type === 'undo') { void vscode.commands.executeCommand('undo'); return; }

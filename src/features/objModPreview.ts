@@ -531,7 +531,7 @@ function buildBaseObjectOptions(summaryData: ObjSummaryData | undefined, ext: st
             const raceLabel = RACE_OPTIONS.find((option) => option.value === race)?.label ?? race;
             return {
                 value: id,
-                label: [resolveBasePickerName(id, summaryData) ?? id, raceLabel].filter(Boolean).join(' — '),
+                label: [resolveBasePickerName(id, summaryData) ?? id, raceLabel].filter(Boolean).join(' - '),
                 detail: id,
             };
         });

@@ -417,8 +417,38 @@ test('field search filters rows and reports how many matched', async ({ openObjM
     expect(after).toBeLessThan(before);
     await expect(visible.locator('td.id:text-is("ugol")')).toHaveCount(1);
 
-    await page.fill('#field-search', '');
+    await expect(page.locator('#field-search-clear')).toBeVisible();
+    await page.click('#field-search-clear');
+    await expect(page.locator('#field-search')).toBeFocused();
+    await expect(page.locator('#field-search-clear')).toBeHidden();
     await expect(page.locator('#details tbody tr:not(.category-row):not(.hidden)')).toHaveCount(before);
+});
+
+test('field-view presets reorder groups and apply their visibility defaults', async ({ openObjMod }) => {
+    const { page } = await openObjMod();
+    await selectObject(page, 'h004');
+
+    await page.selectOption('#field-view', 'world-editor');
+    const worldGroups = await page.locator('#details .category-row').evaluateAll((rows) => rows.map((row) => row.getAttribute('data-cat')));
+    const worldRank = ['abil', 'art', 'combat', 'editor', 'move', 'path', 'sound', 'stats', 'tech', 'text', 'data'];
+    expect(worldGroups).toEqual([...worldGroups].sort((a, b) => {
+        const ai = worldRank.indexOf(a), bi = worldRank.indexOf(b);
+        return (ai < 0 ? worldRank.length : ai) - (bi < 0 ? worldRank.length : bi) || a.localeCompare(b);
+    }));
+    await expect(page.locator('#hide-empty-toggle')).not.toBeChecked();
+    await expect(page.locator('#hide-unmodified-toggle')).not.toBeChecked();
+
+    await page.selectOption('#field-view', 'practical');
+    await expect(page.locator('#hide-empty-toggle')).toBeChecked();
+    await expect(page.locator('#hide-unmodified-toggle')).not.toBeChecked();
+
+    await page.selectOption('#field-view', 'overrides');
+    await expect(page.locator('#hide-unmodified-toggle')).toBeChecked();
+    await expect(page.locator('#details .tt-edit-hint')).toHaveCount(0);
+
+    // The harness retains webview UI state between pages. Restore the normal view so this
+    // preference-focused test does not hide fields required by later edit scenarios.
+    await page.selectOption('#field-view', 'world-editor');
 });
 
 test('the category filter hides a whole category and shows a count badge', async ({ openObjMod }) => {
@@ -438,6 +468,16 @@ test('the category filter hides a whole category and shows a count badge', async
     await expect(page.locator('#details tbody tr:not(.category-row):not(.hidden)')).toHaveCount(0);
     await page.click('#cat-filter-all');
     await expect(page.locator('#details tbody tr:not(.category-row):not(.hidden)')).not.toHaveCount(0);
+});
+
+test('asset picker fields use a Codicon chevron instead of the native datalist glyph', async ({ openObjMod }) => {
+    const { page } = await openObjMod();
+    await selectObject(page, 'h004');
+    await page.check('#technical-toggle');
+    const modelRow = rowForField(page, 'umdl');
+    await expect(modelRow).toHaveCount(1);
+    await modelRow.locator('.cell-edit').click();
+    await expect(modelRow.locator('.picker-chevron')).toHaveClass(/codicon-chevron-down/);
 });
 
 test('editing an int field posts the edit, marks the document dirty, and survives undo/redo', async ({ openObjMod }) => {

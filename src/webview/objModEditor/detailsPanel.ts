@@ -27,14 +27,68 @@ export function retryDetails(key) {
 // combat/...) isn't something worth hand-maintaining, so the filter checklist is the union of every
 // category seen across objects loaded so far this session — accurate for whatever file is actually
 // open, and it only grows (never reshuffles/disappears) as detailCache accumulates more objects.
-const CATEGORY_SORT_ORDER = ['text', 'art', 'stats', 'combat', 'move', 'abil', 'tech', 'data', 'sound'];
+const FIELD_VIEWS = {
+  // The group sequence used by Warcraft III's Object Editor. Keep aliases beside their metadata
+  // names (abil/move/tech) rather than their display labels, because those vary by game locale.
+  'world-editor': {
+    label: 'World Editor',
+    order: ['abil', 'art', 'combat', 'editor', 'move', 'path', 'sound', 'stats', 'tech', 'text', 'data'],
+    hidden: [], hideEmpty: false, hideUnmodified: false,
+  },
+  practical: {
+    label: 'Practical',
+    order: ['text', 'stats', 'art', 'abil', 'combat', 'tech', 'editor', 'move', 'path', 'sound', 'data'],
+    // These groups are useful while auditing edge cases, but rarely change during routine object work.
+    hidden: ['move', 'path', 'sound', 'data'], hideEmpty: true, hideUnmodified: false,
+  },
+  overrides: {
+    label: 'Changed fields',
+    order: ['text', 'stats', 'art', 'abil', 'combat', 'tech', 'editor', 'move', 'path', 'sound', 'data'],
+    hidden: [], hideEmpty: false, hideUnmodified: true,
+  },
+};
+
+function fieldView() {
+  return FIELD_VIEWS[ui.fieldView] || FIELD_VIEWS['world-editor'];
+}
+
+function categoryRank(category, order) {
+  const key = categoryKey(category);
+  const rank = order.indexOf(key);
+  return rank < 0 ? order.length : rank;
+}
+
 function categoriesSeenSoFar() {
   const seen = new Set<string>();
   for (const mods of detailCache.values()) for (const mod of mods) seen.add(categoryKey(mod.category));
   return Array.from(seen).sort((a, b) => {
-    const ra = CATEGORY_SORT_ORDER.indexOf(a), rb = CATEGORY_SORT_ORDER.indexOf(b);
-    if (ra !== rb) return (ra < 0 ? CATEGORY_SORT_ORDER.length : ra) - (rb < 0 ? CATEGORY_SORT_ORDER.length : rb);
+    const order = fieldView().order;
+    const ra = categoryRank(a, order), rb = categoryRank(b, order);
+    if (ra !== rb) return ra - rb;
     return a.localeCompare(b);
+  });
+}
+
+function orderedMods(mods) {
+  const order = fieldView().order;
+  return mods.map((mod, index) => ({ mod, index })).sort((a, b) =>
+    categoryRank(a.mod.category, order) - categoryRank(b.mod.category, order) ||
+    categoryKey(a.mod.category).localeCompare(categoryKey(b.mod.category)) ||
+    String(a.mod.label || '').localeCompare(String(b.mod.label || '')) ||
+    String(a.mod.fieldId || '').localeCompare(String(b.mod.fieldId || '')) ||
+    a.index - b.index,
+  );
+}
+
+function applyFieldViewPreset(view) {
+  const normalizedView = Object.prototype.hasOwnProperty.call(FIELD_VIEWS, view) ? view : 'world-editor';
+  const preset = FIELD_VIEWS[normalizedView];
+  batch(() => {
+    ui.fieldView = normalizedView;
+    ui.hideEmpty = preset.hideEmpty;
+    ui.hideUnmodified = preset.hideUnmodified;
+    ui.hiddenCategories.clear();
+    for (const key of preset.hidden) ui.hiddenCategories.add(key);
   });
 }
 
@@ -43,8 +97,9 @@ function categoriesSeenSoFar() {
 // so it stays applied while browsing between objects.
 function categoryFilterHtml() {
   const keys = categoriesSeenSoFar();
-  const activeCount = keys.length - keys.filter(k => ui.hiddenCategories.has(k)).length;
-  const badge = ui.hiddenCategories.size ? '<span class="cat-filter-badge">' + activeCount + '/' + keys.length + '</span>' : '';
+  const hiddenCount = keys.filter(k => ui.hiddenCategories.has(k)).length;
+  const activeCount = keys.length - hiddenCount;
+  const badge = hiddenCount ? '<span class="cat-filter-badge">' + activeCount + '/' + keys.length + '</span>' : '';
   return '<div class="cat-filter">' +
     '<button type="button" id="cat-filter-btn" class="toggle-chip cat-filter-btn" aria-haspopup="true" aria-expanded="false">Categories' + badge + '</button>' +
     '<div id="cat-filter-pop" class="cat-filter-pop" hidden>' +
@@ -96,7 +151,7 @@ export function renderDetails() {
   const hasFailed = !mods && failedDetails.has(obj.key);
   if (!mods && !hasFailed) requestDetails(obj);
   let lastCategory = '';
-  const rows = (mods || []).map((mod, mi) => {
+  const rows = orderedMods(mods || []).map(({ mod, index: mi }) => {
     const category = categoryLabel(mod.category);
     const catKey = categoryKey(mod.category);
     const groupRow = category !== lastCategory
@@ -128,8 +183,12 @@ export function renderDetails() {
     // initial DOM state. Toggling them re-applies via the lighter filterFields() effect below instead
     // of rebuilding this whole table (see the second effect wired in setupDetails()).
     (mods ? '<div class="field-search-wrap">' +
-      '<input id="field-search" class="field-search" type="text" placeholder="Search fields…" aria-label="Search fields" spellcheck="false" value="' + esc(untracked(() => ui.fieldQuery)) + '">' +
+      '<div class="field-search-control"><input id="field-search" class="field-search" type="text" placeholder="Search fields…" aria-label="Search fields" spellcheck="false" value="' + esc(untracked(() => ui.fieldQuery)) + '">' +
+        '<button id="field-search-clear" class="field-search-clear' + (untracked(() => ui.fieldQuery) ? '' : ' hidden') + '" type="button" title="Clear field search" aria-label="Clear field search"><span class="codicon codicon-close" aria-hidden="true"></span></button></div>' +
       '<span id="field-match" class="field-match" role="status" aria-live="polite"></span>' +
+      '<label class="field-view-label">View <select id="field-view" class="field-view" aria-label="Field view">' +
+        Object.keys(FIELD_VIEWS).map(key => '<option value="' + key + '"' + (ui.fieldView === key ? ' selected' : '') + '>' + FIELD_VIEWS[key].label + '</option>').join('') +
+      '</select></label>' +
       categoryFilterHtml() +
       // Grouped so only the group as a whole gets pushed to the right edge (margin-left: auto on
       // *each* chip individually would split the leftover space between all of them, scattering them
@@ -174,12 +233,14 @@ export function renderDetails() {
   }
 
   const fieldSearch = document.getElementById('field-search');
+  const fieldSearchClear = document.getElementById('field-search-clear');
   if (fieldSearch) {
     // Debounce the write itself (not just its effect) so rapid keystrokes don't re-filter the table
     // once per keystroke — same rAF-coalescing convention as the object search box (see applySearch
     // in objModEditorWebview.ts).
     let fieldFilterRaf = 0;
     fieldSearch.addEventListener('input', () => {
+      if (fieldSearchClear) fieldSearchClear.classList.toggle('hidden', !fieldSearch.value);
       if (fieldFilterRaf) cancelAnimationFrame(fieldFilterRaf);
       fieldFilterRaf = requestAnimationFrame(() => {
         fieldFilterRaf = 0;
@@ -187,6 +248,14 @@ export function renderDetails() {
       });
     });
   }
+  if (fieldSearchClear && fieldSearch) fieldSearchClear.addEventListener('click', () => {
+    fieldSearch.value = '';
+    fieldSearchClear.classList.add('hidden');
+    ui.fieldQuery = '';
+    fieldSearch.focus();
+  });
+  const fieldViewSelect = document.getElementById('field-view') as HTMLSelectElement | null;
+  if (fieldViewSelect) fieldViewSelect.addEventListener('change', () => applyFieldViewPreset(fieldViewSelect.value));
   filterFields(untracked(() => ui.fieldQuery));
 
   iconLoader.observe(details);
@@ -227,6 +296,7 @@ export function setupDetails() {
     ui.hideUnmodified;
     ui.fieldQuery;
     ui.hiddenCategories.version;
+    ui.fieldView;
     if (filterPrimed) filterFields(untracked(() => ui.fieldQuery));
     else filterPrimed = true;
   }, 'detailsPanel.filterFields');
@@ -265,6 +335,18 @@ export function setupDetails() {
       return;
     }
     if (e.target.closest('.num-step')) e.preventDefault();
+    // A real pointer click first scrolls the cell into view, then fires its click event. Enter the
+    // rich tooltip editor on mousedown so that scroll/focus work cannot consume that later click.
+    // The delegated click handler below sees the already-active editor and simply returns.
+    const collapsed = e.target.closest('.tt-collapsed');
+    if (collapsed) {
+      const mi = Number(collapsed.getAttribute('data-mi'));
+      const mod = (detailCache.get(ui.selectedKey) || [])[mi];
+      if (mod && needsColorEditor(mod) && !collapsed.classList.contains('tt-editing')) {
+        e.preventDefault();
+        enterTooltipEdit(collapsed, mi, e);
+      }
+    }
   });
   window.addEventListener('mouseup', stopNumStepHold);
   window.addEventListener('blur', stopNumStepHold);
@@ -592,7 +674,15 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
   document.addEventListener('mousedown', onOutsideDown, true);
   window.addEventListener('resize', onScrollOrResize);
   const scrollHost = collapsed.closest('.table-wrap');
-  if (scrollHost) scrollHost.addEventListener('scroll', onScrollOrResize);
+  // The browser may scroll a just-clicked off-screen row into view as part of the same pointer
+  // gesture. Begin observing later scrolls on the next frame, otherwise that automatic scroll closes
+  // the editor immediately after opening it.
+  let scrollListenerArmed = false;
+  requestAnimationFrame(() => {
+    if (!activeTooltipEdit || activeTooltipEdit.collapsed !== collapsed || !scrollHost) return;
+    scrollHost.addEventListener('scroll', onScrollOrResize);
+    scrollListenerArmed = true;
+  });
   const onFocusOut = () => {
     setTimeout(() => {
       if (!activeTooltipEdit || activeTooltipEdit.mi !== mi || activeTooltipEdit.collapsed !== collapsed) return;
@@ -605,7 +695,7 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
   activeTooltipEdit.cleanup = () => {
     document.removeEventListener('mousedown', onOutsideDown, true);
     window.removeEventListener('resize', onScrollOrResize);
-    if (scrollHost) scrollHost.removeEventListener('scroll', onScrollOrResize);
+    if (scrollHost && scrollListenerArmed) scrollHost.removeEventListener('scroll', onScrollOrResize);
     // `body` is the persistent .tt-collapsed-body node — reused for every future edit of this same
     // field — so its listeners MUST be removed here. Leaving them meant a second edit session left
     // this session's stale onFocusOut (closed over this now-detached toolbar/rawArea) still firing
@@ -800,8 +890,10 @@ function updateCatFilterBadge() {
   const btn = document.getElementById('cat-filter-btn');
   if (!btn) return;
   const total = details.querySelectorAll('#cat-filter-pop input[data-cat-key]').length;
-  const activeCount = total - ui.hiddenCategories.size;
-  btn.innerHTML = 'Categories' + (ui.hiddenCategories.size ? '<span class="cat-filter-badge">' + activeCount + '/' + total + '</span>' : '');
+  const hiddenCount = Array.from(details.querySelectorAll('#cat-filter-pop input[data-cat-key]'))
+    .filter(cb => ui.hiddenCategories.has(cb.getAttribute('data-cat-key'))).length;
+  const activeCount = total - hiddenCount;
+  btn.innerHTML = 'Categories' + (hiddenCount ? '<span class="cat-filter-badge">' + activeCount + '/' + total + '</span>' : '');
 }
 
 // Filter the details table rows by field id / label / value AND by the category checklist, without

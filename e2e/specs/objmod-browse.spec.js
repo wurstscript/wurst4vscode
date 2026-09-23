@@ -21,6 +21,10 @@ test('renders a grouped tree and selects the first object with its field rows', 
 
     await expect(page.locator('#tree .object-row').first()).toBeVisible();
     await expect(page.locator('.md-meta')).toContainText('123 objects');
+    const firstTwisty = page.locator('#tree .twisty').first();
+    await expect(firstTwisty).toHaveClass(/codicon-chevron-down/);
+    await firstTwisty.locator('..').click();
+    await expect(firstTwisty).toHaveClass(/codicon-chevron-right/);
 
     // The first object is selected on open and its fields are requested from the host, not shipped
     // in the initial payload — that laziness is the whole point of the details protocol.

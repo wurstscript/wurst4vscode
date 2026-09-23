@@ -281,12 +281,14 @@ export interface BuildPageOptions {
     title: string;
     /** Additional CSS placed after WEBVIEW_BASE_CSS (viewer-specific rules). */
     extraCss?: string;
+    /** Additional markup placed in <head> after the inline viewer styles (for local webview assets). */
+    extraHead?: string;
     /** Full <body> inner HTML (everything between <body> tags). */
     body: string;
 }
 
 export function buildPage(opts: BuildPageOptions): string {
-    const { csp, title, extraCss = '', body } = opts;
+    const { csp, title, extraCss = '', extraHead = '', body } = opts;
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -298,6 +300,7 @@ export function buildPage(opts: BuildPageOptions): string {
 ${WEBVIEW_BASE_CSS}
 ${extraCss}
 </style>
+${extraHead}
 </head>
 <body>
 ${body}

@@ -46,7 +46,7 @@ test('clicking a tooltip field opens an in-place editor with a floating toolbar'
     await expect(body).toHaveAttribute('contenteditable', 'true');
 
     // The toolbar floats over the page but must stay beside the box it is editing, not off-screen.
-    const boxRect = await page.locator('.tt-collapsed-box').first().boundingBox();
+    const boxRect = await collapsed.locator('.tt-collapsed-box').boundingBox();
     const toolbarRect = await toolbar.boundingBox();
     expect(toolbarRect.x + toolbarRect.width).toBeGreaterThan(0);
     expect(toolbarRect.y).toBeLessThan(boxRect.y + boxRect.height + 200);

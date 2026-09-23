@@ -40,6 +40,8 @@ package-lock.json
 # dist/ is in .gitignore, so explicitly re-include only runtime artifacts
 !dist/**/*.js
 !dist/**/*.txt
+!dist/**/*.css
+!dist/**/*.ttf
 # source maps are only useful for local debugging, don't ship them
 dist/**/*.map
 **/*.map

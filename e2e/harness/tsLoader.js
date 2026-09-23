@@ -62,6 +62,10 @@ function createTsLoader(options = {}) {
         cache.set(abs, mod);
         const localRequire = (request) => {
             if (Object.prototype.hasOwnProperty.call(mocks, request)) return mocks[request];
+            // Codicons are emitted as separate, packaged webview assets. The host only needs their
+            // stable output paths here; parsing CSS/TTF as CommonJS would fail before a page is built.
+            if (request === '@vscode/codicons/dist/codicon.css') return { __esModule: true, default: 'webview/codicon.css' };
+            if (request === '@vscode/codicons/dist/codicon.ttf') return { __esModule: true, default: 'webview/codicon.ttf' };
             if (request.startsWith('.')) {
                 const target = resolveRelative(abs, request);
                 const targetRel = toRepoRelative(target);

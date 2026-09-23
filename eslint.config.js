@@ -10,7 +10,7 @@ module.exports = tseslint.config(
 	{
 		// The webview scripts are plain bundled browser JS with `// @ts-nocheck` and a very
 		// different style (inline HTML template strings) — see AGENTS.md. Lint everything else.
-		ignores: ['dist/**', 'out/**', 'node_modules/**', 'src/webview/**', '.claude/**'],
+		ignores: ['dist/**', 'out/**', 'node_modules/**', 'src/webview/**', '.claude/**', 'test-results/**', 'playwright-report/**'],
 	},
 	eslint.configs.recommended,
 	...tseslint.configs.recommended,

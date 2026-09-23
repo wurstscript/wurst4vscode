@@ -182,7 +182,7 @@ export function pickerEditorHtml(mod, mi, v) {
     : '';
   return '<div class="value-editor">' +
     '<div class="picker-row">' +
-      '<input class="edit-raw" type="text" list="' + listId + '" data-mi="' + mi + '" spellcheck="false" aria-label="Choose from Warcraft III game data" value="' + esc(v) + '">' +
+      '<span class="picker-input-wrap"><input class="edit-raw" type="text" list="' + listId + '" data-mi="' + mi + '" spellcheck="false" aria-label="Choose from Warcraft III game data" value="' + esc(v) + '"><span class="picker-chevron codicon codicon-chevron-down" aria-hidden="true"></span></span>' +
       browse +
     '</div>' +
     '<datalist id="' + listId + '">' + datalistOptionsHtml(mod.options) + '</datalist>' +
@@ -390,13 +390,13 @@ export function collapsedView(mod, mi) {
     const body = dv ? renderWc3Colors(tooltipPreviewText(dv, isTooltipTemplateField(mod))) : '<span class="tt-empty">(empty)</span>';
     return '<div class="tt-collapsed" data-mi="' + mi + '" tabindex="0" role="button" title="Click or press Enter to edit">' +
       '<div class="tt-collapsed-box"><div class="tt-collapsed-body" data-mi="' + mi + '">' + body + '</div></div>' +
-      (mod.source ? sourcePill(mod) : '') + '<span class="tt-edit-hint">✎</span></div>';
+      (mod.source ? sourcePill(mod) : '') + '</div>';
   }
   const badge = mod.overridden ? '<span class="override-badge" title="This field overrides the base value">modified</span>' : '';
   const disp = decoratedValueHtml(mod, mi, dv);
   return '<span class="cell-edit" data-mi="' + mi + '" tabindex="0" role="button" title="Click or press Enter to edit">' +
     '<span class="cell-edit-val">' + disp + '</span>' + badge + (mod.source ? sourcePill(mod) : '') +
-    '<span class="tt-edit-hint">✎</span></span>';
+    '</span>';
 }
 
 export function valueCell(mod, mi) {

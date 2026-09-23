@@ -38,8 +38,8 @@ const webExtensionConfig = {
 			assert: require.resolve('assert'),
 		},
 	},
-	module: {
-		rules: [
+		module: {
+			rules: [
 			{
 				test: /\.ts$/,
 				exclude: /node_modules/,
@@ -132,8 +132,15 @@ const nodeExtensionConfig = {
 				exclude: /node_modules/,
 				use: [{ loader: 'ts-loader' }],
 			},
+			// The object editor loads Codicons as a separate stylesheet so its font can remain cacheable.
+			// Emit both files next to its webview bundle — node_modules is excluded from the VSIX.
+			{
+				test: /@vscode[\\/]codicons[\\/]dist[\\/]codicon\.(css|ttf)$/,
+				type: 'asset/resource',
+				generator: { filename: 'webview/[name][ext]' },
+			},
 			// Viewer stylesheets live in .css files and are inlined into the host bundle as strings.
-			{ test: /\.css$/, type: 'asset/source' },
+			{ test: /\.css$/, exclude: /@vscode[\\/]codicons[\\/]dist[\\/]codicon\.css$/, type: 'asset/source' },
 		],
 	},
 	externals: {

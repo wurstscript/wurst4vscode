@@ -95,7 +95,10 @@ export function mpvSetPlaying(on) {
   const v = mpvViewer();
   if (v && mpvInited) { try { v.setAutoplay(on); } catch (e) {} }
   const btn = document.getElementById('mpv-play');
-  if (btn) { btn.textContent = on ? '⏸' : '▶'; btn.title = on ? 'Pause' : 'Play'; }
+  if (btn) {
+    btn.innerHTML = '<span class="codicon codicon-debug-' + (on ? 'pause' : 'start') + '" aria-hidden="true"></span>';
+    btn.title = on ? 'Pause' : 'Play';
+  }
 }
 
 export function mpvRestart() {

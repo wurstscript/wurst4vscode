@@ -194,6 +194,9 @@ body.density-cozy #density-toggle { margin-left: auto; }
 }
 .editable-badge.dirty:hover { background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 12%, transparent); }
 .refresh-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   flex: 0 0 auto;
   padding: 2px 7px;
   border: 1px solid var(--border);
@@ -429,15 +432,6 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 .tt-empty { color: var(--muted); font-style: normal; }
 .tt-collapsed-box .tt-empty,
 .tt-preview .tt-empty { font-style: italic; }
-.tt-edit-hint {
-  flex-shrink: 0;
-  color: var(--muted);
-  font-size: 11px;
-  opacity: 0.35; /* faintly visible at rest so cells read as editable; brightens on hover/focus */
-  transition: opacity .1s;
-}
-.tt-collapsed:hover .tt-edit-hint,
-.tt-collapsed:focus-visible .tt-edit-hint { opacity: 0.9; }
 /* Editing indicator: outline only, on the box itself — the tooltip box's own background/text colors
    (--wc3-tip-bg/-fg) are left completely alone, so the preview never loses contrast while being edited. */
 .tt-collapsed.tt-editing .tt-collapsed-box {
@@ -490,11 +484,9 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   border-color: color-mix(in srgb, var(--vscode-focusBorder, var(--vscode-textLink-foreground)) 60%, transparent);
   outline: none;
 }
-.cell-edit:hover .tt-edit-hint,
-.cell-edit:focus-visible .tt-edit-hint { opacity: 0.7; }
-/* Shrink-to-fit, not flex:1 — the "modified" badge, source pill and ✎ hint cluster right after the
-   value instead of being flung to the far edge of a wide value column. The click target is still the
-   full cell (.cell-edit stays width:100%). */
+/* Shrink-to-fit, not flex:1 — the "modified" badge and source pill cluster right after the value
+   instead of being flung to the far edge of a wide value column. The click target is still the full
+   cell (.cell-edit stays width:100%). */
 .cell-edit-val { flex: 0 1 auto; min-width: 0; font-family: var(--font); word-break: break-word; white-space: pre-wrap; }
 .value-display {
   display: grid;
@@ -601,7 +593,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1;
   padding: 2px 4px;
   border-radius: 2px;
@@ -720,16 +712,21 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   border-radius: 3px;
   font: inherit;
 }
+.ab-source-wrap { position: relative; display: inline-flex; flex: 0 0 auto; }
 .ab-source {
   flex: 0 0 auto;
   height: 24px;
+  min-width: 72px;
+  padding: 0 22px 0 7px;
   color: var(--input-fg);
   background: var(--input-bg);
   border: 1px solid var(--input-border, var(--border));
   border-radius: 3px;
   font: inherit;
   font-size: 11px;
+  appearance: none;
 }
+.ab-source-chevron { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 14px; pointer-events: none; }
 .ab-count { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .ab-close {
   flex: 0 0 auto;
@@ -737,7 +734,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  font-size: 14px;
+  font-size: 16px;
   padding: 2px 6px;
   border-radius: 2px;
 }
@@ -840,7 +837,6 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 .num-step:hover { background: var(--btn-hover, var(--hover)); color: var(--fg); }
 /* Scannable accent for customized (overridden) fields. */
 tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 70%, transparent); }
-.cell-edit .tt-edit-hint { flex-shrink: 0; }
 .tt-bar { position: relative; display: inline-flex; align-items: center; gap: 4px; }
 .tt-color-sq {
   width: 20px;
@@ -917,7 +913,7 @@ tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--acce
 .field-search {
   flex: 1;
   min-width: 80px;
-  max-width: 300px;
+  width: 100%;
   height: var(--input-h);
   background: var(--input-bg);
   color: var(--input-fg);
@@ -927,6 +923,13 @@ tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--acce
   font: inherit;
 }
 .field-search:focus { outline: 1px solid var(--vscode-focusBorder, var(--vscode-textLink-foreground)); }
+.field-search-control { position: relative; flex: 1; min-width: 80px; max-width: 300px; }
+.field-search-control .field-search { padding-right: 25px; }
+.field-search-clear { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; padding: 0; border: 0; border-radius: 2px; color: var(--muted); background: transparent; cursor: pointer; font-size: 14px; }
+.field-search-clear:hover { color: var(--fg); background: var(--hover); }
+.field-search-clear.hidden { display: none; }
+.field-view-label { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: var(--chip-fs); }
+.field-view { height: var(--input-h); border: 1px solid var(--input-border, var(--border)); border-radius: 2px; color: var(--input-fg); background: var(--input-bg); font: inherit; font-size: var(--chip-fs); }
 .field-match { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .cat-filter { position: relative; }
 .cat-filter-btn {
@@ -1182,11 +1185,9 @@ tr.hidden { display: none; }
   outline-offset: -1px;
 }
 .twisty {
-  width: 10px;
-  display: inline-block;
+  width: 14px;
   color: var(--muted);
-  font-family: var(--mono);
-  font-size: 10px;
+  font-size: 14px;
 }
 .folder-count {
   margin-left: auto;

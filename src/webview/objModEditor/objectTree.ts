@@ -136,7 +136,7 @@ export function matches(obj) {
 
 function headingHtml(kindClass, key, label, count, closed) {
   return '<button class="' + kindClass + '-heading" type="button" data-node="' + esc(key) + '" aria-expanded="' + (closed ? 'false' : 'true') + '">' +
-    '<span class="twisty">' + (closed ? '&gt;' : 'v') + '</span>' +
+    '<span class="twisty codicon codicon-chevron-' + (closed ? 'right' : 'down') + '" aria-hidden="true"></span>' +
     '<span>' + esc(label) + '</span><span class="folder-count">' + count + '</span></button>';
 }
 

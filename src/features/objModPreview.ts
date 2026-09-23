@@ -33,6 +33,8 @@ import {
 } from './preview/wc3Data';
 import { getGameAssetCacheDir, getModelThumbCacheDir, listGameAssetPaths } from './preview/cascStorage';
 import OBJMOD_EDITOR_CSS from '../webview/objModEditor/objModEditor.css';
+import CODICON_CSS_BUNDLE from '@vscode/codicons/dist/codicon.css';
+import '@vscode/codicons/dist/codicon.ttf';
 import { showErrorWithLogs, showWarningWithLogs } from './diagnostics';
 import { repairTooltipTrueTypeFont } from './preview/tooltipFont';
 import {
@@ -1820,6 +1822,7 @@ async function buildHtml(
     mdxViewerUri?: string,
     objModEditorUri?: string,
     thumbnailWorkerUri?: string,
+    codiconCssUri?: string,
     combined?: CombinedObjModInfo,
     preferredSelectionIdentity?: string,
     customColors: string[] = [],
@@ -1893,8 +1896,9 @@ async function buildHtml(
 ` : '';
 
     return buildPage({
-        csp: `default-src 'none'; img-src ${context.webview.cspSource} data:; font-src ${context.webview.cspSource}; connect-src ${context.webview.cspSource}; style-src 'unsafe-inline'; script-src 'unsafe-inline' ${context.webview.cspSource}; worker-src blob:;`,
+        csp: `default-src 'none'; img-src ${context.webview.cspSource} data:; font-src ${context.webview.cspSource}; connect-src ${context.webview.cspSource}; style-src 'unsafe-inline' ${context.webview.cspSource}; script-src 'unsafe-inline' ${context.webview.cspSource}; worker-src blob:;`,
         title: escapeHtml(fileName),
+        extraHead: codiconCssUri ? `<link rel="stylesheet" href="${codiconCssUri}">` : '',
         extraCss: `${OBJMOD_EDITOR_CSS}
 :root { --wc3-tip-width: ${tooltipWidthPx}px; }
 ${tooltipFontCss}`,
@@ -1907,7 +1911,7 @@ ${tooltipFontCss}`,
     <span class="density-track" aria-hidden="true"><span class="density-thumb"></span></span>
     <span class="density-option density-option-cozy">Spacious</span>
   </button>
-  <button type="button" id="refresh-editor" class="refresh-button" title="Reload this object file from disk">↻ Refresh</button>
+  <button type="button" id="refresh-editor" class="refresh-button" title="Reload this object file from disk"><span class="codicon codicon-refresh" aria-hidden="true"></span> Refresh</button>
   <button type="button" id="editable-badge" class="editable-badge" title="Existing overrides can be edited. Click or Ctrl+S to save.">editable</button>
 </div>
 ${errorBanner}
@@ -1919,7 +1923,7 @@ ${gameDataBanner}
     <div class="search-wrap">
       <input id="search" class="search-input" placeholder="Search objects or IDs" aria-label="Search objects">
       <span id="search-match" class="search-match" role="status" aria-live="polite"></span>
-      <button id="search-clear" class="search-clear" type="button" title="Clear search" aria-label="Clear search">✕</button>
+      <button id="search-clear" class="search-clear" type="button" title="Clear search" aria-label="Clear search"><span class="codicon codicon-close" aria-hidden="true"></span></button>
     </div>
     <div id="tree" class="tree"></div>
   </aside>
@@ -1930,10 +1934,10 @@ ${gameDataBanner}
   <div class="mpv-head" id="mpv-head">
     <span id="mpv-name" class="mpv-name">Model</span>
     <select id="mpv-anim" class="mpv-anim" title="Animation" hidden></select>
-    <button id="mpv-play" class="mpv-ctl" type="button" title="Pause" aria-label="Play/pause">⏸</button>
-    <button id="mpv-restart" class="mpv-ctl" type="button" title="Restart animation" aria-label="Restart">⟲</button>
-    <button id="mpv-help" class="mpv-ctl" type="button" aria-label="Controls help" title="Drag header to move · drag model to orbit · scroll to zoom · dropdown switches animation · ⟲ replays from start">?</button>
-    <button id="mpv-close" class="mpv-close" type="button" title="Close preview" aria-label="Close preview">✕</button>
+    <button id="mpv-play" class="mpv-ctl" type="button" title="Pause" aria-label="Play/pause"><span class="codicon codicon-debug-pause" aria-hidden="true"></span></button>
+    <button id="mpv-restart" class="mpv-ctl" type="button" title="Restart animation" aria-label="Restart"><span class="codicon codicon-debug-restart" aria-hidden="true"></span></button>
+    <button id="mpv-help" class="mpv-ctl" type="button" aria-label="Controls help" title="Drag header to move · drag model to orbit · scroll to zoom · dropdown switches animation · restart replays from start"><span class="codicon codicon-question" aria-hidden="true"></span></button>
+    <button id="mpv-close" class="mpv-close" type="button" title="Close preview" aria-label="Close preview"><span class="codicon codicon-close" aria-hidden="true"></span></button>
   </div>
   <div id="mpv-viewport" class="mpv-viewport">
     <canvas id="mpv-canvas" class="mpv-canvas"></canvas>
@@ -1954,13 +1958,13 @@ ${gameDataBanner}
         <button class="ab-tab" type="button" role="tab" data-tab="pathing" aria-controls="ab-grid" aria-selected="false">Pathing</button>
       </div>
       <input id="ab-search" class="ab-search" type="search" placeholder="Search game assets…" aria-label="Search assets">
-      <select id="ab-source" class="ab-source" title="Filter by source" aria-label="Filter by source">
+      <label class="ab-source-wrap"><select id="ab-source" class="ab-source" title="Filter by source" aria-label="Filter by source">
         <option value="all">All</option>
         <option value="wc3">WC3</option>
         <option value="import">Imports</option>
-      </select>
+      </select><span class="ab-source-chevron codicon codicon-chevron-down" aria-hidden="true"></span></label>
       <span id="ab-count" class="ab-count" role="status" aria-live="polite"></span>
-      <button id="ab-close" class="ab-close" type="button" title="Close (Esc)" aria-label="Close">✕</button>
+      <button id="ab-close" class="ab-close" type="button" title="Close (Esc)" aria-label="Close"><span class="codicon codicon-close" aria-hidden="true"></span></button>
     </div>
     <div id="ab-grid" class="ab-grid"></div>
   </div>
@@ -2545,6 +2549,9 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         const thumbnailWorkerUri = panel.webview.asWebviewUri(
             vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', 'mdxThumbnailWorker.js'),
         ).toString();
+        const codiconCssUri = panel.webview.asWebviewUri(
+            vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', path.basename(CODICON_CSS_BUNDLE)),
+        ).toString();
         // Show a spinner immediately — buildHtml awaits CASC game-data and can exceed 200ms.
         panel.webview.html = buildObjLoadingHtml(fileName);
         doc.reload = async () => {
@@ -2556,6 +2563,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
                 mdxViewerUri,
                 objModEditorUri,
                 thumbnailWorkerUri,
+                codiconCssUri,
                 doc.combinedInfo,
                 doc.selectedIdentity,
                 this.customColors,

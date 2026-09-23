@@ -390,13 +390,13 @@ export function collapsedView(mod, mi) {
     const body = dv ? renderWc3Colors(tooltipPreviewText(dv, isTooltipTemplateField(mod))) : '<span class="tt-empty">(empty)</span>';
     return '<div class="tt-collapsed" data-mi="' + mi + '" tabindex="0" role="button" title="Click or press Enter to edit">' +
       '<div class="tt-collapsed-box"><div class="tt-collapsed-body" data-mi="' + mi + '">' + body + '</div></div>' +
-      (mod.source ? sourcePill(mod) : '') + '<span class="tt-edit-hint">✎</span></div>';
+      (mod.source ? sourcePill(mod) : '') + '</div>';
   }
   const badge = mod.overridden ? '<span class="override-badge" title="This field overrides the base value">modified</span>' : '';
   const disp = decoratedValueHtml(mod, mi, dv);
   return '<span class="cell-edit" data-mi="' + mi + '" tabindex="0" role="button" title="Click or press Enter to edit">' +
     '<span class="cell-edit-val">' + disp + '</span>' + badge + (mod.source ? sourcePill(mod) : '') +
-    '<span class="tt-edit-hint">✎</span></span>';
+    '</span>';
 }
 
 export function valueCell(mod, mi) {

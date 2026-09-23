@@ -71,6 +71,9 @@ const fieldQuerySignal = signal(typeof persisted.fieldQuery === 'string' ? persi
 const showTechnicalSignal = signal(!!persisted.showTechnical);
 const hideEmptySignal = signal(!!persisted.hideEmpty);
 const hideUnmodifiedSignal = signal(!!persisted.hideUnmodified);
+const fieldViewSignal = signal(
+  persisted.fieldView === 'practical' || persisted.fieldView === 'overrides' ? persisted.fieldView : 'world-editor',
+);
 // Only consulted once, to restore scroll position on the tree's first paint (see renderTree() in
 // objectTree.ts) — every scroll after that just updates this via the listener in setupTree(), which
 // the persistUi effect below picks up like every other field.
@@ -104,6 +107,10 @@ export const ui = {
   set hideEmpty(v) { hideEmptySignal.value = v; },
   get hideUnmodified() { return hideUnmodifiedSignal.value; },
   set hideUnmodified(v) { hideUnmodifiedSignal.value = v; },
+  // Presets control the group order; their filtering choices are applied by detailsPanel so the
+  // existing category and row-filter controls remain the single source of truth for visibility.
+  get fieldView() { return fieldViewSignal.value; },
+  set fieldView(v) { fieldViewSignal.value = v; },
   get density() { return densitySignal.value; },
   set density(v) { densitySignal.value = v; },
   get treeScrollTop() { return treeScrollTopSignal.value; },
@@ -151,6 +158,7 @@ effect(() => {
     showTechnical: ui.showTechnical,
     hideEmpty: ui.hideEmpty,
     hideUnmodified: ui.hideUnmodified,
+    fieldView: ui.fieldView,
     density: ui.density,
     treeScrollTop: ui.treeScrollTop,
     detailsScrollTop: ui.detailsScrollTop,

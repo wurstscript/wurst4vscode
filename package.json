@@ -964,6 +964,7 @@
         "webpack-cli": "^7.0.2"
     },
     "dependencies": {
+        "@vscode/codicons": "^0.0.36",
         "casc-ts": "file:../casc-ts",
         "node-stream-zip": "^1.15.0",
         "vscode-languageclient": "^9.0.1"

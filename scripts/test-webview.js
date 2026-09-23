@@ -200,6 +200,7 @@ function testObjModStateRestoresAndPersistsUiState() {
         showTechnical: true,
         hideEmpty: true,
         hideUnmodified: false,
+        fieldView: 'practical',
         collapsedNodes: ['group:Original'],
         hiddenCategories: ['art'],
         treeScrollTop: 240,
@@ -216,6 +217,7 @@ function testObjModStateRestoresAndPersistsUiState() {
     assert.equal(state.ui.showTechnical, true);
     assert.equal(state.ui.hideEmpty, true);
     assert.equal(state.ui.hideUnmodified, false);
+    assert.equal(state.ui.fieldView, 'practical');
     assert.equal(state.collapsedNodes.has('group:Original'), true);
     assert.equal(state.ui.hiddenCategories.has('art'), true);
     assert.equal(state.ui.treeScrollTop, 240, 'the tree scroll position should be restored too');
@@ -226,6 +228,7 @@ function testObjModStateRestoresAndPersistsUiState() {
     assert.equal(persistedAfter.query, 'bar', 'writing a signal should re-persist automatically, with no explicit setState call at the write site');
     assert.equal(persistedAfter.treeScrollTop, 240, 'persisting one field must not drop the others');
     assert.equal(persistedAfter.detailsScrollTop, 150, 'persisting one field must not drop the others');
+    assert.equal(persistedAfter.fieldView, 'practical', 'the selected field view must persist with the other editor preferences');
     assert.equal(persistedAfter.selectedKey, 'Custom:1', 'unrelated restored fields must survive a later persist');
     assert.equal(persistedAfter.selectedIdentity, 'Custom:hrif|h002', 'selection persistence must use stable rawcodes, not an array index');
     assert.ok(dom.getMessages().some(message => message.type === 'selectionChanged' && message.identity === 'Custom:hrif|h002'),

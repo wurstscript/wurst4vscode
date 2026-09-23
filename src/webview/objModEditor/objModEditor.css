@@ -645,7 +645,12 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 }
 .mpv-status.hidden { display: none; }
 .picker-row { display: flex; gap: 4px; align-items: center; }
-.picker-row .edit-raw { flex: 1; min-width: 0; }
+.picker-input-wrap { position: relative; flex: 1; min-width: 0; }
+.picker-input-wrap .edit-raw { width: 100%; min-width: 0; padding-right: 24px; }
+/* Chrome renders datalist's native up/down glyph as this pseudo-control. Hide it so the familiar
+   Codicon chevron below is the only dropdown cue; typing and the datalist suggestions still work. */
+.picker-input-wrap .edit-raw::-webkit-calendar-picker-indicator { opacity: 0; }
+.picker-chevron { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 14px; pointer-events: none; }
 .browse-btn {
   flex: 0 0 auto;
   font: inherit;

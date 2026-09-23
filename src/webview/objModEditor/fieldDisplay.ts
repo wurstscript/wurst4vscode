@@ -182,7 +182,7 @@ export function pickerEditorHtml(mod, mi, v) {
     : '';
   return '<div class="value-editor">' +
     '<div class="picker-row">' +
-      '<input class="edit-raw" type="text" list="' + listId + '" data-mi="' + mi + '" spellcheck="false" aria-label="Choose from Warcraft III game data" value="' + esc(v) + '">' +
+      '<span class="picker-input-wrap"><input class="edit-raw" type="text" list="' + listId + '" data-mi="' + mi + '" spellcheck="false" aria-label="Choose from Warcraft III game data" value="' + esc(v) + '"><span class="picker-chevron codicon codicon-chevron-down" aria-hidden="true"></span></span>' +
       browse +
     '</div>' +
     '<datalist id="' + listId + '">' + datalistOptionsHtml(mod.options) + '</datalist>' +

@@ -470,6 +470,16 @@ test('the category filter hides a whole category and shows a count badge', async
     await expect(page.locator('#details tbody tr:not(.category-row):not(.hidden)')).not.toHaveCount(0);
 });
 
+test('asset picker fields use a Codicon chevron instead of the native datalist glyph', async ({ openObjMod }) => {
+    const { page } = await openObjMod();
+    await selectObject(page, 'h004');
+    await page.check('#technical-toggle');
+    const modelRow = rowForField(page, 'umdl');
+    await expect(modelRow).toHaveCount(1);
+    await modelRow.locator('.cell-edit').click();
+    await expect(modelRow.locator('.picker-chevron')).toHaveClass(/codicon-chevron-down/);
+});
+
 test('editing an int field posts the edit, marks the document dirty, and survives undo/redo', async ({ openObjMod }) => {
     const { page, host } = await openObjMod();
     await selectObject(page, 'h004');

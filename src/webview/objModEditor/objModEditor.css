@@ -41,6 +41,9 @@
   --meta-fs: 11px;        /* meta strip, rawcode suffix */
   --chip-fs: 11px;        /* toggle chips */
   --input-h: 22px;        /* search boxes */
+  --field-search-clear-size: 20px;
+  --field-search-clear-inset: 2px;
+  --field-search-clear-space: 25px;
   --details-icon: 26px;
   --details-head-pad: 5px 9px 6px;
   --search-pad: 5px 6px;
@@ -90,6 +93,9 @@ body.density-cozy {
   --meta-fs: 12px;
   --chip-fs: 12px;
   --input-h: 26px;
+  --field-search-clear-size: 24px;
+  --field-search-clear-inset: 3px;
+  --field-search-clear-space: 29px;
   --details-icon: 32px;
   --details-head-pad: 11px 16px 10px;
   --search-pad: 8px;
@@ -924,8 +930,8 @@ tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--acce
 }
 .field-search:focus { outline: 1px solid var(--vscode-focusBorder, var(--vscode-textLink-foreground)); }
 .field-search-control { position: relative; flex: 1; min-width: 80px; max-width: 300px; }
-.field-search-control .field-search { padding-right: 25px; }
-.field-search-clear { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; padding: 0; border: 0; border-radius: 2px; color: var(--muted); background: transparent; cursor: pointer; font-size: 14px; }
+.field-search-control .field-search { padding-right: var(--field-search-clear-space); }
+.field-search-clear { position: absolute; right: var(--field-search-clear-inset); top: 50%; transform: translateY(-50%); width: var(--field-search-clear-size); height: var(--field-search-clear-size); padding: 0; border: 0; border-radius: 2px; color: var(--muted); background: transparent; cursor: pointer; font-size: var(--chip-fs); }
 .field-search-clear:hover { color: var(--fg); background: var(--hover); }
 .field-search-clear.hidden { display: none; }
 .field-view-label { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: var(--chip-fs); }

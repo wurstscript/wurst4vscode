@@ -46,6 +46,8 @@ const REQUIRED_BUNDLES = [
     'dist/extension.js',
     'dist/web/extension.js',
     'dist/webview/mdxViewer.js',
+    'dist/webview/codicon.css',
+    'dist/webview/codicon.ttf',
     'dist/webview/mpqViewerWebview.js',
     'dist/webview/objModEditorWebview.js',
     'dist/webview/mdxThumbnailWorker.js',

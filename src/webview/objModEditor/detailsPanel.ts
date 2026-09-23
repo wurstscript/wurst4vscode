@@ -32,18 +32,18 @@ const FIELD_VIEWS = {
   // names (abil/move/tech) rather than their display labels, because those vary by game locale.
   'world-editor': {
     label: 'World Editor',
-    order: ['abil', 'art', 'combat', 'move', 'path', 'sound', 'stats', 'tech', 'text', 'data'],
+    order: ['abil', 'art', 'combat', 'editor', 'move', 'path', 'sound', 'stats', 'tech', 'text', 'data'],
     hidden: [], hideEmpty: false, hideUnmodified: false,
   },
   practical: {
     label: 'Practical',
-    order: ['text', 'stats', 'art', 'abil', 'combat', 'tech', 'move', 'path', 'sound', 'data'],
+    order: ['text', 'stats', 'art', 'abil', 'combat', 'tech', 'editor', 'move', 'path', 'sound', 'data'],
     // These groups are useful while auditing edge cases, but rarely change during routine object work.
     hidden: ['move', 'path', 'sound', 'data'], hideEmpty: true, hideUnmodified: false,
   },
   overrides: {
     label: 'Changed fields',
-    order: ['text', 'stats', 'art', 'abil', 'combat', 'tech', 'move', 'path', 'sound', 'data'],
+    order: ['text', 'stats', 'art', 'abil', 'combat', 'tech', 'editor', 'move', 'path', 'sound', 'data'],
     hidden: [], hideEmpty: false, hideUnmodified: true,
   },
 };
@@ -97,8 +97,9 @@ function applyFieldViewPreset(view) {
 // so it stays applied while browsing between objects.
 function categoryFilterHtml() {
   const keys = categoriesSeenSoFar();
-  const activeCount = keys.length - keys.filter(k => ui.hiddenCategories.has(k)).length;
-  const badge = ui.hiddenCategories.size ? '<span class="cat-filter-badge">' + activeCount + '/' + keys.length + '</span>' : '';
+  const hiddenCount = keys.filter(k => ui.hiddenCategories.has(k)).length;
+  const activeCount = keys.length - hiddenCount;
+  const badge = hiddenCount ? '<span class="cat-filter-badge">' + activeCount + '/' + keys.length + '</span>' : '';
   return '<div class="cat-filter">' +
     '<button type="button" id="cat-filter-btn" class="toggle-chip cat-filter-btn" aria-haspopup="true" aria-expanded="false">Categories' + badge + '</button>' +
     '<div id="cat-filter-pop" class="cat-filter-pop" hidden>' +
@@ -341,7 +342,7 @@ export function setupDetails() {
     if (collapsed) {
       const mi = Number(collapsed.getAttribute('data-mi'));
       const mod = (detailCache.get(ui.selectedKey) || [])[mi];
-      if (mod && needsColorEditor(mod)) {
+      if (mod && needsColorEditor(mod) && !collapsed.classList.contains('tt-editing')) {
         e.preventDefault();
         enterTooltipEdit(collapsed, mi, e);
       }
@@ -889,8 +890,10 @@ function updateCatFilterBadge() {
   const btn = document.getElementById('cat-filter-btn');
   if (!btn) return;
   const total = details.querySelectorAll('#cat-filter-pop input[data-cat-key]').length;
-  const activeCount = total - ui.hiddenCategories.size;
-  btn.innerHTML = 'Categories' + (ui.hiddenCategories.size ? '<span class="cat-filter-badge">' + activeCount + '/' + total + '</span>' : '');
+  const hiddenCount = Array.from(details.querySelectorAll('#cat-filter-pop input[data-cat-key]'))
+    .filter(cb => ui.hiddenCategories.has(cb.getAttribute('data-cat-key'))).length;
+  const activeCount = total - hiddenCount;
+  btn.innerHTML = 'Categories' + (hiddenCount ? '<span class="cat-filter-badge">' + activeCount + '/' + total + '</span>' : '');
 }
 
 // Filter the details table rows by field id / label / value AND by the category checklist, without

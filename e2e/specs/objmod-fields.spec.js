@@ -430,7 +430,7 @@ test('field-view presets reorder groups and apply their visibility defaults', as
 
     await page.selectOption('#field-view', 'world-editor');
     const worldGroups = await page.locator('#details .category-row').evaluateAll((rows) => rows.map((row) => row.getAttribute('data-cat')));
-    const worldRank = ['abil', 'art', 'combat', 'move', 'path', 'sound', 'stats', 'tech', 'text', 'data'];
+    const worldRank = ['abil', 'art', 'combat', 'editor', 'move', 'path', 'sound', 'stats', 'tech', 'text', 'data'];
     expect(worldGroups).toEqual([...worldGroups].sort((a, b) => {
         const ai = worldRank.indexOf(a), bi = worldRank.indexOf(b);
         return (ai < 0 ? worldRank.length : ai) - (bi < 0 ? worldRank.length : bi) || a.localeCompare(b);

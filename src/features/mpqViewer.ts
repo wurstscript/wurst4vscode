@@ -115,7 +115,6 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
         _openContext: vscode.CustomDocumentOpenContext,
         _token: vscode.CancellationToken,
     ): Promise<MpqDocument> {
-        log(`openCustomDocument: ${uri.fsPath}`);
         return {
             uri,
             entries: [],
@@ -134,7 +133,6 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
         webviewPanel: vscode.WebviewPanel,
         _token: vscode.CancellationToken,
     ): Promise<void> {
-        log(`resolveCustomEditor: ${document.uri.fsPath}`);
 
         const scriptUri = webviewPanel.webview.asWebviewUri(
             vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', 'mpqViewerWebview.js')
@@ -170,10 +168,10 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
                 const buf = Buffer.from(bytes);
                 document.reader = MpqReader.open(buf);
                 document.entries = await document.reader.getFilesWithInfoAsync();
-                log(`MPQ opened: ${document.entries.length} files, ${document.archiveSize} bytes`);
+                log(`MPQ opened: ${document.uri.fsPath} (${document.entries.length} files, ${(document.archiveSize / 1048576).toFixed(1)} MB)`);
             } catch (e) {
                 document.parseError = e instanceof Error ? e.message : String(e);
-                log(`ERROR loading MPQ: ${formatDiagnosticError(e)}`);
+                log(`ERROR loading MPQ ${document.uri.fsPath}: ${formatDiagnosticError(e)}`);
                 offerIssueReport({
                     area: 'MPQ map viewer',
                     message: document.parseError,
@@ -192,7 +190,6 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
             const type = (msg as { type?: string }).type;
 
             if (type === 'ready') {
-                log('Webview ready');
                 webviewReady = true;
                 postArchiveState();
                 return;
@@ -257,7 +254,6 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
         });
 
         webviewPanel.webview.html = buildHtml(webviewPanel.webview, archiveName, scriptUri);
-        log('HTML set');
         void loadArchive();
     }
 }

@@ -14,16 +14,17 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { decodeToRgba } from './preview/imageDecoders';
-import { ensureGameAssetCached, ensureGameTextureCached } from './preview/cascStorage';
+import { ensureGameTextureCached } from './preview/cascStorage';
 import {
     getCandidateRoots,
     getTempPreviewDir,
     resolveAssetPath,
+    resolveAssetPathWithCasc,
     encodePng,
     scaleDown,
 } from './imageAssetSupport';
 import { AssetIndex, getAssetIndex, invalidateAssetIndex } from '../utils/assetIndex';
-import { appendDiagnostic, formatDiagnosticError } from './diagnostics';
+import { appendDiagnostic, diagnosticTimestamp, formatDiagnosticError } from './diagnostics';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -81,20 +82,16 @@ async function getFreshPreviewPath(basePath: string, sourceMtime: number): Promi
     return undefined;
 }
 
-let logEpoch = 0;
 function log(message: string): void {
     if (isDisposed) return;
-    if (logEpoch === 0) logEpoch = Date.now();
-    const ms = Date.now() - logEpoch;
-    const ts = `+${ms}ms`;
-    const line = `[inline-icons] ${ts} ${message}`;
-    appendDiagnostic('Inline icons', line);
+    appendDiagnostic('Inline icons', message);
+    const line = `[inline-icons] ${diagnosticTimestamp()} ${message}`;
     try {
         output.appendLine(line);
     } catch {
         return;
     }
-    console.log(`[inline-icons] ${ts} ${message}`);
+    console.log(line);
 }
 
 function safeSetDecorations(
@@ -178,7 +175,7 @@ async function getThumbnailUri(fsPath: string): Promise<vscode.Uri | undefined> 
         await fs.promises.writeFile(previewPath, png);
 
         thumbCache.set(fsPath, { pngPath: previewPath, mtime });
-        log(`thumb generated: ${path.basename(fsPath)} -> ${previewPath}`);
+        log(`thumb generated: ${path.basename(fsPath)}`);
         return vscode.Uri.file(previewPath);
     } catch (error) {
         log(`thumb failed: ${fsPath} :: ${formatDiagnosticError(error)}`);
@@ -378,6 +375,9 @@ async function collectImageRanges(
 // Track CASC extractions in progress so we don't fire duplicates
 const extracting = new Set<string>();
 const unresolvedAssets = new Set<string>();
+// Game-data hits (asset path → extracted file), so a rescan reuses them instead of looking up again.
+const cascResolvedTextures = new Map<string, string>();
+const cascResolvedModels = new Set<string>();
 const mdxFoundRangesByPath = new Map<string, vscode.Range[]>();
 const decorationVersions = new Map<string, number>();
 const pendingThumbJobs = new Set<string>();
@@ -465,6 +465,18 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
     if (useAssetIndex) log(`asset index enabled for ${path.basename(document.uri.fsPath)}`);
 
     const { resolved, pending, mdxResolved, mdxPending } = await collectImageRanges(document, roots, scanRanges, index);
+    // Textures already extracted from the game data are decorated like local files.
+    for (const [assetPath, ranges] of pending) {
+        const cachePath = cascResolvedTextures.get(assetPath);
+        if (!cachePath) continue;
+        pending.delete(assetPath);
+        resolved.set(cachePath, [...(resolved.get(cachePath) ?? []), ...ranges]);
+    }
+    for (const [assetPath, ranges] of mdxPending) {
+        if (!cascResolvedModels.has(assetPath)) continue;
+        mdxPending.delete(assetPath);
+        mdxResolved.set(assetPath, ranges);
+    }
     log(`scan ${path.basename(document.uri.fsPath)}: ranges=${scanRanges.length} resolved=${resolved.size} pending=${pending.size} mdxResolved=${mdxResolved.size} mdxPending=${mdxPending.size} version=${version}`);
 
     // Dispose types for paths no longer needed
@@ -500,7 +512,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
         if (pendingThumbJobs.has(fsPath)) continue;
         pendingThumbJobs.add(fsPath);
         const thumbQueuedAt = Date.now();
-        log(`queue thumb: ${fsPath}`);
+        log(`queue thumb: ${path.basename(fsPath)}`);
         scheduleThumbJob(async () => {
             const thumbStartedAt = Date.now();
             const thumbQueueWait = thumbStartedAt - thumbQueuedAt;
@@ -528,7 +540,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
                 activeTypes.set(fsPath, type);
                 safeSetDecorations(active, type, makeDecorationOptions(ranges));
                 clearLoadingRanges(active, fsPath);
-                log(`applied thumb: ${fsPath} ranges=${ranges.length}`);
+                log(`applied thumb: ${path.basename(fsPath)} ranges=${ranges.length}`);
             } finally {
                 pendingThumbJobs.delete(fsPath);
             }
@@ -570,7 +582,8 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
         scheduleCascJob(async () => {
             try {
                 const startedAt = Date.now();
-                const cachedPath = await ensureGameAssetCached(assetPath);
+                // Same lookup as hovers: the game ships models as .mdx even where code says .mdl.
+                const cachedPath = await resolveAssetPathWithCasc(assetPath, roots, 'model');
                 const elapsed = Date.now() - startedAt;
                 const active = vscode.window.activeTextEditor;
                 if (!active || active.document !== document) return;
@@ -583,6 +596,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
                     return;
                 }
                 log(`casc model resolved: ${assetPath} (${elapsed}ms)`);
+                cascResolvedModels.add(assetPath);
                 mdxFoundRangesByPath.set(assetPath, ranges);
                 clearLoadingRanges(active, assetPath);
                 clearMissingRanges(active, assetPath);
@@ -621,7 +635,8 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
                     log(`casc unresolved: ${assetPath} (${elapsed}ms)`);
                     return;
                 }
-                log(`casc resolved: ${assetPath} -> ${cachedPath} (${elapsed}ms)`);
+                log(`casc resolved: ${assetPath} (${elapsed}ms)`);
+                cascResolvedTextures.set(assetPath, cachedPath);
                 const active = vscode.window.activeTextEditor;
                 if (!active || active.document !== document) return;
                 // Directly queue a thumb job for the resolved path instead of
@@ -648,7 +663,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
                         safeSetDecorations(currentActive, type, makeDecorationOptions(pendingRanges));
                         clearLoadingRanges(currentActive, assetPath);
                         clearMissingRanges(currentActive, assetPath);
-                        log(`applied thumb (casc): ${cachedPath} ranges=${pendingRanges.length}`);
+                        log(`applied thumb (casc): ${path.basename(cachedPath)} ranges=${pendingRanges.length}`);
                     });
                 }
             } catch (error) {
@@ -700,6 +715,8 @@ export function registerInlineImageDecorations(_context: vscode.ExtensionContext
             for (const t of activeTypes.values()) t.dispose();
             activeTypes.clear();
             unresolvedAssets.clear();
+            cascResolvedTextures.clear();
+            cascResolvedModels.clear();
             loadingRangesByPath.clear();
             missingRangesByPath.clear();
             mdxFoundRangesByPath.clear();

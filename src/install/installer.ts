@@ -81,6 +81,33 @@ export function getBundledJava(): string {
     return path.join(RUNTIME_DIR, 'bin', exe);
 }
 
+function getCustomJava(): string {
+    return workspace.getConfiguration('wurst').get<string>('javaExecutable')?.trim() || '';
+}
+
+/** The Java executable the language server runs on: `wurst.javaExecutable`, else the bundled runtime. */
+export function getLanguageServerJava(): string {
+    return getCustomJava() || getBundledJava();
+}
+
+/** Version of a Java executable, from its runtime's `release` file or else `java -version`. */
+export async function describeJavaVersion(javaBin: string): Promise<string | null> {
+    try {
+        const release = await fs.promises.readFile(path.join(path.dirname(path.dirname(javaBin)), 'release'), 'utf8');
+        const version = /^JAVA_VERSION="?([^"\r\n]+)"?/m.exec(release)?.[1];
+        const vendor = /^IMPLEMENTOR="?([^"\r\n]+)"?/m.exec(release)?.[1];
+        if (version) return vendor ? `${version} (${vendor})` : version;
+    } catch {
+        // No JDK layout around the executable (e.g. `java` from PATH): ask it instead.
+    }
+    return new Promise((resolve) => {
+        execFile(javaBin, ['-version'], { encoding: 'utf8', windowsHide: true, timeout: 10000 }, (error, stdout, stderr) => {
+            const firstLine = `${stderr || ''}${stdout || ''}`.trim().split(/\r?\n/)[0];
+            resolve(error || !firstLine ? null : firstLine);
+        });
+    });
+}
+
 function chmodRuntimeExecutables(): void {
     if (process.platform === 'win32') return;
     const binDir = path.join(RUNTIME_DIR, 'bin');
@@ -124,8 +151,8 @@ let installedVersionCacheKey = '';
 let installedVersionPromise: Promise<string | null> | undefined;
 
 export function getInstalledVersionString(): Promise<string | null> {
-    const customJava = workspace.getConfiguration('wurst').get<string>('javaExecutable')?.trim() || '';
-    const java = customJava || getBundledJava();
+    const customJava = getCustomJava();
+    const java = getLanguageServerJava();
     if (!customJava && (!fs.existsSync(java) || !fs.existsSync(COMPILER_JAR))) return Promise.resolve(null);
     if (customJava && !fs.existsSync(COMPILER_JAR)) return Promise.resolve(null);
 

@@ -726,7 +726,7 @@ async function testLanguageClientHandleLifecycle() {
         './paths': { RUNTIME_DIR: 'runtime', COMPILER_JAR: 'wurstscript.jar' },
         './install/installer': {
             ensureInstalledOrOfferMigration: async () => { if (failStart) throw new Error('not installed'); },
-            getBundledJava: () => 'java',
+            getLanguageServerJava: () => 'java',
             checkCustomJavaVersion: async () => undefined,
             getInstalledVersionString: async () => 'v1',
             maybeOfferUpdate: async () => undefined,

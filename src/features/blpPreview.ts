@@ -12,7 +12,7 @@ import {
     findGameAsset,
 } from './preview/cascStorage';
 import { DecodedBlpImage, decodeRasterPreview } from './preview/imageDecoders';
-import { clearTextureMissCache, postTexturesToWebview } from './preview/modelPreviewHost';
+import { clearTextureMissCache, handleModelThumbMessage } from './preview/modelPreviewHost';
 import BLP_PREVIEW_CSS from '../webview/blpPreview.css';
 
 type BlpDocument = vscode.CustomDocument;
@@ -201,7 +201,6 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
             webviewPanel.onDidDispose(() => watcher.dispose());
         }
 
-        // eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
         webviewPanel.webview.onDidReceiveMessage(async (msg: unknown) => {
             if (typeof msg !== 'object' || !msg) return;
             const type = (msg as { type?: string }).type;
@@ -229,16 +228,9 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
                 }
                 return;
             }
-            if (type === 'requestTextures') {
-                const rawPaths = (msg as { paths?: unknown }).paths;
-                if (!Array.isArray(rawPaths)) return;
-                const texPaths: string[] = rawPaths.filter((p): p is string => typeof p === 'string');
-                dbg(`texture request: ${texPaths.length} paths`);
-                // Same resolver, payload cache and concurrency limit as the object editor's inline
-                // model preview and the asset browser — this viewer used to carry its own copy.
-                await postTexturesToWebview(texPaths, document.uri, webviewPanel.webview);
-                return;
-            }
+            // The viewer's `requestTextures`: same resolver, payload cache and concurrency limit as
+            // the object editor's inline model preview and the asset browser.
+            if (await handleModelThumbMessage(msg, webviewPanel.webview, document.uri)) return;
             if (type === 'openTexture') {
                 const fsPath = (msg as { fsPath?: unknown }).fsPath;
                 if (typeof fsPath === 'string' && fsPath && fs.existsSync(fsPath)) {

@@ -2,7 +2,7 @@
 
 /**
  * Harness for the readonly image/model preview (`wurst.blpPreview`): the real `BlpPreviewProvider`
- * from src/features/blpPreview.ts mounted on the fake panel, previewing a TGA written to a temp dir.
+ * from src/features/blpPreview.ts mounted on the fake panel, previewing a file copied to a temp dir.
  */
 
 const fs = require('fs');
@@ -35,8 +35,10 @@ function buildTga(width, height) {
 
 async function createBlpPreviewHost(opts) {
     const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wurst-blp-e2e-'));
-    const target = path.join(fixtureDir, opts.fileName || 'swatch.tga');
-    fs.writeFileSync(target, buildTga(opts.width || 8, opts.height || 4));
+    // `copyFrom` previews a checked-in asset (e.g. wc3data/melon.mdx) instead of the generated TGA.
+    const target = path.join(fixtureDir, opts.copyFrom ? path.basename(opts.copyFrom) : 'swatch.tga');
+    if (opts.copyFrom) fs.copyFileSync(path.join(root, opts.copyFrom), target);
+    else fs.writeFileSync(target, buildTga(opts.width || 8, opts.height || 4));
 
     const vscodeMock = createVscodeMock({ workspaceFolders: [{ uri: fileUri(fixtureDir), name: 'fixture', index: 0 }] });
     const load = createTsLoader({ mocks: { vscode: vscodeMock }, augment: { 'src/features/blpPreview.ts': BLP_INTERNALS } });

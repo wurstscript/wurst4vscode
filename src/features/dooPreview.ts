@@ -11,7 +11,7 @@ import { registerParsedPreviewer, ParsedPreviewContext } from './preview/framewo
 import { getObjectCatalog, ObjectRef } from './preview/objectCatalog';
 import { requestPreviewIcon } from './imageAssetSupport';
 import {
-    buildPage, ICON_INLINE_CSS, ICON_LAZYLOAD_SCRIPT, PREVIEW_ICON_CSP,
+    buildPage, DATA_PAGE_CSS, ICON_INLINE_CSS, ICON_LAZYLOAD_SCRIPT, PREVIEW_ICON_CSP,
 } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
 
@@ -24,7 +24,6 @@ type Catalog = Map<string, ObjectRef>;
 
 // ── HTML helpers ────────────────────────────────────────────────────────────
 
-const esc = escapeHtml;
 
 function fmt1(n: number): string {
     const s = n.toFixed(1);
@@ -48,17 +47,17 @@ function objCell(id: string, catalog: Catalog, fallbackName?: string): string {
     const ref = catalog.get(id.toLowerCase());
     const name = ref?.name || fallbackName || id;
     const icon = ref?.iconPath
-        ? `<span class="object-icon" data-key="${esc(id)}" data-icon="${esc(ref.iconPath)}"></span>`
+        ? `<span class="object-icon" data-key="${escapeHtml(id)}" data-icon="${escapeHtml(ref.iconPath)}"></span>`
         : `<span class="object-icon missing"></span>`;
     const sameAsId = name === id;
-    const idSpan = sameAsId ? '' : `<span class="obj-id">${esc(id)}</span>`;
-    return `<div class="obj-cell">${icon}<span class="obj-text"><span class="obj-name">${esc(name)}</span>${idSpan}</span></div>`;
+    const idSpan = sameAsId ? '' : `<span class="obj-id">${escapeHtml(id)}</span>`;
+    return `<div class="obj-cell">${icon}<span class="obj-text"><span class="obj-name">${escapeHtml(name)}</span>${idSpan}</span></div>`;
 }
 
 /** Inline resolved name with rawcode tooltip (for compact drop/ability lists). */
 function refName(id: string, catalog: Catalog): string {
     const name = catalog.get(id.toLowerCase())?.name;
-    return name ? `<span title="${esc(id)}">${esc(name)}</span>` : `<span class="mono">${esc(id)}</span>`;
+    return name ? `<span title="${escapeHtml(id)}">${escapeHtml(name)}</span>` : `<span class="mono">${escapeHtml(id)}</span>`;
 }
 
 function renderDropSetsHtml(drops: DooDropSet[], catalog: Catalog): string {
@@ -80,7 +79,7 @@ function renderDoodadTable(doodads: DooDoodad[], catalog: Catalog): string {
 
         return `<tr>
   <td class="obj">${objCell(d.typeId, catalog)}</td>
-  <td class="id">${d.skinId && d.skinId !== d.typeId ? esc(d.skinId) : '—'}</td>
+  <td class="id">${d.skinId && d.skinId !== d.typeId ? escapeHtml(d.skinId) : '—'}</td>
   <td class="num">${d.variation}</td>
   <td class="num">${fmt1(d.x)}</td><td class="num">${fmt1(d.y)}</td><td class="num">${fmt1(d.z)}</td>
   <td class="num">${fmt3(d.angle)}</td>
@@ -142,7 +141,7 @@ function renderUnitTable(units: DooUnit[], hasSubV11: boolean, catalog: Catalog)
 
         return `<tr${isSloc ? ' class="sloc"' : ''}>
   <td class="obj">${objHtml}</td>
-  <td class="id">${u.skinId && u.skinId !== u.typeId ? esc(u.skinId) : '—'}</td>
+  <td class="id">${u.skinId && u.skinId !== u.typeId ? escapeHtml(u.skinId) : '—'}</td>
   <td class="num">${u.variation}</td>
   <td class="num">${playerLabel(u.ownerIndex)}</td>
   <td class="num">${fmt1(u.x)}</td><td class="num">${fmt1(u.y)}</td><td class="num">${fmt1(u.z)}</td>
@@ -169,35 +168,32 @@ function renderUnitTable(units: DooUnit[], hasSubV11: boolean, catalog: Catalog)
 
 // ── Full HTML page ────────────────────────────────────────────────────────────
 
+// Page-specific rules on top of the shared data-page look (webview/dataPage.css).
 const DOO_CSS = `
+${DATA_PAGE_CSS}
 ${ICON_INLINE_CSS}
-.content { flex: 1; overflow: auto; padding: 12px 16px; }
-h1 { font-size: 1.1em; margin: 0 0 4px; color: var(--vscode-textLink-foreground, var(--fg)); }
-.subtitle { color: var(--muted); font-size: 0.85em; margin-bottom: 16px; }
-h2 { font-size: 0.9em; margin: 18px 0 6px; text-transform: uppercase; letter-spacing: .05em; opacity: .7; }
-.count { font-weight: normal; opacity: .6; }
-.error { color: var(--vscode-errorForeground, #f44747); border: 1px solid currentColor; padding: 6px 10px; border-radius: 3px; margin-bottom: 12px; }
-.empty { opacity: .5; font-style: italic; padding: 4px 0; }
-table { border-collapse: collapse; font-size: .85em; white-space: nowrap; }
-th { background: var(--vscode-editorGroupHeader-tabsBackground, var(--sidebar)); text-align: left; padding: 4px 8px; font-weight: 600; border-bottom: 1px solid var(--border); position: sticky; top: 0; }
-td { padding: 2px 8px; border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent); }
+.content { padding: 12px 16px; }
+h2 { font-size: .9em; margin: 18px 0 6px; text-transform: uppercase; letter-spacing: .05em; opacity: .7; }
+.empty { padding: 4px 0; }
+table { white-space: nowrap; }
+th { position: sticky; top: 0; }
+td { padding: 2px 8px; }
 tr:nth-child(even) td { background: var(--hover); }
-tr.sloc td { background: color-mix(in srgb, var(--vscode-textLink-foreground, #4ec9b0) 8%, transparent); font-style: italic; opacity: .85; }
+tr.sloc td { background: color-mix(in srgb, var(--accent) 8%, transparent); font-style: italic; opacity: .85; }
 td.obj { --obj-icon-size: 20px; }
 .obj-cell { display: flex; align-items: center; gap: 7px; }
 .obj-text { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
 .obj-name { font-weight: 500; }
 .obj-id { font-family: var(--mono); font-size: .82em; opacity: .5; }
-td.id { font-family: var(--mono); color: var(--vscode-textLink-foreground, var(--fg)); }
-td.num { font-family: var(--mono); text-align: right; opacity: .85; }
+td.id { font-family: var(--mono); color: var(--accent); }
+td.num { opacity: .85; }
 td.drops { font-size: .92em; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
-.mono { font-family: var(--mono); }
 .dim { opacity: .5; }
 `;
 
 function buildHtml(parsed: DooFile, fileName: string, catalog: Catalog): string {
     const errorBanner = parsed.error
-        ? `<div class="error">Parse error: ${esc(parsed.error)}</div>`
+        ? `<div class="error">Parse error: ${escapeHtml(parsed.error)}</div>`
         : '';
 
     const isDoodads = parsed.kind === 'doodads';
@@ -227,11 +223,11 @@ ${renderUnitTable(parsed.units, hasSubV11, catalog)}
 
     return buildPage({
         csp: PREVIEW_ICON_CSP,
-        title: esc(fileName),
+        title: escapeHtml(fileName),
         extraCss: DOO_CSS,
         body: `<div class="content">
-<h1>${esc(fileName)}</h1>
-<p class="subtitle">WC3 ${esc(kindLabel)} &nbsp;·&nbsp; v${parsed.version} (sub ${parsed.subVersion})</p>
+<h1>${escapeHtml(fileName)}</h1>
+<p class="subtitle">WC3 ${escapeHtml(kindLabel)} &nbsp;·&nbsp; v${parsed.version} (sub ${parsed.subVersion})</p>
 ${errorBanner}
 ${mainSection}
 </div>

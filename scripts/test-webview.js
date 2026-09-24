@@ -885,6 +885,37 @@ function testAssetBrowserForwardsModelTextures() {
     );
 }
 
+function testThemeTokensHaveOneHome() {
+    // base.css owns the VS Code theme token map. Viewers use the tokens; redefining one (or defining a
+    // custom property in terms of itself) silently forks or breaks the theme for that page.
+    const baseCss = fs.readFileSync(path.join(root, 'src/webview/base.css'), 'utf8');
+    const baseRoot = /:root\s*\{([\s\S]*?)\n\}/.exec(baseCss)?.[1] || '';
+    const baseTokens = new Set([...baseRoot.matchAll(/--(\w[\w-]*):/g)].map((match) => `--${match[1]}`));
+    assert.ok(baseTokens.has('--fg') && baseTokens.has('--accent'), 'base.css :root should define the shared theme tokens');
+    const sources = fs.readdirSync(path.join(root, 'src'), { recursive: true })
+        .map((file) => String(file).split(path.sep).join('/'))
+        .filter((file) => /\.(css|ts)$/.test(file) && file !== 'webview/base.css');
+    for (const file of sources) {
+        const text = fs.readFileSync(path.join(root, 'src', file), 'utf8');
+        for (const [, bare, value] of text.matchAll(/--(\w[\w-]*):([^;{}]+);/g)) {
+            const name = `--${bare}`;
+            assert.ok(!baseTokens.has(name), `src/${file} redefines the base.css token ${name}; use the shared token instead`);
+            assert.ok(!value.includes(`var(${name})`), `src/${file} defines ${name} in terms of itself`);
+        }
+    }
+}
+
+function testScriptSafeJson() {
+    const { scriptSafeJson } = loadTsModuleWithMocks('src/features/webviewShared.ts', {});
+    const lineSep = String.fromCharCode(0x2028);
+    const paraSep = String.fromCharCode(0x2029);
+    const value = { html: '</script><b>&amp;', text: `a${lineSep}b${paraSep}c` };
+    const out = scriptSafeJson(value);
+    assert.ok(!/[<>&]/.test(out) && !out.includes(lineSep) && !out.includes(paraSep),
+        'JSON embedded in an inline <script> must not contain raw <, >, &, U+2028 or U+2029');
+    assert.deepEqual(JSON.parse(out), value, 'script-safe JSON must still parse back to the same value');
+}
+
 function testThumbnailLifecycleGuards() {
     const host = fs.readFileSync(path.join(root, 'src/features/preview/modelPreviewHost.ts'), 'utf8');
     const objmod = fs.readFileSync(path.join(root, 'src/webview/objModEditor/modelThumbnails.ts'), 'utf8');
@@ -1345,6 +1376,8 @@ async function main() {
     testImportedAssetDedupeSafety();
     testLocalE2eFixturesRemainOptIn();
     testWpmFlagSemantics();
+    testScriptSafeJson();
+    testThemeTokensHaveOneHome();
     testMpqReextractUsesFreshUriAfterDeletedOutput();
     console.log('webview harness tests passed');
 }

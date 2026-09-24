@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { parseObjMod, serializeObjMod, ObjModFile, ObjModEntry, ObjModMod, ObjModVarType } from 'casc-ts/formats';
-import { ParsedPreviewContext } from './preview/framework';
+import { buildLoadingHtml, ParsedPreviewContext } from './preview/framework';
 import { requestPreviewIcon, requestTooltipBackdrop, requestTooltipBorder, getCandidateRoots, resolveAssetPathWithCasc, gatherImportedAssets } from './imageAssetSupport';
 import {
     clearTextureMissCache,
@@ -22,7 +22,7 @@ import {
     loadTriggerStringsForUri, resolveTriggerString, TriggerStringTable,
     findWtsUri, nextTriggerStringId, applyWtsEdits,
 } from './preview/triggerStrings';
-import { buildPage } from './webviewShared';
+import { buildPage, scriptSafeJson } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
 import {
     SlkTable, ProfileTable,
@@ -1703,14 +1703,6 @@ function convertSlkName(slkName: string): string | undefined {
     return SLK_NAME_TO_PATH[slkName];
 }
 
-function buildObjLoadingHtml(fileName: string): string {
-    return buildPage({
-        csp: "default-src 'none'; style-src 'unsafe-inline';",
-        title: escapeHtml(fileName),
-        body: `<div class="wv-state" role="status" aria-live="polite" aria-busy="true"><div class="wv-spinner"></div><div class="wv-loading-text">Loading ${escapeHtml(fileName)}…</div></div>`,
-    });
-}
-
 function isWithinDirectory(root: string, target: string): boolean {
     const relative = path.relative(path.resolve(root), path.resolve(target));
     return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
@@ -1845,7 +1837,7 @@ async function buildHtml(
     const pendingKey = pendingObjectSelection.get(context.uri.toString());
     if (pendingKey) pendingObjectSelection.delete(context.uri.toString());
     const preferredKey = objects.find((object) => object.identity === preferredSelectionIdentity)?.key;
-    const initialJson = JSON.stringify({
+    const initialJson = scriptSafeJson({
         objects,
         selectedKey: pendingKey ?? preferredKey ?? objects[0]?.key ?? '',
         isPendingJump: !!pendingKey,
@@ -1854,12 +1846,7 @@ async function buildHtml(
         fileInfo: combined ?? { mainName: fileName },
         thumbnailWorkerUri,
         baseObjects,
-    })
-        .replace(/</g, '\\u003c')
-        .replace(/>/g, '\\u003e')
-        .replace(/&/g, '\\u0026')
-        .replace(/\u2028/g, '\\u2028')
-        .replace(/\u2029/g, '\\u2029');
+    });
     const overrides = parsed.origObjs.reduce((sum, entry) => sum + entry.mods.length, 0) +
         parsed.customObjs.reduce((sum, entry) => sum + entry.mods.length, 0);
     const summary = `${objects.length} object${objects.length === 1 ? '' : 's'} - ${overrides} override${overrides === 1 ? '' : 's'}`;
@@ -1891,7 +1878,7 @@ async function buildHtml(
 }
 .tt-collapsed-box,
 .tt-preview {
-  font-family: '${TOOLTIP_FONT_FAMILY}', var(--vscode-font-family, sans-serif);
+  font-family: '${TOOLTIP_FONT_FAMILY}', var(--font);
 }
 ` : '';
 
@@ -2551,7 +2538,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', path.basename(CODICON_CSS_BUNDLE)),
         ).toString();
         // Show a spinner immediately — buildHtml awaits CASC game-data and can exceed 200ms.
-        panel.webview.html = buildObjLoadingHtml(fileName);
+        panel.webview.html = buildLoadingHtml(fileName);
         doc.reload = async () => {
             panel.webview.html = await buildHtml(
                 doc.displayFile,

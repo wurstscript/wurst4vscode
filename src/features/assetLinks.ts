@@ -7,7 +7,7 @@ import { loadObjValueCatalog, type ValueOption } from './objModPreview';
 import { cacheModelThumbnail, markModelThumbnailBad, postTexturesToWebview, requestModelThumbnail } from './preview/modelPreviewHost';
 import { getGameAssetCacheDir, getModelThumbCacheDir } from './preview/cascStorage';
 import { isSoundAssetPath, playSoundInline } from './soundPreview';
-import { buildPage, ICON_INLINE_CSS } from './webviewShared';
+import { buildPage, ICON_INLINE_CSS, scriptSafeJson } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
 import { showWarningWithLogs } from './diagnostics';
 import { assetSearchScore, fuzzyMatch } from './preview/fuzzy';
@@ -202,10 +202,7 @@ async function openCodeAssetBrowser(context: vscode.ExtensionContext, target: Br
             sound: assetBrowserItems(dedupeAssetOptions([...imported.sound, ...catalog.sounds])),
         },
     };
-    const initialJson = JSON.stringify(initial)
-        .replace(/</g, '\\u003c')
-        .replace(/>/g, '\\u003e')
-        .replace(/&/g, '\\u0026');
+    const initialJson = scriptSafeJson(initial);
     panel.webview.html = buildAssetBrowserHtml(initialJson, target.currentValue, panel.webview.cspSource, mdxViewerUri);
     // eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
     panel.webview.onDidReceiveMessage((message) => {
@@ -254,13 +251,13 @@ function buildAssetBrowserHtml(initialJson: string, currentValue: string, cspSou
 ${ICON_INLINE_CSS}
 :root { --obj-icon-size: 42px; }
 .browser { height: 100%; display: grid; grid-template-rows: auto auto 1fr; min-height: 0; }
-.toolbar { display: flex; gap: 6px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--sidebar); }
+.toolbar { gap: 6px; padding: 8px 10px; }
 .tab { min-width: 78px; justify-content: center; }
-.search { flex: 1; min-width: 120px; height: 28px; padding: 3px 8px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--input-fg); border-radius: 3px; font-family: var(--font); }
+.search { flex: 1; min-width: 120px; }
 .meta { padding: 6px 10px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .grid { overflow: auto; padding: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; align-content: start; }
 .card { min-width: 0; display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 8px; align-items: center; padding: 7px; border: 1px solid var(--border); background: transparent; color: var(--fg); border-radius: 4px; cursor: pointer; text-align: left; font-family: var(--font); }
-.card:hover, .card:focus-visible { background: var(--hover); border-color: var(--vscode-focusBorder, #007fd4); outline: none; }
+.card:hover, .card:focus-visible { background: var(--hover); border-color: var(--focus); outline: none; }
 .card-text { display: block; min-width: 0; overflow: hidden; }
 .card-name { display: block; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-path { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -275,11 +272,11 @@ ${ICON_INLINE_CSS}
 .empty { color: var(--muted); padding: 24px; text-align: center; }
 `,
         body: `<div class="browser">
-  <div class="toolbar">
+  <div class="wv-toolbar toolbar">
     <button id="tab-icon" class="wv-btn tab" type="button" data-tab="icon">Icons</button>
     <button id="tab-model" class="wv-btn tab" type="button" data-tab="model">Models</button>
     <button id="tab-sound" class="wv-btn tab" type="button" data-tab="sound">Sounds</button>
-    <input id="search" class="search" type="search" placeholder="Search assets..." aria-label="Search assets">
+    <input id="search" class="wv-input search" type="search" placeholder="Search assets..." aria-label="Search assets">
   </div>
   <div class="meta">Replacing ${escapeHtml(currentValue)}</div>
   <div id="grid" class="grid"></div>

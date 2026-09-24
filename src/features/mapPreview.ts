@@ -11,7 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { parseDoo } from 'casc-ts/formats';
-import { buildPage } from './webviewShared';
+import { buildPage, PREVIEW_ICON_CSP, scriptSafeJson } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
 import { findGameTexture } from './preview/cascStorage';
 import { loadTerrainWaterLevel, loadTilesetBlightTexture, parseSlk, readGameData } from './preview/wc3Data';
@@ -450,7 +450,7 @@ async function buildHtml(terrain: Terrain, markers: Marker[]): Promise<string> {
         : 'texture fallback colors';
 
     return buildPage({
-        csp: "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;",
+        csp: PREVIEW_ICON_CSP,
         title: 'Map Preview',
         extraCss: `
 .mp-shell { height: 100%; display: grid; grid-template-rows: auto 1fr auto; min-height: 0; }
@@ -491,7 +491,7 @@ async function buildHtml(terrain: Terrain, markers: Marker[]): Promise<string> {
 </div>
 <script>
 ${VIEWER_SCRIPT}
-initMapPreview(${JSON.stringify(data)});
+initMapPreview(${scriptSafeJson(data)});
 </script>`,
     });
 }

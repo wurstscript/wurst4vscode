@@ -1,5 +1,5 @@
-/* Shared stylesheet for the map-data viewers/editors (.w3i, .w3c, .w3r, .mmp, .imp, .shd, .w3e, ...); see mapDataPreview.ts page(). */
-.content { flex: 1; overflow: auto; }
+/* Stylesheet for the map-data viewers/editors (.w3i, .w3c, .w3r, .mmp, .imp, .shd, .w3e, ...), appended
+   after the shared dataPage.css by mapDataPreview.ts page(). Only map-data-specific rules belong here. */
 .md-header {
   display: flex;
   align-items: center;
@@ -9,7 +9,7 @@
   background: var(--sidebar);
 }
 .md-title {
-  color: var(--vscode-textLink-foreground, var(--fg));
+  color: var(--accent);
   font-size: 15px;
   font-weight: 600;
   line-height: 1.3;
@@ -18,17 +18,8 @@
   text-overflow: ellipsis;
 }
 .md-meta { color: var(--muted); font-size: 12px; margin-top: 1px; }
-.readonly-badge {
-  display: inline-block;
-  margin-left: 8px;
-  padding: 1px 5px;
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-}
+.md-meta .wv-badge, .md-meta .wv-dirty { margin-left: 8px; }
+.md-meta .wv-dirty { font-weight: 600; }
 .dialog { max-width: 1060px; padding: 14px 16px 22px; }
 h2 {
   color: var(--fg);
@@ -67,25 +58,18 @@ h2 {
   border: 1px solid var(--border);
   border-radius: 2px;
   padding: 0 4px;
-  color: var(--vscode-textLink-foreground, var(--muted));
+  color: var(--accent);
   font-family: var(--mono);
   font-size: 10px;
 }
-.source-pill.missing {
-  color: var(--vscode-errorForeground, #f14c4c);
-}
-.field-control {
-  width: 100%;
-  min-width: 0;
-  height: 26px;
-  padding: 3px 6px;
-  color: var(--input-fg);
-  background: var(--input-bg);
-  border: 1px solid var(--input-border, var(--border));
-  border-radius: 2px;
-  font: inherit;
-  line-height: 18px;
-}
+.source-pill.missing { color: var(--error); }
+/* Editor inputs are .wv-input (base.css); these only size them for form grids and table cells. */
+.field-control, .list-input, .mmp-input { width: 100%; }
+.wv-input.mono { font-family: var(--mono); }
+.list-color, .color-input { width: 34px; height: 26px; padding: 1px; border: 1px solid var(--input-border); background: var(--input-bg); border-radius: 2px; }
+.list-color:focus, .color-input:focus { outline: 1px solid var(--focus); outline-offset: -1px; }
+.remove-button { color: var(--error); background: transparent; padding: 3px 7px; }
+.hint { margin: 2px 0 0; }
 textarea.field-control {
   height: auto;
   min-height: 58px;
@@ -96,7 +80,6 @@ textarea.field-control {
   opacity: 1;
   cursor: default;
 }
-.field-control.mono { font-family: var(--mono); }
 .checkbox-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -119,34 +102,14 @@ textarea.field-control {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.empty { color: var(--muted); font-style: italic; }
-.error {
-  color: var(--vscode-errorForeground, #f14c4c);
-  border: 1px solid color-mix(in srgb, currentColor 65%, transparent);
-  padding: 7px 9px;
-  margin-bottom: 12px;
-  border-radius: 2px;
-}
 .table-wrap {
   overflow: auto;
   border: 1px solid var(--border);
 }
-table { border-collapse: collapse; width: 100%; font-size: 12px; min-width: 620px; }
-th {
-  text-align: left;
-  background: var(--vscode-editorGroupHeader-tabsBackground, var(--sidebar));
-  border-bottom: 1px solid var(--border);
-  padding: 6px 8px;
-  font-weight: 600;
-}
-td {
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
-  padding: 5px 8px;
-  vertical-align: top;
-}
+table { width: 100%; min-width: 620px; }
+th { padding: 6px 8px; }
+td { padding: 5px 8px; vertical-align: top; }
 tbody tr:last-child td { border-bottom: 0; }
-td.num { text-align: right; font-family: var(--mono); }
-td.mono { font-family: var(--mono); }
 .metric-strip {
   display: flex;
   flex-wrap: wrap;
@@ -175,6 +138,6 @@ canvas {
   image-rendering: pixelated;
   max-width: min(100%, 768px);
   border: 1px solid var(--border);
-  background: var(--vscode-editor-background, #1e1e1e);
+  background: var(--bg);
 }
 .swatch { display:inline-block; width:12px; height:12px; border:1px solid var(--border); vertical-align:-2px; margin-right:6px; }

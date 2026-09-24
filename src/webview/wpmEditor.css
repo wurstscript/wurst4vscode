@@ -1,0 +1,62 @@
+/* Pathing-map (.wpm) editor stylesheet, appended after the base stylesheet by wpmPreview.ts. */
+:root { --panel-strong: color-mix(in srgb, var(--sidebar) 84%, var(--bg)); }
+.title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meta { flex: 1; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.version-warning { color: var(--warn); font-size: 11px; white-space: nowrap; }
+.toolbar { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+#zoomLabel { min-width: 56px; text-align: center; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+#workspace { display: flex; flex: 1; min-height: 0; }
+#viewport {
+  flex: 1; min-width: 0; overflow: hidden; position: relative;
+  background: color-mix(in srgb, var(--bg) 60%, #000);
+  cursor: grab;
+}
+#wpmCanvas { display: block; position: absolute; top: 0; left: 0; image-rendering: pixelated; }
+#tooltip {
+  position: fixed; pointer-events: none;
+  background: var(--sidebar); border: 1px solid var(--border);
+  padding: 7px 10px; border-radius: 4px; font-size: 11px; display: none; z-index: 10;
+  box-shadow: 0 2px 8px var(--shadow); line-height: 1.7;
+}
+#palette {
+  width: 238px; flex: 0 0 238px; padding: 12px 10px; overflow: auto;
+  border-left: 1px solid var(--border); background: var(--sidebar); order: 2;
+}
+.palette-section { padding: 0 0 14px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+.palette-section:last-child { border-bottom: 0; margin-bottom: 0; }
+.section-title { color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .08em; margin: 0 0 8px; text-transform: uppercase; }
+.tools { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.tool {
+  display: flex; align-items: center; gap: 7px; padding: 7px 8px; text-align: left;
+  border: 1px solid transparent; border-radius: 3px; background: transparent;
+  color: var(--muted); font: inherit; font-size: 12px; cursor: pointer;
+}
+.tool:hover { background: color-mix(in srgb, var(--btn-primary-bg) 55%, transparent); color: var(--fg); }
+.tool:focus-visible, input:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+.tool .tool-icon { width: 18px; color: var(--muted); font-size: 15px; text-align: center; }
+.tool.active { border-color: var(--focus); background: color-mix(in srgb, var(--btn-primary-bg) 35%, transparent); color: var(--fg); }
+.tool.active .tool-icon { color: var(--btn-primary-fg); }
+.brush-size { display: flex; align-items: center; gap: 8px; }
+.brush-size input { flex: 1; min-width: 0; accent-color: var(--focus); }
+.brush-size output { min-width: 35px; color: var(--fg); font: 12px var(--mono); text-align: right; }
+.flag-grid { display: grid; gap: 4px; }
+.flag-card { display: flex; align-items: center; gap: 7px; padding: 5px 6px; border-radius: 4px; cursor: pointer; }
+.flag-card:hover { background: color-mix(in srgb, var(--btn-primary-bg) 25%, transparent); }
+.flag-card input { margin: 0; accent-color: var(--focus); }
+.swatch { width: 16px; height: 16px; border-radius: 4px; border: 1px solid color-mix(in srgb, var(--fg) 25%, transparent); flex: 0 0 16px; }
+.flag-copy { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; min-width: 0; flex: 1; }
+.flag-copy strong { font-size: 11px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flag-copy small { color: var(--muted); font: 10px var(--mono); }
+.brush-readout { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; padding: 7px 8px; border-radius: 4px; background: var(--panel-strong); }
+#brushValue { color: var(--fg); font: 12px var(--mono); }
+#brushLabel { color: var(--muted); font-size: 11px; }
+.legend-list { display: grid; gap: 5px; }
+.legend-item { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
+.legend-item .swatch { width: 12px; height: 12px; flex-basis: 12px; }
+.edit-hint { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.edit-hint kbd { border: 1px solid var(--border); border-radius: 3px; padding: 1px 4px; color: var(--fg); }
+@media (max-width: 680px) {
+  #workspace { flex-direction: column; }
+  #palette { width: 100%; flex-basis: auto; max-height: 270px; border-left: 0; border-top: 1px solid var(--border); }
+  .flag-grid { grid-template-columns: 1fr 1fr; }
+}

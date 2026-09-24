@@ -1,0 +1,34 @@
+/*
+ * Shared look for the read-only, table-heavy data pages (trigger .wct/.wtg, .doo placement, map-data
+ * viewers). Append after the base stylesheet via buildPage({ extraCss: DATA_PAGE_CSS + ... }). It styles
+ * plain semantic class names, so keep it off pages that define their own tables (the object editor).
+ */
+.content { flex: 1; overflow: auto; }
+h1 { font-size: 1.1em; margin: 0 0 4px; color: var(--accent); }
+.subtitle { color: var(--muted); font-size: .85em; margin: 0 0 16px; }
+.count { font-weight: normal; opacity: .6; }
+.error, .warn {
+  border: 1px solid color-mix(in srgb, currentColor 65%, transparent);
+  padding: 6px 10px;
+  border-radius: 2px;
+  margin-bottom: 12px;
+}
+.error { color: var(--error); }
+.warn { color: var(--warn); }
+.empty { color: var(--muted); font-style: italic; }
+.hint { color: var(--muted); font-size: 11px; }
+table { border-collapse: collapse; font-size: 12px; }
+th {
+  background: var(--th-bg);
+  text-align: left;
+  padding: 4px 8px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+td {
+  padding: 3px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+}
+td.num { font-family: var(--mono); text-align: right; }
+.mono { font-family: var(--mono); }
+.dim { opacity: .6; }

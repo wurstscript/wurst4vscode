@@ -260,7 +260,6 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
     :root {
       --cb-a: color-mix(in srgb, var(--vscode-editorWidget-background) 65%, transparent);
       --cb-b: color-mix(in srgb, var(--vscode-editorWidget-border) 55%, transparent);
-      --model-bg: color-mix(in srgb, var(--bg) 72%, var(--fg) 28%);
     }
     .wv-header { padding: 6px 12px; }
     .meta {
@@ -355,7 +354,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       line-height: 1.4;
     }
     .tex-item a {
-      color: var(--vscode-textLink-foreground, #4da3ff);
+      color: var(--accent);
       text-decoration: none;
       cursor: pointer;
     }

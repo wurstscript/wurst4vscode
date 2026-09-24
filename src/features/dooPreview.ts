@@ -13,7 +13,7 @@ import { requestPreviewIcon } from './imageAssetSupport';
 import {
     buildPage, DATA_PAGE_CSS, ICON_INLINE_CSS, ICON_LAZYLOAD_SCRIPT, PREVIEW_ICON_CSP,
 } from './webviewShared';
-import { escapeHtml } from './webviewUtils';
+import { escapeHtml, fmt3 } from './webviewUtils';
 
 export {
     DooFile, DooDoodad, DooSpecialDoodad, DooUnit, DooDropSet,
@@ -28,11 +28,6 @@ type Catalog = Map<string, ObjectRef>;
 function fmt1(n: number): string {
     const s = n.toFixed(1);
     return s.endsWith('.0') ? s.slice(0, -2) : s;
-}
-
-function fmt3(n: number): string {
-    // eslint-disable-next-line sonarjs/super-linear-regex -- single quantified group anchored at end, no ambiguous adjacency; not actually susceptible to backtracking blowup.
-    return n.toFixed(3).replace(/\.?0+$/, '');
 }
 
 function playerLabel(p: number): string {

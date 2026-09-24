@@ -7,7 +7,7 @@ const { test, expect } = require('../fixtures');
 test('renders icon types, coordinates, colors, and the default-color state', async ({ openMmp }) => {
     const { page, host, pageErrors } = await openMmp();
 
-    await expect(page.locator('#mmpCount')).toHaveText('4');
+    await expect(page.locator('#editorCount')).toHaveText('4');
     await expect(page.locator('[data-row="0"] [data-field="type"]')).toHaveValue('0');
     await expect(page.locator('[data-row="0"] [data-field="x"]')).toHaveValue('-1024');
     await expect(page.locator('[data-row="0"] [data-default-color]')).toBeChecked();
@@ -25,18 +25,18 @@ test('removing an icon is undoable and redoable', async ({ openMmp }) => {
 
     await page.click('[data-row="1"] [data-remove]');
     await expect.poll(() => host.doc.file.icons.length).toBe(3);
-    await expect(page.locator('#mmpCount')).toHaveText('3');
+    await expect(page.locator('#editorCount')).toHaveText('3');
     expect(host.editLabels).toEqual(['Remove minimap icon']);
     expect(host.isDirty).toBe(true);
 
     host.undo();
     await expect.poll(() => host.doc.file.icons.length).toBe(4);
-    await expect(page.locator('#mmpCount')).toHaveText('4');
+    await expect(page.locator('#editorCount')).toHaveText('4');
     expect(host.isDirty).toBe(false);
 
     host.redo();
     await expect.poll(() => host.doc.file.icons.length).toBe(3);
-    await expect(page.locator('#mmpCount')).toHaveText('3');
+    await expect(page.locator('#editorCount')).toHaveText('3');
 });
 
 test('editing coordinates, type, and color fields updates the icon', async ({ openMmp }) => {
@@ -55,6 +55,12 @@ test('editing coordinates, type, and color fields updates the icon', async ({ op
     expect(host.doc.file.icons[0]).toMatchObject({ x: 1234, red: 0x12, green: 0x34, blue: 0x56, alpha: 96 });
     await expect(page.locator('[data-row="0"] .type-label')).toHaveText('Player Start');
     expect(host.editLabels).toEqual(['Edit icon type', 'Edit icon x', 'Edit icon color', 'Edit icon alpha']);
+
+    await page.check('[data-row="0"] [data-default-color]');
+    await expect.poll(() => host.doc.file.icons[0].alpha).toBe(0xff);
+    expect(host.doc.file.icons[0]).toMatchObject({ red: 0xff, green: 0xff, blue: 0xff });
+    await expect(page.locator('[data-row="0"] [data-field="color"]')).toBeDisabled();
+    expect(host.editLabels.at(-1)).toBe('Set default icon color');
 });
 
 test('adding an icon and saving round-trips the edited list', async ({ openMmp }) => {

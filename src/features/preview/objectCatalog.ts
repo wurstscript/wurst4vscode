@@ -144,10 +144,10 @@ function pickFirst(row: Record<string, string>, keys: string[]): string | undefi
     return undefined;
 }
 
-// ── asset-path heuristics (mirrors objModPreview's profile normalizers) ──────────
+// ── asset-path heuristics (also used by objModPreview's profile normalizers) ─────
 
 /** First comma-segment of a value, unquoted; undefined for blanks, '-', or WESTRING_ refs. */
-function firstAssetPath(value: string | undefined): string | undefined {
+export function firstAssetPath(value: string | undefined): string | undefined {
     const first = String(value ?? '').split(',')[0].trim().replace(/^"|"$/g, '');
     return (!first || first === '-' || first.startsWith('WESTRING_')) ? undefined : first;
 }
@@ -166,7 +166,7 @@ function profileModelPath(key: string, value: string): string | undefined {
     return normalizeModelPath(first);
 }
 
-function normalizeModelPath(value: string | undefined): string | undefined {
+export function normalizeModelPath(value: string | undefined): string | undefined {
     const first = firstAssetPath(value);
     if (!first) return undefined;
     const normalized = first.replace(/\//g, '\\');

@@ -1779,10 +1779,10 @@ function resolveBaseRace(baseId: string, summaryData: Pick<ObjSummaryData, 'prof
 function buildAddObjectControlsHtml(hasBaseObjects: boolean): string {
     const disabled = hasBaseObjects ? '' : 'disabled';
     return `<div class="object-list-actions" role="toolbar" aria-label="Object actions">
-  <button id="add-object" class="add-object-button" type="button" title="Create a custom object" ${disabled}><span aria-hidden="true">＋</span> New</button>
-  <button id="copy-object" class="object-action-button" type="button" title="Copy selected object (Ctrl+C)">Copy</button>
-  <button id="paste-object" class="object-action-button" type="button" title="Paste as a new object (Ctrl+V)" disabled>Paste</button>
-  <button id="delete-object" class="object-action-button object-delete-button" type="button" title="Delete selected custom object (Delete)" disabled>Delete</button>
+  <button id="add-object" class="add-object-button" type="button" title="Create a custom object" ${disabled}><span class="codicon codicon-add" aria-hidden="true"></span>New</button>
+  <button id="copy-object" class="object-action-button" type="button" title="Copy selected object (Ctrl+C)" aria-label="Copy"><span class="codicon codicon-copy" aria-hidden="true"></span><span class="action-label">Copy</span></button>
+  <button id="paste-object" class="object-action-button" type="button" title="Paste as a new object (Ctrl+V)" aria-label="Paste" disabled><span class="codicon codicon-clippy" aria-hidden="true"></span><span class="action-label">Paste</span></button>
+  <button id="delete-object" class="object-action-button object-delete-button" type="button" title="Delete selected custom object (Delete)" aria-label="Delete" disabled><span class="codicon codicon-trash" aria-hidden="true"></span><span class="action-label">Delete</span></button>
 </div>
 <div id="add-object-overlay" class="add-object-overlay" hidden>
   <form id="add-object-dialog" class="add-object-dialog" aria-labelledby="add-object-title">

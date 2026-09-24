@@ -400,7 +400,7 @@ async function testIconLoader() {
     installIconDom(rootEl);
 
     const messages = [];
-    const { createIconLoader } = loadTsModule('src/webview/objModIconLoader.ts');
+    const { createIconLoader } = loadTsModule('src/webview/iconLoader.ts');
     const loader = createIconLoader({ postMessage: (message) => messages.push(message) });
     loader.observe(rootEl);
     FakeIntersectionObserver.last.intersectAll();
@@ -458,11 +458,11 @@ async function testFolderModeMapAssetResolution() {
     };
     const mod = loadTsModuleWithMocks('src/features/imageAssetSupport.ts', {
         vscode: vscodeMock,
-        './blpPreview': {
+        './preview/imageDecoders': {
             decodeRasterPreview: () => ({ mode: 'rgba', width: 1, height: 1, rgbaBase64: '', description: 'stub' }),
-            ensureGameAssetCached: async () => undefined,
         },
         './preview/cascStorage': {
+            ensureGameAssetCached: async () => undefined,
             findCachedGameAsset: async () => undefined,
             getGameAssetCacheDir: () => path.join(tmpRoot, 'game-cache'),
             ensureGameTextureCached: async () => undefined,
@@ -905,15 +905,13 @@ function testThumbnailLifecycleGuards() {
     assert.ok(host.includes('scaleDown(dec.rgba'), 'thumbnail textures should be downscaled before webview transfer and GPU upload');
     assert.ok(host.includes("if (ext === 'blp')"), 'BLP thumbnails should retain the renderer decoder rather than using the generic preview decoder');
     assert.ok(viewer.includes('downscaleTextureImageData'), 'decoded BLP thumbnail textures should be reduced before GPU upload');
-    assert.ok(objmod.includes('maxTextureDimension: 256'), 'thumbnail renders should opt into bounded browser-side BLP uploads');
+    assert.ok(thumbnailWorker.includes('MAX_TEXTURE_DIMENSION'), 'worker thumbnail renders should bound browser-side texture uploads');
     assert.ok(host.includes('return `v8s-'), 'the cache version must invalidate thumbnails captured before isolated studio-light rendering');
     assert.ok(!objmod.includes('capture-dark-accepted'), 'dark frames must never be persisted as successful thumbnails');
-    assert.ok(objmod.includes('reload-full-textures'), 'a dark fast-path render should retry with full-size textures before failing');
     assert.ok(objmod.includes('Array.from(new Set((texturePaths || [])'), 'thumbnail capture must wait for every referenced material texture');
     assert.ok(!objmod.includes('(?:normal|orm)'), 'thumbnail loading must not omit HD material textures');
-    assert.ok(objmod.includes('freezeAnimation: true'), 'thumbnail renders should explicitly freeze animation');
     assert.ok(viewer.includes('if (animationFrozen) return'), 'the animation frame loop should not update or rerender frozen thumbnails');
-    assert.ok(objmod.includes("toDataURL('image/webp', 0.84)"), 'small thumbnail captures should not use visibly blurry WebP compression');
+    assert.ok(thumbnailWorker.includes("convertToBlob({ type: 'image/webp', quality: 0.88 })"), 'small thumbnail captures should not use visibly blurry WebP compression');
     assert.ok(objmod.includes('new Worker(modelThumbWorkerBlobUrl'), 'objmod thumbnail rendering should run in a webview-compatible Blob worker');
     assert.ok(objmod.includes('fetch(initial.thumbnailWorkerUri'), 'the worker bundle must be fetched before creating its Blob URL');
     assert.ok(!objmod.includes('new Worker(initial.thumbnailWorkerUri)'), 'VS Code resource URLs cannot be passed directly to the Worker constructor');
@@ -947,10 +945,6 @@ function testThumbnailLifecycleGuards() {
     assert.ok(viewer.includes('clearModel()'), 'the model viewer should expose an explicit stale-preview reset');
     assert.ok(modelPreviewPanel.includes('mpvViewer().clearModel()'), 'inline preview must clear the prior model before resolving a new path');
     assert.ok(
-        /onError\(message\)[\s\S]{0,260}finishModelThumb\(false, 'load-error: ' \+ message\)/.test(modelPreviewPanel),
-        'a parser failure reported through loadModel callbacks must release the active thumbnail job',
-    );
-    assert.ok(
         /if \(!rendered\) \{\s*modelThumbWorker\?\.postMessage\(\{ type: 'cancel', key \}\)/.test(objmod),
         'a failed thumbnail must cancel its worker job before allowing the next queued model to start',
     );
@@ -960,7 +954,7 @@ function testThumbnailLifecycleGuards() {
     );
     assert.ok(viewer.includes('renderer?.adoptTexture(texturePath, cached.texture)'), 'warm thumbnail renderers should reuse same-context GPU textures without uploading again');
     assert.ok(/setTextureCompressedImage[\s\S]{0,200}rememberDecodedTexture\(texPath, null\)/.test(viewer), 'compressed DDS GPU textures should join the warm renderer cache');
-    assert.ok(viewer.includes("textureCacheKey: 'thumbnail'") || objmod.includes("textureCacheKey: 'thumbnail'"), 'thumbnail loads must opt into the warm texture cache');
+    assert.ok(assetLinks.includes("textureCacheKey: 'thumbnail'"), 'code asset picker thumbnail loads must opt into the warm texture cache');
     assert.ok(!host.includes('bad-cache-hit'), 'thumbnail host must not suppress retries based on old failures');
     assert.ok(!objmod.includes('TEXTURE_WAIT_RETRIES'), 'objmod thumbnails must wait for texture completion instead of retry-budget capture');
     assert.ok(!objmod.includes('texture-wait-timeout'), 'objmod thumbnails must not fail because texture loading took too long');

@@ -1,5 +1,5 @@
 import { fuzzyMatch } from '../../features/preview/fuzzy';
-import { esc } from '../objModWebviewUtils';
+import { esc } from '../webviewUtils';
 import { effect, untracked } from '../signals';
 import { objects, tree, details, iconLoader, ui, collapsedNodes } from './state';
 import { observeModelThumbs } from './modelThumbnails';

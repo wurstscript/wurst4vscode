@@ -3,7 +3,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 
-import { ensureGameTextureCached } from './blpPreview';
+import { ensureGameTextureCached } from './preview/cascStorage';
 import {
     ensurePreview,
     getCandidateRoots,

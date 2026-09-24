@@ -1,4 +1,4 @@
-import { renderWc3Colors } from '../objModWebviewUtils';
+import { renderWc3Colors } from '../webviewUtils';
 import { customSwatchesHtml, rememberCustomColor } from './fieldDisplay';
 
 // Current selection range for a textarea (kept fresh even after blur, so toolbar/color-picker work).

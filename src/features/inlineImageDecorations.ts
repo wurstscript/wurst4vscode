@@ -13,7 +13,8 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { decodeToRgba, ensureGameAssetCached, ensureGameTextureCached } from './blpPreview';
+import { decodeToRgba } from './preview/imageDecoders';
+import { ensureGameAssetCached, ensureGameTextureCached } from './preview/cascStorage';
 import {
     getCandidateRoots,
     getTempPreviewDir,

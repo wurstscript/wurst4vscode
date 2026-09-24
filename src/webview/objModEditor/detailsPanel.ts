@@ -1,5 +1,5 @@
 import { fuzzyMatch } from '../../features/preview/fuzzy';
-import { esc, renderWc3Colors } from '../objModWebviewUtils';
+import { esc, renderWc3Colors } from '../webviewUtils';
 import { batch, effect, untracked } from '../signals';
 import { details, detailCache, pendingDetails, failedDetails, ui, vscodeApi, iconLoader, initial, objects } from './state';
 import { categoryLabel, categoryKey, objectIconHtml, detailsTitleHtml, matches, selectObject } from './objectTree';

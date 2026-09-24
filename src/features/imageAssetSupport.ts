@@ -7,10 +7,11 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import * as zlib from 'zlib';
 
-import { decodeRasterPreview, ensureGameAssetCached } from './blpPreview';
+import { decodeRasterPreview } from './preview/imageDecoders';
 import {
     findCachedGameAsset,
     getGameAssetCacheDir,
+    ensureGameAssetCached,
     ensureGameTextureCached,
     normalizeGameAssetSeparators,
 } from './preview/cascStorage';

@@ -1,4 +1,4 @@
-import { base64ToBytes, esc } from './objModWebviewUtils';
+import { base64ToBytes, esc } from './webviewUtils';
 
 type IconMessage = {
   key?: string;

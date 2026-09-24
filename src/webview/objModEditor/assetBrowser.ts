@@ -1,5 +1,5 @@
 import { assetSearchScore, fuzzyMatch } from '../../features/preview/fuzzy';
-import { esc } from '../objModWebviewUtils';
+import { esc } from '../webviewUtils';
 import { effect, signal } from '../signals';
 import { detailCache, details, ui, vscodeApi, iconLoader, assetBrowserUi } from './state';
 import { observeModelThumbs, requestVisibleModelThumbs, isAssetBrowserOpen, cancelAssetBrowserModelThumbs, noteModelThumbUserActivity, modelThumbEnsureInit } from './modelThumbnails';

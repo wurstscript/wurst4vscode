@@ -14,15 +14,6 @@ import {
 import { DecodedBlpImage, decodeRasterPreview } from './preview/imageDecoders';
 import { clearTextureMissCache, postTexturesToWebview } from './preview/modelPreviewHost';
 
-// Re-exported for backwards-compat with existing callers that import from blpPreview.
-export { decodeRasterPreview, decodeToRgba } from './preview/imageDecoders';
-export {
-    ensureGameTextureCached,
-    ensureGameAssetCached,
-    ensureCascCached,
-    ensureCascAssetCached,
-} from './preview/cascStorage';
-
 type BlpDocument = vscode.CustomDocument;
 
 const BLP_VIEW_TYPE = 'wurst.blpPreview';

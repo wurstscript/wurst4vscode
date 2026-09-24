@@ -1,7 +1,7 @@
-import { esc } from '../objModWebviewUtils';
+import { esc } from '../webviewUtils';
 import { vscodeApi } from './state';
-import { mpvViewer, mpvB64ToArrayBuffer } from './modelViewerShared';
-import { finishModelThumb, scheduleModelThumbQueues, resetModelThumbInited } from './modelThumbnails';
+import { mpvViewer, mpvB64ToArrayBuffer, pickStandSequence } from './modelViewerShared';
+import { finishModelThumb, scheduleModelThumbQueues } from './modelThumbnails';
 
 // ── Inline model preview (control-less docked square) ────────────────────────
 let mpvInited = false;
@@ -21,7 +21,6 @@ export function mpvEnsureInit() {
   if (mpvInited) return mpvInited;
   const v = mpvViewer();
   if (!v) return false;
-  resetModelThumbInited();
   v.init({
     canvas3d: document.getElementById('mpv-canvas'),
     gizmo: document.getElementById('mpv-gizmo'),
@@ -31,12 +30,7 @@ export function mpvEnsureInit() {
       onModelLoaded(info) { mpvStatus(''); mpvFillAnims((info && info.sequences) || []); },
       onFrameUpdate() {},
       onDebug() {},
-      onError(message) {
-        mpvStatus('Preview error:\\n' + message);
-        // loadModel reports parse and renderer failures through this callback instead of throwing.
-        // Complete a fallback thumbnail job here so one bad model cannot block the queue.
-        finishModelThumb(false, 'load-error: ' + message);
-      },
+      onError(message) { mpvStatus('Preview error: ' + message); },
     },
   });
   mpvInited = true;
@@ -49,12 +43,7 @@ export function mpvFillAnims(seqs) {
   if (!sel) return;
   if (!seqs.length) { sel.hidden = true; sel.innerHTML = ''; return; }
   sel.innerHTML = seqs.map((s, i) => '<option value="' + i + '">' + esc(s.name || ('Sequence ' + i)) + '</option>').join('');
-  // Prefer the shortest name containing "stand" (base Stand over Stand Ready / Stand Victory).
-  let pick = 0, best = Infinity;
-  seqs.forEach((s, i) => {
-    const n = (s.name || '').toLowerCase();
-    if (n.indexOf('stand') >= 0 && n.length < best) { best = n.length; pick = i; }
-  });
+  const pick = pickStandSequence(seqs);
   sel.value = String(pick);
   sel.hidden = false;
   const v = mpvViewer();

@@ -1,4 +1,4 @@
-import { base64ToBytes } from '../objModWebviewUtils';
+import { base64ToBytes } from '../webviewUtils';
 import { details, detailCache, pendingDetails, failedDetails, objects, ui, iconLoader } from './state';
 import { setModValue } from './fieldDisplay';
 import { renderDetails, updateFieldCell } from './detailsPanel';

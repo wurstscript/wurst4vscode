@@ -533,7 +533,7 @@ ${ICON_INLINE_CSS}
       if (msg.ddsBase64 && typeof v.onTextureDds === 'function') {
         v.onTextureDds(msg.path, base64ToArrayBuffer(msg.ddsBase64));
       } else if (msg.rgbaBase64 && msg.width && msg.height && typeof v.onTextureImageData === 'function') {
-        v.onTextureImageData(msg.path, new Uint8Array(base64ToArrayBuffer(msg.rgbaBase64)), msg.width, msg.height);
+        v.onTextureImageData(msg.path, new ImageData(new Uint8ClampedArray(base64ToArrayBuffer(msg.rgbaBase64)), msg.width, msg.height));
       } else if (msg.blpBase64 && typeof v.onTexture === 'function') {
         v.onTexture(msg.path, base64ToArrayBuffer(msg.blpBase64));
       }

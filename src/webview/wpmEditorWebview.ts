@@ -5,6 +5,8 @@
  *   host → webview  { type: 'applyRuns', runs } | { type: 'dirtyStateChanged', isDirty }
  */
 
+import { base64ToBytes } from './webviewUtils';
+
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void;
   getState(): any;
@@ -23,11 +25,9 @@ const api = acquireVsCodeApi();
 const initial = (window as any).__WPM_INITIAL__ as WpmInitialData;
 const W = initial.width;
 const H = initial.height;
-const raw = atob(initial.dataBase64);
 const colorTable = initial.colorTable;
 const flagDefinitions = initial.flagDefinitions;
-const data = new Uint8Array(raw.length);
-for (let i = 0; i < raw.length; i++) data[i] = raw.charCodeAt(i);
+const data = base64ToBytes(initial.dataBase64);
 
 const canvas    = document.getElementById('wpmCanvas') as HTMLCanvasElement;
 const ctx       = canvas.getContext('2d');
@@ -425,17 +425,6 @@ viewport.addEventListener('mousemove', (e) => {
 });
 viewport.addEventListener('mouseleave', () => tooltip.style.display = 'none');
 
-function applyChanges(changes) {
-  changes.forEach((change) => {
-    if (Number.isInteger(change.index) && change.index >= 0 && change.index < data.length) {
-      data[change.index] = change.value & 0xff;
-      refreshCell(change.index);
-    }
-  });
-  flushImage();
-  scheduleDraw();
-}
-
 function applyRuns(runs) {
   runs.forEach((run) => {
     if (!Number.isInteger(run.start) || !Number.isInteger(run.length) || !Number.isInteger(run.value) ||
@@ -451,9 +440,7 @@ function applyRuns(runs) {
 
 window.addEventListener('message', (event) => {
   const message = event.data || {};
-  if (message.type === 'applyCells' && Array.isArray(message.changes)) {
-    applyChanges(message.changes);
-  } else if (message.type === 'applyRuns' && Array.isArray(message.runs)) {
+  if (message.type === 'applyRuns' && Array.isArray(message.runs)) {
     applyRuns(message.runs);
   } else if (message.type === 'dirtyStateChanged') {
     document.getElementById('dirtyBadge').hidden = !message.isDirty;

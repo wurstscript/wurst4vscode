@@ -803,15 +803,6 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   border-radius: 50%;
   animation: wv-spin 0.8s linear infinite;
 }
-.thumb-render-canvas {
-  position: fixed;
-  left: -10000px;
-  top: 0;
-  width: 96px;
-  height: 96px;
-  pointer-events: none;
-  opacity: 0;
-}
 .ab-card-label { font-size: 10px; line-height: 1.15; opacity: .75; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .ab-empty { color: var(--muted); font-style: italic; padding: 18px; grid-column: 1 / -1; text-align: center; }
 .ab-empty.ab-error { font-style: normal; }
@@ -1107,7 +1098,7 @@ tr.hidden { display: none; }
 .add-object-base-status { min-height: 1.2em; margin-top: calc(var(--add-dialog-gap) * -1 + 2px) !important; }
 .add-object-dialog .add-object-error { min-height: 1.2em; color: var(--vscode-errorForeground, #f14c4c); }
 .add-object-actions { display: flex; justify-content: flex-end; gap: var(--add-dialog-action-gap); margin-top: calc(var(--add-dialog-gap) / 2); }
-.add-object-actions button { min-height: var(--add-dialog-control-h); padding: var(--add-dialog-button-pad); border: 1px solid var(--border); border-radius: 2px; background: var(--button-bg); color: var(--fg); font: inherit; cursor: pointer; }
+.add-object-actions button { min-height: var(--add-dialog-control-h); padding: var(--add-dialog-button-pad); border: 1px solid var(--border); border-radius: 2px; background: var(--btn-bg); color: var(--fg); font: inherit; cursor: pointer; }
 .add-object-actions .add-object-confirm { border-color: var(--accent); background: var(--vscode-button-background, var(--accent)); color: var(--vscode-button-foreground, #fff); }
 .search-input {
   flex: 1;

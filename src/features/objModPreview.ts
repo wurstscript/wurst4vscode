@@ -1945,8 +1945,6 @@ ${gameDataBanner}
     <div id="mpv-status" class="mpv-status"></div>
   </div>
 </div>
-<canvas id="model-thumb-canvas" class="thumb-render-canvas" width="96" height="96" aria-hidden="true"></canvas>
-<div id="model-thumb-viewport" class="thumb-render-canvas" aria-hidden="true"></div>
 <div id="ab-overlay" class="ab-overlay" hidden>
   <div class="ab-modal" role="dialog" aria-modal="true" aria-labelledby="ab-title">
     <h2 id="ab-title" class="ab-sr-only">Asset browser</h2>

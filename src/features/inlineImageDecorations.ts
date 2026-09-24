@@ -626,6 +626,14 @@ export function registerInlineImageDecorations(_context: vscode.ExtensionContext
         vscode.workspace.onDidSaveTextDocument(doc => {
             if (doc.fileName.endsWith('.wurst')) { invalidateAssetIndex(); update(vscode.window.activeTextEditor); }
         }),
+        // Game-data hits and misses belong to the previous install once wurst.wc3path changes.
+        vscode.workspace.onDidChangeConfiguration((event) => {
+            if (!event.affectsConfiguration('wurst.wc3path')) return;
+            unresolvedAssets.clear();
+            cascResolvedTextures.clear();
+            cascResolvedModels.clear();
+            update(vscode.window.activeTextEditor);
+        }),
         // Dispose all active types when extension deactivates
         new vscode.Disposable(() => {
             isDisposed = true;

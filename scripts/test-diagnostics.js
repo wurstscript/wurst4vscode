@@ -58,13 +58,13 @@ async function main() {
     const withHeader = mod.exports.buildDiagnosticsText(tempHome, {
         header: ['Extension: 1.2.3, VS Code 1.109.0'],
         pathAliases: [
-            { dir: 'd:\\maps\\proj', label: '<project>' },
+            { dir: 'D:\\Maps\\Proj', label: '<project>' },
             { dir: 'C:\\Users\\bob', label: '~' },
             { dir: 'C:\\Users\\bob\\.wurst\\casc_cache', label: '<casc-cache>' },
         ],
     });
     assert(withHeader.split('\n')[3] === 'Extension: 1.2.3, VS Code 1.109.0', withHeader);
-    assert(withHeader.includes('applied thumb: <project>\\imports\\BTNHeal.blp'), 'workspace prefix shortened, case-insensitively');
+    assert(withHeader.includes('applied thumb: <project>\\imports\\BTNHeal.blp'), 'workspace prefix shortened');
     assert(withHeader.includes('extracted to <casc-cache>\\casc\\a0\\x.dds'), 'the longest matching directory wins');
     assert(withHeader.includes('C:\\Users\\bobby\\file.txt'), 'only whole path segments are shortened');
 
@@ -72,6 +72,7 @@ async function main() {
     assert.strictEqual(compact('/home/bob/.wurst/x', [{ dir: '/home/bob/', label: '~' }], false), '~/.wurst/x');
     assert.strictEqual(compact('/HOME/bob/x', [{ dir: '/home/bob', label: '~' }], false), '/HOME/bob/x', 'case-sensitive off Windows');
     assert.strictEqual(compact('C:/Users/bob/x', [{ dir: 'C:\\Users\\bob', label: '~' }], true), '~/x', 'either separator matches');
+    assert.strictEqual(compact('D:\\Maps\\Proj\\x', [{ dir: 'd:\\maps\\proj', label: '<project>' }], true), '<project>\\x', 'case-insensitive on Windows');
 
     await mod.exports.showErrorWithLogs('Preview failed.', new Error('decoder stack detail'));
     assert(outputShown, 'View Logs should reveal the extension diagnostics output');

@@ -13,7 +13,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getCandidateRoots, resolveAssetPathWithCasc, assetPathVariants, fastByteHash, scaleDown } from '../imageAssetSupport';
+import { getCandidateRoots, resolveAssetPathWithCasc, assetPathVariants, fastByteHash, requestPreviewIcon, scaleDown } from '../imageAssetSupport';
 import { getModelThumbCacheDir } from './cascStorage';
 import { decodeToRgba } from './imageDecoders';
 
@@ -653,4 +653,54 @@ export async function postTexturesToWebview(
         const slow = stats.slow.length ? ` slow=${stats.slow.join(',')}` : '';
         thumbLog(`${thumbKey} textures unique=${uniqueTexPaths.length}/${texPaths.length} sent=${stats.sent} cache=${stats.payloadCache} ddsRgba=${stats.decodedDds} miss=${stats.missing} missCache=${stats.missingCache} unsupported=${stats.unsupported} errors=${stats.errors} total=${Date.now() - totalStart}ms${slow}`);
     }
+}
+
+/**
+ * Host side of the icon/model-thumbnail protocol shared by the objmod editor and the code asset
+ * browser. Returns true when `message` belonged to it. `binaryThumbTextures` sends thumbnail
+ * textures as raw bytes for the `mdxThumbnailWorker`; pages that render thumbnails on the main
+ * thread need the default base64 payloads.
+ */
+export async function handleModelThumbMessage(
+    message: unknown,
+    webview: vscode.Webview,
+    documentUri: vscode.Uri,
+    binaryThumbTextures = false,
+): Promise<boolean> {
+    const msg = Object(message) as Record<string, unknown>;
+    const str = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
+    const key = str(msg.key);
+    switch (msg.type) {
+        case 'loadObjectIcon': {
+            const iconPath = str(msg.iconPath);
+            if (key && iconPath) await requestPreviewIcon(iconPath, key, webview, documentUri);
+            return true;
+        }
+        case 'loadModelThumb': {
+            const modelPath = str(msg.path);
+            if (key && modelPath) await requestModelThumbnail(modelPath, key, documentUri, webview, true);
+            return true;
+        }
+        case 'requestTextures':
+            if (Array.isArray(msg.paths)) postRequestedTextures(msg.paths, str(msg.thumbKey), webview, documentUri, binaryThumbTextures);
+            return true;
+        case 'modelThumbRendered': {
+            const cacheKey = str(msg.cacheKey);
+            const webpBase64 = str(msg.webpBase64);
+            if (key && cacheKey && webpBase64) await cacheModelThumbnail(key, cacheKey, webpBase64, webview, str(msg.aliasKey));
+            return true;
+        }
+        case 'modelThumbFailed':
+            if (key) markModelThumbnailBad(key, str(msg.cacheKey), str(msg.aliasKey), str(msg.reason));
+            return true;
+        default:
+            return false;
+    }
+}
+
+function postRequestedTextures(paths: unknown[], thumbKey: string | undefined, webview: vscode.Webview, documentUri: vscode.Uri, binaryThumbTextures: boolean): void {
+    const texPaths = paths.filter((candidate): candidate is string => typeof candidate === 'string');
+    void postTexturesToWebview(texPaths, documentUri, webview, thumbKey, binaryThumbTextures && !!thumbKey).catch((err) => {
+        console.error(`[wurst-model-thumb] texture request failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
 }

@@ -6,21 +6,17 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { parseObjMod, serializeObjMod, ObjModFile, ObjModEntry, ObjModMod, ObjModVarType } from 'casc-ts/formats';
-import { buildLoadingHtml, ParsedPreviewContext } from './preview/framework';
-import { requestPreviewIcon, requestTooltipBackdrop, requestTooltipBorder, getCandidateRoots, resolveAssetPathWithCasc, gatherImportedAssets } from './imageAssetSupport';
+import { buildLoadingHtml, ParsedPreviewContext, writeBytesIfChanged } from './preview/framework';
+import { requestTooltipBackdrop, requestTooltipBorder, gatherImportedAssets, openAssetInPreview } from './imageAssetSupport';
 import {
     clearTextureMissCache,
+    handleModelThumbMessage,
     postModelToWebview,
-    postTexturesToWebview,
-    requestModelThumbnail,
-    cacheModelThumbnail,
-    markModelThumbnailBad,
     recordModelThumbnailProfile,
 } from './preview/modelPreviewHost';
-import { isSoundAssetPath } from './soundPreview';
 import {
     loadTriggerStringsForUri, resolveTriggerString, TriggerStringTable,
-    findWtsUri, nextTriggerStringId, applyWtsEdits,
+    findWtsUri, nextTriggerStringId, buildWtsBytes,
 } from './preview/triggerStrings';
 import { buildPage, scriptSafeJson } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
@@ -31,6 +27,7 @@ import {
     UNIT_PROFILE_PATHS, ABILITY_PROFILE_PATHS, UPGRADE_PROFILE_PATHS,
     ITEM_PROFILE_PATHS, DESTRUCTABLE_PROFILE_PATHS, DOODAD_PROFILE_PATHS,
 } from './preview/wc3Data';
+import { firstAssetPath, normalizeModelPath } from './preview/objectCatalog';
 import { getGameAssetCacheDir, getModelThumbCacheDir, listGameAssetPaths } from './preview/cascStorage';
 import OBJMOD_EDITOR_CSS from '../webview/objModEditor/objModEditor.css';
 import CODICON_CSS_BUNDLE from '@vscode/codicons/dist/codicon.css';
@@ -882,12 +879,6 @@ function fieldAssetType(field: MetaField): 'icon' | 'model' | 'sound' | 'pathing
     return undefined;
 }
 
-/** First comma-segment of a profile/objmod value, unquoted; undefined for blanks, '-', or WESTRING_ refs. */
-function firstAssetPath(value: string | undefined): string | undefined {
-    const first = stripTxtQuotes(String(value ?? '').split(',')[0].trim());
-    return (!first || first === '-' || first.startsWith('WESTRING_')) ? undefined : first;
-}
-
 function normalizeAssetValue(value: string, assetType: 'icon' | 'model' | 'sound' | 'pathing'): string | undefined {
     if (assetType === 'icon') return normalizeIconPath(value);
     if (assetType === 'model') return normalizeModelPath(value);
@@ -1033,13 +1024,6 @@ function normalizeIconPath(value: string | undefined): string | undefined {
     if (/\.(blp|dds|tga|png|jpe?g)$/i.test(normalized)) return normalized;
     // eslint-disable-next-line sonarjs/super-linear-regex -- single negated char-class quantifier anchored at end, no ambiguous adjacency; not actually susceptible to backtracking blowup.
     return /[\\/]/.test(normalized) && !/\.[^\\/]+$/.test(normalized) ? `${normalized}.blp` : undefined;
-}
-
-function normalizeModelPath(value: string | undefined): string | undefined {
-    const first = firstAssetPath(value);
-    if (!first) return undefined;
-    const normalized = first.replace(/\//g, '\\');
-    return /\.(mdx|mdl)$/i.test(normalized) ? normalized : `${normalized}.mdl`;
 }
 
 /**
@@ -1963,25 +1947,6 @@ ${objModEditorUri ? `<script src="${objModEditorUri}"></script>` : ''}
     });
 }
 
-/** Resolve a model/texture path referenced by a field and open it in the appropriate preview. */
-async function openObjModAsset(assetPath: string, uri: vscode.Uri): Promise<void> {
-    const roots = await getCandidateRoots(uri.fsPath);
-    const resolved = await resolveAssetPathWithCasc(assetPath, roots);
-    if (!resolved) {
-        void showWarningWithLogs(`Could not resolve asset: ${assetPath}`, new Error(`Asset resolution failed for ${assetPath}`));
-        return;
-    }
-    const target = vscode.Uri.file(resolved);
-    const ext = resolved.slice(resolved.lastIndexOf('.')).toLowerCase();
-    if (['.mdx', '.mdl', '.blp', '.dds', '.tga'].includes(ext)) {
-        await vscode.commands.executeCommand('vscode.openWith', target, 'wurst.blpPreview');
-    } else if (isSoundAssetPath(resolved)) {
-        await vscode.commands.executeCommand('vscode.openWith', target, 'wurst.soundPreview');
-    } else {
-        await vscode.commands.executeCommand('vscode.open', target);
-    }
-}
-
 async function loadObjectDetails(key: string, identity: string | undefined, webview: vscode.Webview, doc: ObjModDocument): Promise<void> {
     const entry = findEntryByKey(doc.displayFile, key);
     if (!entry) {
@@ -2575,8 +2540,8 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
     private async handleMessageUnsafe(message: unknown, webview: vscode.Webview, doc: ObjModDocument): Promise<void> {
         if (!message || typeof message !== 'object') return;
         const msg = message as {
-            type?: string; key?: string; iconPath?: string; path?: string;
-            cacheKey?: string; aliasKey?: string; webpBase64?: string; thumbKey?: string; phase?: string; elapsedMs?: number; deltaMs?: number; detail?: string;
+            type?: string; key?: string; path?: string;
+            phase?: string; elapsedMs?: number; detail?: string;
             fieldId?: string; varType?: string; level?: number | null; dataPt?: number | null; value?: string;
             rawcode?: string; label?: string;
             baseId?: string;
@@ -2591,8 +2556,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             await this.openObjectReference(doc, msg.rawcode, msg.label);
             return;
         }
-        if (msg.type === 'loadObjectIcon' && msg.key && msg.iconPath) {
-            await requestPreviewIcon(msg.iconPath, msg.key, webview, doc.uri);
+        if (await handleModelThumbMessage(msg, webview, doc.uri, true)) {
             return;
         }
         if (msg.type === 'requestTooltipBackdrop') {
@@ -2603,32 +2567,12 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             await requestTooltipBorder(webview, doc.uri);
             return;
         }
-        if (msg.type === 'loadModelThumb' && msg.key && msg.path) {
-            await requestModelThumbnail(msg.path, msg.key, doc.uri, webview, true);
-            return;
-        }
-        if (msg.type === 'modelThumbRendered' && msg.key && msg.cacheKey && msg.webpBase64) {
-            await cacheModelThumbnail(msg.key, msg.cacheKey, msg.webpBase64, webview, msg.aliasKey);
-            return;
-        }
-        if (msg.type === 'modelThumbFailed' && msg.key) {
-            const failed = msg as typeof msg & { reason?: string };
-            markModelThumbnailBad(msg.key, msg.cacheKey, msg.aliasKey, failed.reason);
-            return;
-        }
         if (msg.type === 'openAsset' && msg.path) {
-            await openObjModAsset(msg.path, doc.uri);
+            await openAssetInPreview(msg.path, doc.uri);
             return;
         }
         if (msg.type === 'loadModel' && msg.path) {
             await postModelToWebview(msg.path, doc.uri, webview);
-            return;
-        }
-        if (msg.type === 'requestTextures' && Array.isArray((msg as { paths?: unknown }).paths)) {
-            const paths = (msg as { paths: unknown[] }).paths.filter((p): p is string => typeof p === 'string');
-            void postTexturesToWebview(paths, doc.uri, webview, msg.thumbKey, !!msg.thumbKey).catch((err) => {
-                console.error(`[wurst-model-thumb] texture request failed: ${err instanceof Error ? err.message : String(err)}`);
-            });
             return;
         }
         if (msg.type === 'modelThumbProfile' && msg.key && msg.phase) {
@@ -2884,7 +2828,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             const skinBytes = doc.skinFile && doc.skinUri
                 ? serializeValidated(doc.skinFile, doc.skinUri.path)
                 : undefined;
-            const wtsBytes = await this.prepareWts(doc, doc.wtsUri, doc.wtsExists);
+            const wtsBytes = await buildWtsBytes(doc.wtsEdits, doc.wtsUri, doc.wtsExists);
             // writeBytesIfChanged hands back the bytes now on disk (written, or found unchanged) —
             // record those directly instead of re-reading every file back with
             // snapshotKnownBytes, so the file watcher doesn't mistake this save's own fs events for an
@@ -2912,24 +2856,12 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
     async saveCustomDocumentAs(doc: ObjModDocument, targetResource: vscode.Uri): Promise<void> {
         const objModBytes = serializeValidated(doc.openedFile, targetResource.path);
         const { uri: wtsUri, exists } = findWtsUri(targetResource);
-        const wtsBytes = await this.prepareWts(doc, wtsUri, exists);
+        const wtsBytes = await buildWtsBytes(doc.wtsEdits, wtsUri, exists);
         await vscode.workspace.fs.writeFile(targetResource, objModBytes);
         if (wtsBytes && wtsUri) {
             await vscode.workspace.fs.writeFile(wtsUri, wtsBytes);
             doc.wtsEdits.clear();
         }
-    }
-
-    /** Builds the final WTS bytes without writing, so callers can finish all fallible preflight work
-     *  before they modify any of the document's sibling files. */
-    private async prepareWts(doc: ObjModDocument, wtsUri: vscode.Uri | undefined, wtsExists: boolean): Promise<Buffer | undefined> {
-        if (!doc.wtsEdits.size || !wtsUri) return undefined;
-        let original = '';
-        if (wtsExists) {
-            try { original = Buffer.from(await vscode.workspace.fs.readFile(wtsUri)).toString('utf8'); } catch { /* create fresh */ }
-        }
-        const text = applyWtsEdits(original, doc.wtsEdits);
-        return Buffer.from(text, 'utf8');
     }
 
     async revertCustomDocument(doc: ObjModDocument): Promise<void> {
@@ -3121,17 +3053,6 @@ function serializeValidated(file: ObjModFile, name: string): Buffer {
         countMods(reparsed) !== countMods(file)) {
         throw new Error(`Refusing to save ${name}: round-trip object/mod count mismatch.`);
     }
-    return bytes;
-}
-
-/** Write prevalidated objmod bytes only when they differ from disk. Returns the bytes now on disk either
- *  way, so callers can update watcher bookkeeping without reading the file right back. */
-async function writeBytesIfChanged(bytes: Buffer, uri: vscode.Uri): Promise<Buffer> {
-    try {
-        const existing = Buffer.from(await vscode.workspace.fs.readFile(uri));
-        if (existing.equals(bytes)) return existing;
-    } catch { /* file missing → write it */ }
-    await vscode.workspace.fs.writeFile(uri, bytes);
     return bytes;
 }
 

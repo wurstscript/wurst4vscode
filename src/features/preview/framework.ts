@@ -15,7 +15,7 @@
 
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { buildPage } from '../webviewShared';
+import { buildPage, STATIC_CSP } from '../webviewShared';
 import { escapeHtml } from '../webviewUtils';
 import { offerIssueReport } from '../issueReporting';
 import { showErrorWithLogs } from '../diagnostics';
@@ -78,18 +78,16 @@ class ParsedEditorProvider<TData> implements vscode.CustomReadonlyEditorProvider
     }
 }
 
-function buildLoadingHtml(fileName: string): string {
+/** Full-page spinner shown while a custom editor parses its document. */
+export function buildLoadingHtml(fileName: string): string {
     return buildPage({
-        csp: "default-src 'none'; style-src 'unsafe-inline';",
+        csp: STATIC_CSP,
         title: escapeHtml(fileName),
         extraCss: `
 main {
   position: relative;
   flex: 1;
   min-height: 0;
-}
-.wv-loading-overlay {
-  opacity: 1;
 }`,
         body: `<main>
   <div class="wv-loading-overlay visible" role="status" aria-live="polite" aria-busy="true">
@@ -102,9 +100,9 @@ main {
     });
 }
 
-function buildErrorHtml(fileName: string, message: string, title = `Failed to load ${fileName}`): string {
+export function buildErrorHtml(fileName: string, message: string, title = `Failed to load ${fileName}`): string {
     return buildPage({
-        csp: "default-src 'none'; style-src 'unsafe-inline';",
+        csp: STATIC_CSP,
         title: escapeHtml(fileName),
         body: `<div class="wv-state" role="alert">
   <span>${escapeHtml(title)}</span>

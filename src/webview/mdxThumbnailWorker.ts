@@ -1,5 +1,6 @@
 import { decodeBLP, getBLPImageData, ModelRenderer, parseMDL, parseMDX } from 'war3-model';
 import { normalizeAssetPath } from './assetPathUtils';
+import { base64ToBytes } from './webviewUtils';
 
 const scope: any = self;
 const RENDER_SIZE = 128;
@@ -107,13 +108,6 @@ function downscale(imageData: ImageData): ImageData {
     context.imageSmoothingQuality = 'high';
     context.drawImage(source, 0, 0, width, height);
     return context.getImageData(0, 0, width, height);
-}
-
-function base64Bytes(encoded: string): Uint8Array<ArrayBuffer> {
-    const binary = atob(encoded);
-    const bytes = new Uint8Array(new ArrayBuffer(binary.length));
-    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
-    return bytes;
 }
 
 function parseDdsInfo(buffer: ArrayBuffer): any {
@@ -225,18 +219,18 @@ async function applyTexture(message: any, expectedJobKey: string): Promise<boole
             return false;
         }
         if (message.blpBase64) {
-            const bytes = base64Bytes(message.blpBase64);
+            const bytes = base64ToBytes(message.blpBase64);
             return applyBlpTexture(message.path, bytes.buffer);
         }
         if (message.rgbaBase64 && message.width && message.height) {
-            const bytes = base64Bytes(message.rgbaBase64);
+            const bytes = base64ToBytes(message.rgbaBase64);
             const image = downscale(new ImageData(new Uint8ClampedArray(bytes.buffer), message.width, message.height));
             renderer.setTextureImageData(message.path, [image]);
             rememberTexture(message.path, image);
             return true;
         }
         if (message.ddsBase64) {
-            const bytes = base64Bytes(message.ddsBase64);
+            const bytes = base64ToBytes(message.ddsBase64);
             return applyDdsTexture(message.path, bytes.buffer);
         }
     } catch (error) {

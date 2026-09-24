@@ -1,4 +1,4 @@
-import { createIconLoader } from '../objModIconLoader';
+import { createIconLoader } from '../iconLoader';
 import { effect, signal } from '../signals';
 import type { ObjModField, ObjModInitial, ObjModObject, VsCodeApi } from './types';
 

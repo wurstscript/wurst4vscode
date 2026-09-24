@@ -6,6 +6,8 @@ import * as vscode from 'vscode';
 import { parseWpm, serializeWpm, WpmFile } from 'casc-ts/formats';
 import { EditableBinaryDocument, EditableBinaryEditorProvider } from './preview/framework';
 import { escapeHtml, makeNonce } from './webviewUtils';
+import { buildPage, scriptSafeJson, sep } from './webviewShared';
+import WPM_EDITOR_CSS from '../webview/wpmEditor.css';
 export { WpmFile } from 'casc-ts/formats';
 
 export interface WpmFlagDefinition {
@@ -64,13 +66,13 @@ export function wpmColorTable(): Array<[number, number, number]> {
 function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean, scriptUri: string): string {
     const nonce = makeNonce();
     const colorTable = wpmColorTable();
-    const initialJson = JSON.stringify({
+    const initialJson = scriptSafeJson({
         width: wpm.width,
         height: wpm.height,
         dataBase64: wpm.data.toString('base64'),
         colorTable,
         flagDefinitions: WPM_FLAG_DEFS.map(({ bit, label }) => ({ bit, label })),
-    }).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
+    });
     const paletteFlagsHtml = WPM_FLAG_DEFS.map((definition) => {
         const [r, g, b] = wpmCellRgb(definition.bit);
         return `<label class="flag-card" title="${escapeHtml(definition.description)}"><input type="checkbox" data-brush-bit="${definition.bit}"${definition.bit === 0x02 || definition.bit === 0x08 ? ' checked' : ''}><span class="swatch" style="background:rgb(${r},${g},${b})"></span><span class="flag-copy"><strong>${escapeHtml(definition.label)}</strong><small>0x${definition.bit.toString(16).padStart(2, '0').toUpperCase()}</small></span></label>`;
@@ -80,112 +82,22 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean, scriptUr
         ? ''
         : `<span class="version-warning" title="Only WPM version 0 has a documented byte layout. The editor preserves this version and its bytes.">Unverified WPM v${wpm.version}</span>`;
 
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
-<title>${escapeHtml(fileName)}</title>
-<style>
-  :root {
-    --bg:       var(--vscode-editor-background);
-    --panel:    var(--vscode-sideBar-background);
-    --text:     var(--vscode-editor-foreground);
-    --muted:    var(--vscode-descriptionForeground);
-    --border:   var(--vscode-panel-border);
-    --btn-bg:   var(--vscode-button-background);
-    --btn-fg:   var(--vscode-button-foreground);
-    --panel-strong: color-mix(in srgb, var(--panel) 84%, var(--bg));
-  }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; overflow: hidden; }
-  body {
-    background: var(--bg); color: var(--text);
-    font-family: var(--vscode-font-family); font-size: var(--vscode-font-size);
-    display: flex; flex-direction: column; height: 100vh;
-  }
-  header {
-    display: flex; align-items: center; gap: 8px;
-    padding: 5px 12px; border-bottom: 1px solid var(--border);
-    background: var(--panel); flex-shrink: 0; min-width: 0;
-  }
-  .title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .meta { flex: 1; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .version-warning { color: var(--vscode-charts-orange); font-size: 11px; white-space: nowrap; }
-  .sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; flex-shrink: 0; }
-  .toolbar { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
-  button {
-    border: none; background: transparent; color: var(--muted);
-    padding: 3px 8px; border-radius: 3px; cursor: pointer; font-size: 12px;
-  }
-  button:hover { background: color-mix(in srgb, var(--btn-bg) 55%, transparent); color: var(--text); }
-  button.active { background: var(--btn-bg); color: var(--btn-fg); }
-  button:focus-visible, input:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
-  .dirty { color: var(--vscode-charts-orange); font-size: 11px; }
-  #zoomLabel { min-width: 56px; text-align: center; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-  #workspace { display: flex; flex: 1; min-height: 0; }
-  #viewport {
-    flex: 1; min-width: 0; overflow: hidden; position: relative;
-    background: color-mix(in srgb, var(--bg) 60%, #000);
-    cursor: grab;
-  }
-  #wpmCanvas { display: block; position: absolute; top: 0; left: 0; image-rendering: pixelated; }
-  #tooltip {
-    position: fixed; pointer-events: none;
-    background: var(--panel); border: 1px solid var(--border);
-    padding: 7px 10px; border-radius: 4px; font-size: 11px; display: none; z-index: 10;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.4); line-height: 1.7;
-  }
-  #palette {
-    width: 238px; flex: 0 0 238px; padding: 12px 10px; overflow: auto;
-    border-left: 1px solid var(--border); background: var(--panel); order: 2;
-  }
-  .palette-section { padding: 0 0 14px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
-  .palette-section:last-child { border-bottom: 0; margin-bottom: 0; }
-  .section-title { color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .08em; margin: 0 0 8px; text-transform: uppercase; }
-  .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
-  .tool { display: flex; align-items: center; gap: 7px; padding: 7px 8px; text-align: left; border: 1px solid transparent; }
-  .tool .tool-icon { width: 18px; color: var(--muted); font-size: 15px; text-align: center; }
-  .tool.active { border-color: var(--vscode-focusBorder); background: color-mix(in srgb, var(--btn-bg) 35%, transparent); color: var(--text); }
-  .tool.active .tool-icon { color: var(--btn-fg); }
-  .brush-size { display: flex; align-items: center; gap: 8px; }
-  .brush-size input { flex: 1; min-width: 0; accent-color: var(--vscode-focusBorder); }
-  .brush-size output { min-width: 35px; color: var(--text); font: 12px var(--vscode-editor-font-family); text-align: right; }
-  .flag-grid { display: grid; gap: 4px; }
-  .flag-card { display: flex; align-items: center; gap: 7px; padding: 5px 6px; border-radius: 4px; cursor: pointer; }
-  .flag-card:hover { background: color-mix(in srgb, var(--btn-bg) 25%, transparent); }
-  .flag-card input { margin: 0; accent-color: var(--vscode-focusBorder); }
-  .swatch { width: 16px; height: 16px; border-radius: 4px; border: 1px solid rgba(255,255,255,.25); flex: 0 0 16px; }
-  .flag-copy { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; min-width: 0; flex: 1; }
-  .flag-copy strong { font-size: 11px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .flag-copy small { color: var(--muted); font: 10px var(--vscode-editor-font-family); }
-  .brush-readout { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; padding: 7px 8px; border-radius: 4px; background: var(--panel-strong); }
-  #brushValue { color: var(--text); font: 12px var(--vscode-editor-font-family); }
-  #brushLabel { color: var(--muted); font-size: 11px; }
-  .legend-list { display: grid; gap: 5px; }
-  .legend-item { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
-  .legend-item .swatch { width: 12px; height: 12px; flex-basis: 12px; }
-  .edit-hint { color: var(--muted); font-size: 10px; line-height: 1.45; }
-  .edit-hint kbd { border: 1px solid var(--border); border-radius: 3px; padding: 1px 4px; color: var(--text); }
-  @media (max-width: 680px) {
-    #workspace { flex-direction: column; }
-    #palette { width: 100%; flex-basis: auto; max-height: 270px; border-left: 0; border-top: 1px solid var(--border); }
-    .flag-grid { grid-template-columns: 1fr 1fr; }
-  }
-</style>
-</head>
-<body>
-  <header>
+    return buildPage({
+        csp: `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';`,
+        title: escapeHtml(fileName),
+        extraCss: WPM_EDITOR_CSS,
+        body: `
+  <header class="wv-header">
     <span class="title">${escapeHtml(fileName)}</span>
     <span class="meta">${wpm.width} × ${wpm.height} &nbsp;·&nbsp; WPM v${wpm.version}</span>
     ${versionWarning}
-    <span id="dirtyBadge" class="dirty"${isDirty ? '' : ' hidden'}>Modified</span>
+    <span id="dirtyBadge" class="wv-dirty"${isDirty ? '' : ' hidden'}>Modified</span>
     <div class="toolbar">
-      <button id="btnZoomOut" title="Zoom out">−</button>
+      <button id="btnZoomOut" class="wv-btn" title="Zoom out">−</button>
       <span id="zoomLabel">–</span>
-      <button id="btnZoomIn" title="Zoom in">+</button>
-      <div class="sep"></div>
-      <button id="btnZoomFit">Fit</button>
+      <button id="btnZoomIn" class="wv-btn" title="Zoom in">+</button>
+      ${sep()}
+      <button id="btnZoomFit" class="wv-btn">Fit</button>
     </div>
   </header>
 
@@ -229,9 +141,8 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean, scriptUr
   <div id="tooltip"></div>
 
   <script nonce="${nonce}">window.__WPM_INITIAL__ = ${initialJson};</script>
-  <script nonce="${nonce}" src="${scriptUri}"></script>
-</body>
-</html>`;
+  <script nonce="${nonce}" src="${scriptUri}"></script>`,
+    });
 }
 
 // ── Editable document ─────────────────────────────────────────────────────────

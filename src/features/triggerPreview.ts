@@ -8,6 +8,7 @@ import {
     WctFile, WctTrig, WtgFile,
 } from 'casc-ts/formats';
 import { registerParsedPreviewer } from './preview/framework';
+import { buildPage, DATA_PAGE_CSS, STATIC_CSP } from './webviewShared';
 import { getObjectCatalog, ObjectRef } from './preview/objectCatalog';
 export { WctFile, WctTrig, WtgFile, WtgCategory, WtgVar, WtgTrig } from 'casc-ts/formats';
 
@@ -29,40 +30,30 @@ function annotateJassRawcodes(escapedCode: string, catalog: Map<string, ObjectRe
     });
 }
 
-const COMMON_CSS = `
-  :root {
-    --bg: var(--vscode-editor-background, #1e1e1e);
-    --fg: var(--vscode-editor-foreground, #d4d4d4);
-    --border: var(--vscode-panel-border, #444);
-    --th-bg: var(--vscode-editorGroupHeader-tabsBackground, #252526);
-    --row-alt: var(--vscode-list-hoverBackground, #2a2d2e);
-    --accent: var(--vscode-textLink-foreground, #4ec9b0);
-    --error: var(--vscode-errorForeground, #f44747);
-    --warn: var(--vscode-editorWarning-foreground, #cca700);
-    --code-bg: var(--vscode-textCodeBlock-background, #1a1a1a);
-    font-size: 13px;
-    font-family: var(--vscode-font-family, sans-serif);
-  }
-  body { background: var(--bg); color: var(--fg); margin: 0; padding: 12px 16px; }
-  h1 { font-size: 1.1em; margin: 0 0 4px; color: var(--accent); }
-  .subtitle { color: var(--vscode-descriptionForeground, #888); font-size: 0.85em; margin-bottom: 16px; }
-  h2 { font-size: 0.95em; margin: 16px 0 6px; text-transform: uppercase; letter-spacing: .05em; opacity: .7; }
-  .count { font-weight: normal; opacity: .6; }
-  .error { color: var(--error); border: 1px solid var(--error); padding: 6px 10px; border-radius: 3px; margin-bottom: 12px; }
-  .warn  { color: var(--warn);  border: 1px solid var(--warn);  padding: 6px 10px; border-radius: 3px; margin-bottom: 12px; }
-  .empty { opacity: .5; font-style: italic; }
-  table { border-collapse: collapse; font-size: .88em; width: 100%; }
-  th { background: var(--th-bg); text-align: left; padding: 4px 10px; font-weight: 600; border-bottom: 1px solid var(--border); }
-  td { padding: 3px 10px; border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent); }
-  tr:nth-child(even) td { background: var(--row-alt); }
-  td.mono { font-family: monospace; color: var(--accent); }
-  td.dim  { opacity: .6; }
+// Page-specific rules on top of the shared data-page look (webview/dataPage.css).
+const TRIGGER_CSS = `
+  .content { padding: 12px 16px; }
+  h2 { font-size: .95em; margin: 16px 0 6px; text-transform: uppercase; letter-spacing: .05em; opacity: .7; }
+  section { margin-bottom: 20px; }
+  table { width: 100%; }
+  tr:nth-child(even) td { background: var(--hover); }
+  td.mono { color: var(--accent); }
   .pill { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: .78em; font-weight: 600; }
-  .pill.on  { background: color-mix(in srgb, #4ec9b0 20%, transparent); color: #4ec9b0; }
-  .pill.off { background: color-mix(in srgb, #888 20%, transparent);    color: #888; }
-  .pill.custom { background: color-mix(in srgb, #ce9178 20%, transparent); color: #ce9178; }
+  .pill.off { background: color-mix(in srgb, var(--muted) 20%, transparent); color: var(--muted); }
+  .pill.custom { background: color-mix(in srgb, var(--chart-orange) 20%, transparent); color: var(--chart-orange); }
   .rawref { border-bottom: 1px dotted var(--accent); cursor: help; }
 `;
+
+function triggerPage(fileName: string, extraCss: string, body: string): string {
+    return buildPage({
+        csp: STATIC_CSP,
+        title: escHtml(fileName),
+        extraCss: DATA_PAGE_CSS + TRIGGER_CSS + extraCss,
+        body: `<div class="content">
+${body}
+</div>`,
+    });
+}
 
 // ── WCT HTML rendering ────────────────────────────────────────────────────────
 
@@ -109,41 +100,22 @@ ${noteHtml}
         });
     }
 
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
-<title>${escHtml(fileName)}</title>
-<style>
-${COMMON_CSS}
+    return triggerPage(fileName, `
   pre {
     background: var(--code-bg);
     padding: 10px 12px;
     border-radius: 4px;
-    font-family: var(--vscode-editor-font-family, monospace);
-    font-size: var(--vscode-editor-font-size, 13px);
+    font-family: var(--mono);
+    font-size: var(--mono-size);
     white-space: pre;
     overflow-x: auto;
     margin: 0;
   }
-  section { margin-bottom: 20px; }
-  .note {
-    color: var(--vscode-descriptionForeground, #888);
-    font-size: .85em;
-    line-height: 1.4;
-    margin: -2px 0 8px;
-    max-width: 900px;
-  }
-</style>
-</head>
-<body>
-<h1>${escHtml(fileName)}</h1>
+  .note { color: var(--muted); font-size: .85em; line-height: 1.4; margin: -2px 0 8px; max-width: 900px; }
+`, `<h1>${escHtml(fileName)}</h1>
 <p class="subtitle">WC3 Custom Text Triggers &nbsp;·&nbsp; v${versionLabel} &nbsp;·&nbsp; ${parsed.trigs.length} trigger${parsed.trigs.length !== 1 ? 's' : ''}</p>
 ${errorBanner}
-${sections.join('\n')}
-</body>
-</html>`;
+${sections.join('\n')}`);
 }
 
 // ── WTG HTML rendering ────────────────────────────────────────────────────────
@@ -241,27 +213,13 @@ function buildWtgHtml(parsed: WtgFile, fileName: string): string {
 </section>`;
     }
 
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
-<title>${escHtml(fileName)}</title>
-<style>
-${COMMON_CSS}
-  section { margin-bottom: 20px; }
-</style>
-</head>
-<body>
-<h1>${escHtml(fileName)}</h1>
+    return triggerPage(fileName, '', `<h1>${escHtml(fileName)}</h1>
 <p class="subtitle">WC3 GUI Trigger Editor &nbsp;·&nbsp; v${versionLabel}</p>
 ${errorBanner}
 ${warnBanner}
 ${catsSection}
 ${varsSection}
-${trigsSection}
-</body>
-</html>`;
+${trigsSection}`);
 }
 
 // ── Registration ──────────────────────────────────────────────────────────────

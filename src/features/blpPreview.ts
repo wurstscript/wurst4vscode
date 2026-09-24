@@ -14,15 +14,6 @@ import {
 import { DecodedBlpImage, decodeRasterPreview } from './preview/imageDecoders';
 import { clearTextureMissCache, postTexturesToWebview } from './preview/modelPreviewHost';
 
-// Re-exported for backwards-compat with existing callers that import from blpPreview.
-export { decodeRasterPreview, decodeToRgba } from './preview/imageDecoders';
-export {
-    ensureGameTextureCached,
-    ensureGameAssetCached,
-    ensureCascCached,
-    ensureCascAssetCached,
-} from './preview/cascStorage';
-
 type BlpDocument = vscode.CustomDocument;
 
 const BLP_VIEW_TYPE = 'wurst.blpPreview';
@@ -267,9 +258,8 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
 
         const BLP_CSS = `
     :root {
-      --cb-a: color-mix(in srgb, var(--vscode-editorWidget-background) 65%, transparent);
-      --cb-b: color-mix(in srgb, var(--vscode-editorWidget-border) 55%, transparent);
-      --model-bg: color-mix(in srgb, var(--bg) 72%, var(--fg) 28%);
+      --cb-a: color-mix(in srgb, var(--widget-bg) 65%, transparent);
+      --cb-b: color-mix(in srgb, var(--widget-border) 55%, transparent);
     }
     .wv-header { padding: 6px 12px; }
     .meta {
@@ -329,9 +319,9 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
     .sb-divider { height: 1px; background: var(--border); opacity: 0.5; margin: 2px 0; }
     .anim-select {
       width: 100%;
-      background: var(--vscode-dropdown-background);
-      color: var(--vscode-dropdown-foreground);
-      border: 1px solid var(--vscode-dropdown-border);
+      background: var(--dropdown-bg);
+      color: var(--dropdown-fg);
+      border: 1px solid var(--dropdown-border);
       border-radius: 3px;
       padding: 4px 6px;
       font-size: 12px;
@@ -364,7 +354,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       line-height: 1.4;
     }
     .tex-item a {
-      color: var(--vscode-textLink-foreground, #4da3ff);
+      color: var(--accent);
       text-decoration: none;
       cursor: pointer;
     }

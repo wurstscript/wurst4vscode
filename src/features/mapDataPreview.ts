@@ -13,7 +13,7 @@ import {
     findWtsUri, applyWtsEdits,
 } from './preview/triggerStrings';
 import { getCandidateRoots, resolveAssetPathWithCasc } from './imageAssetSupport';
-import { buildPage } from './webviewShared';
+import { buildPage, DATA_PAGE_CSS, INLINE_SCRIPT_CSP, STATIC_CSP } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
 import { showWarningWithLogs } from './diagnostics';
 
@@ -383,11 +383,10 @@ function renderMapData(parsed: MapDataFile, fileName: string, context: ParsedPre
 
 function page(title: string, body: string, extraCss = '', scripts = false): string {
     return buildPage({
-        csp: scripts
-            ? "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';"
-            : "default-src 'none'; style-src 'unsafe-inline';",
+        csp: scripts ? INLINE_SCRIPT_CSP : STATIC_CSP,
         title: escapeHtml(title),
         extraCss: `
+${DATA_PAGE_CSS}
 ${MAP_DATA_CSS}
 ${extraCss}`,
         body: `<div class="content">${body}</div>`,
@@ -566,8 +565,8 @@ type ControlValue = string | number | undefined;
 
 function renderHeader(fileName: string, meta: string, editable = false): string {
     const badge = editable
-        ? `<span class="dirty-badge" id="dirtyBadge" hidden>● unsaved</span>`
-        : `<span class="readonly-badge">read-only</span>`;
+        ? `<span class="wv-dirty" id="dirtyBadge" hidden>● unsaved</span>`
+        : `<span class="wv-badge">read-only</span>`;
     return `<div class="md-header">
   <div>
     <div class="md-title">${escapeHtml(fileName)}</div>
@@ -578,7 +577,7 @@ function renderHeader(fileName: string, meta: string, editable = false): string 
 
 function renderInput(label: string, value: string | number | ResolvedText | undefined, className = ''): string {
     const resolved = normalizeResolvedText(value);
-    const classes = ['field-control', className].filter(Boolean).join(' ');
+    const classes = ['wv-input field-control', className].filter(Boolean).join(' ');
     return `<label class="field">
   ${renderFieldLabel(label, resolved)}
   <input class="${classes}" value="${escapeHtml(controlValue(resolved.value))}" placeholder="-" disabled>
@@ -588,7 +587,7 @@ function renderInput(label: string, value: string | number | ResolvedText | unde
 function renderTextarea(label: string, value: string | ResolvedText | undefined, wide = false, className = ''): string {
     const resolved = normalizeResolvedText(value);
     const fieldClass = wide ? 'field wide' : 'field';
-    const classes = ['field-control', className].filter(Boolean).join(' ');
+    const classes = ['wv-input field-control', className].filter(Boolean).join(' ');
     return `<label class="${fieldClass}">
   ${renderFieldLabel(label, resolved)}
   <textarea class="${classes}" placeholder="-" disabled>${escapeHtml(controlValue(resolved.value))}</textarea>
@@ -609,7 +608,7 @@ function renderSelect(label: string, value: ControlValue, options: SelectOption[
     }).join('');
     return `<label class="field">
   <span class="field-label">${escapeHtml(label)}</span>
-  <select class="field-control" disabled>${renderedOptions}</select>
+  <select class="wv-input field-control" disabled>${renderedOptions}</select>
 </label>`;
 }
 
@@ -775,25 +774,13 @@ function colorHex(red: number, green: number, blue: number): string {
 const EDITABLE_LIST_CSS = `
 .editable-list { max-width: 1500px; }
 .editable-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin: 3px 0 10px; }
-.action-button, .remove-button {
-  color: var(--btn-fg, var(--fg)); background: var(--btn-bg, var(--input-bg));
-  border: 1px solid var(--border); border-radius: 3px; padding: 4px 9px;
-  font: inherit; font-size: 12px; cursor: pointer;
-}
-.action-button:hover, .remove-button:hover { background: var(--btn-hover, var(--hover)); }
-.remove-button { color: var(--vscode-errorForeground, #f14c4c); background: transparent; padding: 3px 7px; }
 .edit-table { min-width: 1100px; table-layout: fixed; }
 .edit-table th { white-space: nowrap; }
 .edit-table th:last-child { width: 84px; }
 .edit-table td { vertical-align: middle; }
-.list-input { width: 100%; min-width: 0; height: 26px; padding: 3px 6px; color: var(--input-fg); background: var(--input-bg); border: 1px solid var(--input-border, var(--border)); border-radius: 2px; font: inherit; }
-.list-input:focus, .list-color:focus { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px; }
-.list-input.mono { font-family: var(--mono); }
-.list-color { width: 34px; height: 26px; padding: 1px; border: 1px solid var(--input-border, var(--border)); background: var(--input-bg); border-radius: 2px; }
 .edit-table .num { white-space: nowrap; }
 .edit-table .row-number { width: 42px; }
 .edit-table .color-cell { text-align: center; }
-.dirty-badge[hidden] { display: none; }
 `;
 
 const EDITABLE_LIST_SCRIPT = `<script>
@@ -838,7 +825,7 @@ ${renderHeader(fileName, meta, true)}
 <div class="dialog editable-list">
 <div class="metric-strip"><span class="metric"><strong id="editorCount">${count}</strong> ${countLabel}</span></div>
 <div class="editable-actions">
-  <button type="button" class="action-button" data-add>Add ${countLabel.slice(0, -1)}</button>
+  <button type="button" class="wv-btn-secondary" data-add>Add ${countLabel.slice(0, -1)}</button>
   <span class="hint">${escapeHtml(hint)}</span>
 </div>
 <div id="editorList">${listHtml}</div>
@@ -888,7 +875,7 @@ function w3cCameraInput(camera: W3cCamera, index: number, field: keyof W3cCamera
     const type = field === 'name' ? 'text' : 'number';
     const step = field === 'name' ? '' : ' step="any"';
     const source = field === 'name' && /^TRIGSTR_\d+$/i.test(camera.name.trim()) ? ` title="Source: ${escapeHtml(camera.name)}"` : '';
-    return `<input class="list-input ${className}" type="${type}"${step}${source} data-index="${index}" data-field="${field}" value="${escapeHtml(value)}" aria-label="Camera ${index + 1} ${field}">`;
+    return `<input class="wv-input list-input ${className}" type="${type}"${step}${source} data-index="${index}" data-field="${field}" value="${escapeHtml(value)}" aria-label="Camera ${index + 1} ${field}">`;
 }
 
 function renderW3cList(file: W3cFile, triggerStrings: TriggerStringTable = new Map(), wtsEdits: Map<number, string> = new Map()): string {
@@ -906,7 +893,7 @@ function renderW3cList(file: W3cFile, triggerStrings: TriggerStringTable = new M
   <td>${w3cCameraInput(camera, index, 'fieldOfView', 'mono')}</td>
   <td>${w3cCameraInput(camera, index, 'farZ', 'mono')}</td>
   <td>${w3cCameraInput(camera, index, 'unknown', 'mono')}</td>
-  <td><button type="button" class="remove-button" data-remove="${index}">Remove</button></td>
+  <td><button type="button" class="wv-btn-secondary remove-button" data-remove="${index}">Remove</button></td>
 </tr>`).join('');
     return `<div class="table-wrap"><table class="edit-table w3c-table"><thead><tr><th>#</th><th>Name</th><th>Target X</th><th>Target Y</th><th>Z offset</th><th>Rotation</th><th>Angle of attack</th><th>Distance</th><th>Roll</th><th>Field of view</th><th>Far Z</th><th>Unknown</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -1061,7 +1048,7 @@ function w3rRegionInput(region: W3rRegion, index: number, field: keyof W3rRegion
     const maxLength = field === 'weatherId' ? ' maxlength="4"' : '';
     const raw = field === 'name' || field === 'sound' ? region[field] as string : '';
     const source = raw && /^TRIGSTR_\d+$/i.test(raw.trim()) ? ` title="Source: ${escapeHtml(raw)}"` : '';
-    return `<input class="list-input ${className}" type="${type}"${step}${maxLength}${source} data-index="${index}" data-field="${field}" value="${escapeHtml(value)}" aria-label="Region ${index + 1} ${field}">`;
+    return `<input class="wv-input list-input ${className}" type="${type}"${step}${maxLength}${source} data-index="${index}" data-field="${field}" value="${escapeHtml(value)}" aria-label="Region ${index + 1} ${field}">`;
 }
 
 function renderW3rList(file: W3rFile, triggerStrings: TriggerStringTable = new Map(), wtsEdits: Map<number, string> = new Map()): string {
@@ -1074,7 +1061,7 @@ function renderW3rList(file: W3rFile, triggerStrings: TriggerStringTable = new M
   <td>${w3rRegionInput(region, index, 'index', 'mono')}</td>
   <td>${w3rRegionInput(region, index, 'weatherId', 'mono', triggerStrings, wtsEdits)}</td><td>${w3rRegionInput(region, index, 'sound', '', triggerStrings, wtsEdits)}</td>
   <td class="color-cell"><input class="list-color" type="color" data-index="${index}" data-field="color" value="${colorHex(region.red, region.green, region.blue)}" aria-label="Region ${index + 1} color"></td>
-  <td><button type="button" class="remove-button" data-remove="${index}">Remove</button></td>
+  <td><button type="button" class="wv-btn-secondary remove-button" data-remove="${index}">Remove</button></td>
 </tr>`).join('');
     return `<div class="table-wrap"><table class="edit-table w3r-table"><thead><tr><th>#</th><th>Name</th><th>Min X</th><th>Max X</th><th>Min Y</th><th>Max Y</th><th>Index</th><th>Weather</th><th>Sound</th><th>Color</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -1185,16 +1172,16 @@ function mmpIconInput(icon: MmpIcon, index: number): string {
     const colorDisabled = defaultColor ? ' disabled' : '';
     return `<tr data-row="${index}">
   <td class="num row-number">${index + 1}</td>
-  <td><select class="mmp-input mmp-select" data-index="${index}" data-field="type" aria-label="Icon ${index + 1} type">${typeOptions}</select></td>
-  <td><input class="mmp-input mono" type="number" data-index="${index}" data-field="x" value="${icon.x}" aria-label="Icon ${index + 1} X coordinate"></td>
-  <td><input class="mmp-input mono" type="number" data-index="${index}" data-field="y" value="${icon.y}" aria-label="Icon ${index + 1} Y coordinate"></td>
+  <td><select class="wv-input mmp-input mmp-select" data-index="${index}" data-field="type" aria-label="Icon ${index + 1} type">${typeOptions}</select></td>
+  <td><input class="wv-input mmp-input mono" type="number" data-index="${index}" data-field="x" value="${icon.x}" aria-label="Icon ${index + 1} X coordinate"></td>
+  <td><input class="wv-input mmp-input mono" type="number" data-index="${index}" data-field="y" value="${icon.y}" aria-label="Icon ${index + 1} Y coordinate"></td>
   <td class="type-label">${escapeHtml(mmpIconLabel(icon.type))}</td>
   <td class="color-cell">
     <input class="color-input" type="color" data-index="${index}" data-field="color" value="${mmpColorHex(icon)}" aria-label="Icon ${index + 1} custom color"${colorDisabled}>
-    <input class="alpha-input mmp-input mono" type="number" min="0" max="255" data-index="${index}" data-field="alpha" value="${icon.alpha}" aria-label="Icon ${index + 1} alpha"${colorDisabled}>
+    <input class="alpha-input wv-input mmp-input mono" type="number" min="0" max="255" data-index="${index}" data-field="alpha" value="${icon.alpha}" aria-label="Icon ${index + 1} alpha"${colorDisabled}>
     <label class="default-color"><input type="checkbox" data-index="${index}" data-default-color title="No custom tint; use the normal game icon color"${defaultColor ? ' checked' : ''}> game default</label>
   </td>
-  <td><button type="button" class="remove-button" data-remove="${index}" title="Remove this minimap icon">Remove</button></td>
+  <td><button type="button" class="wv-btn-secondary remove-button" data-remove="${index}" title="Remove this minimap icon">Remove</button></td>
 </tr>`;
 }
 
@@ -1216,7 +1203,7 @@ ${errorBanner(f.error)}
   <span class="metric">Records are shown in minimap/lobby order</span>
 </div>
 <div class="mmp-actions">
-  <button type="button" class="action-button" data-add>Add minimap icon</button>
+  <button type="button" class="wv-btn-secondary" data-add>Add minimap icon</button>
   <span class="hint">Remove entries to hide them from the lobby minimap preview. Coordinates are Warcraft III map coordinates.</span>
 </div>
 <div id="mmpList">${renderMmpList(f)}</div>
@@ -1266,33 +1253,21 @@ ${errorBanner(f.error)}
 const MMP_EDITOR_CSS = `
 .mmp-editor { max-width: 1180px; }
 .mmp-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin: 3px 0 10px; }
-.action-button, .remove-button {
-  color: var(--btn-fg, var(--fg)); background: var(--btn-bg, var(--input-bg));
-  border: 1px solid var(--border); border-radius: 3px; padding: 4px 9px;
-  font: inherit; font-size: 12px; cursor: pointer;
-}
-.action-button:hover, .remove-button:hover { background: var(--btn-hover, var(--hover)); }
-.remove-button { color: var(--vscode-errorForeground, #f14c4c); background: transparent; padding: 3px 7px; }
 .mmp-table { min-width: 820px; table-layout: fixed; }
 .mmp-table th:nth-child(1) { width: 42px; }
 .mmp-table th:nth-child(2), .mmp-table th:nth-child(3), .mmp-table th:nth-child(4) { width: 100px; }
 .mmp-table th:nth-child(5) { width: 180px; }
 .mmp-table th:nth-child(6) { width: 280px; }
 .mmp-table th:nth-child(7) { width: 84px; }
-.mmp-input { width: 100%; min-width: 0; height: 26px; padding: 3px 6px; color: var(--input-fg); background: var(--input-bg); border: 1px solid var(--input-border, var(--border)); border-radius: 2px; font: inherit; }
 .mmp-select { cursor: pointer; }
 .mmp-input:disabled, .color-input:disabled { opacity: 0.55; cursor: default; }
-.mmp-input:focus, .color-input:focus { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px; }
-.mmp-input.mono { font-family: var(--mono); }
 .color-cell { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
-.color-input { width: 34px; height: 26px; padding: 1px; border: 1px solid var(--input-border, var(--border)); background: var(--input-bg); border-radius: 2px; }
 .alpha-input { width: 68px; }
 .default-color { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; }
-.default-color input { margin: 0; accent-color: var(--vscode-checkbox-selectBackground, var(--vscode-button-background)); }
+.default-color input { margin: 0; accent-color: var(--checkbox-accent); }
 .type-label { color: var(--muted); overflow-wrap: anywhere; }
 .row-number { vertical-align: middle; }
 .mmp-footer-hint { margin-top: 10px; }
-.dirty-badge[hidden] { display: none; }
 `;
 
 function handleMmpMessage(message: unknown, doc: MmpDocument, provider: MmpEditorProvider): void {
@@ -1447,7 +1422,7 @@ function resolveW3iString(raw: string | undefined, doc: W3iDocument): ResolvedTe
 
 function editInput(field: keyof W3iFile, label: string, resolved: ResolvedText, opts: { wide?: boolean; textarea?: boolean; mono?: boolean } = {}): string {
     const fieldClass = opts.wide || opts.textarea ? 'field wide' : 'field';
-    const controlClass = ['field-control', opts.mono ? 'mono' : ''].filter(Boolean).join(' ');
+    const controlClass = ['wv-input field-control', opts.mono ? 'mono' : ''].filter(Boolean).join(' ');
     const value = escapeHtml(controlValue(resolved.value));
     const control = opts.textarea
         ? `<textarea class="${controlClass}" data-field="${field}" placeholder="-">${value}</textarea>`
@@ -1466,7 +1441,7 @@ function editSelectControl(field: keyof W3iFile, label: string, value: ControlVa
     const rendered = opts.map((o) => `<option value="${escapeHtml(o.value)}"${o.value === selected ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('');
     return `<label class="field">
   <span class="field-label">${escapeHtml(label)}</span>
-  <select class="field-control" data-select="${field}">${rendered}</select>
+  <select class="wv-input field-control" data-select="${field}">${rendered}</select>
 </label>`;
 }
 
@@ -1511,23 +1486,12 @@ function renderW3iForces(forces: W3iForce[] | undefined): string {
 }
 
 const W3I_EDITOR_CSS = `
-.field-control:not(:disabled):hover { border-color: var(--vscode-inputOption-activeBorder, var(--vscode-focusBorder, #007fd4)); }
-.field-control:focus { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px; }
-/* The display below outranks the user-agent's [hidden] rule, so the badge needs its own guard —
-   without it the "unsaved" marker shows on a clean document too. */
-.dirty-badge[hidden] { display: none; }
-.dirty-badge {
-  display: inline-block;
-  margin-left: 8px;
-  color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
-  font-size: 11px;
-  font-weight: 600;
-}
+.field-control:not(:disabled):hover { border-color: var(--input-active-border); }
 .open-asset {
   margin-top: 4px;
   font: inherit;
   font-size: 11px;
-  color: var(--vscode-textLink-foreground);
+  color: var(--accent);
   background: transparent;
   border: 1px solid var(--border);
   border-radius: 2px;
@@ -1535,7 +1499,6 @@ const W3I_EDITOR_CSS = `
   cursor: pointer;
 }
 .open-asset:hover { background: var(--hover); }
-.hint { color: var(--muted); font-size: 11px; margin: 2px 0 0; }
 `;
 
 function renderW3iEditor(doc: W3iDocument, fileName: string): string {
@@ -1579,7 +1542,7 @@ ${errorBanner(f.error)}
     ${editInput('loadingSubtitle', 'Subtitle', s('loadingSubtitle'))}
     <label class="field wide">
       ${renderFieldLabel('Custom model', resolveW3iString(f.loadingModel, doc))}
-      <input class="field-control mono" data-field="loadingModel" value="${escapeHtml(controlValue(resolveW3iString(f.loadingModel, doc).value))}" placeholder="-">
+      <input class="wv-input field-control mono" data-field="loadingModel" value="${escapeHtml(controlValue(resolveW3iString(f.loadingModel, doc).value))}" placeholder="-">
       ${openModelBtn}
     </label>
     ${editInput('loadingText', 'Text', s('loadingText'), { textarea: true })}

@@ -394,7 +394,6 @@ export function normalizeGameAssetSeparators(assetPath: string): string {
         .replace(/\\$/, '');
 }
 
-export const normalizeGameAssetPath = normalizeCascAssetPath;
 
 function getCachedAssetPath(cacheDir: string, normalizedAssetPath: string): string {
     // CASC namespace paths contain ':' (e.g. "_hd.w3mod:replaceabletextures\..."), which is illegal

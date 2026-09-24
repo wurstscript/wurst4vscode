@@ -1,4 +1,4 @@
-import { esc, renderWc3Colors } from '../objModWebviewUtils';
+import { esc, renderWc3Colors } from '../webviewUtils';
 import { initial, ui, vscodeApi } from './state';
 
 export function sourcePill(mod) {

@@ -41,17 +41,19 @@ const leaked = files.filter((file) => forbidden.some((pattern) => pattern.test(f
 assert.deepStrictEqual(leaked, [], `Test/development files would be packaged:\n${leaked.join('\n')}`);
 
 // Every bundle the host references with asWebviewUri, plus the web entry. A partial webpack run
-// used to ship silently and leave the object editor with a 404'd script.
+// used to ship silently and leave the object editor with a 404'd script. The webview bundles are
+// read from webpack.config.js so a new entry cannot be forgotten here.
+const webviewOutput = path.join(root, 'dist', 'webview');
+const webviewBundles = require('../webpack.config.js')
+    .filter((config) => config.output && path.resolve(config.output.path) === webviewOutput)
+    .flatMap((config) => Object.keys(config.entry).map((name) => `dist/webview/${name}.js`));
+assert.ok(webviewBundles.includes('dist/webview/objModEditorWebview.js'), 'webview bundles should be discovered from webpack.config.js');
 const REQUIRED_BUNDLES = [
     'dist/extension.js',
     'dist/web/extension.js',
-    'dist/webview/mdxViewer.js',
     'dist/webview/codicon.css',
     'dist/webview/codicon.ttf',
-    'dist/webview/mpqViewerWebview.js',
-    'dist/webview/objModEditorWebview.js',
-    'dist/webview/mdxThumbnailWorker.js',
-    'dist/webview/wpmEditorWebview.js',
+    ...webviewBundles,
 ];
 // LICENSE.txt covers the extension; THIRD-PARTY-NOTICES.txt carries the MIT notices for the
 // bundled dependencies (war3-model and friends), which those licences require us to ship.

@@ -11,7 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { parseDoo } from 'casc-ts/formats';
-import { buildPage } from './webviewShared';
+import { buildPage, PREVIEW_ICON_CSP, scriptSafeJson } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
 import { findGameTexture } from './preview/cascStorage';
 import { loadTerrainWaterLevel, loadTilesetBlightTexture, parseSlk, readGameData } from './preview/wc3Data';
@@ -450,7 +450,7 @@ async function buildHtml(terrain: Terrain, markers: Marker[]): Promise<string> {
         : 'texture fallback colors';
 
     return buildPage({
-        csp: "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;",
+        csp: PREVIEW_ICON_CSP,
         title: 'Map Preview',
         extraCss: `
 .mp-shell { height: 100%; display: grid; grid-template-rows: auto 1fr auto; min-height: 0; }
@@ -463,7 +463,7 @@ async function buildHtml(terrain: Terrain, markers: Marker[]): Promise<string> {
 .mp-swatch { width: 11px; height: 11px; border-radius: 50%; display: inline-block; border: 1px solid rgba(255,255,255,.35); }
 .mp-range { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .mp-hint, .mp-meta { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mp-tip { position: fixed; z-index: 5; display: none; pointer-events: none; max-width: 280px; padding: 7px 9px; border: 1px solid var(--border); background: var(--vscode-editorHoverWidget-background, #252526); color: var(--fg); box-shadow: 0 4px 16px rgba(0,0,0,.35); font-size: 12px; line-height: 1.35; }
+.mp-tip { position: fixed; z-index: 5; display: none; pointer-events: none; max-width: 280px; padding: 7px 9px; border: 1px solid var(--border); background: var(--hover-widget-bg); color: var(--fg); box-shadow: 0 4px 16px rgba(0,0,0,.35); font-size: 12px; line-height: 1.35; }
 .mp-tip-title { font-weight: 600; margin-bottom: 2px; }
 .mp-tip-sub { color: var(--muted); font-family: var(--mono); }
 `,
@@ -491,7 +491,7 @@ async function buildHtml(terrain: Terrain, markers: Marker[]): Promise<string> {
 </div>
 <script>
 ${VIEWER_SCRIPT}
-initMapPreview(${JSON.stringify(data)});
+initMapPreview(${scriptSafeJson(data)});
 </script>`,
     });
 }

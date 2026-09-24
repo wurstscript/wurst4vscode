@@ -1,4 +1,4 @@
-import { esc, base64ToBytes } from '../objModWebviewUtils';
+import { esc, base64ToBytes } from '../webviewUtils';
 import { vscodeApi, assetBrowserUi, initial } from './state';
 import { mpvViewer, mpvB64ToArrayBuffer } from './modelViewerShared';
 
@@ -18,13 +18,10 @@ let modelThumbWorker: Worker | null = null;
 let modelThumbWorkerBlobUrl = '';
 let modelThumbWorkerStartupState: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
 let modelThumbWorkerStartupError = '';
-let modelThumbTextureTimer: ReturnType<typeof setTimeout> | 0 = 0;
 let modelThumbIdleTimer: ReturnType<typeof setTimeout> | 0 = 0;
 let modelThumbCancelGeneration = 0;
 export const modelThumbEvents: any[] = [];
 const MODEL_THUMB_HOST_CONCURRENCY = 1;
-const MODEL_THUMB_ZERO_ALPHA_RETRIES = 0;
-const MODEL_THUMB_MIN_VISIBLE_PIXELS = 4;
 
 export function nextModelThumbSeq() {
   return modelThumbSeq++;
@@ -380,16 +377,6 @@ export function modelThumbEnsureInit() {
   return false;
 }
 
-export function resetModelThumbInited() {
-  modelThumbWorker?.terminate();
-  modelThumbWorker = null;
-  if (modelThumbWorkerBlobUrl) URL.revokeObjectURL(modelThumbWorkerBlobUrl);
-  modelThumbWorkerBlobUrl = '';
-  modelThumbWorkerStartupState = 'idle';
-  modelThumbWorkerStartupError = '';
-  modelThumbInited = false;
-}
-
 export function getModelThumbWorkerState() {
   return { state: modelThumbWorkerStartupState, error: modelThumbWorkerStartupError };
 }
@@ -398,248 +385,11 @@ function modelThumbTexturePaths(texturePaths) {
   return Array.from(new Set((texturePaths || []).filter(path => typeof path === 'string' && path)));
 }
 
-export function pickStandSequence(seqs) {
-  let pick = 0, best = Infinity;
-  seqs.forEach((s, i) => {
-    const n = (s.name || '').toLowerCase();
-    if (n.indexOf('stand') >= 0 && n.length < best) { best = n.length; pick = i; }
-  });
-  return pick;
-}
-
-function modelThumbOnLoaded(seqs, texturePaths) {
-  if (!modelThumbJob) return;
-  const thumbTextures = modelThumbTexturePaths(texturePaths || []);
-  modelThumbProfile('model-loaded', 'textures=' + thumbTextures.length + '/' + ((texturePaths && texturePaths.length) || 0));
-  const v = mpvViewer();
-  if (v && seqs.length) {
-    const pick = pickStandSequence(seqs);
-    const seq = seqs[pick];
-    try {
-      v.setSequence(pick);
-      v.setFrame(seq ? Math.round(seq.start + Math.max(0, seq.end - seq.start) * 0.2) : 0);
-      v.resetCamera();
-      v.zoomOut();
-      v.zoomOut();
-      v.setAutoplay(false);
-    } catch (e) {}
-  }
-  const requested = modelThumbJob.requestedTextures ? Array.from(modelThumbJob.requestedTextures) : thumbTextures;
-  modelThumbJob.pendingTextures = new Set(requested.filter(path => !modelThumbJob.receivedTextures || !modelThumbJob.receivedTextures.has(path)));
-  modelThumbJob.textureFailures = modelThumbJob.textureFailures || 0;
-  if (modelThumbJob.pendingTextures.size === 0) scheduleModelThumbCapture(0, 1);
-  else modelThumbProfile('wait-textures', 'remaining=' + modelThumbJob.pendingTextures.size);
-}
-
-function scheduleModelThumbCapture(timeoutMs, frames) {
-  if (!modelThumbJob) return;
-  if (isAssetBrowserModelKey(modelThumbJob.key) && !hasVisibleModelThumbElement(modelThumbJob.key)) {
-    cancelCurrentModelThumb('not-visible-before-capture');
-    return;
-  }
-  modelThumbProfile('schedule-capture', 'delay=' + timeoutMs + 'ms pendingTextures=' + (modelThumbJob.pendingTextures ? modelThumbJob.pendingTextures.size : 0));
-  clearTimeout(modelThumbTextureTimer);
-  const waitFrames = Math.max(0, frames == null ? 1 : frames);
-  const arm = () => {
-    let remaining = waitFrames;
-    const tick = () => {
-      if (!modelThumbJob) return;
-      if (isAssetBrowserModelKey(modelThumbJob.key) && !hasVisibleModelThumbElement(modelThumbJob.key)) {
-        cancelCurrentModelThumb('not-visible-capture');
-        return;
-      }
-      if (remaining-- > 0) requestAnimationFrame(tick);
-      else captureModelThumb();
-    };
-    requestAnimationFrame(tick);
-  };
-  if (timeoutMs > 0) modelThumbTextureTimer = setTimeout(arm, timeoutMs);
-  else arm();
-}
-
-function captureModelThumb() {
-  if (!modelThumbJob) return;
-  if (isAssetBrowserModelKey(modelThumbJob.key) && !hasVisibleModelThumbElement(modelThumbJob.key)) {
-    cancelCurrentModelThumb('not-visible-capture-start');
-    return;
-  }
-  if (modelThumbJob.pendingTextures && modelThumbJob.pendingTextures.size > 0) {
-    modelThumbProfile('capture-blocked-textures', 'remaining=' + modelThumbJob.pendingTextures.size);
-    return;
-  }
-  modelThumbProfile('capture-start');
-  const canvas = document.getElementById('model-thumb-canvas');
-  if (!canvas) { finishModelThumb(false, 'no-canvas'); return; }
-  try {
-    const v = mpvViewer();
-    if (v && typeof v.renderStillFrame === 'function') v.renderStillFrame();
-    const out = cropModelThumbCanvas(canvas);
-    const quality = modelThumbQuality(out);
-    if (quality.alphaPixels < MODEL_THUMB_MIN_VISIBLE_PIXELS) {
-      modelThumbJob.blackRetries = (modelThumbJob.blackRetries || 0) + 1;
-      modelThumbProfile('capture-empty', 'retry=' + modelThumbJob.blackRetries + ' alpha=' + quality.alphaPixels);
-      if (modelThumbJob.blackRetries <= MODEL_THUMB_ZERO_ALPHA_RETRIES) {
-        scheduleModelThumbCapture(50, 1);
-      } else {
-        finishModelThumb(false, 'empty');
-      }
-      return;
-    }
-    if (quality.tooDark) {
-      modelThumbProfile('capture-dark-rejected', 'alpha=' + quality.alphaPixels + ' avg=' + Math.round(quality.avgLuma) + ' max=' + quality.maxLuma);
-      if (!modelThumbJob.fullQualityRetry) {
-        retryModelThumbAtFullTextureQuality();
-      } else {
-        // Never persist a texture-load failure as a valid thumbnail. The next editor session can
-        // retry generation, while caching this frame would keep it black across restarts.
-        finishModelThumb(false, 'dark-frame');
-      }
-      return;
-    }
-    const dataUrl = out.toDataURL('image/webp', 0.84);
-    const marker = 'data:image/webp;base64,';
-    if (!dataUrl || dataUrl.indexOf(marker) !== 0) { finishModelThumb(false, 'encode-failed'); return; }
-    vscodeApi.postMessage({
-      type: 'modelThumbRendered',
-      key: modelThumbJob.key,
-      cacheKey: modelThumbJob.cacheKey,
-      aliasKey: modelThumbJob.aliasKey,
-      webpBase64: dataUrl.slice(marker.length),
-    });
-    modelThumbProfile('capture-posted', 'bytes=' + Math.round((dataUrl.length - marker.length) * 0.75));
-    finishModelThumb(true, '', dataUrl);
-  } catch (e) {
-    modelThumbProfile('capture-error', e instanceof Error ? e.message : String(e));
-    finishModelThumb(false, 'capture-error');
-  }
-}
-
-function retryModelThumbAtFullTextureQuality() {
-  const job = modelThumbJob;
-  if (!job || !job.modelBuffer) {
-    finishModelThumb(false, 'dark-frame');
-    return;
-  }
-  job.fullQualityRetry = true;
-  job.receivedTextures = new Set();
-  job.requestedTextures = null;
-  job.pendingTextures = null;
-  job.textureFailures = 0;
-  const v = mpvViewer();
-  if (!v) {
-    finishModelThumb(false, 'viewer-missing');
-    return;
-  }
-  if (typeof v.clearTextureCache === 'function') v.clearTextureCache('thumbnail');
-  modelThumbProfile('reload-full-textures');
-  try {
-    v.loadModel(job.modelBuffer, job.fileName || '', job.format || 'mdx', {
-      autoplay: false,
-      freezeAnimation: true,
-      textureCacheKey: 'thumbnail',
-    });
-  } catch (e) {
-    finishModelThumb(false, 'full-quality-reload');
-  }
-}
-
-export function modelThumbQuality(canvas) {
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return { tooDark: true, alphaPixels: 0, avgLuma: 0, maxLuma: 0 };
-  const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const px = id.data;
-  let alphaPixels = 0;
-  let lumaSum = 0;
-  let maxLuma = 0;
-  for (let i = 0; i < px.length; i += 4) {
-    const a = px[i + 3];
-    if (a <= 12) continue;
-    const luma = px[i] * 0.2126 + px[i + 1] * 0.7152 + px[i + 2] * 0.0722;
-    alphaPixels++;
-    lumaSum += luma;
-    if (luma > maxLuma) maxLuma = luma;
-  }
-  const avgLuma = alphaPixels ? lumaSum / alphaPixels : 0;
-  return {
-    tooDark: alphaPixels >= MODEL_THUMB_MIN_VISIBLE_PIXELS && avgLuma < 10 && maxLuma < 34,
-    alphaPixels,
-    avgLuma,
-    maxLuma,
-  };
-}
-
-export function cropModelThumbCanvas(canvas) {
-  const id = readModelThumbFrame(canvas);
-  const w = id.width, h = id.height;
-  const px = id.data;
-  normalizeAdditivePixels(px);
-  const src = document.createElement('canvas');
-  src.width = w; src.height = h;
-  const sctx = src.getContext('2d')!;
-  sctx.putImageData(id, 0, 0);
-  let minX = w, minY = h, maxX = -1, maxY = -1;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const off = (y * w + x) * 4;
-      if (!isModelThumbPixelVisible(px[off], px[off + 1], px[off + 2], px[off + 3])) continue;
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
-    }
-  }
-  if (maxX < minX || maxY < minY) return src;
-  const bw = maxX - minX + 1, bh = maxY - minY + 1;
-  const pad = Math.ceil(Math.max(bw, bh) * 0.16);
-  minX = Math.max(0, minX - pad); minY = Math.max(0, minY - pad);
-  maxX = Math.min(w - 1, maxX + pad); maxY = Math.min(h - 1, maxY + pad);
-  const cw = maxX - minX + 1, ch = maxY - minY + 1;
-  const out = document.createElement('canvas');
-  out.width = 96; out.height = 96;
-  const octx = out.getContext('2d')!;
-  octx.imageSmoothingEnabled = true;
-  octx.imageSmoothingQuality = 'high';
-  const scale = Math.min(96 / cw, 96 / ch);
-  const dw = Math.max(1, Math.round(cw * scale));
-  const dh = Math.max(1, Math.round(ch * scale));
-  octx.clearRect(0, 0, 96, 96);
-  octx.drawImage(src, minX, minY, cw, ch, Math.round((96 - dw) / 2), Math.round((96 - dh) / 2), dw, dh);
-  return out;
-}
-
-export function readModelThumbFrame(canvas) {
-  const v = mpvViewer();
-  if (v && typeof v.readPixelsImageData === 'function') {
-    const frame = v.readPixelsImageData();
-    if (frame) return frame;
-  }
-  const src = document.createElement('canvas');
-  src.width = canvas.width;
-  src.height = canvas.height;
-  const sctx = src.getContext('2d')!;
-  sctx.drawImage(canvas, 0, 0);
-  return sctx.getImageData(0, 0, src.width, src.height);
-}
-
-export function isModelThumbPixelVisible(r, g, b, a) {
-  return a > 8 || (r + g + b) > 24;
-}
-
-export function normalizeAdditivePixels(px) {
-  for (let i = 0; i < px.length; i += 4) {
-    const a = px[i + 3];
-    if (a > 8) continue;
-    const rgbAlpha = Math.max(px[i], px[i + 1], px[i + 2]);
-    if (rgbAlpha > 8) px[i + 3] = rgbAlpha;
-  }
-}
-
 export function finishModelThumb(rendered, reason = '', localUri = '') {
   if (!modelThumbJob) return;
   const key = modelThumbJob.key;
   const cacheKey = modelThumbJob.cacheKey;
   const aliasKey = modelThumbJob.aliasKey;
-  clearTimeout(modelThumbTextureTimer);
   if (!rendered) {
     modelThumbWorker?.postMessage({ type: 'cancel', key });
     vscodeApi.postMessage({ type: 'modelThumbFailed', key, cacheKey, aliasKey, reason: reason || 'failed' });
@@ -663,7 +413,6 @@ function cancelCurrentModelThumb(reason) {
   const key = modelThumbJob.key;
   modelThumbProfile(reason || 'cancelled');
   modelThumbWorker?.postMessage({ type: 'cancel', key });
-  clearTimeout(modelThumbTextureTimer);
   pendingModelThumbs.delete(key);
   cancelQueuedModelThumbRequest(key);
   if (modelThumbAwaitingDecisionKey === key) modelThumbAwaitingDecisionKey = '';
@@ -749,16 +498,7 @@ function processModelThumbQueue() {
       }, [buffer]);
       return;
     }
-    try {
-      mpvViewer().loadModel(buffer, job.fileName || '', job.format || 'mdx', {
-        autoplay: false,
-        freezeAnimation: true,
-        textureCacheKey: 'thumbnail',
-        maxTextureDimension: 256,
-      });
-    } catch (e) {
-      finishModelThumb(false);
-    }
+    finishModelThumb(false, 'worker-missing');
   }).catch(e => {
     if (!modelThumbJob || modelThumbJob !== job) return;
     modelThumbProfile('fetch-error', String(e && e.message ? e.message : e));
@@ -773,7 +513,7 @@ export function applyMdxTexture(msg) {
     v.onTextureDds(msg.path, mpvB64ToArrayBuffer(msg.ddsBase64));
   } else if (msg.rgbaBase64 && msg.width && msg.height) {
     const rgba = base64ToBytes(msg.rgbaBase64);
-    v.onTextureImageData(msg.path, new ImageData(new Uint8ClampedArray(Array.from(rgba)), msg.width, msg.height));
+    v.onTextureImageData(msg.path, new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength), msg.width, msg.height));
   } else {
     v.onTexture(msg.path, msg.blpBase64 ? mpvB64ToArrayBuffer(msg.blpBase64) : null);
   }
@@ -795,37 +535,11 @@ export function handleMdxTextureMessage(msg) {
     }
     return;
   }
-  if (modelThumbJob) {
-    if (msg.thumbKey && msg.thumbKey !== modelThumbJob.key) return;
-    if (!modelThumbJob.receivedTextures) modelThumbJob.receivedTextures = new Set();
-    modelThumbJob.receivedTextures.add(msg.path);
-    if (!msg.thumbKey && modelThumbJob.pendingTextures && modelThumbJob.pendingTextures.has(msg.path)) return;
-    if (modelThumbJob.pendingTextures && !modelThumbJob.pendingTextures.has(msg.path)) return;
-    if (msg.missing || msg.unsupported || msg.error) {
-      modelThumbJob.textureFailures = (modelThumbJob.textureFailures || 0) + 1;
-    } else {
-      applyMdxTexture(msg);
-    }
-    if (modelThumbJob.pendingTextures) modelThumbJob.pendingTextures.delete(msg.path);
-    modelThumbProfile('texture-received', 'remaining=' + (modelThumbJob.pendingTextures ? modelThumbJob.pendingTextures.size : 0) + ' failures=' + (modelThumbJob.textureFailures || 0) + ' path=' + (msg.path || ''));
-    if (!modelThumbJob.pendingTextures || modelThumbJob.pendingTextures.size === 0) scheduleModelThumbCapture(0, 1);
-    return;
-  }
   if (msg.thumbKey) return;
   applyMdxTexture(msg);
 }
 
 export function handleModelThumbTexturesComplete(msg) {
   if (!modelThumbJob || !msg.thumbKey || msg.thumbKey !== modelThumbJob.key) return;
-  if (modelThumbWorker) {
-    modelThumbWorker.postMessage(Object.assign({}, msg, { type: 'texturesComplete' }));
-    return;
-  }
-  const remaining = modelThumbJob.pendingTextures ? modelThumbJob.pendingTextures.size : 0;
-  if (remaining > 0) {
-    modelThumbJob.textureFailures = (modelThumbJob.textureFailures || 0) + remaining;
-    modelThumbJob.pendingTextures.clear();
-  }
-  modelThumbProfile('textures-complete', 'unresolved=' + remaining + ' failures=' + (modelThumbJob.textureFailures || 0));
-  scheduleModelThumbCapture(0, 1);
+  modelThumbWorker?.postMessage(Object.assign({}, msg, { type: 'texturesComplete' }));
 }

@@ -1,0 +1,209 @@
+/*
+ * Base stylesheet for every wurst webview page, prepended by buildPage() (webviewShared.ts).
+ * Single source of truth for the VS Code theme token mapping and the shared `wv-*` components.
+ * Viewer stylesheets use these tokens instead of reading `--vscode-*` variables directly, and put
+ * anything viewer-specific in their own .css file rather than here.
+ */
+:root {
+  --bg:           var(--vscode-editor-background);
+  --sidebar:      var(--vscode-sideBar-background, var(--vscode-editor-background));
+  --fg:           var(--vscode-editor-foreground);
+  --text:         var(--fg); /* legacy alias of --fg */
+  --muted:        var(--vscode-descriptionForeground);
+  --accent:       var(--vscode-textLink-foreground, #3794ff);
+  --warn:         var(--vscode-editorWarning-foreground, #cca700);
+  --error:        var(--vscode-errorForeground, #f14c4c);
+  --dirty:        var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
+  --focus:        var(--vscode-focusBorder, #007fd4);
+  --shadow:       var(--vscode-widget-shadow, rgba(0, 0, 0, .36));
+  --border:       var(--vscode-panel-border, var(--vscode-widget-border, #454545));
+  --hover:        var(--vscode-list-hoverBackground);
+  --active:       var(--vscode-list-activeSelectionBackground);
+  --active-fg:    var(--vscode-list-activeSelectionForeground, var(--vscode-editor-foreground));
+  --th-bg:        var(--vscode-editorGroupHeader-tabsBackground, var(--sidebar));
+  --code-bg:      var(--vscode-textCodeBlock-background, var(--input-bg));
+  --model-bg:     color-mix(in srgb, var(--bg) 72%, var(--fg) 28%);
+  /* Floating surfaces: popovers, dialogs, hover cards. */
+  --widget-bg:     var(--vscode-editorWidget-background, var(--sidebar));
+  --widget-border: var(--vscode-editorWidget-border, var(--border));
+  --backdrop:      color-mix(in srgb, #000 45%, transparent);
+  --hover-widget-bg: var(--vscode-editorHoverWidget-background, var(--widget-bg));
+  --dropdown-bg:     var(--vscode-dropdown-background, var(--input-bg));
+  --dropdown-fg:     var(--vscode-dropdown-foreground, var(--input-fg));
+  --dropdown-border: var(--vscode-dropdown-border, var(--input-border));
+  --input-active-border: var(--vscode-inputOption-activeBorder, var(--focus));
+  --checkbox-accent: var(--vscode-checkbox-selectBackground, var(--btn-primary-bg));
+  --badge-fg:     var(--vscode-badge-foreground, #fff);
+  --code-fg:      var(--vscode-textPreformat-foreground, var(--fg));
+  --mono-size:    var(--vscode-editor-font-size, 13px);
+  --folder-fg:    var(--vscode-symbolIcon-folderForeground, #dcb67a);
+  --chart-orange: var(--vscode-charts-orange, #d18616);
+  --input-bg:     var(--vscode-input-background);
+  --input-fg:     var(--vscode-input-foreground);
+  --input-border: var(--vscode-input-border, transparent);
+  --input-ph:     var(--vscode-input-placeholderForeground);
+  /* Secondary (neutral) buttons. Primary buttons are the --btn-primary-* trio. */
+  --btn-bg:       var(--vscode-button-secondaryBackground, var(--vscode-toolbar-hoverBackground));
+  --btn-fg:       var(--vscode-button-secondaryForeground, var(--vscode-editor-foreground));
+  --btn-hover:    var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-activeBackground));
+  --btn-primary-bg:    var(--vscode-button-background, var(--accent));
+  --btn-primary-fg:    var(--vscode-button-foreground, #fff);
+  --btn-primary-hover: var(--vscode-button-hoverBackground, var(--btn-primary-bg));
+  --icon-fg:      var(--vscode-icon-foreground, var(--vscode-editor-foreground));
+  --font:         var(--vscode-font-family);
+  --font-size:    var(--vscode-font-size, 13px);
+  --mono:         var(--vscode-editor-font-family, monospace);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; overflow: hidden; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: var(--font-size);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ── header ────────────────────────────────────────────────────────────────── */
+.wv-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar);
+  flex-shrink: 0;
+  min-width: 0;
+}
+.wv-header-icon { flex-shrink: 0; width: 20px; height: 20px; opacity: 0.85; }
+.wv-header-text { flex: 1; min-width: 0; }
+.wv-header-name {
+  font-weight: 600;
+  font-size: calc(var(--font-size) + 1px);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wv-header-meta { color: var(--muted); font-size: 12px; margin-top: 1px; }
+
+/* ── toolbar ───────────────────────────────────────────────────────────────── */
+.wv-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar);
+  flex-shrink: 0;
+}
+.wv-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  font-family: var(--font);
+  font-size: 12px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+.wv-btn svg { width: 13px; height: 13px; flex-shrink: 0; fill: currentColor; opacity: 0.85; }
+.wv-btn:hover:not(:disabled) { background: var(--btn-hover); border-color: var(--border); color: var(--fg); }
+.wv-btn.active { background: var(--btn-bg); color: var(--btn-fg); }
+.wv-btn:disabled { opacity: 0.4; cursor: default; }
+.wv-btn:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+.wv-sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; flex-shrink: 0; }
+
+/* ── scrollable content area ───────────────────────────────────────────────── */
+.wv-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
+.wv-scroll::-webkit-scrollbar { width: 8px; }
+.wv-scroll::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background, rgba(121,121,121,.4));
+  border-radius: 4px;
+}
+.wv-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100,100,100,.7));
+}
+
+/* ── spinner overlay ───────────────────────────────────────────────────────── */
+.wv-loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 130ms ease;
+}
+.wv-loading-overlay.visible { opacity: 1; }
+.wv-spinner {
+  width: 22px; height: 22px;
+  border: 2px solid color-mix(in srgb, var(--fg) 20%, transparent);
+  border-top-color: var(--fg);
+  border-radius: 50%;
+  animation: wv-spin 0.8s linear infinite;
+}
+.wv-loading-text { font-size: 12px; color: var(--muted); text-align: center; }
+@keyframes wv-spin { to { transform: rotate(360deg); } }
+
+/* ── empty / error state ───────────────────────────────────────────────────── */
+.wv-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 100%; gap: 8px; color: var(--muted); font-size: 13px; padding: 24px; text-align: center;
+}
+.wv-state .err { color: var(--error); font-size: 12px; max-width: 360px; }
+
+/* ── filled buttons (dialog actions, add/remove) ───────────────────────────── */
+.wv-btn-secondary, .wv-btn-primary {
+  padding: 4px 9px;
+  font: inherit;
+  font-size: 12px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wv-btn-secondary { background: var(--btn-bg); color: var(--btn-fg); border-color: var(--border); }
+.wv-btn-secondary:hover:not(:disabled) { background: var(--btn-hover); }
+.wv-btn-primary { background: var(--btn-primary-bg); color: var(--btn-primary-fg); }
+.wv-btn-primary:hover:not(:disabled) { background: var(--btn-primary-hover); }
+.wv-btn-secondary:disabled, .wv-btn-primary:disabled { opacity: .5; cursor: default; }
+.wv-btn-secondary:focus-visible, .wv-btn-primary:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+
+/* ── text inputs / selects ─────────────────────────────────────────────────── */
+.wv-input {
+  min-width: 0;
+  height: 26px;
+  padding: 3px 6px;
+  color: var(--input-fg);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 2px;
+  font: inherit;
+  line-height: 18px;
+}
+.wv-input::placeholder { color: var(--input-ph); }
+.wv-input:focus { outline: 1px solid var(--focus); outline-offset: -1px; }
+
+/* ── small status badges ───────────────────────────────────────────────────── */
+.wv-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+/* Unsaved-changes indicator, shared by every editable custom editor. */
+.wv-dirty { color: var(--dirty); font-size: 11px; white-space: nowrap; }
+.wv-dirty[hidden] { display: none; }

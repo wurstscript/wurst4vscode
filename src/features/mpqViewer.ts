@@ -325,9 +325,9 @@ function buildHtml(webview: vscode.Webview, archiveName: string, scriptUri: vsco
         body: `
 <div class="wv-header">
   <svg class="wv-header-icon" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <rect x="1" y="3" width="14" height="11" rx="1.5" fill="var(--vscode-symbolIcon-folderForeground,#dcb67a)" opacity="0.9"/>
-    <rect x="1" y="5" width="14" height="9" rx="1" fill="var(--vscode-symbolIcon-folderForeground,#dcb67a)"/>
-    <rect x="1" y="2" width="6" height="4" rx="1" fill="var(--vscode-symbolIcon-folderForeground,#dcb67a)" opacity="0.7"/>
+    <rect x="1" y="3" width="14" height="11" rx="1.5" fill="var(--folder-fg)" opacity="0.9"/>
+    <rect x="1" y="5" width="14" height="9" rx="1" fill="var(--folder-fg)"/>
+    <rect x="1" y="2" width="6" height="4" rx="1" fill="var(--folder-fg)" opacity="0.7"/>
     <text x="8" y="11.5" text-anchor="middle" font-size="5" font-weight="bold" fill="#1e1e1e" font-family="monospace">MPQ</text>
   </svg>
   <div class="wv-header-text">
@@ -354,11 +354,11 @@ function buildHtml(webview: vscode.Webview, archiveName: string, scriptUri: vsco
   <svg class="search-icon" width="14" height="14" viewBox="0 0 16 16" fill="var(--icon-fg)">
     <path d="M6.5 1a5.5 5.5 0 0 1 4.38 8.82l3.15 3.15-.71.71-3.15-3.15A5.5 5.5 0 1 1 6.5 1zm0 1a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9z"/>
   </svg>
-  <input class="search-input" id="searchInput" type="search" placeholder="Filter files\u2026" aria-label="Filter archive files" autocomplete="off" spellcheck="false">
+  <input class="wv-input search-input" id="searchInput" type="search" placeholder="Filter files\u2026" aria-label="Filter archive files" autocomplete="off" spellcheck="false">
   <span class="match-count" id="matchCount"></span>
 </div>
 
-<div class="tree-wrap" id="treeWrap" role="group" aria-label="Archive contents">
+<div class="wv-scroll tree-wrap" id="treeWrap" role="group" aria-label="Archive contents">
   <div class="wv-state"><span>Loading archive\u2026</span></div>
 </div>
 

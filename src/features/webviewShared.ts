@@ -12,145 +12,20 @@
  *   viewer-specific styles.
  */
 
-import { fuzzyMatch } from './preview/fuzzy';
+import BASE_CSS from '../webview/base.css';
+import DATA_PAGE_CSS from '../webview/dataPage.css';
 
 // ---------------------------------------------------------------------------
 // Base CSS — VS Code token mapping + shared structural components
 // ---------------------------------------------------------------------------
 
-export const WEBVIEW_BASE_CSS = `
-:root {
-  --bg:           var(--vscode-editor-background);
-  --sidebar:      var(--vscode-sideBar-background, var(--vscode-editor-background));
-  --fg:           var(--vscode-editor-foreground);
-  --text:         var(--vscode-editor-foreground);
-  --muted:        var(--vscode-descriptionForeground);
-  --warn:         var(--vscode-editorWarning-foreground);
-  --border:       var(--vscode-panel-border, var(--vscode-widget-border, #454545));
-  --hover:        var(--vscode-list-hoverBackground);
-  --active:       var(--vscode-list-activeSelectionBackground);
-  --active-fg:    var(--vscode-list-activeSelectionForeground, var(--vscode-editor-foreground));
-  --input-bg:     var(--vscode-input-background);
-  --input-fg:     var(--vscode-input-foreground);
-  --input-border: var(--vscode-input-border, transparent);
-  --input-ph:     var(--vscode-input-placeholderForeground);
-  --btn-bg:       var(--vscode-button-secondaryBackground, var(--vscode-toolbar-hoverBackground));
-  --btn-fg:       var(--vscode-button-secondaryForeground, var(--vscode-editor-foreground));
-  --btn-hover:    var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-activeBackground));
-  --icon-fg:      var(--vscode-icon-foreground, var(--vscode-editor-foreground));
-  --font:         var(--vscode-font-family);
-  --font-size:    var(--vscode-font-size, 13px);
-  --mono:         var(--vscode-editor-font-family, monospace);
-}
+export const WEBVIEW_BASE_CSS = BASE_CSS;
 
-*, *::before, *::after { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; overflow: hidden; }
-body {
-  background: var(--bg);
-  color: var(--fg);
-  font-family: var(--font);
-  font-size: var(--font-size);
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-}
-
-/* ── header ────────────────────────────────────────────────────────────────── */
-.wv-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--sidebar);
-  flex-shrink: 0;
-  min-width: 0;
-}
-.wv-header-icon { flex-shrink: 0; width: 20px; height: 20px; opacity: 0.85; }
-.wv-header-text { flex: 1; min-width: 0; }
-.wv-header-name {
-  font-weight: 600;
-  font-size: calc(var(--font-size) + 1px);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.wv-header-meta { color: var(--muted); font-size: 12px; margin-top: 1px; }
-
-/* ── toolbar ───────────────────────────────────────────────────────────────── */
-.wv-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--sidebar);
-  flex-shrink: 0;
-}
-.wv-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 8px;
-  font-family: var(--font);
-  font-size: 12px;
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 3px;
-  cursor: pointer;
-  white-space: nowrap;
-  line-height: 1.4;
-}
-.wv-btn svg { width: 13px; height: 13px; flex-shrink: 0; fill: currentColor; opacity: 0.85; }
-.wv-btn:hover:not(:disabled) { background: var(--btn-hover); border-color: var(--border); color: var(--fg); }
-.wv-btn.active { background: var(--btn-bg); color: var(--btn-fg); }
-.wv-btn:disabled { opacity: 0.4; cursor: default; }
-.wv-btn:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: 1px; }
-.wv-sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; flex-shrink: 0; }
-
-/* ── scrollable content area ───────────────────────────────────────────────── */
-.wv-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
-.wv-scroll::-webkit-scrollbar { width: 8px; }
-.wv-scroll::-webkit-scrollbar-thumb {
-  background: var(--vscode-scrollbarSlider-background, rgba(121,121,121,.4));
-  border-radius: 4px;
-}
-.wv-scroll::-webkit-scrollbar-thumb:hover {
-  background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100,100,100,.7));
-}
-
-/* ── spinner overlay ───────────────────────────────────────────────────────── */
-.wv-loading-overlay {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  gap: 10px;
-  background: color-mix(in srgb, var(--bg) 60%, transparent);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 130ms ease;
-}
-.wv-loading-overlay.visible { opacity: 1; }
-.wv-spinner {
-  width: 22px; height: 22px;
-  border: 2px solid color-mix(in srgb, var(--text) 20%, transparent);
-  border-top-color: var(--text);
-  border-radius: 50%;
-  animation: wv-spin 0.8s linear infinite;
-}
-.wv-loading-text { font-size: 12px; color: var(--muted); text-align: center; }
-@keyframes wv-spin { to { transform: rotate(360deg); } }
-
-/* ── empty / error state ───────────────────────────────────────────────────── */
-.wv-state {
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  height: 100%; gap: 8px; color: var(--muted); font-size: 13px; padding: 24px; text-align: center;
-}
-.wv-state .err { color: var(--vscode-errorForeground, #f14c4c); font-size: 12px; max-width: 360px; }
-`;
+/** Opt-in table/banner/empty-state styles for read-only data pages (see dataPage.css). */
+export { DATA_PAGE_CSS };
 
 // ---------------------------------------------------------------------------
-// Inline object-icon thumbnails (shared by doo / map-data / objmod webviews)
+// Inline object-icon thumbnails (doo preview, code asset picker)
 // ---------------------------------------------------------------------------
 
 /**
@@ -181,7 +56,7 @@ export const ICON_INLINE_CSS = `
  * other script needing `acquireVsCodeApi`. Exposes `window.observeIcons(root)`
  * for dynamically added content and observes the whole document on load.
  *
- * Requires CSP: `script-src 'unsafe-inline'; img-src data:;` (see PREVIEW_CSP).
+ * Requires CSP: `script-src 'unsafe-inline'; img-src data:;` (see PREVIEW_ICON_CSP).
  * Uses string concatenation (no template literals) so it nests safely.
  */
 export const ICON_LAZYLOAD_SCRIPT = `
@@ -257,18 +132,24 @@ export const ICON_LAZYLOAD_SCRIPT = `
 })();
 </script>`;
 
+/** CSP for static pages: inline styles only, no scripts or resources. */
+export const STATIC_CSP = "default-src 'none'; style-src 'unsafe-inline';";
+
+/** CSP for pages with inline scripts but no external resources. */
+export const INLINE_SCRIPT_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';";
+
 /** CSP for parsed-data webviews that use inline scripts + decoded data-URL icons. */
 export const PREVIEW_ICON_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;";
 
 /**
- * Shared typo-tolerant search for every webview search box. Exposes `window.fuzzyMatch(query, text)`
- * — the SAME pure function unit-tested in `scripts/test-fuzzy.js`, shipped to the webview verbatim
- * via `.toString()` (single source of truth; see `preview/fuzzy.ts`).
+ * JSON for embedding inside an inline `<script>` (e.g. `window.__X_INITIAL__ = ${scriptSafeJson(data)}`).
+ * Escapes the characters that could close the script element or break a JS string literal.
  */
-export const FUZZY_SEARCH_SCRIPT = `
-<script>
-window.fuzzyMatch = ${fuzzyMatch.toString()};
-</script>`;
+const SCRIPT_UNSAFE_CHARS = /[<>&\u2028\u2029]/g;
+
+export function scriptSafeJson(value: unknown): string {
+    return JSON.stringify(value).replace(SCRIPT_UNSAFE_CHARS, (ch) => '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0'));
+}
 
 // ---------------------------------------------------------------------------
 // HTML page builder
@@ -315,17 +196,4 @@ ${body}
 /** A 1px vertical separator for use inside a .wv-toolbar. */
 export function sep(): string {
     return `<div class="wv-sep"></div>`;
-}
-
-/**
- * A loading spinner overlay to be placed inside a `position:relative` container.
- * @param textId  id of the inner text element so callers can update it via JS.
- * @param initiallyVisible  whether the overlay starts visible (default true).
- */
-export function spinnerOverlay(textId: string, initiallyVisible = true): string {
-    const cls = initiallyVisible ? 'wv-loading-overlay visible' : 'wv-loading-overlay';
-    return `<div class="${cls}" role="status" aria-live="polite" aria-busy="${initiallyVisible}">
-  <div class="wv-spinner"></div>
-  <div id="${textId}" class="wv-loading-text">Loading...</div>
-</div>`;
 }

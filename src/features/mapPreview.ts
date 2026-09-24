@@ -14,7 +14,7 @@ import { parseDoo } from 'casc-ts/formats';
 import { buildPage, PREVIEW_ICON_CSP, scriptSafeJson } from './webviewShared';
 import { escapeHtml } from './webviewUtils';
 import { findGameTexture } from './preview/cascStorage';
-import { loadTerrainWaterLevel, loadTilesetBlightTexture, parseSlk, readGameData } from './preview/wc3Data';
+import { loadTerrainWaterLevel, loadTilesetBlightTexture, parseSlk, readGameData, slkField } from './preview/wc3Data';
 import { decodeToRgba } from './preview/imageDecoders';
 import { encodePng, scaleDown } from './imageAssetSupport';
 import { getObjectCatalog } from './preview/objectCatalog';
@@ -272,16 +272,6 @@ function activeResourcePath(resource?: vscode.Uri): string | undefined {
     if (editor) return editor;
     const input = vscode.window.tabGroups.activeTabGroup?.activeTab?.input as { uri?: vscode.Uri } | undefined;
     return input?.uri?.fsPath;
-}
-
-function slkField(row: Record<string, string> | undefined, names: string[]): string | undefined {
-    if (!row) return undefined;
-    const entries = Object.entries(row);
-    for (const name of names) {
-        const found = entries.find(([k]) => k.toLowerCase() === name.toLowerCase());
-        if (found && found[1]) return found[1];
-    }
-    return undefined;
 }
 
 async function loadSlkRows(assetPath: string): Promise<SlkRows> {

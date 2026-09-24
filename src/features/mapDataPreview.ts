@@ -10,12 +10,11 @@ import { BinaryEdit, EditableBinaryDocument, EditableBinaryEditorProvider, Parse
 import MAP_DATA_CSS from '../webview/mapData.css';
 import {
     loadTriggerStringsForUri, resolveTriggerString, ResolvedText, TriggerStringTable,
-    findWtsUri, applyWtsEdits,
+    findWtsUri, buildWtsBytes,
 } from './preview/triggerStrings';
-import { getCandidateRoots, resolveAssetPathWithCasc } from './imageAssetSupport';
+import { openAssetInPreview } from './imageAssetSupport';
 import { buildPage, DATA_PAGE_CSS, INLINE_SCRIPT_CSP, STATIC_CSP } from './webviewShared';
-import { escapeHtml } from './webviewUtils';
-import { showWarningWithLogs } from './diagnostics';
+import { escapeHtml, fmt3 } from './webviewUtils';
 
 type MapDataFile =
     | { kind: 'imp'; version: number; imports: ImpEntry[]; error?: string }
@@ -476,13 +475,13 @@ function renderW3c(parsed: Extract<MapDataFile, { kind: 'w3c' }>, fileName: stri
     const rows = parsed.cameras.map((camera, index) => `<tr>
   <td class="num">${index}</td>
   <td>${renderResolvedInline(resolveTriggerString(camera.name || '(unnamed)', triggerStrings))}</td>
-  <td class="num">${fmt(camera.targetX)}</td>
-  <td class="num">${fmt(camera.targetY)}</td>
-  <td class="num">${fmt(camera.zOffset)}</td>
-  <td class="num">${fmt(camera.rotation)}</td>
-  <td class="num">${fmt(camera.angleOfAttack)}</td>
-  <td class="num">${fmt(camera.distance)}</td>
-  <td class="num">${fmt(camera.fieldOfView)}</td>
+  <td class="num">${fmt3(camera.targetX)}</td>
+  <td class="num">${fmt3(camera.targetY)}</td>
+  <td class="num">${fmt3(camera.zOffset)}</td>
+  <td class="num">${fmt3(camera.rotation)}</td>
+  <td class="num">${fmt3(camera.angleOfAttack)}</td>
+  <td class="num">${fmt3(camera.distance)}</td>
+  <td class="num">${fmt3(camera.fieldOfView)}</td>
 </tr>`).join('');
     return page(fileName, `
 ${renderHeader(fileName, `WC3 cameras - v${parsed.version}`)}
@@ -496,10 +495,10 @@ function renderW3r(parsed: Extract<MapDataFile, { kind: 'w3r' }>, fileName: stri
     const rows = parsed.regions.map((region) => `<tr>
   <td class="num">${region.index}</td>
   <td>${renderResolvedInline(resolveTriggerString(region.name || '(unnamed)', triggerStrings))}</td>
-  <td class="num">${fmt(region.minX)}</td>
-  <td class="num">${fmt(region.maxX)}</td>
-  <td class="num">${fmt(region.minY)}</td>
-  <td class="num">${fmt(region.maxY)}</td>
+  <td class="num">${fmt3(region.minX)}</td>
+  <td class="num">${fmt3(region.maxX)}</td>
+  <td class="num">${fmt3(region.minY)}</td>
+  <td class="num">${fmt3(region.maxY)}</td>
   <td class="mono">${escapeHtml(region.weatherId || '-')}</td>
   <td>${renderResolvedInline(resolveTriggerString(region.sound || '-', triggerStrings))}</td>
   <td><span class="swatch" style="background:${w3rColorCss(region)}"></span>${escapeHtml(w3rColorCss(region))}</td>
@@ -526,7 +525,7 @@ ${errorBanner(parsed.error)}
     ${renderSelect('Tileset', info.tileset, tilesetOptions())}
     ${renderInput('Width', info.width || undefined, 'mono')}
     ${renderInput('Height', info.height || undefined, 'mono')}
-    ${renderInput('Center', `${fmt(info.centerX)}, ${fmt(info.centerY)}`, 'mono')}
+    ${renderInput('Center', `${fmt3(info.centerX)}, ${fmt3(info.centerY)}`, 'mono')}
     ${renderInput('Tile payload', `${info.payloadBytes} bytes`, 'mono')}
   </div>
 </section>
@@ -731,10 +730,6 @@ function mmpColorCss(icon: MmpIcon): string | null {
     return `rgba(${icon.red},${icon.green},${icon.blue},${(icon.alpha / 255).toFixed(3)})`;
 }
 
-function mmpColorHex(icon: MmpIcon): string {
-    return `#${icon.red.toString(16).padStart(2, '0')}${icon.green.toString(16).padStart(2, '0')}${icon.blue.toString(16).padStart(2, '0')}`;
-}
-
 const W3I_FLAG_DEFS: Array<[number, string]> = [
     [0x0001, 'Hide minimap in preview'],
     [0x0002, 'Modify ally priorities'],
@@ -749,11 +744,6 @@ const W3I_FLAG_DEFS: Array<[number, string]> = [
     [0x0400, 'Water waves on cliff shores'],
     [0x0800, 'Water waves on rolling shores'],
 ];
-
-function fmt(value: number): string {
-    // eslint-disable-next-line sonarjs/super-linear-regex -- single quantified group anchored at end, no ambiguous adjacency; not actually susceptible to backtracking blowup.
-    return value.toFixed(3).replace(/\.?0+$/, '');
-}
 
 function fmtF32(value: number): string {
     return Math.fround(value).toString();
@@ -788,7 +778,11 @@ const EDITABLE_LIST_SCRIPT = `<script>
   const api = acquireVsCodeApi();
   document.addEventListener('change', function (e) {
     const t = e.target;
-    if (t.matches('[data-field]')) {
+    if (t.matches('[data-default-color]')) {
+      // .mmp "game default" colour: the row's tint controls are meaningless while it is checked.
+      t.closest('[data-row]').querySelectorAll('[data-field="color"], [data-field="alpha"]').forEach(function (control) { control.disabled = t.checked; });
+      api.postMessage({ type: 'edit', index: Number(t.getAttribute('data-index')), field: 'defaultColor', value: String(t.checked) });
+    } else if (t.matches('[data-field]')) {
       api.postMessage({ type: 'edit', index: Number(t.getAttribute('data-index')), field: t.getAttribute('data-field'), value: t.value });
     }
   });
@@ -810,28 +804,94 @@ const EDITABLE_LIST_SCRIPT = `<script>
 })();
 </script>`;
 
-function renderEditableListPage(
-    fileName: string,
-    meta: string,
-    count: number,
-    countLabel: string,
-    listHtml: string,
-    hint: string,
-    isDirty: boolean,
-    extraCss: string,
-): string {
+interface EditableListPage {
+    meta: string;
+    count: number;
+    /** Plural record noun; the add button uses it without the trailing "s". */
+    countLabel: string;
+    listHtml: string;
+    hint: string;
+    css: string;
+    /** Optional extra metric-strip text and HTML below the list. */
+    metric?: string;
+    footerHtml?: string;
+}
+
+function renderEditableListPage(doc: EditableBinaryDocument<unknown>, opts: EditableListPage): string {
+    const metric = opts.metric ? ` <span class="metric">${escapeHtml(opts.metric)}</span>` : '';
     const body = `
-${renderHeader(fileName, meta, true)}
+${renderHeader(doc.fileName, opts.meta, true)}
 <div class="dialog editable-list">
-<div class="metric-strip"><span class="metric"><strong id="editorCount">${count}</strong> ${countLabel}</span></div>
+<div class="metric-strip"><span class="metric"><strong id="editorCount">${opts.count}</strong> ${opts.countLabel}</span>${metric}</div>
 <div class="editable-actions">
-  <button type="button" class="wv-btn-secondary" data-add>Add ${countLabel.slice(0, -1)}</button>
-  <span class="hint">${escapeHtml(hint)}</span>
+  <button type="button" class="wv-btn-secondary" data-add>Add ${opts.countLabel.slice(0, -1)}</button>
+  <span class="hint">${escapeHtml(opts.hint)}</span>
 </div>
-<div id="editorList">${listHtml}</div>
+<div id="editorList">${opts.listHtml}</div>
+${opts.footerHtml ?? ''}
 </div>
 ${EDITABLE_LIST_SCRIPT}`;
-    return page(fileName, body.replace('id="dirtyBadge" hidden', `id="dirtyBadge"${isDirty ? '' : ' hidden'}`), extraCss, true);
+    return page(doc.fileName, body.replace('id="dirtyBadge" hidden', `id="dirtyBadge"${doc.isDirty ? '' : ' hidden'}`), opts.css, true);
+}
+
+function postEditableListState(doc: EditableBinaryDocument<unknown>, listHtml: string, count: number): void {
+    void doc.webview?.postMessage({ type: 'editorStateChanged', listHtml, count, isDirty: doc.isDirty });
+}
+
+/**
+ * The record array of a list editor (.w3c cameras, .w3r regions, .mmp icons). `handleListMessage`
+ * turns the page's add/remove messages into undoable edits and hands field edits of a valid row to
+ * `edit`, which usually ends in `pushListItemEdit`.
+ */
+interface ListEditor<TFile extends { error?: string }, TDoc extends EditableBinaryDocument<TFile>, TItem extends object> {
+    /** Record noun for the add/remove undo labels, e.g. "camera". */
+    noun: string;
+    items: (file: TFile) => TItem[];
+    create: () => TItem;
+    edit: (doc: TDoc, provider: EditableBinaryEditorProvider<TFile, TDoc>, index: number, field: string, value: string) => void;
+}
+
+function handleListMessage<TFile extends { error?: string }, TDoc extends EditableBinaryDocument<TFile>, TItem extends object>(
+    list: ListEditor<TFile, TDoc, TItem>,
+    message: unknown,
+    doc: TDoc,
+    provider: EditableBinaryEditorProvider<TFile, TDoc>,
+): void {
+    if (!message || typeof message !== 'object' || doc.file.error) return;
+    const msg = message as { type?: string; index?: number; field?: string; value?: string };
+    const length = list.items(doc.file).length;
+    if (msg.type === 'add') {
+        const item = list.create();
+        provider.pushEdit(doc, `Add ${list.noun}`, { apply: () => { list.items(doc.file).push(item); }, revert: () => { list.items(doc.file).splice(length, 1); } });
+        return;
+    }
+    if (!validListIndex(msg.index, length)) return;
+    const index = msg.index;
+    if (msg.type === 'remove') {
+        const removed = { ...list.items(doc.file)[index] };
+        provider.pushEdit(doc, `Remove ${list.noun}`, { apply: () => { list.items(doc.file).splice(index, 1); }, revert: () => { list.items(doc.file).splice(index, 0, removed); } });
+    } else if (msg.type === 'edit' && typeof msg.field === 'string' && typeof msg.value === 'string') {
+        list.edit(doc, provider, index, msg.field, msg.value);
+    }
+}
+
+/** Replace the record at `index` with a mutated copy as one undoable edit; an unchanged record pushes nothing. */
+function pushListItemEdit<TFile extends { error?: string }, TDoc extends EditableBinaryDocument<TFile>, TItem extends object>(
+    list: ListEditor<TFile, TDoc, TItem>,
+    doc: TDoc,
+    provider: EditableBinaryEditorProvider<TFile, TDoc>,
+    index: number,
+    label: string,
+    mutate: (item: TItem) => void,
+): void {
+    const before = { ...list.items(doc.file)[index] };
+    const after = { ...before };
+    mutate(after);
+    if (JSON.stringify(before) === JSON.stringify(after)) return;
+    provider.pushEdit(doc, label, {
+        apply: () => { list.items(doc.file)[index] = { ...after }; },
+        revert: () => { list.items(doc.file)[index] = { ...before }; },
+    });
 }
 
 const W3C_NUMERIC_FIELDS = new Set<keyof W3cCamera>([
@@ -862,12 +922,8 @@ function makeTriggerStringEdit(raw: string, triggerStrings: TriggerStringTable, 
 }
 
 async function writeTriggerStringEdits(edits: Map<number, string>, wtsUri: vscode.Uri | undefined, wtsExists: boolean): Promise<void> {
-    if (!edits.size || !wtsUri) return;
-    let original = '';
-    if (wtsExists) {
-        try { original = Buffer.from(await vscode.workspace.fs.readFile(wtsUri)).toString('utf8'); } catch { /* create fresh */ }
-    }
-    await vscode.workspace.fs.writeFile(wtsUri, Buffer.from(applyWtsEdits(original, edits), 'utf8'));
+    const bytes = await buildWtsBytes(edits, wtsUri, wtsExists);
+    if (bytes && wtsUri) await vscode.workspace.fs.writeFile(wtsUri, bytes);
 }
 
 function w3cCameraInput(camera: W3cCamera, index: number, field: keyof W3cCamera, className = '', triggerStrings: TriggerStringTable = new Map(), wtsEdits: Map<number, string> = new Map()): string {
@@ -898,11 +954,18 @@ function renderW3cList(file: W3cFile, triggerStrings: TriggerStringTable = new M
     return `<div class="table-wrap"><table class="edit-table w3c-table"><thead><tr><th>#</th><th>Name</th><th>Target X</th><th>Target Y</th><th>Z offset</th><th>Rotation</th><th>Angle of attack</th><th>Distance</th><th>Roll</th><th>Field of view</th><th>Far Z</th><th>Unknown</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
-function renderW3cEditor(doc: W3cDocument, fileName: string): string {
-    return renderEditableListPage(fileName, `WC3 cameras — v${doc.file.version}`, doc.file.cameras.length, 'cameras', renderW3cList(doc.file, doc.wtsTable, doc.wtsEdits), 'Camera values are stored as floating-point Warcraft III camera parameters.', doc.currentRevision !== doc.savedRevision, `${EDITABLE_LIST_CSS}
+function renderW3cEditor(doc: W3cDocument): string {
+    return renderEditableListPage(doc, {
+        meta: `WC3 cameras — v${doc.file.version}`,
+        count: doc.file.cameras.length,
+        countLabel: 'cameras',
+        listHtml: renderW3cList(doc.file, doc.wtsTable, doc.wtsEdits),
+        hint: 'Camera values are stored as floating-point Warcraft III camera parameters.',
+        css: `${EDITABLE_LIST_CSS}
 .w3c-table { min-width: 1500px; }
 .w3c-table th:nth-child(1) { width: 42px; }.w3c-table th:nth-child(2) { width: 180px; }.w3c-table th:nth-child(n+3):nth-child(-n+12) { width: 110px; }
-`);
+`,
+    });
 }
 
 /**
@@ -953,41 +1016,24 @@ function validListIndex(index: number | undefined, length: number): index is num
     return Number.isInteger(index) && (index as number) >= 0 && (index as number) < length;
 }
 
-function handleW3cMessage(message: unknown, doc: W3cDocument, provider: W3cEditorProvider): void {
-    if (!message || typeof message !== 'object' || doc.file.error) return;
-    const msg = message as { type?: string; index?: number; field?: string; value?: string };
-    if (msg.type === 'add') return addW3cCamera(doc, provider);
-    if (!validListIndex(msg.index, doc.file.cameras.length)) return;
-    const index = msg.index;
-    if (msg.type === 'remove') return removeW3cCamera(doc, provider, index);
-    if (msg.type === 'edit' && typeof msg.field === 'string' && typeof msg.value === 'string') editW3cCameraField(doc, provider, index, msg.field, msg.value);
-}
+const W3C_LIST: ListEditor<W3cFile, W3cDocument, W3cCamera> = {
+    noun: 'camera',
+    items: (file) => file.cameras,
+    create: () => ({ targetX: 0, targetY: 0, zOffset: 0, rotation: 270, angleOfAttack: 304, distance: 1650, roll: 0, fieldOfView: 70, farZ: 5000, unknown: 0, name: 'New Camera' }),
+    edit: editW3cCameraField,
+};
 
-function addW3cCamera(doc: W3cDocument, provider: W3cEditorProvider): void {
-    const camera: W3cCamera = { targetX: 0, targetY: 0, zOffset: 0, rotation: 270, angleOfAttack: 304, distance: 1650, roll: 0, fieldOfView: 70, farZ: 5000, unknown: 0, name: 'New Camera' };
-    const index = doc.file.cameras.length;
-    provider.pushEdit(doc, 'Add camera', { apply: () => { doc.file.cameras.push(camera); }, revert: () => { doc.file.cameras.splice(index, 1); } });
-}
-
-function removeW3cCamera(doc: W3cDocument, provider: W3cEditorProvider, index: number): void {
-    const removed = { ...doc.file.cameras[index] };
-    provider.pushEdit(doc, 'Remove camera', { apply: () => { doc.file.cameras.splice(index, 1); }, revert: () => { doc.file.cameras.splice(index, 0, removed); } });
-}
-
-function editW3cCameraField(doc: W3cDocument, provider: W3cEditorProvider, index: number, field: string, rawValue: string): void {
-    const before = { ...doc.file.cameras[index] };
-    const after = { ...before };
+function editW3cCameraField(doc: W3cDocument, provider: EditableBinaryEditorProvider<W3cFile, W3cDocument>, index: number, field: string, rawValue: string): void {
+    const label = `Edit camera ${field}`;
     if (field === 'name') {
-        const triggerEdit = makeTriggerStringEdit(before.name, doc.wtsTable, doc.wtsEdits, rawValue);
-        if (triggerEdit) return provider.pushEdit(doc, `Edit camera ${field}`, triggerEdit);
-        after.name = rawValue;
-    } else if (W3C_NUMERIC_FIELDS.has(field as keyof W3cCamera)) {
-        const value = Number(rawValue);
-        if (!Number.isFinite(value) || !Number.isFinite(Math.fround(value))) return;
-        after[field as keyof W3cCamera] = value as never;
-    } else return;
-    if (JSON.stringify(before) === JSON.stringify(after)) return;
-    provider.pushEdit(doc, `Edit camera ${field}`, { apply: () => { doc.file.cameras[index] = { ...after }; }, revert: () => { doc.file.cameras[index] = { ...before }; } });
+        const triggerEdit = makeTriggerStringEdit(doc.file.cameras[index].name, doc.wtsTable, doc.wtsEdits, rawValue);
+        if (triggerEdit) return provider.pushEdit(doc, label, triggerEdit);
+        return pushListItemEdit(W3C_LIST, doc, provider, index, label, (camera) => { camera.name = rawValue; });
+    }
+    if (!W3C_NUMERIC_FIELDS.has(field as keyof W3cCamera)) return;
+    const value = Number(rawValue);
+    if (!Number.isFinite(value) || !Number.isFinite(Math.fround(value))) return;
+    pushListItemEdit(W3C_LIST, doc, provider, index, label, (camera) => { camera[field as keyof W3cCamera] = value as never; });
 }
 
 class W3cEditorProvider extends EditableBinaryEditorProvider<W3cFile, W3cDocument> {
@@ -997,12 +1043,10 @@ class W3cEditorProvider extends EditableBinaryEditorProvider<W3cFile, W3cDocumen
             parse: parseW3cFile,
             serialize: serializeValidatedW3c,
             createDocument: (uri, file) => new W3cDocument(uri, file),
-            render: (doc) => renderW3cEditor(doc, doc.fileName),
-            postState: (doc) => {
-                void doc.webview?.postMessage({ type: 'editorStateChanged', listHtml: renderW3cList(doc.file, doc.wtsTable, doc.wtsEdits), count: doc.file.cameras.length, isDirty: doc.isDirty });
-            },
+            render: renderW3cEditor,
+            postState: (doc) => postEditableListState(doc, renderW3cList(doc.file, doc.wtsTable, doc.wtsEdits), doc.file.cameras.length),
             ...wtsSidecar,
-            handleMessage: handleW3cMessage,
+            handleMessage: (message, doc, provider) => handleListMessage(W3C_LIST, message, doc, provider),
         });
     }
 }
@@ -1066,58 +1110,48 @@ function renderW3rList(file: W3rFile, triggerStrings: TriggerStringTable = new M
     return `<div class="table-wrap"><table class="edit-table w3r-table"><thead><tr><th>#</th><th>Name</th><th>Min X</th><th>Max X</th><th>Min Y</th><th>Max Y</th><th>Index</th><th>Weather</th><th>Sound</th><th>Color</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
-function renderW3rEditor(doc: W3rDocument, fileName: string): string {
-    return renderEditableListPage(fileName, `WC3 regions — v${doc.file.version}`, doc.file.regions.length, 'regions', renderW3rList(doc.file, doc.wtsTable, doc.wtsEdits), 'Bounds are map coordinates. Weather uses a four-character WC3 environment id.', doc.currentRevision !== doc.savedRevision, `${EDITABLE_LIST_CSS}
+function renderW3rEditor(doc: W3rDocument): string {
+    return renderEditableListPage(doc, {
+        meta: `WC3 regions — v${doc.file.version}`,
+        count: doc.file.regions.length,
+        countLabel: 'regions',
+        listHtml: renderW3rList(doc.file, doc.wtsTable, doc.wtsEdits),
+        hint: 'Bounds are map coordinates. Weather uses a four-character WC3 environment id.',
+        css: `${EDITABLE_LIST_CSS}
 .w3r-table { min-width: 1250px; }
 .w3r-table th:nth-child(1) { width: 42px; }.w3r-table th:nth-child(2) { width: 180px; }.w3r-table th:nth-child(n+3):nth-child(-n+8) { width: 100px; }.w3r-table th:nth-child(9) { width: 170px; }.w3r-table th:nth-child(10) { width: 70px; }
-`);
+`,
+    });
 }
 
 class W3rDocument extends TriggerStringBackedDocument<W3rFile> {}
 
-function handleW3rMessage(message: unknown, doc: W3rDocument, provider: W3rEditorProvider): void {
-    if (!message || typeof message !== 'object' || doc.file.error) return;
-    const msg = message as { type?: string; index?: number; field?: string; value?: string };
-    if (msg.type === 'add') return addW3rRegion(doc, provider);
-    if (!validListIndex(msg.index, doc.file.regions.length)) return;
-    const index = msg.index;
-    if (msg.type === 'remove') return removeW3rRegion(doc, provider, index);
-    if (msg.type === 'edit' && typeof msg.field === 'string' && typeof msg.value === 'string') editW3rRegionField(doc, provider, index, msg.field, msg.value);
-}
+const W3R_LIST: ListEditor<W3rFile, W3rDocument, W3rRegion> = {
+    noun: 'region',
+    items: (file) => file.regions,
+    create: () => ({ name: 'New Region', minX: 0, maxX: 128, minY: 0, maxY: 128, index: 0, weatherId: 'NULL', sound: '', blue: 0, green: 0, red: 0, endToken: 0 }),
+    edit: editW3rRegionField,
+};
 
-function addW3rRegion(doc: W3rDocument, provider: W3rEditorProvider): void {
-    const region: W3rRegion = { name: 'New Region', minX: 0, maxX: 128, minY: 0, maxY: 128, index: 0, weatherId: 'NULL', sound: '', blue: 0, green: 0, red: 0, endToken: 0 };
-    const index = doc.file.regions.length;
-    provider.pushEdit(doc, 'Add region', { apply: () => { doc.file.regions.push(region); }, revert: () => { doc.file.regions.splice(index, 1); } });
-}
-
-function removeW3rRegion(doc: W3rDocument, provider: W3rEditorProvider, index: number): void {
-    const removed = { ...doc.file.regions[index] };
-    provider.pushEdit(doc, 'Remove region', { apply: () => { doc.file.regions.splice(index, 1); }, revert: () => { doc.file.regions.splice(index, 0, removed); } });
-}
-
-function editW3rRegionField(doc: W3rDocument, provider: W3rEditorProvider, index: number, field: string, rawValue: string): void {
-    const before = { ...doc.file.regions[index] };
-    const after = { ...before };
+function editW3rRegionField(doc: W3rDocument, provider: EditableBinaryEditorProvider<W3rFile, W3rDocument>, index: number, field: string, rawValue: string): void {
+    const label = `Edit region ${field}`;
     if (field === 'name' || field === 'sound') {
-        const triggerEdit = makeTriggerStringEdit(before[field], doc.wtsTable, doc.wtsEdits, rawValue);
-        if (triggerEdit) return provider.pushEdit(doc, `Edit region ${field}`, triggerEdit);
-        after[field] = rawValue;
-    } else if (field === 'weatherId') {
-        after[field] = rawValue;
-    } else if (field === 'color') {
+        const triggerEdit = makeTriggerStringEdit(doc.file.regions[index][field], doc.wtsTable, doc.wtsEdits, rawValue);
+        if (triggerEdit) return provider.pushEdit(doc, label, triggerEdit);
+        return pushListItemEdit(W3R_LIST, doc, provider, index, label, (region) => { region[field] = rawValue; });
+    }
+    if (field === 'weatherId') {
+        return pushListItemEdit(W3R_LIST, doc, provider, index, label, (region) => { region.weatherId = rawValue; });
+    }
+    if (field === 'color') {
         const color = parseMmpColor(rawValue);
-        if (!color) return;
-        Object.assign(after, color);
-    } else if (W3R_NUMERIC_FIELDS.has(field as keyof W3rRegion)) {
-        const value = Number(rawValue);
-        if (!Number.isFinite(value) || !Number.isFinite(Math.fround(value)) || (field === 'index' && !Number.isInteger(value))) return;
-        after[field as keyof W3rRegion] = value as never;
-    } else {
+        if (color) pushListItemEdit(W3R_LIST, doc, provider, index, label, (region) => Object.assign(region, color));
         return;
     }
-    if (JSON.stringify(before) === JSON.stringify(after)) return;
-    provider.pushEdit(doc, `Edit region ${field}`, { apply: () => { doc.file.regions[index] = { ...after }; }, revert: () => { doc.file.regions[index] = { ...before }; } });
+    if (!W3R_NUMERIC_FIELDS.has(field as keyof W3rRegion)) return;
+    const value = Number(rawValue);
+    if (!Number.isFinite(value) || !Number.isFinite(Math.fround(value)) || (field === 'index' && !Number.isInteger(value))) return;
+    pushListItemEdit(W3R_LIST, doc, provider, index, label, (region) => { region[field as keyof W3rRegion] = value as never; });
 }
 
 class W3rEditorProvider extends EditableBinaryEditorProvider<W3rFile, W3rDocument> {
@@ -1127,12 +1161,10 @@ class W3rEditorProvider extends EditableBinaryEditorProvider<W3rFile, W3rDocumen
             parse: parseW3rFile,
             serialize: serializeValidatedW3r,
             createDocument: (uri, file) => new W3rDocument(uri, file),
-            render: (doc) => renderW3rEditor(doc, doc.fileName),
-            postState: (doc) => {
-                void doc.webview?.postMessage({ type: 'editorStateChanged', listHtml: renderW3rList(doc.file, doc.wtsTable, doc.wtsEdits), count: doc.file.regions.length, isDirty: doc.isDirty });
-            },
+            render: renderW3rEditor,
+            postState: (doc) => postEditableListState(doc, renderW3rList(doc.file, doc.wtsTable, doc.wtsEdits), doc.file.regions.length),
             ...wtsSidecar,
-            handleMessage: handleW3rMessage,
+            handleMessage: (message, doc, provider) => handleListMessage(W3R_LIST, message, doc, provider),
         });
     }
 }
@@ -1177,7 +1209,7 @@ function mmpIconInput(icon: MmpIcon, index: number): string {
   <td><input class="wv-input mmp-input mono" type="number" data-index="${index}" data-field="y" value="${icon.y}" aria-label="Icon ${index + 1} Y coordinate"></td>
   <td class="type-label">${escapeHtml(mmpIconLabel(icon.type))}</td>
   <td class="color-cell">
-    <input class="color-input" type="color" data-index="${index}" data-field="color" value="${mmpColorHex(icon)}" aria-label="Icon ${index + 1} custom color"${colorDisabled}>
+    <input class="color-input" type="color" data-index="${index}" data-field="color" value="${colorHex(icon.red, icon.green, icon.blue)}" aria-label="Icon ${index + 1} custom color"${colorDisabled}>
     <input class="alpha-input wv-input mmp-input mono" type="number" min="0" max="255" data-index="${index}" data-field="alpha" value="${icon.alpha}" aria-label="Icon ${index + 1} alpha"${colorDisabled}>
     <label class="default-color"><input type="checkbox" data-index="${index}" data-default-color title="No custom tint; use the normal game icon color"${defaultColor ? ' checked' : ''}> game default</label>
   </td>
@@ -1191,68 +1223,21 @@ function renderMmpList(file: MmpFile): string {
     return `<div class="table-wrap"><table class="mmp-table"><thead><tr><th>#</th><th>Type</th><th>X</th><th>Y</th><th>Meaning</th><th>Color · alpha</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
-function renderMmpEditor(doc: MmpDocument, fileName: string): string {
-    const f = doc.file;
-    const dirty = doc.currentRevision !== doc.savedRevision;
-    const body = `
-${renderHeader(fileName, `WC3 minimap icons — v${f.version}`, true)}
-<div class="dialog mmp-editor">
-${errorBanner(f.error)}
-<div class="metric-strip">
-  <span class="metric"><strong id="mmpCount">${f.icons.length}</strong> icon${f.icons.length === 1 ? '' : 's'}</span>
-  <span class="metric">Records are shown in minimap/lobby order</span>
-</div>
-<div class="mmp-actions">
-  <button type="button" class="wv-btn-secondary" data-add>Add minimap icon</button>
-  <span class="hint">Remove entries to hide them from the lobby minimap preview. Coordinates are Warcraft III map coordinates.</span>
-</div>
-<div id="mmpList">${renderMmpList(f)}</div>
-<p class="hint mmp-footer-hint">Game default color = <code>FF FF FF FF</code>: no custom tint, so Warcraft III uses the icon’s normal color. Uncheck it to choose a custom tint.</p>
-</div>
-<script>
-(function () {
-  const api = acquireVsCodeApi();
-  document.addEventListener('change', function (e) {
-    const t = e.target;
-    if (t.matches('[data-default-color]')) {
-      const row = t.closest('[data-row]');
-      row.querySelectorAll('[data-field="color"], [data-field="alpha"]').forEach(function (control) { control.disabled = t.checked; });
-      api.postMessage({ type: 'defaultColor', index: Number(t.getAttribute('data-index')), on: t.checked });
-      return;
-    }
-    if (t.matches('[data-field]')) {
-      api.postMessage({ type: 'edit', index: Number(t.getAttribute('data-index')), field: t.getAttribute('data-field'), value: t.value });
-    }
-  });
-  document.addEventListener('click', function (e) {
-    const remove = e.target.closest('[data-remove]');
-    if (remove) api.postMessage({ type: 'remove', index: Number(remove.getAttribute('data-remove')) });
-    else if (e.target.closest('[data-add]')) api.postMessage({ type: 'add' });
-  });
-  window.addEventListener('message', function (event) {
-    const msg = event.data || {};
-    if (msg.type === 'mmpStateChanged') {
-      const list = document.getElementById('mmpList');
-      const count = document.getElementById('mmpCount');
-      if (list) list.innerHTML = msg.listHtml;
-      if (count) count.textContent = String(msg.count);
-      const badge = document.getElementById('dirtyBadge');
-      if (badge) badge.hidden = !msg.isDirty;
-    } else if (msg.type === 'dirtyStateChanged') {
-      const badge = document.getElementById('dirtyBadge');
-      if (badge) badge.hidden = !msg.isDirty;
-    }
-  });
-})();
-</script>`;
-    // Keep the value explicit here for the initial render; subsequent renders use the same
-    // revision comparison and therefore keep the badge correct after undo/redo as well.
-    return page(fileName, body.replace('id="dirtyBadge" hidden', `id="dirtyBadge"${dirty ? '' : ' hidden'}`), MMP_EDITOR_CSS, true);
+function renderMmpEditor(doc: MmpDocument): string {
+    return renderEditableListPage(doc, {
+        meta: `WC3 minimap icons — v${doc.file.version}`,
+        count: doc.file.icons.length,
+        countLabel: 'minimap icons',
+        metric: 'Records are shown in minimap/lobby order',
+        listHtml: renderMmpList(doc.file),
+        hint: 'Remove entries to hide them from the lobby minimap preview. Coordinates are Warcraft III map coordinates.',
+        footerHtml: '<p class="hint mmp-footer-hint">Game default color = <code>FF FF FF FF</code>: no custom tint, so Warcraft III uses the icon’s normal color. Uncheck it to choose a custom tint.</p>',
+        css: MMP_EDITOR_CSS,
+    });
 }
 
-const MMP_EDITOR_CSS = `
-.mmp-editor { max-width: 1180px; }
-.mmp-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin: 3px 0 10px; }
+const MMP_EDITOR_CSS = `${EDITABLE_LIST_CSS}
+.editable-list { max-width: 1180px; }
 .mmp-table { min-width: 820px; table-layout: fixed; }
 .mmp-table th:nth-child(1) { width: 42px; }
 .mmp-table th:nth-child(2), .mmp-table th:nth-child(3), .mmp-table th:nth-child(4) { width: 100px; }
@@ -1270,64 +1255,28 @@ const MMP_EDITOR_CSS = `
 .mmp-footer-hint { margin-top: 10px; }
 `;
 
-function handleMmpMessage(message: unknown, doc: MmpDocument, provider: MmpEditorProvider): void {
-    if (!message || typeof message !== 'object' || doc.file.error) return;
-    const msg = message as { type?: string; index?: number; field?: string; value?: string; on?: boolean };
-    if (msg.type === 'add') return addMmpIcon(doc, provider);
-    if (!validListIndex(msg.index, doc.file.icons.length)) return;
-    const index = msg.index;
-    if (msg.type === 'remove') return removeMmpIcon(doc, provider, index);
-    if (msg.type === 'defaultColor' && typeof msg.on === 'boolean') {
-        return editMmpIcon(doc, provider, index, 'Set default icon color', (icon) => {
-            icon.blue = msg.on ? 0xff : icon.blue;
-            icon.green = msg.on ? 0xff : icon.green;
-            icon.red = msg.on ? 0xff : icon.red;
-            icon.alpha = msg.on ? 0xff : icon.alpha;
-        });
+const MMP_LIST: ListEditor<MmpFile, MmpDocument, MmpIcon> = {
+    noun: 'minimap icon',
+    items: (file) => file.icons,
+    create: () => ({ type: 0, x: 0, y: 0, blue: 0xff, green: 0xff, red: 0xff, alpha: 0xff }),
+    edit: editMmpField,
+};
+
+function editMmpField(doc: MmpDocument, provider: EditableBinaryEditorProvider<MmpFile, MmpDocument>, index: number, field: string, rawValue: string): void {
+    if (field === 'defaultColor') {
+        // Unchecking keeps the current colour; the page only re-enables the tint controls.
+        if (rawValue === 'true') pushListItemEdit(MMP_LIST, doc, provider, index, 'Set default icon color', (icon) => Object.assign(icon, { blue: 0xff, green: 0xff, red: 0xff, alpha: 0xff }));
+        return;
     }
-    if (msg.type === 'edit' && typeof msg.field === 'string' && typeof msg.value === 'string') {
-        editMmpField(doc, provider, index, msg.field, msg.value);
-    }
-}
-
-function addMmpIcon(doc: MmpDocument, provider: MmpEditorProvider): void {
-    const index = doc.file.icons.length;
-    const icon: MmpIcon = { type: 0, x: 0, y: 0, blue: 0xff, green: 0xff, red: 0xff, alpha: 0xff };
-    provider.pushEdit(doc, 'Add minimap icon', {
-        apply: () => { doc.file.icons.push(icon); },
-        revert: () => { doc.file.icons.splice(index, 1); },
-    });
-}
-
-function removeMmpIcon(doc: MmpDocument, provider: MmpEditorProvider, index: number): void {
-    const removed = { ...doc.file.icons[index] };
-    provider.pushEdit(doc, 'Remove minimap icon', {
-        apply: () => { doc.file.icons.splice(index, 1); },
-        revert: () => { doc.file.icons.splice(index, 0, removed); },
-    });
-}
-
-function editMmpField(doc: MmpDocument, provider: MmpEditorProvider, index: number, field: string, rawValue: string): void {
     if (field === 'color') {
         const color = parseMmpColor(rawValue);
-        if (color) editMmpIcon(doc, provider, index, 'Edit icon color', (icon) => Object.assign(icon, color));
+        if (color) pushListItemEdit(MMP_LIST, doc, provider, index, 'Edit icon color', (icon) => Object.assign(icon, color));
         return;
     }
     if (!['type', 'x', 'y', 'alpha'].includes(field)) return;
     const value = Number(rawValue);
     const valid = Number.isInteger(value) && (field !== 'alpha' || value >= 0 && value <= 0xff);
-    if (valid) editMmpIcon(doc, provider, index, `Edit icon ${field}`, (icon) => { icon[field as 'type' | 'x' | 'y' | 'alpha'] = value; });
-}
-
-function editMmpIcon(doc: MmpDocument, provider: MmpEditorProvider, index: number, label: string, mutate: (icon: MmpIcon) => void): void {
-    const before = { ...doc.file.icons[index] };
-    const after = { ...before };
-    mutate(after);
-    if (JSON.stringify(before) === JSON.stringify(after)) return;
-    provider.pushEdit(doc, label, {
-        apply: () => { doc.file.icons[index] = { ...after }; },
-        revert: () => { doc.file.icons[index] = { ...before }; },
-    });
+    if (valid) pushListItemEdit(MMP_LIST, doc, provider, index, `Edit icon ${field}`, (icon) => { icon[field as 'type' | 'x' | 'y' | 'alpha'] = value; });
 }
 
 class MmpEditorProvider extends EditableBinaryEditorProvider<MmpFile, MmpDocument> {
@@ -1337,11 +1286,9 @@ class MmpEditorProvider extends EditableBinaryEditorProvider<MmpFile, MmpDocumen
             parse: parseMmpFile,
             serialize: serializeValidatedMmp,
             createDocument: (uri, file) => new MmpDocument(uri, file),
-            render: (doc) => renderMmpEditor(doc, doc.fileName),
-            postState: (doc) => {
-                void doc.webview?.postMessage({ type: 'mmpStateChanged', listHtml: renderMmpList(doc.file), count: doc.file.icons.length, isDirty: doc.isDirty });
-            },
-            handleMessage: handleMmpMessage,
+            render: renderMmpEditor,
+            postState: (doc) => postEditableListState(doc, renderMmpList(doc.file), doc.file.icons.length),
+            handleMessage: (message, doc, provider) => handleListMessage(MMP_LIST, message, doc, provider),
         });
     }
 }
@@ -1601,7 +1548,7 @@ function handleW3iMessage(message: unknown, doc: W3iDocument, provider: W3iEdito
     const msg = message as { type?: string; field?: string; value?: string; bit?: number; on?: boolean; path?: string };
 
     if (msg.type === 'openAsset' && msg.path) {
-        void openW3iAsset(msg.path, doc.uri);
+        void openAssetInPreview(msg.path, doc.uri);
         return;
     }
     if (msg.type === 'flag' && typeof msg.bit === 'number') {
@@ -1682,21 +1629,6 @@ function serializeValidatedW3i(file: W3iFile, name: string): Buffer {
         throw new Error(`Refusing to save ${name}: round-trip verification failed.`);
     }
     return bytes;
-}
-
-async function openW3iAsset(assetPath: string, uri: vscode.Uri): Promise<void> {
-    const resolved = await resolveAssetPathWithCasc(assetPath, await getCandidateRoots(uri.fsPath));
-    if (!resolved) {
-        void showWarningWithLogs(`Could not resolve asset: ${assetPath}`, new Error(`Asset resolution failed for ${assetPath}`));
-        return;
-    }
-    const target = vscode.Uri.file(resolved);
-    const ext = resolved.slice(resolved.lastIndexOf('.')).toLowerCase();
-    if (['.mdx', '.mdl', '.blp', '.dds', '.tga'].includes(ext)) {
-        await vscode.commands.executeCommand('vscode.openWith', target, 'wurst.blpPreview');
-    } else {
-        await vscode.commands.executeCommand('vscode.open', target);
-    }
 }
 
 export function registerMapDataPreview(_context: vscode.ExtensionContext): vscode.Disposable {

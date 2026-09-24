@@ -81,6 +81,7 @@
   --add-object-button-pad: 0 7px;
   --object-action-button-pad: 0 6px;
   --object-action-gap: 3px;
+  --header-control-h: 20px;
 }
 body.density-cozy {
   --pad-x: 16px;
@@ -126,6 +127,7 @@ body.density-cozy {
   --add-object-button-pad: 0 9px;
   --object-action-button-pad: 0 8px;
   --object-action-gap: 5px;
+  --header-control-h: 22px;
 }
 .content {
   flex: 1;
@@ -138,10 +140,12 @@ body.density-cozy {
 }
 /* One line, not two: the file name, its meta summary and the save badge share a single strip so the
    editor itself starts ~20px higher. The meta line is the part that gives (it ellipsizes, full text
-   in its title) — the name and the badge always stay legible. */
+   in its title) — the name and the badge always stay legible. Items are centred, not baseline-aligned:
+   the header controls are boxes of different content (switch track, icon, text), and baseline
+   alignment staggers them vertically. */
 .md-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   flex-wrap: wrap;
   gap: 2px 8px;
   padding: var(--head-py) var(--pad-x);
@@ -174,6 +178,15 @@ body.density-cozy .md-meta { order: 3; flex-basis: 100%; white-space: normal; }
    On the first badge only — both carry .editable-badge, and giving each an auto margin would split
    the free space between them and strand one mid-header. */
 body.density-cozy #density-toggle { margin-left: auto; }
+/* The three header controls share one box height so they sit on a single centre line. */
+.density-toggle, .refresh-button, .editable-badge {
+  height: var(--header-control-h);
+  display: inline-flex;
+  align-items: center;
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 1;
+}
 .editable-badge {
   flex: 0 0 auto;
   padding: 1px 5px;
@@ -1027,27 +1040,49 @@ tr.hidden { display: none; }
   gap: var(--object-action-gap);
   padding: var(--search-pad) var(--search-pad) 0;
   flex: 0 0 auto;
+  container-type: inline-size;
+}
+/* With icons, four labelled buttons no longer fit the default 220px browse list. Below this width the
+   secondary actions drop to icon-only (their title and aria-label still name them); "New" keeps its label. */
+@container (max-width: 290px) {
+  .object-action-button .action-label { display: none; }
+  .object-action-button { gap: 0; }
 }
 .add-object-button,
 .object-action-button {
   min-height: var(--add-object-button-h);
-  border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: 3px;
-  background: transparent;
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
   color: var(--muted);
   font: inherit;
   font-size: var(--meta-fs);
   cursor: pointer;
+  transition: color .13s, border-color .13s, background-color .13s;
 }
-.add-object-button { padding: var(--add-object-button-pad); font-weight: 600; color: var(--fg); }
+.add-object-button .codicon,
+.object-action-button .codicon { font-size: 13px; opacity: .85; }
+/* "New" is the primary action: a light accent tint instead of the neutral fill. */
+.add-object-button {
+  padding: var(--add-object-button-pad);
+  font-weight: 600;
+  color: var(--fg);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.add-object-button .codicon { color: var(--accent); opacity: 1; }
 .object-action-button { padding: var(--object-action-button-pad); }
-.add-object-button:hover:not(:disabled),
-.object-action-button:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
+.add-object-button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 22%, transparent); border-color: var(--accent); }
+.object-action-button:hover:not(:disabled) { background: var(--hover); border-color: var(--border); color: var(--fg); }
 .add-object-button:focus-visible,
 .object-action-button:focus-visible { outline: 1px solid var(--focus); outline-offset: 2px; }
 .add-object-button:disabled,
 .object-action-button:disabled { opacity: .45; cursor: not-allowed; }
 .object-delete-button:not(:disabled) { color: var(--error); }
+.object-delete-button:hover:not(:disabled) { color: var(--error); border-color: color-mix(in srgb, var(--error) 55%, transparent); background: color-mix(in srgb, var(--error) 10%, transparent); }
 .search-wrap {
   position: relative;
   display: flex;

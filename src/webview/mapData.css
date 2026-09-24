@@ -95,7 +95,7 @@ textarea.field-control {
 .check-row input {
   flex: 0 0 auto;
   margin: 1px 0 0;
-  accent-color: var(--vscode-checkbox-selectBackground, var(--vscode-button-background));
+  accent-color: var(--checkbox-accent);
 }
 .check-row input:disabled { opacity: 1; }
 .check-row span {

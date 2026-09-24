@@ -40,7 +40,7 @@ const TRIGGER_CSS = `
   td.mono { color: var(--accent); }
   .pill { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: .78em; font-weight: 600; }
   .pill.off { background: color-mix(in srgb, var(--muted) 20%, transparent); color: var(--muted); }
-  .pill.custom { background: color-mix(in srgb, var(--vscode-charts-orange, #d18616) 20%, transparent); color: var(--vscode-charts-orange, #d18616); }
+  .pill.custom { background: color-mix(in srgb, var(--chart-orange) 20%, transparent); color: var(--chart-orange); }
   .rawref { border-bottom: 1px dotted var(--accent); cursor: help; }
 `;
 
@@ -106,7 +106,7 @@ ${noteHtml}
     padding: 10px 12px;
     border-radius: 4px;
     font-family: var(--mono);
-    font-size: var(--vscode-editor-font-size, 13px);
+    font-size: var(--mono-size);
     white-space: pre;
     overflow-x: auto;
     margin: 0;

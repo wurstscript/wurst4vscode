@@ -325,9 +325,9 @@ function buildHtml(webview: vscode.Webview, archiveName: string, scriptUri: vsco
         body: `
 <div class="wv-header">
   <svg class="wv-header-icon" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <rect x="1" y="3" width="14" height="11" rx="1.5" fill="var(--vscode-symbolIcon-folderForeground,#dcb67a)" opacity="0.9"/>
-    <rect x="1" y="5" width="14" height="9" rx="1" fill="var(--vscode-symbolIcon-folderForeground,#dcb67a)"/>
-    <rect x="1" y="2" width="6" height="4" rx="1" fill="var(--vscode-symbolIcon-folderForeground,#dcb67a)" opacity="0.7"/>
+    <rect x="1" y="3" width="14" height="11" rx="1.5" fill="var(--folder-fg)" opacity="0.9"/>
+    <rect x="1" y="5" width="14" height="9" rx="1" fill="var(--folder-fg)"/>
+    <rect x="1" y="2" width="6" height="4" rx="1" fill="var(--folder-fg)" opacity="0.7"/>
     <text x="8" y="11.5" text-anchor="middle" font-size="5" font-weight="bold" fill="#1e1e1e" font-family="monospace">MPQ</text>
   </svg>
   <div class="wv-header-text">

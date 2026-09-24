@@ -1088,7 +1088,7 @@ tr.hidden { display: none; }
 .add-object-base-row.selected { border-left-color: var(--accent); background: var(--active); color: var(--active-fg); }
 .add-object-base-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .add-object-base-race { padding: var(--add-base-race-pad); border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 11px; line-height: 1.25; }
-.add-object-base-rawcode { padding: var(--add-base-rawcode-pad); border-radius: 2px; background: color-mix(in srgb, var(--fg) 9%, transparent); color: var(--vscode-textPreformat-foreground, var(--fg)); font-family: var(--mono); font-size: 11px; }
+.add-object-base-rawcode { padding: var(--add-base-rawcode-pad); border-radius: 2px; background: color-mix(in srgb, var(--fg) 9%, transparent); color: var(--code-fg); font-family: var(--mono); font-size: 11px; }
 .add-object-optional { color: var(--muted); font-weight: normal; }
 .add-object-dialog p { margin: 0; color: var(--muted); font-size: 11px; }
 .add-object-base-status { min-height: 1.2em; margin-top: calc(var(--add-dialog-gap) * -1 + 2px) !important; }

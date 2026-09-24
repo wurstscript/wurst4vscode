@@ -27,6 +27,17 @@
   --widget-bg:     var(--vscode-editorWidget-background, var(--sidebar));
   --widget-border: var(--vscode-editorWidget-border, var(--border));
   --backdrop:      color-mix(in srgb, #000 45%, transparent);
+  --hover-widget-bg: var(--vscode-editorHoverWidget-background, var(--widget-bg));
+  --dropdown-bg:     var(--vscode-dropdown-background, var(--input-bg));
+  --dropdown-fg:     var(--vscode-dropdown-foreground, var(--input-fg));
+  --dropdown-border: var(--vscode-dropdown-border, var(--input-border));
+  --input-active-border: var(--vscode-inputOption-activeBorder, var(--focus));
+  --checkbox-accent: var(--vscode-checkbox-selectBackground, var(--btn-primary-bg));
+  --badge-fg:     var(--vscode-badge-foreground, #fff);
+  --code-fg:      var(--vscode-textPreformat-foreground, var(--fg));
+  --mono-size:    var(--vscode-editor-font-size, 13px);
+  --folder-fg:    var(--vscode-symbolIcon-folderForeground, #dcb67a);
+  --chart-orange: var(--vscode-charts-orange, #d18616);
   --input-bg:     var(--vscode-input-background);
   --input-fg:     var(--vscode-input-foreground);
   --input-border: var(--vscode-input-border, transparent);

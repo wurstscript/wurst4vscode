@@ -886,7 +886,8 @@ function testAssetBrowserForwardsModelTextures() {
 }
 
 function testThemeTokensHaveOneHome() {
-    // base.css owns the VS Code theme token map. Viewers use the tokens; redefining one (or defining a
+    // base.css owns the VS Code theme token map and is the only place that reads --vscode-* variables.
+    // Viewers use the tokens; reading a raw variable, redefining a token (or defining a
     // custom property in terms of itself) silently forks or breaks the theme for that page.
     const baseCss = fs.readFileSync(path.join(root, 'src/webview/base.css'), 'utf8');
     const baseRoot = /:root\s*\{([\s\S]*?)\n\}/.exec(baseCss)?.[1] || '';
@@ -897,6 +898,8 @@ function testThemeTokensHaveOneHome() {
         .filter((file) => /\.(css|ts)$/.test(file) && file !== 'webview/base.css');
     for (const file of sources) {
         const text = fs.readFileSync(path.join(root, 'src', file), 'utf8');
+        const rawLookup = text.split('\n').findIndex((line) => line.includes('var(--vscode-'));
+        assert.ok(rawLookup < 0, `src/${file}:${rawLookup + 1} reads a raw --vscode-* variable; add a semantic token to base.css and use that`);
         for (const [, bare, value] of text.matchAll(/--(\w[\w-]*):([^;{}]+);/g)) {
             const name = `--${bare}`;
             assert.ok(!baseTokens.has(name), `src/${file} redefines the base.css token ${name}; use the shared token instead`);

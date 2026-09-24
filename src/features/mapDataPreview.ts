@@ -1264,7 +1264,7 @@ const MMP_EDITOR_CSS = `
 .color-cell { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
 .alpha-input { width: 68px; }
 .default-color { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; }
-.default-color input { margin: 0; accent-color: var(--vscode-checkbox-selectBackground, var(--vscode-button-background)); }
+.default-color input { margin: 0; accent-color: var(--checkbox-accent); }
 .type-label { color: var(--muted); overflow-wrap: anywhere; }
 .row-number { vertical-align: middle; }
 .mmp-footer-hint { margin-top: 10px; }
@@ -1486,7 +1486,7 @@ function renderW3iForces(forces: W3iForce[] | undefined): string {
 }
 
 const W3I_EDITOR_CSS = `
-.field-control:not(:disabled):hover { border-color: var(--vscode-inputOption-activeBorder, var(--focus)); }
+.field-control:not(:disabled):hover { border-color: var(--input-active-border); }
 .open-asset {
   margin-top: 4px;
   font: inherit;

@@ -47,7 +47,7 @@
 .folder-icon {
   flex-shrink: 0; width: 16px; height: 16px;
   display: flex; align-items: center; justify-content: center;
-  color: var(--vscode-symbolIcon-folderForeground, #dcb67a);
+  color: var(--folder-fg);
 }
 .folder-icon svg { width: 15px; height: 15px; fill: currentColor; }
 
@@ -60,7 +60,7 @@
 /* badge */
 .badge {
   flex-shrink: 0; font-size: 9px; font-weight: 700; letter-spacing: 0.04em;
-  padding: 1px 4px; border-radius: 3px; color: var(--vscode-badge-foreground, #fff);
+  padding: 1px 4px; border-radius: 3px; color: var(--badge-fg);
   min-width: 26px; text-align: center; font-family: var(--mono);
 }
 

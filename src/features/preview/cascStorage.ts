@@ -7,7 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { CascStorage, MpqStorage, closeAllSegments } from 'casc-ts';
-import { appendDiagnostic, formatDiagnosticError } from '../diagnostics';
+import { appendDiagnostic, diagnosticTimestamp, formatDiagnosticError } from '../diagnostics';
 
 const WURST_HOME = path.join(os.homedir(), '.wurst');
 
@@ -66,10 +66,7 @@ class MpqGameStorage implements GameStorage {
     static async openAsync(root: string, log: (message: string) => void): Promise<MpqGameStorage> {
         const entries = await fs.promises.readdir(root, { withFileTypes: true });
         const files = new Map(entries.filter((entry) => entry.isFile()).map((entry) => [entry.name.toLowerCase(), entry.name]));
-        const record = (message: string): void => {
-            log(message);
-            channelLog(message);
-        };
+        const record = (message: string): void => logToChannel(log, message);
         // Low priority first. The last archive containing a path wins, matching
         // the classic client: base RoC -> TFT -> locale -> patch overlay.
         const archiveNames = ['war3.mpq', 'war3local.mpq', 'war3x.mpq', 'war3xlocal.mpq', 'war3patch.mpq'];
@@ -176,10 +173,14 @@ export function getCascOutputChannel(): vscode.OutputChannel {
 }
 
 function channelLog(message: string): void {
-    const iso = new Date().toISOString();
-    const line = `[${iso.slice(11, 23)}] ${message}`;
-    appendDiagnostic('WC3 data', line);
-    getCascOutputChannel().appendLine(line);
+    appendDiagnostic('WC3 data', message);
+    getCascOutputChannel().appendLine(`[${diagnosticTimestamp()}] ${message}`);
+}
+
+/** Logs through the caller's logger, and to the channel unless that logger already writes there. */
+function logToChannel(log: (message: string) => void, message: string): void {
+    log(message);
+    if (log !== defaultCascLog) channelLog(message);
 }
 
 function normalizeWindowsDriveRoot(value: string | undefined): string | null {
@@ -449,8 +450,7 @@ function logCascRootOnce(message: string, log: (msg: string) => void): void {
         return;
     }
     loggedCascRootMessage = message;
-    log(message);
-    channelLog(message);
+    logToChannel(log, message);
 }
 
 function getDisabledButtonFallbackPath(assetPath: string): string | null {
@@ -548,21 +548,18 @@ async function getCascStorageInstance(wc3Root: string, log: (msg: string) => voi
     const generation = storageGeneration;
     const opening = (async () => {
         try {
-            log(`CASC opening storage at: ${wc3Root}`);
-            channelLog(`opening storage at: ${wc3Root}`);
+            logToChannel(log, `CASC opening storage at: ${wc3Root}`);
             const storage = await CascStorage.openAsync(wc3Root, log);
             if (generation !== storageGeneration) {
                 channelLog(`discarding CASC storage opened for a superseded root: ${wc3Root}`);
                 return null;
             }
             cascStorageInstance = storage;
-            log(`CASC storage opened (${storage.fileCount} files)`);
-            channelLog(`storage opened (${storage.fileCount} files)`);
+            logToChannel(log, `CASC storage opened (${storage.fileCount} files)`);
             return storage;
         } catch (e) {
             const detail = formatDiagnosticError(e);
-            log(`CASC open failed: ${detail}`);
-            channelLog(`storage open failed: ${detail}`);
+            logToChannel(log, `CASC open failed: ${detail}`);
             if (generation === storageGeneration) cascStorageRoot = null;
             return null;
         } finally {
@@ -599,8 +596,7 @@ async function getGameStorageInstance(root: GameDataRoot, log: (msg: string) => 
             return storage;
         } catch (error) {
             const detail = formatDiagnosticError(error);
-            log(`MPQ game storage open failed: ${detail}`);
-            channelLog(`game storage open failed: ${detail}`);
+            logToChannel(log, `MPQ game storage open failed: ${detail}`);
             if (generation === storageGeneration) mpqStorageRoot = null;
             return null;
         } finally {
@@ -638,8 +634,7 @@ async function gameReadDirect(root: GameDataRoot, gamePath: string, log: (msg: s
     } catch (error) {
         const detail = formatDiagnosticError(error);
         const message = `${root.kind.toUpperCase()} lookup failed: ${gamePath}: ${detail}`;
-        log(message);
-        channelLog(message);
+        logToChannel(log, message);
         return null;
     }
     try {
@@ -649,8 +644,7 @@ async function gameReadDirect(root: GameDataRoot, gamePath: string, log: (msg: s
     } catch (error) {
         const detail = formatDiagnosticError(error);
         const message = `${root.kind.toUpperCase()} read failed: ${gamePath}: ${detail}`;
-        log(message);
-        channelLog(message);
+        logToChannel(log, message);
         return null;
     }
 }
@@ -722,7 +716,7 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
         const cachePath = getSourceCachePath(gameRoot!, rel);
         const buf = await gameReadDirect(gameRoot!, gamePath, log);
         if (buf) {
-            log(`${gameRoot!.kind.toUpperCase()} extracted: ${gamePath} (${buf.length} bytes) -> ${cachePath}`);
+            log(`${gameRoot!.kind.toUpperCase()} extracted: ${gamePath} (${buf.length} bytes)`);
             await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
             await fs.promises.writeFile(cachePath, buf);
             return { buf, ext, cachePath };
@@ -824,7 +818,7 @@ async function findCascAssetWithPath(assetPath: string, log: (msg: string) => vo
         const buf = await gameReadDirect(gameRoot, gamePath, log);
         if (buf) {
             const cachePath = await writeGameCache(gameRoot, normalized, buf);
-            log(`${gameRoot.kind.toUpperCase()} extracted: ${gamePath} (${buf.length} bytes) -> ${cachePath}`);
+            log(`${gameRoot.kind.toUpperCase()} extracted: ${gamePath} (${buf.length} bytes)`);
             return { buf, cachePath };
         }
     }
@@ -902,9 +896,7 @@ function defaultCascLog(message: string): void {
 }
 
 /** Shared logger for game-data consumers that do not have a feature-specific output channel. */
-export function logGameData(message: string): void {
-    defaultCascLog(message);
-}
+export const logGameData = defaultCascLog;
 
 /**
  * Ensures a texture asset is present in the CASC disk cache, extracting from

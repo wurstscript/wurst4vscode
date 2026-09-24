@@ -2,11 +2,16 @@
 
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import * as os from 'os';
 import { LanguageClient, ExecuteCommandParams, ExecuteCommandRequest } from 'vscode-languageclient/node';
 import { workspace, window } from 'vscode';
 import { WURST_HOME } from '../paths';
 import { appendDiagnostic, buildDiagnosticsText, formatDiagnosticError, showDiagnosticOutput, showErrorWithLogs } from './diagnostics';
+import type { PathAlias } from './diagnostics';
 import { getRunningLanguageClient } from '../languageServer';
+import { describeJavaVersion, getInstalledVersionString, getLanguageServerJava } from '../install/installer';
+import { extensionVersion } from './issueReporting';
+import { getCascCacheDir } from './preview/cascStorage';
 
 function showLanguageServerOutput(): void {
     try {
@@ -22,9 +27,47 @@ function showLanguageServerOutput(): void {
     }
 }
 
+async function diagnosticsHeader(): Promise<string[]> {
+    const config = workspace.getConfiguration('wurst');
+    const java = getLanguageServerJava();
+    const [javaVersion, compilerVersion] = await Promise.all([
+        describeJavaVersion(java).catch(() => null),
+        getInstalledVersionString().catch(() => null),
+    ]);
+    const setting = (key: string) => config.get<string>(key)?.trim() || '(not set)';
+    const javaSource = config.get<string>('javaExecutable')?.trim() ? 'wurst.javaExecutable' : 'bundled';
+    return [
+        `Extension: ${extensionVersion()}, VS Code ${vscode.version}`,
+        `OS: ${os.type()} ${os.release()} ${process.arch}`,
+        `Java: ${javaVersion ?? 'unknown'} (${javaSource}: ${java})`,
+        `Java options: ${(config.get<string[]>('javaOpts') ?? []).join(' ') || '(none)'}`,
+        `Compiler: ${compilerVersion ?? 'not installed'}`,
+        `Language server: ${getRunningLanguageClient() ? 'running' : 'not running'}`,
+        `wc3path: ${setting('wc3path')}, gameExePath: ${setting('gameExePath')}`,
+        `Workspace: ${(workspace.workspaceFolders ?? []).map((folder) => folder.name).join(', ') || '(none)'}`,
+    ];
+}
+
+function diagnosticsPathAliases(): PathAlias[] {
+    const folders = workspace.workspaceFolders ?? [];
+    return [
+        ...folders.map((folder) => ({
+            dir: folder.uri.fsPath,
+            label: folders.length === 1 ? '<project>' : `<project:${folder.name}>`,
+        })),
+        { dir: getCascCacheDir(), label: '<casc-cache>' },
+        { dir: os.tmpdir(), label: '<tmp>' },
+        { dir: os.homedir(), label: '~' },
+    ];
+}
+
 async function copyDiagnostics(): Promise<void> {
     try {
-        await vscode.env.clipboard.writeText(buildDiagnosticsText(WURST_HOME));
+        const report = buildDiagnosticsText(WURST_HOME, {
+            header: await diagnosticsHeader(),
+            pathAliases: diagnosticsPathAliases(),
+        });
+        await vscode.env.clipboard.writeText(report);
         void vscode.window.showInformationMessage('Copied Wurst diagnostics to the clipboard.');
     } catch (error) {
         void showErrorWithLogs('Could not copy Wurst diagnostics.', error);

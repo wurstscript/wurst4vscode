@@ -5,7 +5,7 @@ import * as vscode from 'vscode';
 import { workspace, ExtensionContext } from 'vscode';
 import { LanguageClient, LanguageClientOptions, ServerOptions, Executable } from 'vscode-languageclient/node';
 import { RUNTIME_DIR, COMPILER_JAR } from './paths';
-import { getBundledJava, checkCustomJavaVersion, getInstalledVersionString, ensureInstalledOrOfferMigration, maybeOfferUpdate } from './install/installer';
+import { getLanguageServerJava, checkCustomJavaVersion, getInstalledVersionString, ensureInstalledOrOfferMigration, maybeOfferUpdate } from './install/installer';
 import type { UpdateAvailable } from './install/installer';
 import { appendDiagnostic, formatDiagnosticError } from './features/diagnostics';
 
@@ -164,7 +164,7 @@ async function getServerOptions(): Promise<ServerOptions> {
         throw new Error('WurstScript compiler not found. Use the "Wurst: Install/Update" command.');
     }
 
-    const java = customJava || getBundledJava();
+    const java = getLanguageServerJava();
     if (customJava) await checkCustomJavaVersion(customJava);
     const platformOpts = process.platform === 'darwin' ? ['-Dapple.awt.UIElement=true'] : [];
     const args = [...platformOpts, ...javaOpts, '-jar', COMPILER_JAR, '-languageServer'];

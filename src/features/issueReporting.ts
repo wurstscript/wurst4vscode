@@ -15,7 +15,7 @@ export interface ExtensionIssue {
     details?: string;
 }
 
-function extensionVersion(): string {
+export function extensionVersion(): string {
     return String(vscode.extensions.getExtension('peterzeller.wurst')?.packageJSON?.version ?? 'development');
 }
 

@@ -100,18 +100,14 @@ test('creating an object without a rawcode generates, reverts, and saves a colli
 test('base picker searches friendly names and rawcodes', async ({ openObjMod }) => {
     const { page } = await openObjMod();
     await page.locator('#add-object').click();
-    const base = await page.locator('#add-object-base option').evaluateAll((options) => {
-        const namedOptions = options.map((candidate) => {
-            const display = candidate.textContent?.trim() || '';
-            const rawcodeSuffix = ` (${candidate.value})`;
-            return { candidate, name: display.endsWith(rawcodeSuffix) ? display.slice(0, -rawcodeSuffix.length).trim() : display };
-        });
-        const named = namedOptions.find(({ candidate, name }) => candidate.value && name.toLowerCase() !== candidate.value.toLowerCase());
+    // Read the name from the row's own name span: the <option> text also carries the race, which
+    // only resolves with a WC3 install, so parsing it breaks depending on the machine.
+    const base = await page.locator('#add-object-base-list [data-base-id]').evaluateAll((rows) => {
+        const named = rows
+            .map((row) => ({ rawcode: row.dataset.baseId || '', name: row.querySelector('.add-object-base-name')?.textContent?.trim() || '' }))
+            .find(({ rawcode, name }) => rawcode && name && name.toLowerCase() !== rawcode.toLowerCase());
         if (!named) throw new Error('Expected a named base object');
-        return {
-            rawcode: named.candidate.value,
-            name: named.name,
-        };
+        return named;
     });
 
     await page.locator('#add-object-base-search').fill(base.rawcode);

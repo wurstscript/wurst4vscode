@@ -64,7 +64,8 @@ async function mountCustomEditor(opts) {
         onDidChangeViewState: () => ({ dispose() {} }),
     };
 
-    provider.onDidChangeCustomDocument((event) => {
+    // Readonly providers (the image/model preview) have no edit event to subscribe to.
+    provider.onDidChangeCustomDocument?.((event) => {
         // VS Code truncates the redo branch when a new edit is made after an undo.
         editStack.length = editIndex;
         editStack.push({ label: event.label, undo: event.undo, redo: event.redo });

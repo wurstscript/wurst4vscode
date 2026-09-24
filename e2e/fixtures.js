@@ -15,6 +15,7 @@ const { test: base, expect } = require('@playwright/test');
 const { startHarnessServer } = require('./harness/server');
 const { createObjModHost } = require('./harness/objmodHost');
 const { createW3iHost, createWpmHost, createMmpHost, createW3cHost, createW3rHost } = require('./harness/mapEditorHosts');
+const { createBlpPreviewHost } = require('./harness/blpPreviewHost');
 const { root } = require('./harness/tsLoader');
 
 /** Mirrors the webview API surface the shipped code uses. State lives in sessionStorage so it
@@ -157,6 +158,18 @@ const test = base.extend({
         const opened = [];
         await use(async (options = {}) => {
             const host = await createW3rHost({ origin: server.origin, ...options });
+            opened.push(host);
+            const wiring = await attachPageToHost(page, server, host);
+            return { host, page, ...wiring };
+        });
+        for (const host of opened) host.dispose();
+    },
+
+    /** Opens the readonly image/model preview on a generated TGA. */
+    openBlpPreview: async ({ page, server }, use) => {
+        const opened = [];
+        await use(async (options = {}) => {
+            const host = await createBlpPreviewHost({ origin: server.origin, ...options });
             opened.push(host);
             const wiring = await attachPageToHost(page, server, host);
             return { host, page, ...wiring };

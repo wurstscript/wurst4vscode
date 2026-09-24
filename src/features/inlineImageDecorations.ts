@@ -10,17 +10,15 @@
  */
 
 import * as vscode from 'vscode';
-import * as fs from 'fs';
 import * as path from 'path';
-import * as crypto from 'crypto';
-import { decodeToRgba } from './preview/imageDecoders';
 import { ensureGameAssetCached, ensureGameTextureCached } from './preview/cascStorage';
 import {
+    ensurePreview,
+    getCachedPreview,
     getCandidateRoots,
     getTempPreviewDir,
+    PreviewCacheEntry,
     resolveAssetPath,
-    encodePng,
-    scaleDown,
 } from './imageAssetSupport';
 import { AssetIndex, getAssetIndex, invalidateAssetIndex } from '../utils/assetIndex';
 import { appendDiagnostic, formatDiagnosticError } from './diagnostics';
@@ -66,20 +64,7 @@ async function resolveImagePath(assetPath: string, roots: string[]): Promise<str
 
 // ── Thumbnail cache ───────────────────────────────────────────────────────────
 
-const IMAGE_EXTS = new Set(['blp', 'dds', 'tga', 'png', 'jpg', 'jpeg']);
-
-interface ThumbEntry { pngPath: string; mtime: number; }
-const thumbCache = new Map<string, ThumbEntry>();
-
-async function getFreshPreviewPath(basePath: string, sourceMtime: number): Promise<string | undefined> {
-    for (const ext of ['.png', '.jpg']) {
-        const candidate = basePath + ext;
-        if (await isFreshThumbFile(candidate, sourceMtime)) {
-            return candidate;
-        }
-    }
-    return undefined;
-}
+const thumbCache = new Map<string, PreviewCacheEntry>();
 
 let logEpoch = 0;
 function log(message: string): void {
@@ -110,80 +95,14 @@ function safeSetDecorations(
     }
 }
 
-async function isFreshThumbFile(thumbPath: string, sourceMtime: number): Promise<boolean> {
-    try {
-        return (await fs.promises.stat(thumbPath)).mtimeMs >= sourceMtime;
-    } catch {
-        return false;
-    }
-}
-
 async function getCachedThumbnailUri(fsPath: string): Promise<vscode.Uri | undefined> {
-    const ext = path.extname(fsPath).toLowerCase();
-    if (!IMAGE_EXTS.has(ext.slice(1))) return undefined;
-
-    let mtime = 0;
-    try { mtime = (await fs.promises.stat(fsPath)).mtimeMs; } catch { return undefined; }
-
-    const cached = thumbCache.get(fsPath);
-    if (cached && cached.mtime === mtime && await isFreshThumbFile(cached.pngPath, mtime)) {
-        log(`thumb cache hit: ${path.basename(fsPath)}`);
-        return vscode.Uri.file(cached.pngPath);
-    }
-
-    // PNG/JPG can be served directly — VSCode can render them natively
-    if (ext === '.png' || ext === '.jpg' || ext === '.jpeg') {
-        thumbCache.set(fsPath, { pngPath: fsPath, mtime });
-        return vscode.Uri.file(fsPath);
-    }
-
-    try {
-        await fs.promises.mkdir(THUMB_DIR, { recursive: true });
-        const key = crypto.createHash('sha1').update('rgba-v2\0').update(fsPath).digest('hex');
-        const previewPath = await getFreshPreviewPath(path.join(THUMB_DIR, key), mtime);
-        if (previewPath) {
-            thumbCache.set(fsPath, { pngPath: previewPath, mtime });
-            log(`thumb disk cache hit: ${path.basename(fsPath)}`);
-            return vscode.Uri.file(previewPath);
-        }
-    } catch {
-        return undefined;
-    }
-
-    return undefined;
+    const entry = await getCachedPreview(fsPath, THUMB_DIR, thumbCache, log);
+    return entry && vscode.Uri.file(entry.previewPath);
 }
 
 async function getThumbnailUri(fsPath: string): Promise<vscode.Uri | undefined> {
-    const cachedUri = await getCachedThumbnailUri(fsPath);
-    if (cachedUri) {
-        return cachedUri;
-    }
-
-    const ext = path.extname(fsPath).toLowerCase();
-    if (!IMAGE_EXTS.has(ext.slice(1))) return undefined;
-
-    let mtime = 0;
-    try { mtime = (await fs.promises.stat(fsPath)).mtimeMs; } catch { return undefined; }
-
-    try {
-        await fs.promises.mkdir(THUMB_DIR, { recursive: true });
-        const key = crypto.createHash('sha1').update('rgba-v2\0').update(fsPath).digest('hex');
-        const basePath = path.join(THUMB_DIR, key);
-
-        const bytes = new Uint8Array(await fs.promises.readFile(fsPath));
-        const { width, height, rgba } = decodeToRgba(bytes, ext);
-        const previewPath = `${basePath}.png`;
-        const scaled = scaleDown(Buffer.from(rgba), width, height, THUMB_DIM);
-        const png = encodePng(scaled.w, scaled.h, scaled.rgba);
-        await fs.promises.writeFile(previewPath, png);
-
-        thumbCache.set(fsPath, { pngPath: previewPath, mtime });
-        log(`thumb generated: ${path.basename(fsPath)} -> ${previewPath}`);
-        return vscode.Uri.file(previewPath);
-    } catch (error) {
-        log(`thumb failed: ${fsPath} :: ${formatDiagnosticError(error)}`);
-        return undefined;
-    }
+    const entry = await ensurePreview(fsPath, THUMB_DIR, THUMB_DIM, thumbCache, log);
+    return entry && vscode.Uri.file(entry.previewPath);
 }
 
 // ── Decoration manager ────────────────────────────────────────────────────────

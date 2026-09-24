@@ -128,6 +128,17 @@ export function registerParsedPreviewer<TData>(
 // Editable binary documents
 // ---------------------------------------------------------------------------
 
+/** Write `bytes` only when they differ from disk. Returns the bytes now on disk either way, so callers
+ *  can update watcher bookkeeping without reading the file right back. */
+export async function writeBytesIfChanged(bytes: Buffer, uri: vscode.Uri): Promise<Buffer> {
+    try {
+        const existing = Buffer.from(await vscode.workspace.fs.readFile(uri));
+        if (existing.equals(bytes)) return existing;
+    } catch { /* file missing → write it */ }
+    await vscode.workspace.fs.writeFile(uri, bytes);
+    return bytes;
+}
+
 /** One reversible change to a document's model. `apply` is also what `redo` runs. */
 export interface BinaryEdit {
     apply: () => void;
@@ -340,10 +351,6 @@ export class EditableBinaryEditorProvider<TFile extends { error?: string }, TDoc
     }
 
     private async writeIfChanged(doc: TDoc, uri: vscode.Uri): Promise<void> {
-        const bytes = this.opts.serialize(doc.file, uri.path);
-        try {
-            if (Buffer.from(await vscode.workspace.fs.readFile(uri)).equals(bytes)) return;
-        } catch { /* missing → write */ }
-        await vscode.workspace.fs.writeFile(uri, bytes);
+        await writeBytesIfChanged(this.opts.serialize(doc.file, uri.path), uri);
     }
 }

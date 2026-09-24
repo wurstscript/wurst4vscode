@@ -7,6 +7,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import * as zlib from 'zlib';
 
+import { formatDiagnosticError, showWarningWithLogs } from './diagnostics';
 import { decodeRasterPreview } from './preview/imageDecoders';
 import {
     findCachedGameAsset,
@@ -649,8 +650,27 @@ export async function ensurePreview(
         cache.set(fsPath, entry);
         log?.(`preview generated: ${path.basename(fsPath)}`);
         return entry;
-    } catch {
+    } catch (error) {
+        log?.(`preview failed: ${fsPath} :: ${formatDiagnosticError(error)}`);
         return undefined;
+    }
+}
+
+/** Resolve an asset referenced from `documentUri` and open it in the matching Wurst preview. */
+export async function openAssetInPreview(assetPath: string, documentUri: vscode.Uri): Promise<void> {
+    const resolved = await resolveAssetPathWithCasc(assetPath, await getCandidateRoots(documentUri.fsPath));
+    if (!resolved) {
+        void showWarningWithLogs(`Could not resolve asset: ${assetPath}`, new Error(`Asset resolution failed for ${assetPath}`));
+        return;
+    }
+    const target = vscode.Uri.file(resolved);
+    const ext = path.extname(resolved).toLowerCase();
+    if (['.mdx', '.mdl', '.blp', '.dds', '.tga'].includes(ext)) {
+        await vscode.commands.executeCommand('vscode.openWith', target, 'wurst.blpPreview');
+    } else if (SOUND_EXTS.has(ext.slice(1))) {
+        await vscode.commands.executeCommand('vscode.openWith', target, 'wurst.soundPreview');
+    } else {
+        await vscode.commands.executeCommand('vscode.open', target);
     }
 }
 

@@ -2,9 +2,9 @@
 
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { gatherImportedAssets, getCandidateRoots, requestPreviewIcon, resolveAssetPath as resolveAssetPathString, resolveAssetPathWithCasc } from './imageAssetSupport';
+import { gatherImportedAssets, getCandidateRoots, resolveAssetPath as resolveAssetPathString, resolveAssetPathWithCasc } from './imageAssetSupport';
 import { loadObjValueCatalog, type ValueOption } from './objModPreview';
-import { cacheModelThumbnail, markModelThumbnailBad, postTexturesToWebview, requestModelThumbnail } from './preview/modelPreviewHost';
+import { handleModelThumbMessage } from './preview/modelPreviewHost';
 import { getGameAssetCacheDir, getModelThumbCacheDir } from './preview/cascStorage';
 import { isSoundAssetPath, playSoundInline } from './soundPreview';
 import { buildPage, ICON_INLINE_CSS, scriptSafeJson } from './webviewShared';
@@ -204,26 +204,12 @@ async function openCodeAssetBrowser(context: vscode.ExtensionContext, target: Br
     };
     const initialJson = scriptSafeJson(initial);
     panel.webview.html = buildAssetBrowserHtml(initialJson, target.currentValue, panel.webview.cspSource, mdxViewerUri);
-    // eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
     panel.webview.onDidReceiveMessage((message) => {
         const msg = message || {};
         if (msg.type === 'selectAsset' && typeof msg.value === 'string') {
             void replaceAssetString(target, msg.value).then(() => panel.dispose());
-        } else if (msg.type === 'loadObjectIcon' && typeof msg.iconPath === 'string' && typeof msg.key === 'string') {
-            void requestPreviewIcon(msg.iconPath, msg.key, panel.webview, target.uri);
-        } else if (msg.type === 'loadModelThumb' && typeof msg.path === 'string' && typeof msg.key === 'string') {
-            void requestModelThumbnail(msg.path, msg.key, target.uri, panel.webview, true);
-        } else if (msg.type === 'requestTextures' && Array.isArray(msg.paths)) {
-            void postTexturesToWebview(
-                msg.paths.filter((candidate: unknown): candidate is string => typeof candidate === 'string'),
-                target.uri,
-                panel.webview,
-                typeof msg.thumbKey === 'string' ? msg.thumbKey : undefined,
-            );
-        } else if (msg.type === 'modelThumbRendered' && typeof msg.key === 'string' && typeof msg.cacheKey === 'string' && typeof msg.webpBase64 === 'string') {
-            void cacheModelThumbnail(msg.key, msg.cacheKey, msg.webpBase64, panel.webview, typeof msg.aliasKey === 'string' ? msg.aliasKey : undefined);
-        } else if (msg.type === 'modelThumbFailed' && typeof msg.key === 'string') {
-            markModelThumbnailBad(msg.key, typeof msg.cacheKey === 'string' ? msg.cacheKey : undefined, typeof msg.aliasKey === 'string' ? msg.aliasKey : undefined, typeof msg.reason === 'string' ? msg.reason : undefined);
+        } else {
+            void handleModelThumbMessage(msg, panel.webview, target.uri);
         }
     });
 }

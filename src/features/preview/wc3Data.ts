@@ -106,7 +106,7 @@ async function loadTerrainWaterLevelsUncached(): Promise<Map<string, number>> {
     const buf = await readGameData('TerrainArt\\Water.slk');
     if (!buf) return levels;
     for (const [id, row] of parseSlk(buf.toString('utf8')).rows) {
-        const raw = slkFieldCI(row, ['waterlevel', 'height']);
+        const raw = slkField(row, ['waterlevel', 'height']);
         if (raw === undefined) continue;
         const value = Number(raw);
         if (Number.isFinite(value)) levels.set(id, value * 128);
@@ -135,7 +135,9 @@ async function loadTilesetBlightTexturesUncached(): Promise<Map<string, string>>
     return textures;
 }
 
-function slkFieldCI(row: Record<string, string>, names: string[]): string | undefined {
+/** First non-empty value among `names` in an SLK row, matching column names case-insensitively. */
+export function slkField(row: Record<string, string> | undefined, names: string[]): string | undefined {
+    if (!row) return undefined;
     const entries = Object.entries(row);
     for (const name of names) {
         const found = entries.find(([key]) => key.toLowerCase() === name.toLowerCase());

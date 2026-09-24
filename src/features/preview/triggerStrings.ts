@@ -66,6 +66,19 @@ export function nextTriggerStringId(table: TriggerStringTable): number {
 }
 
 /**
+ * The `war3map.wts` bytes with `edits` applied, or undefined when there is nothing to write. Builds
+ * without writing so a save can finish all fallible preflight work before touching any file.
+ */
+export async function buildWtsBytes(edits: Map<number, string>, wtsUri: vscode.Uri | undefined, wtsExists: boolean): Promise<Buffer | undefined> {
+    if (!edits.size || !wtsUri) return undefined;
+    let original = '';
+    if (wtsExists) {
+        try { original = Buffer.from(await vscode.workspace.fs.readFile(wtsUri)).toString('utf8'); } catch { /* create fresh */ }
+    }
+    return Buffer.from(applyWtsEdits(original, edits), 'utf8');
+}
+
+/**
  * Surgically upsert the given trigger strings into an existing war3map.wts text,
  * preserving everything else (comments, untouched entries, ordering). Appends new
  * blocks for ids not already present. Pass '' as originalText to create a new file.

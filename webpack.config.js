@@ -73,6 +73,7 @@ const viewerConfig = {
 		mdxViewer: './src/webview/mdxViewer.ts',
 		mpqViewerWebview: './src/webview/mpqViewerWebview.ts',
 		wpmEditorWebview: './src/webview/wpmEditorWebview.ts',
+		blpPreviewWebview: './src/webview/blpPreviewWebview.ts',
 		objModEditorWebview: './src/webview/objModEditorWebview.ts',
 	},
 	output: {

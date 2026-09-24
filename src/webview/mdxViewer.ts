@@ -941,5 +941,8 @@ const War3Viewer = {
     },
 };
 
-// Expose globally for the inline script
+/** The `window.War3Viewer` surface, for bundles that load this one beside them (`import type` only). */
+export type War3ViewerApi = typeof War3Viewer;
+
+// Expose globally for the pages that load this bundle
 (window as unknown as Record<string, unknown>).War3Viewer = War3Viewer;

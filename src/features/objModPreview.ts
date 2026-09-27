@@ -1176,8 +1176,8 @@ function getBaseSlkRow(baseId: string, field: MetaField, gameData: ObjEditorData
 }
 
 function isMissingBaseValue(value: string | undefined, field: MetaField): boolean {
-    if (value === undefined || value === '') return true;
-    return value === '-' && ['int', 'real', 'unreal', 'bool'].includes(field.type.toLowerCase());
+    if (value === undefined || value.trim() === '') return true;
+    return value.trim() === '-' && ['int', 'real', 'unreal', 'bool'].includes(field.type.toLowerCase());
 }
 
 function defaultBaseFieldValue(field: MetaField): string | undefined {

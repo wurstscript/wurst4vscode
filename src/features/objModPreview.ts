@@ -95,6 +95,7 @@ function metaVarType(type: string): ObjModVarType {
 
 // Object-editor field IDs (one per object type) that hold the display name / button icon override.
 const NAME_FIELDS = new Set(['unam', 'inam', 'anam', 'bnam', 'dnam', 'fnam', 'gnam']);
+const EDITOR_SUFFIX_FIELDS = new Set(['unsf', 'ansf', 'bsuf', 'fnsf', 'gnsf']);
 const ICON_FIELDS = new Set(['uico', 'iico', 'aart', 'fart', 'gico']);
 const SUMMARY_MODEL_FIELDS = new Set(['umdl', 'amdl', 'ifil', 'bfil', 'dfil']);
 // "Categorization - Campaign"/"Categorization - Special" — these decide which Melee|Campaign and
@@ -115,10 +116,14 @@ const FIELD_LABELS: Record<string, string> = {
     unam: 'Name',
     inam: 'Name',
     anam: 'Name',
+    ansf: 'Editor Suffix',
     bnam: 'Name',
+    bsuf: 'Editor Suffix',
     dnam: 'Name',
     fnam: 'Name',
+    fnsf: 'Editor Suffix',
     gnam: 'Name',
+    gnsf: 'Editor Suffix',
     utip: 'Tooltip',
     atp1: 'Tooltip',
     itip: 'Tooltip',
@@ -169,6 +174,7 @@ interface PreviewObject {
     baseId: string;
     newId: string | null;
     displayName: string;
+    displaySuffix?: string;
     displaySource?: string;
     nameOverridden: boolean;
     race: string;
@@ -549,6 +555,7 @@ function buildObject(
     ext: string,
 ): PreviewObject {
     const resolvedName = resolveObjectNameOverride(entry, triggerStrings);
+    const displaySuffix = resolveObjectEditorSuffix(entry, triggerStrings, summaryData);
     const baseName = summaryData ? resolveBaseDisplayName(entry.baseId, summaryData) : undefined;
     const nameOverridden = resolvedName?.value !== undefined && resolvedName.value !== '';
     // The Melee/Campaign x Units/Buildings/Heroes/Special browse grouping (see objectTree.ts on the
@@ -564,6 +571,7 @@ function buildObject(
         baseId: entry.baseId,
         newId: entry.newId,
         displayName: nameOverridden ? String(resolvedName.value) : (baseName || entry.newId || entry.baseId),
+        displaySuffix,
         displaySource: resolvedName?.source,
         nameOverridden,
         race: summaryData ? resolveObjectRace(entry, summaryData) : raceFromRawcode(entry.baseId),
@@ -915,6 +923,34 @@ function resolveObjectNameOverride(
     const nameMod = findStringOverride(entry, NAME_FIELDS);
     if (!nameMod || typeof nameMod.value !== 'string') return undefined;
     return resolveTriggerString(nameMod.value, triggerStrings);
+}
+
+function resolveObjectEditorSuffix(
+    entry: ObjModEntry,
+    triggerStrings: TriggerStringTable,
+    summaryData?: ObjSummaryData,
+): string | undefined {
+    const suffixMod = findStringOverride(entry, EDITOR_SUFFIX_FIELDS);
+    if (suffixMod) {
+        if (typeof suffixMod.value !== 'string') return undefined;
+        const resolved = resolveTriggerString(suffixMod.value, triggerStrings);
+        const suffix = resolved.value === undefined ? '' : String(resolved.value).trim();
+        // An explicit empty value clears the inherited suffix, so do not fall back to the base.
+        return suffix || undefined;
+    }
+    if (!summaryData) return undefined;
+    const baseRecord = summaryData.baseObjects?.get(entry.baseId.toLowerCase());
+    const baseSuffix = (baseRecord ? firstDefinedRecord(baseRecord, ['EditorSuffix']) : undefined) ||
+        getAnyProfileValue(entry.baseId, ['EditorSuffix', 'editorsuffix'], summaryData);
+    if (!baseSuffix) return undefined;
+    const worldResolved = resolveWorldEditString(baseSuffix, summaryData.worldStrings);
+    const resolved = resolveTriggerString(worldResolved, triggerStrings);
+    const suffix = resolved.value === undefined ? '' : String(resolved.value).trim();
+    return suffix && suffix !== '_' ? suffix : undefined;
+}
+
+function objectDisplayLabel(name: string, suffix?: string): string {
+    return suffix ? `${name} (${suffix})` : name;
 }
 
 function resolveObjectIconPath(entry: ObjModEntry, summaryData: ObjSummaryData): string | undefined {
@@ -1460,7 +1496,7 @@ function catalogWithDocumentObjects(
     baseCatalog: ObjValueCatalog,
     parsed: ObjModFile,
     triggerStrings: TriggerStringTable,
-    summaryData: Pick<ObjSummaryData, 'worldStrings' | 'profile'>,
+    summaryData: ObjSummaryData,
 ): ObjValueCatalog {
     const objects = new Map(baseCatalog.objects);
     const addEntry = (entry: ObjModEntry, group: 'Original' | 'Custom', index: number) => {
@@ -1468,7 +1504,10 @@ function catalogWithDocumentObjects(
         const id = entry.newId || entry.baseId;
         const nameOverride = resolveObjectNameOverride(entry, triggerStrings);
         const baseName = resolveBaseDisplayName(entry.baseId, summaryData);
-        const label = nameOverride?.value ? String(nameOverride.value) : (baseName || id);
+        const label = objectDisplayLabel(
+            nameOverride?.value ? String(nameOverride.value) : (baseName || id),
+            resolveObjectEditorSuffix(entry, triggerStrings, summaryData),
+        );
         objects.set(id.toLowerCase(), {
             value: id,
             label,
@@ -1520,7 +1559,10 @@ async function catalogWithSiblingObjects(
             if (objects.get(id.toLowerCase())?.objectKey) return;
             const nameOverride = resolveObjectNameOverride(entry, triggerStrings);
             const baseName = resolveBaseDisplayName(entry.baseId, summaryData);
-            const label = nameOverride?.value ? String(nameOverride.value) : (baseName || id);
+            const label = objectDisplayLabel(
+                nameOverride?.value ? String(nameOverride.value) : (baseName || id),
+                resolveObjectEditorSuffix(entry, triggerStrings, summaryData),
+            );
             objects.set(id.toLowerCase(), {
                 value: id,
                 label,
@@ -1947,10 +1989,16 @@ ${objModEditorUri ? `<script src="${objModEditorUri}"></script>` : ''}
     });
 }
 
-async function loadObjectDetails(key: string, identity: string | undefined, webview: vscode.Webview, doc: ObjModDocument): Promise<void> {
+async function loadObjectDetails(
+    key: string,
+    identity: string | undefined,
+    generation: number,
+    webview: vscode.Webview,
+    doc: ObjModDocument,
+): Promise<void> {
     const entry = findEntryByKey(doc.displayFile, key);
     if (!entry) {
-        await webview.postMessage({ type: 'objectDetailsFailed', key, identity, reason: 'Object not found' });
+        await webview.postMessage({ type: 'objectDetailsFailed', key, identity, generation, reason: 'Object not found' });
         return;
     }
     try {
@@ -1974,12 +2022,12 @@ async function loadObjectDetails(key: string, identity: string | undefined, webv
                 annotateEditable(row, mod, wts);
                 return row;
             });
-        await webview.postMessage({ type: 'objectDetailsLoaded', key, identity, mods });
+        await webview.postMessage({ type: 'objectDetailsLoaded', key, identity, generation, mods });
     } catch (err) {
         // Game-data/CASC lookups can throw (missing install, bad metadata); without this the webview
         // was left stuck on its "Loading fields..." spinner forever with no way out but reopening.
         console.error('[wurst-objmod] failed to build field rows for', key, err);
-        await webview.postMessage({ type: 'objectDetailsFailed', key, identity, reason: err instanceof Error ? err.message : String(err) });
+        await webview.postMessage({ type: 'objectDetailsFailed', key, identity, generation, reason: err instanceof Error ? err.message : String(err) });
     }
 }
 
@@ -2009,7 +2057,7 @@ async function buildObjectForKey(doc: ObjModDocument, key: string): Promise<Prev
 
 function isSummaryField(fieldId: string): boolean {
     const id = fieldId.toLowerCase();
-    return NAME_FIELDS.has(id) || ICON_FIELDS.has(id) || SUMMARY_MODEL_FIELDS.has(id) || CLASSIFICATION_FIELDS.has(id);
+    return NAME_FIELDS.has(id) || EDITOR_SUFFIX_FIELDS.has(id) || ICON_FIELDS.has(id) || SUMMARY_MODEL_FIELDS.has(id) || CLASSIFICATION_FIELDS.has(id);
 }
 
 async function postObjectSummary(webview: vscode.Webview, doc: ObjModDocument, key: string): Promise<void> {
@@ -2117,7 +2165,7 @@ function applyFieldEdit(doc: ObjModDocument, p: EditFieldMessage): ModEditUndo |
     const id = wtsId;
     const newMod = mod;
     // A name override changes the labels the value catalog hands out for rawcode cross-references.
-    const affectsCatalog = NAME_FIELDS.has(p.fieldId.toLowerCase());
+    const affectsCatalog = NAME_FIELDS.has(p.fieldId.toLowerCase()) || EDITOR_SUFFIX_FIELDS.has(p.fieldId.toLowerCase());
     const addMod = (arr: ObjModMod[]) => { if (arr.indexOf(newMod) < 0) arr.push(newMod); };
     const removeMod = (arr: ObjModMod[]) => { const i = arr.indexOf(newMod); if (i >= 0) arr.splice(i, 1); };
     const apply = () => {
@@ -2546,10 +2594,11 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             rawcode?: string; label?: string;
             baseId?: string;
             identity?: string;
+            generation?: number;
             color?: string;
         };
         if (msg.type === 'loadObjectDetails' && msg.key) {
-            await loadObjectDetails(msg.key, msg.identity, webview, doc);
+            await loadObjectDetails(msg.key, msg.identity, msg.generation ?? 0, webview, doc);
             return;
         }
         if (msg.type === 'openObjectReference' && msg.rawcode) {

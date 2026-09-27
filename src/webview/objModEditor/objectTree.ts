@@ -86,8 +86,12 @@ export function rawcodeLine(obj) {
   return obj.newId ? esc(obj.baseId) + ' → ' + esc(obj.newId) : esc(obj.baseId);
 }
 
+function displayNameWithSuffix(obj) {
+  return String(obj.displayName || '') + (obj.displaySuffix ? ' (' + String(obj.displaySuffix) + ')' : '');
+}
+
 export function detailsTitleHtml(obj) {
-  return esc(obj.displayName) +
+  return esc(displayNameWithSuffix(obj)) +
     '<span class="details-rawcode">' + rawcodeLine(obj) + '</span>' +
     (obj.displaySource ? sourcePill({ source: obj.displaySource }) : '');
 }
@@ -118,11 +122,11 @@ export function matchScore(obj, query) {
   const newId = String(obj.newId || '').toLowerCase();
   if (base === q || newId === q) return 0;
   if (base.startsWith(q) || newId.startsWith(q)) return 1;
-  const name = String(obj.displayName || '').toLowerCase();
+  const name = displayNameWithSuffix(obj).toLowerCase();
   if (name === q) return 2;
   if (name.startsWith(q)) return 3;
   if (name.includes(q) || base.includes(q) || newId.includes(q)) return 4;
-  const haystack = [obj.displayName, obj.baseId, obj.newId, obj.displaySource, obj.group].filter(Boolean).join(' ');
+  const haystack = [displayNameWithSuffix(obj), obj.baseId, obj.newId, obj.displaySource, obj.group].filter(Boolean).join(' ');
   return fuzzyMatch(query, haystack) ? 5 : -1;
 }
 
@@ -253,10 +257,10 @@ export function objectRowReplacementHtml(obj) {
   // row-refresh — so this can key off the object alone rather than needing render-context passed in.
   const nested = obj.kind !== undefined ? ' nested' : '';
   const source = obj.displaySource ? sourcePill({ source: obj.displaySource }) : '';
-  const label = obj.displayName + ' - ' + (obj.newId ? obj.baseId + ' to ' + obj.newId : obj.baseId);
+  const label = displayNameWithSuffix(obj) + ' - ' + (obj.newId ? obj.baseId + ' to ' + obj.newId : obj.baseId);
   return '<button class="object-row' + active + nested + '" type="button" data-key="' + esc(obj.key) + '" aria-label="' + esc(label) + '" title="' + esc(label) + '">' +
     objectIconHtml(obj, '') +
-    '<span class="object-name">' + esc(obj.displayName) + source + '</span>' +
+    '<span class="object-name">' + esc(displayNameWithSuffix(obj)) + source + '</span>' +
     '<span class="object-id">' + idLine(obj) + '</span>' +
     '</button>';
 }

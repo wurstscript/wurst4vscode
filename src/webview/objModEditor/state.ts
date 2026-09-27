@@ -12,6 +12,14 @@ export const iconLoader = createIconLoader(vscodeApi);
 
 export const detailCache = new Map<string, ObjModField[]>();
 export const pendingDetails = new Set<string>();
+export let detailGeneration = 0;
+
+export function invalidateDetailCache(): void {
+  detailGeneration++;
+  detailCache.clear();
+  pendingDetails.clear();
+  failedDetails.clear();
+}
 
 // Everything below is restored from vscodeApi's per-document persisted state (survives a webview
 // reload — including our own external-change auto-reload/revert, see objModPreview.ts — and a full

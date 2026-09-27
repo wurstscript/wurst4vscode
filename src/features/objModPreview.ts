@@ -1177,6 +1177,10 @@ function getBaseSlkRow(baseId: string, field: MetaField, gameData: ObjEditorData
 
 function isMissingBaseValue(value: string | undefined, field: MetaField): boolean {
     if (value === undefined || value.trim() === '') return true;
+    // Upgrade base/mod values may be interpreted by the upgrade effect itself. A dash here can
+    // encode an effect-specific value, and UpgradeEffectMetaData does not provide a numeric default
+    // for every effect (including stock armor upgrades), so keep the source marker intact.
+    if (field.slkName.toLowerCase() === 'upgradedata' && /^(base|mod)\d+$/i.test(field.sourceField)) return false;
     return value.trim() === '-' && ['int', 'real', 'unreal', 'bool'].includes(field.type.toLowerCase());
 }
 

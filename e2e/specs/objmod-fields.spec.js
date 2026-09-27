@@ -395,6 +395,21 @@ test('whitespace-padded numeric dash base values use the typed default', async (
     await expect(rowForField(page, 'usca').locator('td').last()).toHaveText('1.000');
 });
 
+test('upgrade effect sentinels are preserved when their effect defines the value', async ({ openObjMod }) => {
+    const { page } = await openObjMod({
+        fileName: 'war3map.w3q',
+        setupFixture: (dir) => fs.writeFileSync(path.join(dir, 'war3map.w3q'), serializeObjMod({
+            version: 3, ext: '.w3q', extended: true, origObjs: [],
+            customObjs: [{ baseId: 'Rhar', newId: 'Z906', mods: [] }],
+        })),
+    });
+    await selectObject(page, 'Z906');
+    await page.check('#technical-toggle');
+
+    await expect(rowForField(page, 'gba1').locator('td').last()).toHaveText('-');
+    await expect(rowForField(page, 'gmo1').locator('td').last()).toHaveText('-');
+});
+
 test('buff editors exclude ability-only bases', async ({ openObjMod }) => {
     const { page } = await openObjMod({
         fileName: 'war3map.w3h',

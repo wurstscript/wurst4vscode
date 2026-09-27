@@ -357,6 +357,11 @@ async function offerMapFolderMigration(
     }
     if (choice !== 'primary') return;
 
+    if (fs.existsSync(destination)) {
+        await vscode.window.showInformationMessage(`Map folder already exists: ${destination}`);
+        return;
+    }
+
     const migrated = await exportArchiveToMapFolder(reader, entries, archiveDir, archiveName);
     if (migrated) await globalState.update(stateKey, true);
 }

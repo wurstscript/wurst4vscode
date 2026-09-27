@@ -90,7 +90,9 @@ async function extractObjModSibling(
     const normalizedSibling = siblingName.replace(/\\/g, '/').toLowerCase();
     const siblingEntry = entries.find((entry) => entry.name.replace(/\\/g, '/').toLowerCase() === normalizedSibling);
     if (!siblingEntry) return;
-    const outPath = getArchiveOutputPath(tmpDir, siblingEntry.name);
+    // The editor probes the canonical World Editor sibling name, so preserve that casing on
+    // case-sensitive filesystems even when the MPQ entry itself uses different casing.
+    const outPath = getArchiveOutputPath(tmpDir, siblingName);
     if (!outPath || fs.existsSync(outPath)) return;
     try {
         const data = await reader.readFileAsync(siblingEntry.name);

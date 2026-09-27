@@ -946,7 +946,7 @@ function resolveObjectEditorSuffix(
     const worldResolved = resolveWorldEditString(baseSuffix, summaryData.worldStrings);
     const resolved = resolveTriggerString(worldResolved, triggerStrings);
     const suffix = resolved.value === undefined ? '' : String(resolved.value).trim();
-    return suffix || undefined;
+    return suffix && suffix !== '_' ? suffix : undefined;
 }
 
 function objectDisplayLabel(name: string, suffix?: string): string {
@@ -2159,7 +2159,7 @@ function applyFieldEdit(doc: ObjModDocument, p: EditFieldMessage): ModEditUndo |
     const id = wtsId;
     const newMod = mod;
     // A name override changes the labels the value catalog hands out for rawcode cross-references.
-    const affectsCatalog = NAME_FIELDS.has(p.fieldId.toLowerCase());
+    const affectsCatalog = NAME_FIELDS.has(p.fieldId.toLowerCase()) || EDITOR_SUFFIX_FIELDS.has(p.fieldId.toLowerCase());
     const addMod = (arr: ObjModMod[]) => { if (arr.indexOf(newMod) < 0) arr.push(newMod); };
     const removeMod = (arr: ObjModMod[]) => { const i = arr.indexOf(newMod); if (i >= 0) arr.splice(i, 1); };
     const apply = () => {

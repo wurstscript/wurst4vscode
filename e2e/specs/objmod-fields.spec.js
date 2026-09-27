@@ -337,6 +337,44 @@ test('changing ability Levels rebuilds the table with the added levels', async (
     await expect(cooldownRows).toHaveCount(3);
 });
 
+test('ability base rows show stock ability values when the object has no overrides', async ({ openObjMod }) => {
+    const { page } = await openObjMod({
+        fileName: 'war3map.w3a',
+        setupFixture: (dir) => fs.writeFileSync(path.join(dir, 'war3map.w3a'), serializeObjMod({
+            version: 3, ext: '.w3a', extended: true, origObjs: [],
+            customObjs: [{ baseId: 'Adef', newId: 'Z901', mods: [] }],
+        })),
+    });
+    await selectObject(page, 'Z901');
+    await page.check('#technical-toggle');
+
+    await expect(rowForField(page, 'abpx').locator('td').last()).toContainText('0');
+    await expect(rowForField(page, 'abpy').locator('td').last()).toContainText('2');
+    await expect(rowForField(page, 'acdn').locator('td').last()).toContainText('0');
+});
+
+test('missing ability base fields use World Editor typed defaults and optional fields stay blank', async ({ openObjMod }) => {
+    const { page } = await openObjMod({
+        fileName: 'war3map.w3a',
+        setupFixture: (dir) => fs.writeFileSync(path.join(dir, 'war3map.w3a'), serializeObjMod({
+            version: 3, ext: '.w3a', extended: true, origObjs: [],
+            customObjs: [{
+                baseId: 'AIl2', newId: 'Z902',
+                mods: [{ fieldId: 'aart', varType: 'string', value: '', endToken: '\0\0\0\0' }],
+            }],
+        })),
+    });
+    await selectObject(page, 'Z902');
+    await page.check('#technical-toggle');
+
+    await expect(rowForField(page, 'abpx').locator('td').last()).toHaveText('0');
+    await expect(rowForField(page, 'acdn').locator('td').last()).toHaveText('0.000');
+    await expect(rowForField(page, 'aare').locator('td').last()).toHaveText('0.000');
+    await expect(rowForField(page, 'amho').locator('td').last()).toContainText('False');
+    await expect(rowForField(page, 'amat').locator('.tt-empty')).toHaveCount(0);
+    await expect(rowForField(page, 'aart').locator('.tt-empty')).toHaveCount(1);
+});
+
 test('buff editors exclude ability-only bases', async ({ openObjMod }) => {
     const { page } = await openObjMod({
         fileName: 'war3map.w3h',

@@ -261,6 +261,7 @@ interface MetaField {
     sort: string;
     repeat: number;
     data: number;
+    canBeEmpty?: boolean;
     index?: number; // for fields packed into a comma-list cell (e.g. Buttonpos "x,y": ubpx=0, ubpy=1)
     // Per-object applicability (parity with the World Editor — which fields a given object shows).
     useSpecific?: string[]; // ability codes/aliases this field applies to (empty = common)
@@ -695,7 +696,7 @@ function buildFieldRows(entry: ObjModEntry, gameData: ObjEditorData, triggerStri
             const baseValue = resolveBaseFieldValue(entry.baseId, field, gameData, level);
             if (!override && !applies) continue;
             const formattedOverride = override ? formatValue(override, triggerStrings) : undefined;
-            const formattedBase = formatRawValue(baseValue, triggerStrings);
+            const formattedBase = formatRawValue(formatBaseFieldValue(baseValue, field), triggerStrings);
             const currentValue = formattedOverride ?? formattedBase;
             // Carry the level/dataPt the mod has (or would have) so the host can locate/create it.
             let rowLevel: number | undefined;
@@ -1145,11 +1146,21 @@ function resolveBaseFieldValue(baseId: string, field: MetaField, gameData: ObjEd
     let raw: string | undefined;
     if (compilerRecord) {
         raw = firstDefinedRecord(compilerRecord, isProfileField ? resolveProfileFields(field, level) : [resolveSlkField(field, level)]);
-    } else if (isProfileField) {
-        raw = firstDefined(gameData.profile.get(baseId), resolveProfileFields(field, level));
-    } else {
-        raw = getBaseSlkRow(baseId, field, gameData)?.[resolveSlkField(field, level)];
     }
+    // The compiler KB is version-matched and fast, but does not carry every metadata default or
+    // every profile/SLK key. Keep the regular game-data sources as a fallback instead of letting a
+    // partial compiler record turn every absent base field into an empty cell.
+    if (isMissingBaseValue(raw, field)) {
+        const profileRow = getProfileRow(baseId, gameData);
+        const profileValue = isProfileField
+            ? firstDefined(profileRow, resolveProfileFields(field, level))
+            : undefined;
+        const slkValue = !isProfileField
+            ? getBaseSlkRow(baseId, field, gameData)?.[resolveSlkField(field, level)]
+            : undefined;
+        raw = profileValue ?? slkValue ?? raw;
+    }
+    if (isMissingBaseValue(raw, field)) raw = defaultBaseFieldValue(field) ?? raw;
     // Fields packed into one comma-list cell (e.g. Buttonpos "x,y") select their part via index.
     if (raw !== undefined && field.index !== undefined && raw.indexOf(',') !== -1) {
         return (raw.split(',')[field.index] ?? '').trim();
@@ -1159,7 +1170,33 @@ function resolveBaseFieldValue(baseId: string, field: MetaField, gameData: ObjEd
 
 function getBaseSlkRow(baseId: string, field: MetaField, gameData: ObjEditorData): Record<string, string> | undefined {
     if (!field.slkPath) return undefined;
-    return gameData.slkTables.get(field.slkPath)?.rows.get(baseId);
+    const rows = gameData.slkTables.get(field.slkPath)?.rows;
+    return rows?.get(baseId) ?? rows?.get(baseId.toLowerCase()) ??
+        [...(rows?.entries() ?? [])].find(([id]) => id.toLowerCase() === baseId.toLowerCase())?.[1];
+}
+
+function isMissingBaseValue(value: string | undefined, field: MetaField): boolean {
+    if (value === undefined || value === '') return true;
+    return value === '-' && ['int', 'real', 'unreal', 'bool'].includes(field.type.toLowerCase());
+}
+
+function defaultBaseFieldValue(field: MetaField): string | undefined {
+    if (field.canBeEmpty) return undefined;
+    switch (field.type.toLowerCase()) {
+        case 'int': return '0';
+        case 'real':
+        case 'unreal': return '0.000';
+        case 'bool': return '0';
+        case 'race':
+        case 'unitrace': return 'other';
+        default: return undefined;
+    }
+}
+
+function formatBaseFieldValue(value: string | undefined, field: MetaField): string | undefined {
+    if (value === undefined || !['real', 'unreal'].includes(field.type.toLowerCase())) return value;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric.toFixed(3) : value;
 }
 
 function getAnyProfileValue(baseId: string, fields: string[], summaryData: Pick<ObjSummaryData, 'profile'>): string | undefined {
@@ -1458,6 +1495,7 @@ function makeCompilerMetaField(schema: CompilerFieldSchema, worldStrings: Map<st
         sort: schema.sort || schema.id,
         repeat: schema.repeat || 0,
         data: schema.data || 0,
+        canBeEmpty: schema.canBeEmpty,
         index: schema.index ?? undefined,
         useUnit: schema.useUnit,
         useHero: schema.useHero,
@@ -1710,6 +1748,7 @@ function makeMetaField(row: Record<string, string>, worldStrings: Map<string, st
         sort: row.sort || '',
         repeat: Number(row.repeat ?? 0) || 0,
         data: Number(row.data ?? 0) || 0,
+        canBeEmpty: row.canBeEmpty === '1',
         index: row.index !== undefined && row.index !== '' ? Number(row.index) : undefined,
         useSpecific: splitCodes(row.useSpecific),
         notSpecific: splitCodes(row.notSpecific),

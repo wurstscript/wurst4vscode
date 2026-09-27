@@ -1183,14 +1183,19 @@ function isMissingBaseValue(value: string | undefined, field: MetaField): boolea
 function defaultBaseFieldValue(field: MetaField): string | undefined {
     if (field.canBeEmpty) return undefined;
     switch (field.type.toLowerCase()) {
-        case 'int': return '0';
+        case 'int': return hasPositiveMinimum(field) ? undefined : '0';
         case 'real':
-        case 'unreal': return '0.000';
+        case 'unreal': return hasPositiveMinimum(field) ? undefined : '0.000';
         case 'bool': return '0';
         case 'race':
         case 'unitrace': return 'other';
         default: return undefined;
     }
+}
+
+function hasPositiveMinimum(field: MetaField): boolean {
+    const min = Number(field.minVal);
+    return Number.isFinite(min) && min > 0;
 }
 
 function formatBaseFieldValue(value: string | undefined, field: MetaField): string | undefined {
@@ -1256,8 +1261,11 @@ function firstDefined(row: Record<string, string> | undefined, fields: string[])
 }
 
 function resolveProfileFields(field: MetaField, level?: number): string[] {
-    const fields = [appendRepeat(field.sourceField, field.repeat, level, 1)];
-    if (field.repeat > 0 && !fields.includes(field.sourceField)) fields.push(field.sourceField);
+    const repeated = appendRepeat(field.sourceField, field.repeat, level, 1);
+    const fields = [repeated, `${repeated}:sd`, `${repeated}:hd`];
+    if (field.repeat > 0 && !fields.includes(field.sourceField)) {
+        fields.push(field.sourceField, `${field.sourceField}:sd`, `${field.sourceField}:hd`);
+    }
     return fields;
 }
 

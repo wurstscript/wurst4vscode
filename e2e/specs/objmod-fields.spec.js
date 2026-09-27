@@ -380,13 +380,19 @@ test('whitespace-padded numeric dash base values use the typed default', async (
         fileName: 'war3map.w3u',
         setupFixture: (dir) => fs.writeFileSync(path.join(dir, 'war3map.w3u'), serializeObjMod({
             version: 3, ext: '.w3u', extended: true, origObjs: [],
-            customObjs: [{ baseId: 'hpea', newId: 'Z904', mods: [] }],
+            customObjs: [
+                { baseId: 'hpea', newId: 'Z904', mods: [] },
+                { baseId: 'hfoo', newId: 'Z905', mods: [] },
+            ],
         })),
     });
     await selectObject(page, 'Z904');
     await page.check('#technical-toggle');
 
     await expect(rowForField(page, 'ufma').locator('td').last()).toHaveText('0');
+
+    await selectObject(page, 'Z905');
+    await expect(rowForField(page, 'usca').locator('td').last()).toHaveText('1.000');
 });
 
 test('buff editors exclude ability-only bases', async ({ openObjMod }) => {

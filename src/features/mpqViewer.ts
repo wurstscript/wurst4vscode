@@ -63,6 +63,46 @@ function shouldExtractTriggerStrings(fileName: string): boolean {
     return ['.w3i', '.w3r', '.w3c', '.w3u', '.w3t', '.w3a', '.w3b', '.w3d', '.w3h', '.w3q'].includes(ext);
 }
 
+function getObjModSiblingName(archiveEntryName: string): string | undefined {
+    const normalized = archiveEntryName.replace(/\\/g, '/');
+    const basename = path.posix.basename(normalized);
+    const ext = path.posix.extname(basename);
+    if (!['.w3u', '.w3t', '.w3a', '.w3b', '.w3d', '.w3h', '.w3q'].includes(ext.toLowerCase())) return undefined;
+
+    const lower = basename.toLowerCase();
+    let siblingBase: string;
+    if (lower === `war3map${ext}`.toLowerCase()) siblingBase = `war3mapSkin${ext}`;
+    else if (lower === `war3mapskin${ext}`.toLowerCase()) siblingBase = `war3map${ext}`;
+    else return undefined;
+
+    const directory = path.posix.dirname(normalized);
+    return directory === '.' ? siblingBase : `${directory}/${siblingBase}`;
+}
+
+async function extractObjModSibling(
+    reader: MpqReader,
+    entries: MpqFileEntry[],
+    archiveEntryName: string,
+    tmpDir: string,
+): Promise<void> {
+    const siblingName = getObjModSiblingName(archiveEntryName);
+    if (!siblingName) return;
+    const normalizedSibling = siblingName.replace(/\\/g, '/').toLowerCase();
+    const siblingEntry = entries.find((entry) => entry.name.replace(/\\/g, '/').toLowerCase() === normalizedSibling);
+    if (!siblingEntry) return;
+    const outPath = getArchiveOutputPath(tmpDir, siblingEntry.name);
+    if (!outPath || fs.existsSync(outPath)) return;
+    try {
+        const data = await reader.readFileAsync(siblingEntry.name);
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        fs.writeFileSync(outPath, data);
+        log(`Extracted matching object-data sibling: ${siblingEntry.name}`);
+    } catch (e) {
+        // The selected file remains usable on its own when an optional sibling is damaged or unreadable.
+        log(`Could not extract matching object skin file ${siblingEntry.name}: ${formatDiagnosticError(e)}`);
+    }
+}
+
 async function extractTriggerStringsSidecar(
     reader: MpqReader,
     entries: MpqFileEntry[],
@@ -213,6 +253,7 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
                     fs.mkdirSync(path.dirname(outPath), { recursive: true });
                     fs.writeFileSync(outPath, data);
                     document.extractedPaths.set(name, outPath);
+                    await extractObjModSibling(document.reader, document.entries, name, tmpDir);
                     if (shouldExtractTriggerStrings(name)) {
                         await extractTriggerStringsSidecar(document.reader, document.entries, tmpDir);
                     }

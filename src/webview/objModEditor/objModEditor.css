@@ -1428,6 +1428,17 @@ td.type { color: var(--muted); font-size: 11px; }
 td.num { text-align: right; color: var(--muted); }
 td.value { word-break: break-word; white-space: pre-wrap; }
 td.field { color: var(--fg); }
+.field-level {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  border-radius: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+  vertical-align: 1px;
+}
 tr.overridden td {
   background: color-mix(in srgb, var(--accent) 7%, transparent);
 }

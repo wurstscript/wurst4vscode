@@ -231,6 +231,8 @@ export function setupMessageHandler() {
       const index = objects.findIndex(obj => obj.key === msg.object.key);
       if (index < 0) return;
       const oldIcon = objects[index].iconPath || '';
+      const oldDisplayName = objects[index].displayName;
+      const oldDisplaySuffix = objects[index].displaySuffix;
       // Campaign/kind/race decide which tree branch this row lives under (see renderTree) — if editing
       // pushed it into a different branch, an in-place row swap would leave it under the wrong heading
       // until the next full render, so rebuild the tree instead of just patching this one row.
@@ -240,7 +242,7 @@ export function setupMessageHandler() {
       if (oldIcon !== (objects[index].iconPath || '')) {
         iconLoader.clearPrefix(objects[index].key + ':icon:');
       }
-      if (oldBranch !== newBranch) renderTree();
+      if (oldBranch !== newBranch || oldDisplayName !== objects[index].displayName || oldDisplaySuffix !== objects[index].displaySuffix) renderTree();
       else updateObjectRow(objects[index]);
       updateDetailsHeader(objects[index]);
     } else if (msg.type === 'objectAdded' && msg.object && msg.object.key) {

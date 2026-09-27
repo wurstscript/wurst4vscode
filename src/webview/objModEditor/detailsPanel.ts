@@ -158,13 +158,17 @@ export function renderDetails() {
       ? '<tr class="category-row" data-cat="' + esc(catKey) + '"><td colspan="' + headers.length + '">' + esc(category) + '</td></tr>'
       : '';
     lastCategory = category;
+    const levelLabel = mod.level != null && mod.level > 0 && (!ui.showTechnical || !initial.extended)
+      ? '<span class="field-level">Level ' + esc(mod.level) + '</span>'
+      : '';
+    const fieldLabel = (mod.label || mod.fieldId) + (mod.level != null && mod.level > 0 ? ' Level ' + mod.level : '');
     const fieldCell = ui.showTechnical
-      ? '<td class="id">' + esc(mod.fieldId) + '</td><td class="label">' + esc(mod.label || '-') + '</td><td class="type">' + esc(category) + '</td><td class="type">' + esc(mod.type) + '</td>' +
+      ? '<td class="id">' + esc(mod.fieldId) + '</td><td class="label">' + esc(mod.label || '-') + levelLabel + '</td><td class="type">' + esc(category) + '</td><td class="type">' + esc(mod.type) + '</td>' +
         (initial.extended ? '<td class="num">' + esc(mod.level ?? '') + '</td>' + '<td class="num">' + esc(mod.dataPt ?? '') + '</td>' : '')
-      : '<td class="field">' + esc(mod.label || mod.fieldId) + '</td>';
+      : '<td class="field">' + esc(mod.label || mod.fieldId) + levelLabel + '</td>';
     // Include the category ("Abilities", "Stats", ...) so a query like "abilities" finds a field whose
     // own label is just "Normal" — the category is what ties it to that word, not the field name.
-    const fsearch = esc((category + ' ' + (mod.fieldId || '') + ' ' + (mod.label || '') + ' ' + (mod.currentValue || '') + ' ' + (mod.editValue || '') + ' ' + (mod.displayValue || '') + ' ' + (mod.displayDetail || '')).toLowerCase());
+    const fsearch = esc((category + ' ' + (mod.fieldId || '') + ' ' + fieldLabel + ' ' + (mod.currentValue || '') + ' ' + (mod.editValue || '') + ' ' + (mod.displayValue || '') + ' ' + (mod.displayDetail || '')).toLowerCase());
     // "-" is WC3's own placeholder for "no value" (asset paths, rawcode lists, ...) — treat it as blank
     // too, same as decoratedValueHtml/collapsedView already do when deciding whether to show "(empty)".
     const currentDisplay = (mod.editValue == null ? (mod.currentValue == null ? '' : String(mod.currentValue)) : String(mod.editValue)).trim();

@@ -95,6 +95,7 @@ function metaVarType(type: string): ObjModVarType {
 
 // Object-editor field IDs (one per object type) that hold the display name / button icon override.
 const NAME_FIELDS = new Set(['unam', 'inam', 'anam', 'bnam', 'dnam', 'fnam', 'gnam']);
+const EDITOR_SUFFIX_FIELDS = new Set(['unsf', 'insf', 'ansf', 'bnsf', 'dnsf', 'fnsf', 'gnsf']);
 const ICON_FIELDS = new Set(['uico', 'iico', 'aart', 'fart', 'gico']);
 const SUMMARY_MODEL_FIELDS = new Set(['umdl', 'amdl', 'ifil', 'bfil', 'dfil']);
 // "Categorization - Campaign"/"Categorization - Special" — these decide which Melee|Campaign and
@@ -115,10 +116,16 @@ const FIELD_LABELS: Record<string, string> = {
     unam: 'Name',
     inam: 'Name',
     anam: 'Name',
+    ansf: 'Editor Suffix',
     bnam: 'Name',
+    bnsf: 'Editor Suffix',
     dnam: 'Name',
+    dnsf: 'Editor Suffix',
     fnam: 'Name',
+    fnsf: 'Editor Suffix',
     gnam: 'Name',
+    gnsf: 'Editor Suffix',
+    insf: 'Editor Suffix',
     utip: 'Tooltip',
     atp1: 'Tooltip',
     itip: 'Tooltip',
@@ -169,6 +176,7 @@ interface PreviewObject {
     baseId: string;
     newId: string | null;
     displayName: string;
+    displaySuffix?: string;
     displaySource?: string;
     nameOverridden: boolean;
     race: string;
@@ -549,6 +557,7 @@ function buildObject(
     ext: string,
 ): PreviewObject {
     const resolvedName = resolveObjectNameOverride(entry, triggerStrings);
+    const displaySuffix = resolveObjectEditorSuffix(entry, triggerStrings);
     const baseName = summaryData ? resolveBaseDisplayName(entry.baseId, summaryData) : undefined;
     const nameOverridden = resolvedName?.value !== undefined && resolvedName.value !== '';
     // The Melee/Campaign x Units/Buildings/Heroes/Special browse grouping (see objectTree.ts on the
@@ -564,6 +573,7 @@ function buildObject(
         baseId: entry.baseId,
         newId: entry.newId,
         displayName: nameOverridden ? String(resolvedName.value) : (baseName || entry.newId || entry.baseId),
+        displaySuffix,
         displaySource: resolvedName?.source,
         nameOverridden,
         race: summaryData ? resolveObjectRace(entry, summaryData) : raceFromRawcode(entry.baseId),
@@ -915,6 +925,18 @@ function resolveObjectNameOverride(
     const nameMod = findStringOverride(entry, NAME_FIELDS);
     if (!nameMod || typeof nameMod.value !== 'string') return undefined;
     return resolveTriggerString(nameMod.value, triggerStrings);
+}
+
+function resolveObjectEditorSuffix(entry: ObjModEntry, triggerStrings: TriggerStringTable): string | undefined {
+    const suffixMod = findStringOverride(entry, EDITOR_SUFFIX_FIELDS);
+    if (!suffixMod || typeof suffixMod.value !== 'string') return undefined;
+    const resolved = resolveTriggerString(suffixMod.value, triggerStrings);
+    const suffix = resolved.value === undefined ? '' : String(resolved.value).trim();
+    return suffix || undefined;
+}
+
+function objectDisplayLabel(name: string, suffix?: string): string {
+    return suffix ? `${name} (${suffix})` : name;
 }
 
 function resolveObjectIconPath(entry: ObjModEntry, summaryData: ObjSummaryData): string | undefined {
@@ -1468,7 +1490,10 @@ function catalogWithDocumentObjects(
         const id = entry.newId || entry.baseId;
         const nameOverride = resolveObjectNameOverride(entry, triggerStrings);
         const baseName = resolveBaseDisplayName(entry.baseId, summaryData);
-        const label = nameOverride?.value ? String(nameOverride.value) : (baseName || id);
+        const label = objectDisplayLabel(
+            nameOverride?.value ? String(nameOverride.value) : (baseName || id),
+            resolveObjectEditorSuffix(entry, triggerStrings),
+        );
         objects.set(id.toLowerCase(), {
             value: id,
             label,
@@ -1520,7 +1545,10 @@ async function catalogWithSiblingObjects(
             if (objects.get(id.toLowerCase())?.objectKey) return;
             const nameOverride = resolveObjectNameOverride(entry, triggerStrings);
             const baseName = resolveBaseDisplayName(entry.baseId, summaryData);
-            const label = nameOverride?.value ? String(nameOverride.value) : (baseName || id);
+            const label = objectDisplayLabel(
+                nameOverride?.value ? String(nameOverride.value) : (baseName || id),
+                resolveObjectEditorSuffix(entry, triggerStrings),
+            );
             objects.set(id.toLowerCase(), {
                 value: id,
                 label,
@@ -2009,7 +2037,7 @@ async function buildObjectForKey(doc: ObjModDocument, key: string): Promise<Prev
 
 function isSummaryField(fieldId: string): boolean {
     const id = fieldId.toLowerCase();
-    return NAME_FIELDS.has(id) || ICON_FIELDS.has(id) || SUMMARY_MODEL_FIELDS.has(id) || CLASSIFICATION_FIELDS.has(id);
+    return NAME_FIELDS.has(id) || EDITOR_SUFFIX_FIELDS.has(id) || ICON_FIELDS.has(id) || SUMMARY_MODEL_FIELDS.has(id) || CLASSIFICATION_FIELDS.has(id);
 }
 
 async function postObjectSummary(webview: vscode.Webview, doc: ObjModDocument, key: string): Promise<void> {

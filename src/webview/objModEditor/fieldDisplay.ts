@@ -387,7 +387,9 @@ export function editorHtml(mod, mi) {
 export function collapsedView(mod, mi) {
   const dv = mod.editValue == null ? (mod.currentValue == null ? '' : String(mod.currentValue)) : String(mod.editValue);
   if (needsColorEditor(mod)) {
-    const body = dv ? renderWc3Colors(tooltipPreviewText(dv, isTooltipTemplateField(mod))) : '<span class="tt-empty">(empty)</span>';
+    const body = dv
+      ? renderWc3Colors(tooltipPreviewText(dv, isTooltipTemplateField(mod)))
+      : (mod.overridden ? '<span class="tt-empty">(empty)</span>' : '');
     return '<div class="tt-collapsed" data-mi="' + mi + '" tabindex="0" role="button" title="Click or press Enter to edit">' +
       '<div class="tt-collapsed-box"><div class="tt-collapsed-body" data-mi="' + mi + '">' + body + '</div></div>' +
       (mod.source ? sourcePill(mod) : '') + '</div>';

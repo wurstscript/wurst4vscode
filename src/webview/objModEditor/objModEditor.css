@@ -446,7 +446,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 .tt-collapsed:hover .tt-collapsed-box,
 .tt-collapsed:focus-visible .tt-collapsed-box { border-color: var(--focus); }
 .tt-collapsed:focus-visible { outline: none; }
-.tt-collapsed-body { min-width: 0; }
+.tt-collapsed-body { min-width: 1em; min-height: 1em; }
 .tt-collapsed-body[contenteditable="true"] { outline: none; cursor: text; }
 .tt-empty { color: var(--muted); font-style: normal; }
 .tt-collapsed-box .tt-empty,

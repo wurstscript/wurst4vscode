@@ -360,8 +360,11 @@ test('missing ability base fields use World Editor typed defaults and optional f
             version: 3, ext: '.w3a', extended: true, origObjs: [],
             customObjs: [{
                 baseId: 'AIl2', newId: 'Z902',
-                mods: [{ fieldId: 'aart', varType: 'string', value: '', endToken: '\0\0\0\0' }],
-            }],
+                mods: [
+                    { fieldId: 'aart', varType: 'string', value: '', endToken: '\0\0\0\0' },
+                    { fieldId: 'atp1', varType: 'string', value: '', endToken: '\0\0\0\0' },
+                ],
+            }, { baseId: 'AIl2', newId: 'Z908', mods: [] }],
         })),
     });
     await selectObject(page, 'Z902');
@@ -373,6 +376,10 @@ test('missing ability base fields use World Editor typed defaults and optional f
     await expect(rowForField(page, 'amho').locator('td').last()).toContainText('False');
     await expect(rowForField(page, 'amat').locator('.tt-empty')).toHaveCount(0);
     await expect(rowForField(page, 'aart').locator('.tt-empty')).toHaveCount(1);
+    await expect(rowForField(page, 'atp1').locator('.tt-empty')).toHaveCount(1);
+
+    await selectObject(page, 'Z908');
+    await expect(rowForField(page, 'atp1').locator('.tt-empty')).toHaveCount(0);
 });
 
 test('whitespace-padded numeric dash base values use the typed default', async ({ openObjMod }) => {

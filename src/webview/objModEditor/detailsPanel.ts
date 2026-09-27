@@ -506,7 +506,7 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
   const original = mod.editValue == null ? '' : String(mod.editValue);
   const stripTemplatePrefix = isTooltipTemplateField(mod);
   const hiddenPrefixLength = stripTemplatePrefix ? original.length - tooltipPreviewText(original).length : 0;
-  // An empty field's collapsed body holds a "(empty)" placeholder (see collapsedView) — clear it before
+  // An explicit empty override may hold a "(empty)" placeholder (see collapsedView) — clear it before
   // editing so typing doesn't start by appending to that literal text. No real content existed to click
   // into, so the captured range (if any) is meaningless here too.
   if (!original) { body.innerHTML = ''; caretOffset = null; }
@@ -731,7 +731,9 @@ export function exitTooltipEdit(commit) {
   const mods = detailCache.get(ui.selectedKey) || [];
   const mod = mods[mi];
   const value = mod && mod.editValue != null ? String(mod.editValue) : '';
-  body.innerHTML = value ? renderWc3Colors(tooltipPreviewText(value, isTooltipTemplateField(mod))) : '<span class="tt-empty">(empty)</span>';
+  body.innerHTML = value
+    ? renderWc3Colors(tooltipPreviewText(value, isTooltipTemplateField(mod)))
+    : (mod && mod.overridden ? '<span class="tt-empty">(empty)</span>' : '');
 }
 
 export function markModified(el, mod) {

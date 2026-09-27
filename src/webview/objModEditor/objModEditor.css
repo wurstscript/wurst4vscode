@@ -57,6 +57,8 @@
   --th-pad: 3px 6px;
   --td-pad: 1px 6px;
   --cat-pad: 3px 6px 2px;
+  --field-level-gap: 6px;
+  --field-level-pad: 0 4px;
   /* Sticky category rows sit directly under the sticky table header (th padding + 1px border). */
   --table-header-h: 23px;
   /* Row height for the field table's collapsed/edit cells, so toggling a cell into edit mode never
@@ -108,6 +110,8 @@ body.density-cozy {
   --th-pad: 5px 8px;
   --td-pad: 3px 8px;
   --cat-pad: 5px 8px 4px;
+  --field-level-gap: 8px;
+  --field-level-pad: 1px 5px;
   --table-header-h: 27px;
   --cell-h: 24px;
   --palette-group-gap: 6px;
@@ -1430,8 +1434,8 @@ td.value { word-break: break-word; white-space: pre-wrap; }
 td.field { color: var(--fg); }
 .field-level {
   display: inline-block;
-  margin-left: 6px;
-  padding: 0 4px;
+  margin-left: var(--field-level-gap);
+  padding: var(--field-level-pad);
   border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
   border-radius: 2px;
   color: var(--muted);

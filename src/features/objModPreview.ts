@@ -95,7 +95,7 @@ function metaVarType(type: string): ObjModVarType {
 
 // Object-editor field IDs (one per object type) that hold the display name / button icon override.
 const NAME_FIELDS = new Set(['unam', 'inam', 'anam', 'bnam', 'dnam', 'fnam', 'gnam']);
-const EDITOR_SUFFIX_FIELDS = new Set(['unsf', 'insf', 'ansf', 'bnsf', 'dnsf', 'fnsf', 'gnsf']);
+const EDITOR_SUFFIX_FIELDS = new Set(['unsf', 'ansf', 'bsuf', 'fnsf', 'gnsf']);
 const ICON_FIELDS = new Set(['uico', 'iico', 'aart', 'fart', 'gico']);
 const SUMMARY_MODEL_FIELDS = new Set(['umdl', 'amdl', 'ifil', 'bfil', 'dfil']);
 // "Categorization - Campaign"/"Categorization - Special" — these decide which Melee|Campaign and
@@ -118,14 +118,12 @@ const FIELD_LABELS: Record<string, string> = {
     anam: 'Name',
     ansf: 'Editor Suffix',
     bnam: 'Name',
-    bnsf: 'Editor Suffix',
+    bsuf: 'Editor Suffix',
     dnam: 'Name',
-    dnsf: 'Editor Suffix',
     fnam: 'Name',
     fnsf: 'Editor Suffix',
     gnam: 'Name',
     gnsf: 'Editor Suffix',
-    insf: 'Editor Suffix',
     utip: 'Tooltip',
     atp1: 'Tooltip',
     itip: 'Tooltip',
@@ -557,7 +555,7 @@ function buildObject(
     ext: string,
 ): PreviewObject {
     const resolvedName = resolveObjectNameOverride(entry, triggerStrings);
-    const displaySuffix = resolveObjectEditorSuffix(entry, triggerStrings);
+    const displaySuffix = resolveObjectEditorSuffix(entry, triggerStrings, summaryData);
     const baseName = summaryData ? resolveBaseDisplayName(entry.baseId, summaryData) : undefined;
     const nameOverridden = resolvedName?.value !== undefined && resolvedName.value !== '';
     // The Melee/Campaign x Units/Buildings/Heroes/Special browse grouping (see objectTree.ts on the
@@ -927,10 +925,26 @@ function resolveObjectNameOverride(
     return resolveTriggerString(nameMod.value, triggerStrings);
 }
 
-function resolveObjectEditorSuffix(entry: ObjModEntry, triggerStrings: TriggerStringTable): string | undefined {
+function resolveObjectEditorSuffix(
+    entry: ObjModEntry,
+    triggerStrings: TriggerStringTable,
+    summaryData?: ObjSummaryData,
+): string | undefined {
     const suffixMod = findStringOverride(entry, EDITOR_SUFFIX_FIELDS);
-    if (!suffixMod || typeof suffixMod.value !== 'string') return undefined;
-    const resolved = resolveTriggerString(suffixMod.value, triggerStrings);
+    if (suffixMod) {
+        if (typeof suffixMod.value !== 'string') return undefined;
+        const resolved = resolveTriggerString(suffixMod.value, triggerStrings);
+        const suffix = resolved.value === undefined ? '' : String(resolved.value).trim();
+        // An explicit empty value clears the inherited suffix, so do not fall back to the base.
+        return suffix || undefined;
+    }
+    if (!summaryData) return undefined;
+    const baseRecord = summaryData.baseObjects?.get(entry.baseId.toLowerCase());
+    const baseSuffix = (baseRecord ? firstDefinedRecord(baseRecord, ['EditorSuffix']) : undefined) ||
+        getAnyProfileValue(entry.baseId, ['EditorSuffix', 'editorsuffix'], summaryData);
+    if (!baseSuffix) return undefined;
+    const worldResolved = resolveWorldEditString(baseSuffix, summaryData.worldStrings);
+    const resolved = resolveTriggerString(worldResolved, triggerStrings);
     const suffix = resolved.value === undefined ? '' : String(resolved.value).trim();
     return suffix || undefined;
 }
@@ -1482,7 +1496,7 @@ function catalogWithDocumentObjects(
     baseCatalog: ObjValueCatalog,
     parsed: ObjModFile,
     triggerStrings: TriggerStringTable,
-    summaryData: Pick<ObjSummaryData, 'worldStrings' | 'profile'>,
+    summaryData: ObjSummaryData,
 ): ObjValueCatalog {
     const objects = new Map(baseCatalog.objects);
     const addEntry = (entry: ObjModEntry, group: 'Original' | 'Custom', index: number) => {
@@ -1492,7 +1506,7 @@ function catalogWithDocumentObjects(
         const baseName = resolveBaseDisplayName(entry.baseId, summaryData);
         const label = objectDisplayLabel(
             nameOverride?.value ? String(nameOverride.value) : (baseName || id),
-            resolveObjectEditorSuffix(entry, triggerStrings),
+            resolveObjectEditorSuffix(entry, triggerStrings, summaryData),
         );
         objects.set(id.toLowerCase(), {
             value: id,
@@ -1547,7 +1561,7 @@ async function catalogWithSiblingObjects(
             const baseName = resolveBaseDisplayName(entry.baseId, summaryData);
             const label = objectDisplayLabel(
                 nameOverride?.value ? String(nameOverride.value) : (baseName || id),
-                resolveObjectEditorSuffix(entry, triggerStrings),
+                resolveObjectEditorSuffix(entry, triggerStrings, summaryData),
             );
             objects.set(id.toLowerCase(), {
                 value: id,

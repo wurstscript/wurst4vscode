@@ -268,42 +268,76 @@ async function extractAllFiles(
     destDir: string,
     successMessage: string,
     onComplete?: () => void,
+    discardIncompleteDestination = false,
 ): Promise<boolean> {
+    let destinationCreated = false;
+    let extractionComplete = false;
     try {
-        fs.mkdirSync(destDir, { recursive: true });
-        let failed = 0;
-        for (const entry of entries) {
-            try {
-                const data = await reader.readFileAsync(entry.name);
-                const outPath = getArchiveOutputPath(destDir, entry.name);
-                if (!outPath) {
-                    failed++;
-                    log(`Skipping unsafe archive path: ${entry.name}`);
-                    continue;
-                }
-                fs.mkdirSync(path.dirname(outPath), { recursive: true });
-                fs.writeFileSync(outPath, data);
-            } catch (error) {
-                log(`ERROR extracting ${entry.name}: ${formatDiagnosticError(error)}`);
-                failed++;
-            }
+        createExtractionDirectory(destDir, discardIncompleteDestination);
+        if (discardIncompleteDestination) destinationCreated = true;
+        const failed = await extractArchiveEntries(reader, entries, destDir);
+        if (failed > 0 && discardIncompleteDestination) {
+            fs.rmSync(destDir, { recursive: true, force: true });
+            onComplete?.();
+            const error = new Error(`${failed} file(s) could not be extracted. The partial map folder was removed so migration can be retried.`);
+            log(`ERROR during map-folder migration: ${error.message}`);
+            void showErrorWithLogs(error.message, error, 'MPQ');
+            return false;
         }
-        onComplete?.(); // extraction finished — clear webview busy state before the (awaited) toast
-        const msg = failed > 0
-            ? `${successMessage}\n\n${failed} file(s) could not be extracted.`
-            : successMessage;
-        const btn = await vscode.window.showInformationMessage(msg, 'Open Folder', ...(failed > 0 ? ['View Logs'] : []));
-        if (btn === 'Open Folder') {
-            void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(destDir));
-        } else if (btn === 'View Logs') {
-            getOut().show(true);
-        }
-        return true;
+        extractionComplete = failed === 0;
+        onComplete?.();
+        await showExtractionResult(destDir, successMessage, failed);
+        return discardIncompleteDestination ? failed === 0 : true;
     } catch (e) {
+        if (destinationCreated && !extractionComplete) removePartialDestination(destDir);
         onComplete?.();
         log(`ERROR during extraction: ${formatDiagnosticError(e)}`);
         void showErrorWithLogs(`Extraction failed: ${e instanceof Error ? e.message : String(e)}`, e, 'MPQ');
         return false;
+    }
+}
+
+function createExtractionDirectory(destDir: string, exclusive: boolean): void {
+    if (exclusive) fs.mkdirSync(destDir);
+    else fs.mkdirSync(destDir, { recursive: true });
+}
+
+async function extractArchiveEntries(reader: MpqReader, entries: MpqFileEntry[], destDir: string): Promise<number> {
+    let failed = 0;
+    for (const entry of entries) {
+        try {
+            const data = await reader.readFileAsync(entry.name);
+            const outPath = getArchiveOutputPath(destDir, entry.name);
+            if (!outPath) {
+                failed++;
+                log(`Skipping unsafe archive path: ${entry.name}`);
+                continue;
+            }
+            fs.mkdirSync(path.dirname(outPath), { recursive: true });
+            fs.writeFileSync(outPath, data);
+        } catch (error) {
+            log(`ERROR extracting ${entry.name}: ${formatDiagnosticError(error)}`);
+            failed++;
+        }
+    }
+    return failed;
+}
+
+async function showExtractionResult(destDir: string, successMessage: string, failed: number): Promise<void> {
+    const msg = failed > 0 ? `${successMessage}\n\n${failed} file(s) could not be extracted.` : successMessage;
+    const btn = await vscode.window.showInformationMessage(msg, 'Open Folder', ...(failed > 0 ? ['View Logs'] : []));
+    if (btn === 'Open Folder') {
+        void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(destDir));
+    } else if (btn === 'View Logs') {
+        getOut().show(true);
+    }
+}
+
+function removePartialDestination(destDir: string): void {
+    try {
+        fs.rmSync(destDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+        log(`ERROR cleaning partial map folder ${destDir}: ${formatDiagnosticError(cleanupError)}`);
     }
 }
 
@@ -321,10 +355,12 @@ async function exportArchiveToMapFolder(
     archiveDir: string,
     archiveName: string,
     onComplete?: () => void,
+    discardIncompleteDestination = false,
 ): Promise<boolean> {
     const destDir = mapFolderDestination(archiveDir, archiveName);
     return extractAllFiles(reader, entries, destDir,
-        `Map folder exported to ${destDir}\n\nThis folder can be used directly as a map in WC3 folder mode.`, onComplete);
+        `Map folder exported to ${destDir}\n\nThis folder can be used directly as a map in WC3 folder mode.`, onComplete,
+        discardIncompleteDestination);
 }
 
 async function offerMapFolderMigration(
@@ -362,7 +398,7 @@ async function offerMapFolderMigration(
         return;
     }
 
-    const migrated = await exportArchiveToMapFolder(reader, entries, archiveDir, archiveName);
+    const migrated = await exportArchiveToMapFolder(reader, entries, archiveDir, archiveName, undefined, true);
     if (migrated) await globalState.update(stateKey, true);
 }
 

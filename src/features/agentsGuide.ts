@@ -52,7 +52,7 @@ async function offerAgentsGuide(context: vscode.ExtensionContext): Promise<void>
             return;
         }
         if (choice === 'never') {
-            await context.workspaceState.update(offer.neverStateKey, true);
+            await context.globalState.update(offer.neverStateKey, true);
             return;
         }
         return;
@@ -104,7 +104,7 @@ async function findFolderToOffer(context: vscode.ExtensionContext): Promise<Agen
 
             const stateKey = getUpdateStateKey(folder);
             const neverStateKey = getNeverUpdateStateKey(folder);
-            if (context.workspaceState.get<boolean>(neverStateKey, false)) {
+            if (context.globalState.get<boolean>(neverStateKey, false)) {
                 continue;
             }
             if (context.workspaceState.get<boolean>(stateKey, false)) {

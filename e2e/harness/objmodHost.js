@@ -21,7 +21,7 @@ const { mountCustomEditor } = require('./customEditorHost');
 // Reaching into module-private values rather than adding test-only exports to the production file.
 // A rename there fails loudly here (ReferenceError at load), which is the intended signal.
 const OBJMOD_INTERNALS = `
-export const __e2e = { ObjModEditorProvider, ObjModDocument, loadEditableObjMod, buildHtml, applyFieldEdit, modDisplayValue, serializeValidated };
+export const __e2e = { ObjModEditorProvider, ObjModDocument, loadEditableObjMod, buildHtml, applyFieldEdit, modDisplayValue, serializeValidated, makeMetaField, defaultBaseFieldValue };
 `;
 
 function createMemento(seed = {}) {

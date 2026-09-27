@@ -382,6 +382,17 @@ test('missing ability base fields use World Editor typed defaults and optional f
     await expect(rowForField(page, 'atp1').locator('.tt-empty')).toHaveCount(0);
 });
 
+test('CASC metadata bounds are retained for typed base defaults', async ({ openObjMod }) => {
+    const { host } = await openObjMod();
+    const field = host.internals.makeMetaField({
+        ID: 'doodadScale', field: 'someField', slk: 'Doodads', type: 'int', minVal: '1', maxVal: '8',
+    }, new Map());
+
+    expect(field.minVal).toBe('1');
+    expect(field.maxVal).toBe('8');
+    expect(host.internals.defaultBaseFieldValue(field)).toBeUndefined();
+});
+
 test('whitespace-padded numeric dash base values use the typed default', async ({ openObjMod }) => {
     const { page } = await openObjMod({
         fileName: 'war3map.w3u',

@@ -1769,6 +1769,8 @@ function makeMetaField(row: Record<string, string>, worldStrings: Map<string, st
         useItem: row.useItem === '1',
         useBuilding: row.useBuilding === '1',
         useCreep: row.useCreep === '1',
+        minVal: row.minVal || undefined,
+        maxVal: row.maxVal || undefined,
     };
 }
 

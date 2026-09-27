@@ -393,6 +393,16 @@ test('CASC metadata bounds are retained for typed base defaults', async ({ openO
     expect(host.internals.defaultBaseFieldValue(field)).toBeUndefined();
 });
 
+test('unmapped upgrade effect fields do not receive generic base defaults', async ({ openObjMod }) => {
+    const { host } = await openObjMod();
+    expect(host.internals.defaultBaseFieldValue({
+        id: 'atdb', sourceField: '', slkName: '', type: 'int', canBeEmpty: false,
+    })).toBeUndefined();
+    expect(host.internals.defaultBaseFieldValue({
+        id: 'atdm', sourceField: '', slkName: '', type: 'real', canBeEmpty: false,
+    })).toBeUndefined();
+});
+
 test('whitespace-padded numeric dash base values use the typed default', async ({ openObjMod }) => {
     const { page } = await openObjMod({
         fileName: 'war3map.w3u',

@@ -1186,6 +1186,9 @@ function isMissingBaseValue(value: string | undefined, field: MetaField): boolea
 
 function defaultBaseFieldValue(field: MetaField): string | undefined {
     if (field.canBeEmpty) return undefined;
+    // Compiler effect schemas without a backing SLK field are context-dependent and cannot supply
+    // one generic base value (e.g. atdb only applies to an upgrade's active attack-dice effect).
+    if (!field.sourceField || !field.slkName) return undefined;
     switch (field.type.toLowerCase()) {
         case 'int': return hasPositiveMinimum(field) ? undefined : '0';
         case 'real':

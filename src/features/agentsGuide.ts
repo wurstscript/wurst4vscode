@@ -5,6 +5,7 @@ import * as https from 'https';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { showErrorWithLogs } from './diagnostics';
+import { showThreeChoiceOffer } from './notificationOffer';
 
 const PROMPT_STATE_PREFIX = 'wurst.agentsGuidePromptDismissed:';
 const UPDATE_PROMPT_STATE_PREFIX = 'wurst.agentsGuideUpdatePromptDismissed:';
@@ -14,13 +15,13 @@ const AGENTS_TEMPLATE_MARKER_PREFIX = '<!-- WURST_AGENTS_TEMPLATE_VERSION:';
 const AGENTS_TEMPLATE_MARKER = `<!-- WURST_AGENTS_TEMPLATE_VERSION: ${AGENTS_TEMPLATE_VERSION} -->`;
 const AGENTS_TEMPLATE_SOURCE_HINT = 'WurstScript Warcraft III map project notes';
 const CREATE_ACTION = 'Create AGENTS.md';
+const NEVER_CREATE_ACTION = "Don't Ask Again";
 const REVIEW_UPDATE_ACTION = 'Review Update';
-const OPEN_CURRENT_ACTION = 'Open AGENTS.md';
-const NEVER_ACTION = "Don't Ask Again";
+const NEVER_UPDATE_STATE_PREFIX = 'wurst.agentsGuideUpdateNever:';
 
 type AgentsGuideOffer =
     | { kind: 'create'; folder: vscode.WorkspaceFolder; stateKey: string }
-    | { kind: 'update'; folder: vscode.WorkspaceFolder; stateKey: string; warning: string };
+    | { kind: 'update'; folder: vscode.WorkspaceFolder; stateKey: string; neverStateKey: string; warning: string };
 
 export function registerAgentsGuideOffer(context: vscode.ExtensionContext): vscode.Disposable {
     const offer = () => {
@@ -40,31 +41,27 @@ async function offerAgentsGuide(context: vscode.ExtensionContext): Promise<void>
 
     const { folder, stateKey } = offer;
     if (offer.kind === 'update') {
-        const choice = await vscode.window.showInformationMessage(
+        const choice = await showThreeChoiceOffer(
             `${offer.warning} Review the current WurstSetup template?`,
             REVIEW_UPDATE_ACTION,
-            OPEN_CURRENT_ACTION,
-            NEVER_ACTION
         );
 
-        if (choice === REVIEW_UPDATE_ACTION) {
+        if (choice === 'primary') {
             await context.workspaceState.update(stateKey, true);
             await openAgentsGuideUpdate(folder);
             return;
         }
-        if (choice === OPEN_CURRENT_ACTION) {
-            await context.workspaceState.update(stateKey, true);
-            await vscode.window.showTextDocument(vscode.Uri.file(path.join(folder.uri.fsPath, 'AGENTS.md')));
+        if (choice === 'never') {
+            await context.workspaceState.update(offer.neverStateKey, true);
             return;
         }
-        await context.workspaceState.update(stateKey, true);
         return;
     }
 
     const choice = await vscode.window.showInformationMessage(
         `Add an AGENTS.md guide for AI coding agents in "${folder.name}"?`,
         CREATE_ACTION,
-        NEVER_ACTION
+        NEVER_CREATE_ACTION
     );
 
     if (choice === CREATE_ACTION) {
@@ -106,12 +103,16 @@ async function findFolderToOffer(context: vscode.ExtensionContext): Promise<Agen
             }
 
             const stateKey = getUpdateStateKey(folder);
+            const neverStateKey = getNeverUpdateStateKey(folder);
+            if (context.workspaceState.get<boolean>(neverStateKey, false)) {
+                continue;
+            }
             if (context.workspaceState.get<boolean>(stateKey, false)) {
                 continue;
             }
             const warning = await agentsTemplateWarning(agentsPath);
             if (warning) {
-                return { kind: 'update', folder, stateKey, warning };
+                return { kind: 'update', folder, stateKey, neverStateKey, warning };
             }
         }
     }
@@ -146,6 +147,10 @@ function getStateKey(folder: vscode.WorkspaceFolder): string {
 
 function getUpdateStateKey(folder: vscode.WorkspaceFolder): string {
     return `${UPDATE_PROMPT_STATE_PREFIX}${AGENTS_TEMPLATE_VERSION}:${folder.uri.toString()}`;
+}
+
+function getNeverUpdateStateKey(folder: vscode.WorkspaceFolder): string {
+    return `${NEVER_UPDATE_STATE_PREFIX}${folder.uri.toString()}`;
 }
 
 async function agentsTemplateWarning(agentsPath: string): Promise<string | undefined> {

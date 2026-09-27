@@ -10,6 +10,7 @@ import { makeNonce, escapeHtml } from './webviewUtils';
 import { buildPage, sep } from './webviewShared';
 import MPQ_CSS from '../webview/mpqViewer.css';
 import { offerIssueReport } from './issueReporting';
+import { showThreeChoiceOffer } from './notificationOffer';
 
 const MPQ_VIEW_TYPE = 'wurst.mpqViewer';
 
@@ -150,7 +151,10 @@ function extractionRootForOpen(currentRoot: string | undefined, previousPath: st
 // ---------------------------------------------------------------------------
 
 class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocument> {
-    constructor(private readonly extensionUri: vscode.Uri) {}
+    constructor(
+        private readonly extensionUri: vscode.Uri,
+        private readonly globalState: vscode.Memento,
+    ) {}
 
     async openCustomDocument(
         uri: vscode.Uri,
@@ -204,12 +208,14 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
         };
 
         const loadArchive = async () => {
+            let archiveOpened = false;
             try {
                 const bytes = await vscode.workspace.fs.readFile(document.uri);
                 document.archiveSize = bytes.byteLength;
                 const buf = Buffer.from(bytes);
                 document.reader = MpqReader.open(buf);
                 document.entries = await document.reader.getFilesWithInfoAsync();
+                archiveOpened = true;
                 log(`MPQ opened: ${document.uri.fsPath} (${document.entries.length} files, ${(document.archiveSize / 1048576).toFixed(1)} MB)`);
             } catch (e) {
                 document.parseError = e instanceof Error ? e.message : String(e);
@@ -223,6 +229,10 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
             } finally {
                 document.loaded = true;
                 postArchiveState();
+            }
+            if (archiveOpened) {
+                void offerMapFolderMigration(this.globalState, document.uri, document.reader!, document.entries)
+                    .catch((error) => log(`Could not offer map-folder migration: ${formatDiagnosticError(error)}`));
             }
         };
 
@@ -286,13 +296,7 @@ class MpqViewerProvider implements vscode.CustomReadonlyEditorProvider<MpqDocume
             if (type === 'exportToMapFolder') {
                 const done = () => void webviewPanel.webview.postMessage({ type: 'extractDone' });
                 if (!document.reader) { done(); return; }
-                // Map folder mode: folder named exactly like the archive (e.g. MyMap.w3x/)
-                // Since we can't have a file and folder with the same name, append -folder before ext
-                const ext = path.extname(archiveName);
-                const base = path.basename(archiveName, ext);
-                const destDir = path.join(archiveDir, base + '-folder' + ext);
-                await extractAllFiles(document.reader, document.entries, destDir,
-                    `Map folder exported to ${destDir}\n\nThis folder can be used directly as a map in WC3 folder mode.`, done);
+                await exportArchiveToMapFolder(document.reader, document.entries, archiveDir, archiveName, done);
             }
         });
 
@@ -307,41 +311,138 @@ async function extractAllFiles(
     destDir: string,
     successMessage: string,
     onComplete?: () => void,
-): Promise<void> {
+    discardIncompleteDestination = false,
+): Promise<boolean> {
+    let destinationCreated = false;
+    let extractionComplete = false;
     try {
-        fs.mkdirSync(destDir, { recursive: true });
-        let failed = 0;
-        for (const entry of entries) {
-            try {
-                const data = await reader.readFileAsync(entry.name);
-                const outPath = getArchiveOutputPath(destDir, entry.name);
-                if (!outPath) {
-                    failed++;
-                    log(`Skipping unsafe archive path: ${entry.name}`);
-                    continue;
-                }
-                fs.mkdirSync(path.dirname(outPath), { recursive: true });
-                fs.writeFileSync(outPath, data);
-            } catch (error) {
-                log(`ERROR extracting ${entry.name}: ${formatDiagnosticError(error)}`);
-                failed++;
-            }
+        createExtractionDirectory(destDir, discardIncompleteDestination);
+        if (discardIncompleteDestination) destinationCreated = true;
+        const failed = await extractArchiveEntries(reader, entries, destDir);
+        if (failed > 0 && discardIncompleteDestination) {
+            fs.rmSync(destDir, { recursive: true, force: true });
+            onComplete?.();
+            const error = new Error(`${failed} file(s) could not be extracted. The partial map folder was removed so migration can be retried.`);
+            log(`ERROR during map-folder migration: ${error.message}`);
+            void showErrorWithLogs(error.message, error, 'MPQ');
+            return false;
         }
-        onComplete?.(); // extraction finished — clear webview busy state before the (awaited) toast
-        const msg = failed > 0
-            ? `${successMessage}\n\n${failed} file(s) could not be extracted.`
-            : successMessage;
-        const btn = await vscode.window.showInformationMessage(msg, 'Open Folder', ...(failed > 0 ? ['View Logs'] : []));
-        if (btn === 'Open Folder') {
-            void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(destDir));
-        } else if (btn === 'View Logs') {
-            getOut().show(true);
-        }
+        extractionComplete = failed === 0;
+        onComplete?.();
+        await showExtractionResult(destDir, successMessage, failed);
+        return discardIncompleteDestination ? failed === 0 : true;
     } catch (e) {
+        if (destinationCreated && !extractionComplete) removePartialDestination(destDir);
         onComplete?.();
         log(`ERROR during extraction: ${formatDiagnosticError(e)}`);
         void showErrorWithLogs(`Extraction failed: ${e instanceof Error ? e.message : String(e)}`, e, 'MPQ');
+        return false;
     }
+}
+
+function createExtractionDirectory(destDir: string, exclusive: boolean): void {
+    if (exclusive) fs.mkdirSync(destDir);
+    else fs.mkdirSync(destDir, { recursive: true });
+}
+
+async function extractArchiveEntries(reader: MpqReader, entries: MpqFileEntry[], destDir: string): Promise<number> {
+    let failed = 0;
+    for (const entry of entries) {
+        try {
+            const data = await reader.readFileAsync(entry.name);
+            const outPath = getArchiveOutputPath(destDir, entry.name);
+            if (!outPath) {
+                failed++;
+                log(`Skipping unsafe archive path: ${entry.name}`);
+                continue;
+            }
+            fs.mkdirSync(path.dirname(outPath), { recursive: true });
+            fs.writeFileSync(outPath, data);
+        } catch (error) {
+            log(`ERROR extracting ${entry.name}: ${formatDiagnosticError(error)}`);
+            failed++;
+        }
+    }
+    return failed;
+}
+
+async function showExtractionResult(destDir: string, successMessage: string, failed: number): Promise<void> {
+    const msg = failed > 0 ? `${successMessage}\n\n${failed} file(s) could not be extracted.` : successMessage;
+    const btn = await vscode.window.showInformationMessage(msg, 'Open Folder', ...(failed > 0 ? ['View Logs'] : []));
+    if (btn === 'Open Folder') {
+        void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(destDir));
+    } else if (btn === 'View Logs') {
+        getOut().show(true);
+    }
+}
+
+function removePartialDestination(destDir: string): void {
+    try {
+        fs.rmSync(destDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+        log(`ERROR cleaning partial map folder ${destDir}: ${formatDiagnosticError(cleanupError)}`);
+    }
+}
+
+function mapFolderDestination(archiveDir: string, archiveName: string): string {
+    // Map folder mode: folder named exactly like the archive (e.g. MyMap.w3x/). Since a file and
+    // folder cannot share a path, append -folder before the extension.
+    const ext = path.extname(archiveName);
+    const base = path.basename(archiveName, ext);
+    return path.join(archiveDir, base + '-folder' + ext);
+}
+
+async function exportArchiveToMapFolder(
+    reader: MpqReader,
+    entries: MpqFileEntry[],
+    archiveDir: string,
+    archiveName: string,
+    onComplete?: () => void,
+    discardIncompleteDestination = false,
+): Promise<boolean> {
+    const destDir = mapFolderDestination(archiveDir, archiveName);
+    return extractAllFiles(reader, entries, destDir,
+        `Map folder exported to ${destDir}\n\nThis folder can be used directly as a map in WC3 folder mode.`, onComplete,
+        discardIncompleteDestination);
+}
+
+async function offerMapFolderMigration(
+    globalState: vscode.Memento,
+    archiveUri: vscode.Uri,
+    reader: MpqReader,
+    entries: MpqFileEntry[],
+): Promise<void> {
+    const archivePath = archiveUri.fsPath || archiveUri.path;
+    const extension = path.extname(archivePath).toLowerCase();
+    if (!['.w3x', '.w3m'].includes(extension)) return;
+    const isMap = entries.some((entry) => entry.name.replace(/\\/g, '/').toLowerCase() === 'war3map.w3i');
+    if (!isMap) return;
+
+    const stateKey = `wurst.mapFolderMigration.dismissed:${archiveUri.toString()}`;
+    if (globalState.get<boolean>(stateKey, false)) return;
+
+    const archiveDir = path.dirname(archivePath);
+    const archiveName = path.basename(archivePath);
+    const destination = mapFolderDestination(archiveDir, archiveName);
+    if (fs.existsSync(destination)) return;
+
+    const choice = await showThreeChoiceOffer(
+        'This map is a binary archive. Extracting it to a map folder puts files like Wurst source under normal version control and enables the extension\'s map and object-data editors.',
+        'Migrate to map folder',
+    );
+    if (choice === 'never') {
+        await globalState.update(stateKey, true);
+        return;
+    }
+    if (choice !== 'primary') return;
+
+    if (fs.existsSync(destination)) {
+        await vscode.window.showInformationMessage(`Map folder already exists: ${destination}`);
+        return;
+    }
+
+    const migrated = await exportArchiveToMapFolder(reader, entries, archiveDir, archiveName, undefined, true);
+    if (migrated) await globalState.update(stateKey, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -410,7 +511,7 @@ function buildHtml(webview: vscode.Webview, archiveName: string, scriptUri: vsco
 // ---------------------------------------------------------------------------
 
 export function registerMpqViewer(context: vscode.ExtensionContext): vscode.Disposable {
-    const provider = new MpqViewerProvider(context.extensionUri);
+    const provider = new MpqViewerProvider(context.extensionUri, context.globalState);
     return vscode.window.registerCustomEditorProvider(MPQ_VIEW_TYPE, provider, {
         webviewOptions: { retainContextWhenHidden: true },
         supportsMultipleEditorsPerDocument: false,

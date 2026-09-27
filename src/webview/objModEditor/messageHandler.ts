@@ -203,10 +203,10 @@ export function setupMessageHandler() {
       failedDetails.set(msg.key, msg.reason || '');
       if (msg.key === ui.selectedKey) renderDetails();
     } else if (msg.type === 'invalidateDetails') {
-      detailCache.delete(msg.key);
-      pendingDetails.delete(msg.key);
-      failedDetails.delete(msg.key);
-      if (msg.key === ui.selectedKey) renderDetails();
+      // Field cardinality may have changed (for example an ability's `alev`). Clear all cached rows
+      // and advance the generation so an in-flight response with the old row count cannot win.
+      invalidateDetailCache();
+      renderDetails();
     } else if (msg.type === 'fieldUpdated') {
       const mods = detailCache.get(msg.key);
       if (!mods) return;

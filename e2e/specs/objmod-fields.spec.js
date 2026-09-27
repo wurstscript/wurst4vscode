@@ -307,6 +307,36 @@ test('ability editors exclude buff-only bases', async ({ openObjMod }) => {
     await expect(page.locator('#add-object-base option[value="Bmlc"]')).toHaveCount(0);
 });
 
+test('changing ability Levels rebuilds the table with the added levels', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod({
+        fileName: 'war3map.w3a',
+        setupFixture: (dir) => fs.writeFileSync(path.join(dir, 'war3map.w3a'), serializeObjMod({
+            version: 3,
+            ext: '.w3a',
+            extended: true,
+            origObjs: [],
+            customObjs: [{ baseId: 'Adef', newId: 'Z903', mods: [] }],
+        })),
+    });
+    await selectObject(page, 'Z903');
+    await page.check('#technical-toggle');
+
+    const cooldownRows = rowForField(page, 'acdn');
+    await expect(cooldownRows).toHaveCount(1);
+    const levelsRow = rowForField(page, 'alev');
+    await levelsRow.locator('.cell-edit').click();
+    const input = levelsRow.locator('input.num-input');
+    await input.fill('3');
+    await input.blur();
+
+    await expect(cooldownRows).toHaveCount(3);
+    await expect.poll(() => host.isDirty).toBe(true);
+    host.undo();
+    await expect(cooldownRows).toHaveCount(1);
+    host.redo();
+    await expect(cooldownRows).toHaveCount(3);
+});
+
 test('buff editors exclude ability-only bases', async ({ openObjMod }) => {
     const { page } = await openObjMod({
         fileName: 'war3map.w3h',

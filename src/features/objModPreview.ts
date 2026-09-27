@@ -633,7 +633,9 @@ function makeObjectContext(entry: ObjModEntry, gameData: ObjEditorData, ext: str
         const code = value('code') || baseId;
         const isHero = value('hero') === '1';
         const isItem = value('item') === '1';
-        const levelCount = Math.max(1, Math.min(20, Number(value('levels')) || 1));
+        const levelOverride = entry.mods.find((mod) => mod.fieldId.toLowerCase() === 'alev');
+        const rawLevelCount = Number(levelOverride ? levelOverride.value : value('levels'));
+        const levelCount = Math.max(1, Math.min(100, Number.isFinite(rawLevelCount) ? Math.trunc(rawLevelCount) : 1));
         return {
             applies: (f) => abilityFieldApplies(f, baseId, code, isHero, isItem),
             levelsFor: (f) => (f.repeat > 0 ? Array.from({ length: levelCount }, (_, i) => i + 1) : [undefined]),
@@ -2813,11 +2815,17 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             const fieldId = msg.fieldId;
             const level = msg.level ?? null;
             const dataPt = msg.dataPt ?? null;
+            const refreshAbilityLevels = () => {
+                if (doc.displayFile.ext === '.w3a' && fieldId.toLowerCase() === 'alev') {
+                    void webview.postMessage({ type: 'invalidateDetails', key });
+                }
+            };
             // Targeted in-place update on undo/redo — avoids rebuilding the whole (700+ row) table.
             const post = () => {
                 const display = modDisplayValue(edit.mod, doc.wtsTable);
                 const overridden = !!locateMod(findEntryByKey(doc.displayFile, key), fieldId, level ?? undefined, dataPt ?? undefined);
                 void webview.postMessage({ type: 'fieldUpdated', key, fieldId, level, dataPt, editValue: display, currentValue: display, overridden });
+                refreshAbilityLevels();
                 if (isSummaryField(fieldId)) void postObjectSummary(webview, doc, key);
             };
             this._onDidChange.fire({
@@ -2828,6 +2836,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             });
             doc.currentRevision = afterRevision;
             this.postDirtyState(doc);
+            refreshAbilityLevels();
             if (isSummaryField(fieldId)) void postObjectSummary(webview, doc, key);
         }
     }

@@ -318,13 +318,13 @@ export function decoratedValueHtml(mod, mi, raw) {
   const isAsset = mod.displayKind === 'asset' && !!mod.assetPath;
   const hasFriendlyLabel = !!mod.displayValue && String(mod.displayValue) !== String(raw);
   if (!isAsset && !hasFriendlyLabel) {
-    return raw === '' ? '<span class="tt-empty">(empty)</span>' : esc(raw);
+    return raw === '' ? (mod.overridden ? '<span class="tt-empty">(empty)</span>' : '') : esc(raw);
   }
   const mainText = hasFriendlyLabel ? mod.displayValue : raw;
   return '<span class="value-display ' + esc(mod.displayKind || '') + '">' +
     assetMiniHtml(mod, mi) +
     (mainText === ''
-      ? '<span class="tt-empty">(empty)</span>'
+      ? (mod.overridden ? '<span class="tt-empty">(empty)</span>' : '')
       : '<span class="value-main" title="' + esc(mainText) + '">' + esc(mainText) + '</span>') +
     (hasFriendlyLabel ? '<span class="value-raw" title="' + esc(mod.displayDetail || raw) + '">' + esc(mod.displayDetail || raw) + '</span>' : '') +
   '</span>';
@@ -387,7 +387,9 @@ export function editorHtml(mod, mi) {
 export function collapsedView(mod, mi) {
   const dv = mod.editValue == null ? (mod.currentValue == null ? '' : String(mod.currentValue)) : String(mod.editValue);
   if (needsColorEditor(mod)) {
-    const body = dv ? renderWc3Colors(tooltipPreviewText(dv, isTooltipTemplateField(mod))) : '<span class="tt-empty">(empty)</span>';
+    const body = dv
+      ? renderWc3Colors(tooltipPreviewText(dv, isTooltipTemplateField(mod)))
+      : (mod.overridden ? '<span class="tt-empty">(empty)</span>' : '');
     return '<div class="tt-collapsed" data-mi="' + mi + '" tabindex="0" role="button" title="Click or press Enter to edit">' +
       '<div class="tt-collapsed-box"><div class="tt-collapsed-body" data-mi="' + mi + '">' + body + '</div></div>' +
       (mod.source ? sourcePill(mod) : '') + '</div>';

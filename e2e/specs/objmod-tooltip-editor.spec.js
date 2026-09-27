@@ -27,7 +27,7 @@ async function selectObject(page, rawcode) {
 async function openTooltipEditor(page, rawcode = 'h004') {
     await selectObject(page, rawcode);
     const collapsed = page.locator('#details .tt-collapsed[data-mi]')
-        .filter({ hasNot: page.locator('.tt-empty') })
+        .filter({ has: page.locator('.tt-collapsed-body:not(:empty)') })
         .first();
     await expect(collapsed).toBeVisible();
     await collapsed.click();

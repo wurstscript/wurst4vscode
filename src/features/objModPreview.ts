@@ -1989,10 +1989,16 @@ ${objModEditorUri ? `<script src="${objModEditorUri}"></script>` : ''}
     });
 }
 
-async function loadObjectDetails(key: string, identity: string | undefined, webview: vscode.Webview, doc: ObjModDocument): Promise<void> {
+async function loadObjectDetails(
+    key: string,
+    identity: string | undefined,
+    generation: number,
+    webview: vscode.Webview,
+    doc: ObjModDocument,
+): Promise<void> {
     const entry = findEntryByKey(doc.displayFile, key);
     if (!entry) {
-        await webview.postMessage({ type: 'objectDetailsFailed', key, identity, reason: 'Object not found' });
+        await webview.postMessage({ type: 'objectDetailsFailed', key, identity, generation, reason: 'Object not found' });
         return;
     }
     try {
@@ -2016,12 +2022,12 @@ async function loadObjectDetails(key: string, identity: string | undefined, webv
                 annotateEditable(row, mod, wts);
                 return row;
             });
-        await webview.postMessage({ type: 'objectDetailsLoaded', key, identity, mods });
+        await webview.postMessage({ type: 'objectDetailsLoaded', key, identity, generation, mods });
     } catch (err) {
         // Game-data/CASC lookups can throw (missing install, bad metadata); without this the webview
         // was left stuck on its "Loading fields..." spinner forever with no way out but reopening.
         console.error('[wurst-objmod] failed to build field rows for', key, err);
-        await webview.postMessage({ type: 'objectDetailsFailed', key, identity, reason: err instanceof Error ? err.message : String(err) });
+        await webview.postMessage({ type: 'objectDetailsFailed', key, identity, generation, reason: err instanceof Error ? err.message : String(err) });
     }
 }
 
@@ -2588,10 +2594,11 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             rawcode?: string; label?: string;
             baseId?: string;
             identity?: string;
+            generation?: number;
             color?: string;
         };
         if (msg.type === 'loadObjectDetails' && msg.key) {
-            await loadObjectDetails(msg.key, msg.identity, webview, doc);
+            await loadObjectDetails(msg.key, msg.identity, msg.generation ?? 0, webview, doc);
             return;
         }
         if (msg.type === 'openObjectReference' && msg.rawcode) {

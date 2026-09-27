@@ -1,7 +1,7 @@
 import { fuzzyMatch } from '../../features/preview/fuzzy';
 import { esc, renderWc3Colors } from '../webviewUtils';
 import { batch, effect, untracked } from '../signals';
-import { details, detailCache, pendingDetails, failedDetails, ui, vscodeApi, iconLoader, initial, objects } from './state';
+import { details, detailCache, pendingDetails, failedDetails, detailGeneration, ui, vscodeApi, iconLoader, initial, objects } from './state';
 import { categoryLabel, categoryKey, objectIconHtml, detailsTitleHtml, matches, selectObject } from './objectTree';
 import { valueCell, postEdit, setModValue, editorHtml, collapsedView, normalizeNumberValue, needsColorEditor, tooltipToolbarHtml, tooltipPreviewText, isTooltipTemplateField, usedColorSwatchesHtml } from './fieldDisplay';
 import { observeModelThumbs } from './modelThumbnails';
@@ -13,7 +13,7 @@ export function requestDetails(obj) {
   if (!obj || detailCache.has(obj.key) || pendingDetails.has(obj.key)) return;
   failedDetails.delete(obj.key);
   pendingDetails.add(obj.key);
-  vscodeApi.postMessage({ type: 'loadObjectDetails', key: obj.key, identity: obj.identity });
+  vscodeApi.postMessage({ type: 'loadObjectDetails', key: obj.key, identity: obj.identity, generation: detailGeneration });
 }
 
 export function retryDetails(key) {

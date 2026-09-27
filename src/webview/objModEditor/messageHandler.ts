@@ -1,5 +1,5 @@
 import { base64ToBytes } from '../webviewUtils';
-import { details, detailCache, pendingDetails, failedDetails, objects, ui, iconLoader } from './state';
+import { details, detailCache, pendingDetails, failedDetails, objects, ui, iconLoader, invalidateDetailCache, detailGeneration } from './state';
 import { setModValue } from './fieldDisplay';
 import { renderDetails, updateFieldCell } from './detailsPanel';
 import { updateObjectRow, updateDetailsHeader, selectObject, renderTree } from './objectTree';
@@ -190,12 +190,14 @@ export function setupMessageHandler() {
         scheduleModelThumbQueues(0);
       }
     } else if (msg.type === 'objectDetailsLoaded') {
+      if (msg.generation != null && msg.generation !== detailGeneration) return;
       if (!objects.some(obj => obj.key === msg.key && obj.identity === msg.identity)) return;
       pendingDetails.delete(msg.key);
       failedDetails.delete(msg.key);
       detailCache.set(msg.key, msg.mods || []);
       if (msg.key === ui.selectedKey) renderDetails();
     } else if (msg.type === 'objectDetailsFailed') {
+      if (msg.generation != null && msg.generation !== detailGeneration) return;
       if (!objects.some(obj => obj.key === msg.key && obj.identity === msg.identity)) return;
       pendingDetails.delete(msg.key);
       failedDetails.set(msg.key, msg.reason || '');
@@ -233,6 +235,7 @@ export function setupMessageHandler() {
       const oldIcon = objects[index].iconPath || '';
       const oldDisplayName = objects[index].displayName;
       const oldDisplaySuffix = objects[index].displaySuffix;
+      const suffixChanged = oldDisplaySuffix !== msg.object.displaySuffix;
       // Campaign/kind/race decide which tree branch this row lives under (see renderTree) — if editing
       // pushed it into a different branch, an in-place row swap would leave it under the wrong heading
       // until the next full render, so rebuild the tree instead of just patching this one row.
@@ -245,6 +248,12 @@ export function setupMessageHandler() {
       if (oldBranch !== newBranch || oldDisplayName !== objects[index].displayName || oldDisplaySuffix !== objects[index].displaySuffix) renderTree();
       else updateObjectRow(objects[index]);
       updateDetailsHeader(objects[index]);
+      if (suffixChanged) {
+        // Reference chips in every cached row may now carry an obsolete label. Advance the request
+        // generation so late replies from pre-edit loads cannot repopulate the cleared cache.
+        invalidateDetailCache();
+        renderDetails();
+      }
     } else if (msg.type === 'objectAdded' && msg.object && msg.object.key) {
       objects.push(msg.object);
       renderTree();
@@ -255,9 +264,7 @@ export function setupMessageHandler() {
     } else if (msg.type === 'objectsReplaced' && Array.isArray(msg.objects)) {
       const previousIdentity = objects.find(obj => obj.key === ui.selectedKey)?.identity || '';
       objects.splice(0, objects.length, ...msg.objects);
-      detailCache.clear();
-      pendingDetails.clear();
-      failedDetails.clear();
+      invalidateDetailCache();
       const preferred = msg.preferredIdentity || previousIdentity;
       ui.selectedKey = objects.find(obj => obj.identity === preferred)?.key || objects[0]?.key || '';
       renderTree();

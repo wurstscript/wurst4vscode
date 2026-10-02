@@ -51,8 +51,10 @@ function setServerState(state: ServerState): void {
 function renderStatusItem(): void {
     const sb = statusItem;
     if (!sb) return;
-    const busy = serverState.kind === 'starting' || serverState.kind === 'loading';
-    const update = busy ? undefined : availableUpdate;
+    // Only a healthy server may trade its icon for the update badge; starting, loading, failed and
+    // stopped keep their own icon and mention a known update in the tooltip instead.
+    const update = availableUpdate;
+    const showUpdateBadge = !!update && serverState.kind === 'ready';
     let icon: string;
     let summary: string;
     switch (serverState.kind) {
@@ -81,8 +83,8 @@ function renderStatusItem(): void {
             summary = 'WurstScript language server was stopped.';
             break;
     }
-    sb.text = update ? '$(circle-filled) WurstScript Update' : `${icon} WurstScript`;
-    sb.color = update ? '#3794ff' : undefined;
+    sb.text = showUpdateBadge ? '$(circle-filled) WurstScript Update' : `${icon} WurstScript`;
+    sb.color = showUpdateBadge ? '#3794ff' : undefined;
     sb.tooltip = [
         summary,
         update ? 'A newer WurstScript version is available.' : undefined,

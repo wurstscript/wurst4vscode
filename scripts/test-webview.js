@@ -711,6 +711,7 @@ async function testLanguageClientHandleLifecycle() {
     let failStart = false;
     const clients = [];
     const probes = [];
+    let reportUpdate;
     const statusItem = { text: '', show() {}, dispose() {} };
     class FakeLanguageClient {
         constructor() { this.stopped = false; this.outputChannel = { show() {} }; clients.push(this); }
@@ -741,7 +742,7 @@ async function testLanguageClientHandleLifecycle() {
             getLanguageServerJava: () => 'java',
             checkCustomJavaVersion: async () => undefined,
             getInstalledVersionString: async () => 'v1',
-            maybeOfferUpdate: async () => undefined,
+            maybeOfferUpdate: async (onUpdateAvailable) => { reportUpdate = onUpdateAvailable; },
         },
         './features/diagnostics': { appendDiagnostic() {}, formatDiagnosticError: (e) => String(e) },
     });
@@ -784,8 +785,11 @@ async function testLanguageClientHandleLifecycle() {
     probes.shift().resolve([]);
     await tick();
     assert.equal(statusItem.text, '$(check) WurstScript');
+    reportUpdate({ installedSha: 'a'.repeat(40), latestSha: 'b'.repeat(40) });
+    assert.equal(statusItem.text, '$(circle-filled) WurstScript Update', 'a healthy server shows a known update');
     clients[0].emitState(1);
-    assert.equal(statusItem.text, '$(warning) WurstScript', 'a server that stopped unexpectedly must be visible');
+    assert.equal(statusItem.text, '$(warning) WurstScript', 'a server that stopped unexpectedly must be visible, even with an update known');
+    assert.ok(statusItem.tooltip.includes('A newer WurstScript version is available.'), 'a hidden update badge must still be mentioned in the tooltip');
     clients[0].emitState(2);
     probes.shift().resolve([]);
     await tick();

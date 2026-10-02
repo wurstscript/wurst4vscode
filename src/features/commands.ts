@@ -9,7 +9,7 @@ import { WURST_HOME } from '../paths';
 import { appendDiagnostic, buildDiagnosticsText, formatDiagnosticError, showDiagnosticOutput, showErrorWithLogs } from './diagnostics';
 import type { PathAlias } from './diagnostics';
 import { getRunningLanguageClient } from '../languageServer';
-import { describeJavaVersion, getInstalledVersionString, getLanguageServerJava } from '../install/installer';
+import { describeJavaVersion, displayGitSha, getAvailableUpdate, getInstalledVersionString, getLanguageServerJava } from '../install/installer';
 import { extensionVersion } from './issueReporting';
 import { getCascCacheDir } from './preview/cascStorage';
 
@@ -89,8 +89,15 @@ export function registerWurstDiagnosticsCommands(context: vscode.ExtensionContex
         vscode.commands.registerCommand('wurst.showLogs', () => showLanguageServerOutput()),
         vscode.commands.registerCommand('wurst.showExtensionLogs', () => showDiagnosticOutput()),
         vscode.commands.registerCommand('wurst.showDiagnosticsActions', async () => {
+            const update = getAvailableUpdate();
             const choice = await vscode.window.showQuickPick([
-                { label: '$(cloud-download) Install/update WurstScript', command: 'wurst.installOrUpdate' },
+                update
+                    ? {
+                        label: '$(cloud-download) Update WurstScript',
+                        description: `${displayGitSha(update.installedSha)} → ${displayGitSha(update.latestSha)}`,
+                        command: 'wurst.installOrUpdate',
+                    }
+                    : { label: '$(cloud-download) Install/update WurstScript', command: 'wurst.installOrUpdate' },
                 { label: '$(folder-opened) Open Wurst home', command: 'wurst.openWurstHome' },
                 { label: '$(copy) Copy diagnostics', command: 'wurst.copyDiagnostics' },
                 { label: '$(output) Open Wurst output', command: 'wurst.showLogs' },

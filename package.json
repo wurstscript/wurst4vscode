@@ -23,7 +23,9 @@
     ],
     "activationEvents": [
         "workspaceContains:wurst.build",
+        "workspaceContains:wurst_run.args",
         "onLanguage:wurst",
+        "onLanguage:wurst-run-args",
         "onCustomEditor:wurst.objModPreview",
         "onCustomEditor:wurst.soundPreview",
         "onCommand:wurst.previewMap",
@@ -49,6 +51,15 @@
                     ".j"
                 ],
                 "configuration": "./wurst.configuration.json"
+            },
+            {
+                "id": "wurst-run-args",
+                "aliases": [
+                    "Wurst Run Arguments"
+                ],
+                "filenames": [
+                    "wurst_run.args"
+                ]
             },
             {
                 "id": "wc3-image",

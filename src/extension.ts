@@ -3,8 +3,8 @@
 import * as vscode from 'vscode';
 import { workspace, ExtensionContext } from 'vscode';
 import { initPathManager } from './install/pathManager';
-import { installWithRetry } from './install/installer';
-import { getLanguageClient, startLanguageClient, stopLanguageServerIfRunning } from './languageServer';
+import { getAvailableUpdate, installWithRetry } from './install/installer';
+import { getLanguageClient, showWurstStatusItem, startLanguageClient, stopLanguageServerIfRunning } from './languageServer';
 import {
     findConflictingWurstProcesses,
     forceStopWurstProcesses,
@@ -37,6 +37,9 @@ import { formatDiagnosticError, showErrorWithLogs, showWarningWithLogs } from '.
 
 export async function activate(context: ExtensionContext) {
     console.log('Wurst extension activated!');
+    // First, so the status bar shows Wurst as active (with a spinner once the server starts) before
+    // any feature registration, install check or JVM start.
+    showWurstStatusItem(context);
     initPathManager(context.environmentVariableCollection);
 
     setupDecorators(context);
@@ -113,12 +116,16 @@ function registerBasicCommands(context: ExtensionContext) {
             }
         }),
         vscode.commands.registerCommand('wurst.installOrUpdate', async () => {
-            const choice = await vscode.window.showWarningMessage(
-                'Reinstall WurstScript from the latest nightly build? VS Code will reload when installation completes.',
-                { modal: true },
-                'Reinstall'
-            );
-            if (choice !== 'Reinstall') return;
+            // A detected update was already announced (status item / notification), so choosing it
+            // installs right away. Only a reinstall of the current version needs a confirmation.
+            if (!getAvailableUpdate()) {
+                const choice = await vscode.window.showWarningMessage(
+                    'Reinstall WurstScript from the latest nightly build? VS Code will reload when installation completes.',
+                    { modal: true },
+                    'Reinstall'
+                );
+                if (choice !== 'Reinstall') return;
+            }
             try {
                 await installWithRetry({ offerPostInstallActions: false });
                 await vscode.commands.executeCommand('workbench.action.reloadWindow');

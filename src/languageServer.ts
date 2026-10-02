@@ -11,6 +11,92 @@ import { appendDiagnostic, formatDiagnosticError } from './features/diagnostics'
 
 let clientRef: LanguageClient | null = null;
 
+// The status item exists from the first activation frame, before any install check or JVM start,
+// so the user sees Wurst is active and what it is doing while the server boots and builds.
+type ServerState =
+    | { kind: 'noWorkspace' }
+    | { kind: 'starting' }
+    | { kind: 'loading' }
+    | { kind: 'ready' }
+    | { kind: 'failed'; reason: string }
+    | { kind: 'stopped' };
+
+let statusItem: vscode.StatusBarItem | undefined;
+let serverState: ServerState = { kind: 'noWorkspace' };
+let installedVersion: string | undefined;
+let availableUpdate: UpdateAvailable | undefined;
+
+// A workspace/symbol query that matches nothing. The server's worker answers user requests only
+// after its init and initial full build, so the reply marks the end of the initial workspace load.
+const INITIAL_BUILD_PROBE_QUERY = '\u0000wurst-initial-build-probe';
+
+export function showWurstStatusItem(context: ExtensionContext): void {
+    if (statusItem) return;
+    const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    item.command = 'wurst.showDiagnosticsActions';
+    statusItem = item;
+    context.subscriptions.push(item, { dispose: () => { if (statusItem === item) statusItem = undefined; } });
+    renderStatusItem();
+    item.show();
+}
+
+function setServerState(state: ServerState): void {
+    serverState = state;
+    renderStatusItem();
+}
+
+function renderStatusItem(): void {
+    const sb = statusItem;
+    if (!sb) return;
+    const busy = serverState.kind === 'starting' || serverState.kind === 'loading';
+    const update = busy ? undefined : availableUpdate;
+    let icon: string;
+    let summary: string;
+    switch (serverState.kind) {
+        case 'noWorkspace':
+            icon = '$(circle-outline)';
+            summary = 'Open a folder containing a Wurst project to start the language server.';
+            break;
+        case 'starting':
+            icon = '$(sync~spin)';
+            summary = 'Starting the WurstScript language server...';
+            break;
+        case 'loading':
+            icon = '$(sync~spin)';
+            summary = 'Loading the workspace...';
+            break;
+        case 'ready':
+            icon = '$(check)';
+            summary = 'WurstScript language server is running.';
+            break;
+        case 'failed':
+            icon = '$(warning)';
+            summary = `WurstScript language server is not running: ${serverState.reason}`;
+            break;
+        case 'stopped':
+            icon = '$(circle-slash)';
+            summary = 'WurstScript language server was stopped.';
+            break;
+    }
+    sb.text = update ? '$(circle-filled) WurstScript Update' : `${icon} WurstScript`;
+    sb.color = update ? '#3794ff' : undefined;
+    sb.tooltip = [
+        summary,
+        update ? 'A newer WurstScript version is available.' : undefined,
+        installedVersion ? `Version: ${installedVersion}` : undefined,
+        update ? `Latest: ${update.latestSha.slice(0, 7)}` : undefined,
+        update ? 'Click to update WurstScript.' : 'Click for WurstScript actions.',
+    ].filter(Boolean).join('\n');
+}
+
+async function waitForInitialBuild(client: LanguageClient): Promise<void> {
+    try {
+        await client.sendRequest('workspace/symbol', { query: INITIAL_BUILD_PROBE_QUERY });
+    } catch (error) {
+        appendDiagnostic('VS Code extension', `Initial workspace load probe failed: ${formatDiagnosticError(error)}`);
+    }
+}
+
 // Commands that talk to the server are registered at activation, before (and independent of) the
 // JVM start, so they exist in the palette even while the server is still booting or when it failed.
 // They ask for the client through getLanguageClient(), which reflects three states and nothing
@@ -43,6 +129,7 @@ export async function stopLanguageServerIfRunning(): Promise<boolean> {
         appendDiagnostic('VS Code extension', `Language server stop failed: ${formatDiagnosticError(error)}`);
     }
     clientRef = null;
+    setServerState({ kind: 'stopped' });
     // Nothing restarts the server after an intentional stop (the install flow reloads the window
     // instead), so commands issued from now on fail fast with this reason.
     unavailableReason = new Error('The WurstScript language server was stopped.');
@@ -59,6 +146,7 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
     });
     // Consumed through getLanguageClient(); avoid an unhandled-rejection report when nobody waits.
     startingClient.catch(() => undefined);
+    setServerState({ kind: 'starting' });
 
     let client: LanguageClient;
     try {
@@ -88,6 +176,7 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
         startingClient = null;
         unavailableReason = error instanceof Error ? error : new Error(String(error));
         appendDiagnostic('VS Code extension', `Wurst language server failed to start: ${formatDiagnosticError(error)}`);
+        setServerState({ kind: 'failed', reason: unavailableReason.message });
         announceFailed(error);
         throw error;
     }
@@ -100,23 +189,10 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
     }
     announceStarted(client);
 
-    const sb = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    let installedVersion = 'detecting...';
-    let availableUpdate: UpdateAvailable | undefined;
-    const updateStatusBar = () => {
-        sb.text = availableUpdate ? '$(circle-filled) WurstScript Update' : '$(check) WurstScript';
-        sb.color = availableUpdate ? '#3794ff' : undefined;
-        sb.tooltip = [
-            availableUpdate ? 'A newer WurstScript version is available.' : 'WurstScript language server is running.',
-            `Version: ${installedVersion}`,
-            availableUpdate ? `Latest: ${availableUpdate.latestSha.slice(0, 7)}` : undefined,
-            'Click for WurstScript actions.',
-        ].filter(Boolean).join('\n');
-    };
-    updateStatusBar();
-    sb.command = 'wurst.showDiagnosticsActions';
-    sb.show();
-    context.subscriptions.push(sb);
+    setServerState({ kind: 'loading' });
+    void waitForInitialBuild(client).then(() => {
+        if (clientRef === client) setServerState({ kind: 'ready' });
+    });
 
     client.onNotification('wurst/updateGamePath', (params) => {
         workspace.getConfiguration().update('wurst.wc3path', params);
@@ -128,16 +204,12 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
     // the update check performs network I/O. Neither should delay language features or block the
     // extension host.
     void getInstalledVersionString().then((version) => {
-        try {
-            installedVersion = version ?? 'unknown';
-            updateStatusBar();
-        } catch { /* status item was disposed during shutdown */ }
+        installedVersion = version ?? 'unknown';
+        renderStatusItem();
     });
     void maybeOfferUpdate((update) => {
-        try {
-            availableUpdate = update;
-            updateStatusBar();
-        } catch { /* status item was disposed during shutdown */ }
+        availableUpdate = update;
+        renderStatusItem();
     });
 }
 

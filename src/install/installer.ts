@@ -40,6 +40,14 @@ export type UpdateAvailable = {
     latestSha: string;
 };
 
+// The newer nightly found by the last update check in this window, so the status item, the actions
+// menu and the install command can offer it as an update instead of a generic reinstall.
+let availableUpdate: UpdateAvailable | undefined;
+
+export function getAvailableUpdate(): UpdateAvailable | undefined {
+    return availableUpdate;
+}
+
 // Snooze state lives in a file under ~/.wurst rather than ExtensionContext.globalState so a "Later"
 // choice sticks across separate VS Code profiles/user-data-dirs (e.g. Extension Development Host runs,
 // --user-data-dir test profiles) on the same machine, not just the one profile that showed the dialog.
@@ -503,7 +511,8 @@ export async function maybeOfferUpdate(onUpdateAvailable?: (update: UpdateAvaila
         const latestSha = await fetchNightlyCommitSha();
         if (gitShasMatch(installedSha, latestSha)) return;
 
-        onUpdateAvailable?.({ installedSha, latestSha });
+        availableUpdate = { installedSha, latestSha };
+        onUpdateAvailable?.(availableUpdate);
         if (readUpdateSnoozedUntil() > Date.now()) return;
 
         const versions = [
@@ -517,8 +526,7 @@ export async function maybeOfferUpdate(onUpdateAvailable?: (update: UpdateAvaila
         );
         if (choice === 'Update') {
             writeUpdateSnoozedUntil(undefined);
-            await installWithRetry({ offerPostInstallActions: false });
-            await vscode.commands.executeCommand('workbench.action.reloadWindow');
+            await vscode.commands.executeCommand('wurst.installOrUpdate');
         } else if (choice === 'Later') {
             writeUpdateSnoozedUntil(nextLocalDayStartMs());
         }

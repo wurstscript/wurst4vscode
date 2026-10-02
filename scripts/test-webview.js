@@ -689,9 +689,13 @@ function testNonBlockingStartupAndForcedReinstallWiring() {
     assert.ok(!extension.includes('ensureInstalledOrOfferMigration(true)'), 'manual install/update must not use the no-op ensure path');
     assert.ok(!languageServer.includes('await maybeOfferUpdate(context)'), 'update checks must not delay language-client startup');
     assert.ok(languageServer.includes('void maybeOfferUpdate((update) =>'), 'update checks should still run in the background and update the status item');
+    assert.ok(extension.indexOf('showWurstStatusItem(context)') < extension.indexOf('initPathManager('), 'the status item must be shown before any other activation work');
+    assert.ok(manifest.activationEvents.includes('onLanguage:wurst-run-args'), 'opening wurst_run.args must activate the extension');
     assert.ok(languageServer.includes("'$(circle-filled) WurstScript Update'"), 'the status item must indicate when an update is available');
     assert.ok(!installer.includes("{ modal: true, detail }, 'Update', 'Later'"), 'the automatic update notification must not be modal');
     assert.ok(installer.includes("'Update', 'Later'"), 'the non-modal update notification must retain its actions');
+    assert.ok(extension.includes('if (!getAvailableUpdate()) {'), 'installing a detected update must not ask for a reinstall confirmation');
+    assert.ok(installer.includes("executeCommand('wurst.installOrUpdate')"), 'the update notification must share the install command and its error handling');
     assert.ok(installer.includes("execFile(java, ['-jar', COMPILER_JAR, '-version']"), 'version detection must use an asynchronous child process');
     assert.ok(!manifest.activationEvents.includes('workspaceContains:**/*.wurst'), 'activation must not recursively scan for loose Wurst files');
     assert.ok(manifest.activationEvents.includes('onLanguage:wurst'), 'opening a Wurst document must activate the extension');
@@ -706,22 +710,31 @@ function testNonBlockingStartupAndForcedReinstallWiring() {
 async function testLanguageClientHandleLifecycle() {
     let failStart = false;
     const clients = [];
+    const probes = [];
+    let reportUpdate;
+    const statusItem = { text: '', show() {}, dispose() {} };
     class FakeLanguageClient {
         constructor() { this.stopped = false; this.outputChannel = { show() {} }; clients.push(this); }
         start() { return Promise.resolve(); }
-        stop() { this.stopped = true; return Promise.resolve(); }
+        sendRequest(method) {
+            assert.equal(method, 'workspace/symbol', 'the initial-load probe must be a request the server queues behind its initial build');
+            return new Promise((resolve, reject) => probes.push({ resolve, reject }));
+        }
+        onDidChangeState(listener) { this.stateListener = listener; return { dispose() {} }; }
+        emitState(newState) { this.stateListener({ oldState: 0, newState }); }
+        stop() { this.stopped = true; this.stateListener?.({ oldState: 2, newState: 1 }); this.textWhenStopped = statusItem.text; return Promise.resolve(); }
         onNotification() {}
     }
     const mod = loadTsModuleWithMocks('src/languageServer.ts', {
         vscode: {
-            window: { createStatusBarItem: () => ({ show() {}, dispose() {} }) },
+            window: { createStatusBarItem: () => statusItem },
             StatusBarAlignment: { Right: 2 },
             workspace: {
                 getConfiguration: () => ({ get: (_key, fallback) => fallback }),
                 createFileSystemWatcher: () => ({ onDidCreate() {}, onDidChange() {}, onDidDelete() {}, dispose() {} }),
             },
         },
-        'vscode-languageclient/node': { LanguageClient: FakeLanguageClient },
+        'vscode-languageclient/node': { LanguageClient: FakeLanguageClient, State: { Stopped: 1, Running: 2, Starting: 3 } },
         fs: { existsSync: () => true },
         './paths': { RUNTIME_DIR: 'runtime', COMPILER_JAR: 'wurstscript.jar' },
         './install/installer': {
@@ -729,7 +742,7 @@ async function testLanguageClientHandleLifecycle() {
             getLanguageServerJava: () => 'java',
             checkCustomJavaVersion: async () => undefined,
             getInstalledVersionString: async () => 'v1',
-            maybeOfferUpdate: async () => undefined,
+            maybeOfferUpdate: async (onUpdateAvailable) => { reportUpdate = onUpdateAvailable; },
         },
         './features/diagnostics': { appendDiagnostic() {}, formatDiagnosticError: (e) => String(e) },
     });
@@ -743,14 +756,49 @@ async function testLanguageClientHandleLifecycle() {
     await assert.rejects(mod.getLanguageClient(), /Open a folder/);
     assert.equal(await mod.stopLanguageServerIfRunning(), false, 'stopping with no client is a no-op');
 
+    mod.showWurstStatusItem(context);
+    assert.equal(statusItem.text, '$(circle-outline) WurstScript', 'the status item must exist before any server start');
     const starting = mod.startLanguageClient(context);
+    assert.equal(statusItem.text, '$(sync~spin) WurstScript', 'the status item must show progress as soon as the start begins');
     assert.equal(await settled(mod.getLanguageClient()), 'resolved', 'a request during startup waits for that start');
     await starting;
+    assert.equal(statusItem.text, '$(sync~spin) WurstScript', 'the status item must keep spinning until the initial workspace load finished');
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+    probes.shift().resolve([]);
+    await tick();
+    assert.equal(statusItem.text, '$(check) WurstScript', 'the status item must turn ready once the initial build probe answers');
+
+    // The client restarts a crashed server by itself: spin again and re-probe the new process.
+    clients[0].emitState(3);
+    assert.equal(statusItem.text, '$(sync~spin) WurstScript', 'a server restart must show progress again');
+    clients[0].emitState(2);
+    assert.equal(probes.length, 1, 'a restarted server must be probed again');
+    probes.shift().reject(new Error('connection closed'));
+    await tick();
+    assert.equal(statusItem.text, '$(warning) WurstScript', 'a failed probe must not be reported as a completed workspace load');
+    clients[0].emitState(2);
+    const staleProbe = probes.shift();
+    clients[0].emitState(2);
+    staleProbe.resolve([]);
+    await tick();
+    assert.equal(statusItem.text, '$(sync~spin) WurstScript', 'a probe answered by an earlier server process must not mark the current one ready');
+    probes.shift().resolve([]);
+    await tick();
+    assert.equal(statusItem.text, '$(check) WurstScript');
+    reportUpdate({ installedSha: 'a'.repeat(40), latestSha: 'b'.repeat(40) });
+    assert.equal(statusItem.text, '$(circle-filled) WurstScript Update', 'a healthy server shows a known update');
+    clients[0].emitState(1);
+    assert.equal(statusItem.text, '$(warning) WurstScript', 'a server that stopped unexpectedly must be visible, even with an update known');
+    assert.ok(statusItem.tooltip.includes('A newer WurstScript version is available.'), 'a hidden update badge must still be mentioned in the tooltip');
+    clients[0].emitState(2);
+    probes.shift().resolve([]);
+    await tick();
     assert.equal(await mod.getLanguageClient(), clients[0], 'the handle resolves to the started client');
     assert.equal(mod.getRunningLanguageClient(), clients[0], 'output-channel commands must see the running client without a prior command');
 
     assert.equal(await mod.stopLanguageServerIfRunning(), true);
     assert.equal(clients[0].stopped, true);
+    assert.equal(clients[0].textWhenStopped, '$(circle-slash) WurstScript', 'an intentional stop must never be reported as a crash');
     assert.equal(mod.getRunningLanguageClient(), null);
     assert.equal(await settled(mod.getLanguageClient()), 'rejected', 'after an intentional stop a command must fail fast instead of waiting forever');
     await assert.rejects(mod.getLanguageClient(), /was stopped/);
@@ -763,6 +811,8 @@ async function testLanguageClientHandleLifecycle() {
     await assert.rejects(mod.startLanguageClient(context));
     assert.equal(await settled(mod.getLanguageClient()), 'rejected', 'a failed start must reject the handle');
     await assert.rejects(mod.getLanguageClient(), /not installed/);
+    assert.equal(statusItem.text, '$(warning) WurstScript', 'a failed start must be visible in the status item');
+    assert.ok(statusItem.tooltip.includes('not installed'));
 }
 
 function testWurstProcessMatching() {

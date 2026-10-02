@@ -717,9 +717,11 @@ async function testLanguageClientHandleLifecycle() {
         start() { return Promise.resolve(); }
         sendRequest(method) {
             assert.equal(method, 'workspace/symbol', 'the initial-load probe must be a request the server queues behind its initial build');
-            return new Promise((resolve) => probes.push(resolve));
+            return new Promise((resolve, reject) => probes.push({ resolve, reject }));
         }
-        stop() { this.stopped = true; return Promise.resolve(); }
+        onDidChangeState(listener) { this.stateListener = listener; return { dispose() {} }; }
+        emitState(newState) { this.stateListener({ oldState: 0, newState }); }
+        stop() { this.stopped = true; this.stateListener?.({ oldState: 2, newState: 1 }); this.textWhenStopped = statusItem.text; return Promise.resolve(); }
         onNotification() {}
     }
     const mod = loadTsModuleWithMocks('src/languageServer.ts', {
@@ -731,7 +733,7 @@ async function testLanguageClientHandleLifecycle() {
                 createFileSystemWatcher: () => ({ onDidCreate() {}, onDidChange() {}, onDidDelete() {}, dispose() {} }),
             },
         },
-        'vscode-languageclient/node': { LanguageClient: FakeLanguageClient },
+        'vscode-languageclient/node': { LanguageClient: FakeLanguageClient, State: { Stopped: 1, Running: 2, Starting: 3 } },
         fs: { existsSync: () => true },
         './paths': { RUNTIME_DIR: 'runtime', COMPILER_JAR: 'wurstscript.jar' },
         './install/installer': {
@@ -760,15 +762,39 @@ async function testLanguageClientHandleLifecycle() {
     assert.equal(await settled(mod.getLanguageClient()), 'resolved', 'a request during startup waits for that start');
     await starting;
     assert.equal(statusItem.text, '$(sync~spin) WurstScript', 'the status item must keep spinning until the initial workspace load finished');
-    probes.shift()([]);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+    probes.shift().resolve([]);
+    await tick();
     assert.equal(statusItem.text, '$(check) WurstScript', 'the status item must turn ready once the initial build probe answers');
+
+    // The client restarts a crashed server by itself: spin again and re-probe the new process.
+    clients[0].emitState(3);
+    assert.equal(statusItem.text, '$(sync~spin) WurstScript', 'a server restart must show progress again');
+    clients[0].emitState(2);
+    assert.equal(probes.length, 1, 'a restarted server must be probed again');
+    probes.shift().reject(new Error('connection closed'));
+    await tick();
+    assert.equal(statusItem.text, '$(warning) WurstScript', 'a failed probe must not be reported as a completed workspace load');
+    clients[0].emitState(2);
+    const staleProbe = probes.shift();
+    clients[0].emitState(2);
+    staleProbe.resolve([]);
+    await tick();
+    assert.equal(statusItem.text, '$(sync~spin) WurstScript', 'a probe answered by an earlier server process must not mark the current one ready');
+    probes.shift().resolve([]);
+    await tick();
+    assert.equal(statusItem.text, '$(check) WurstScript');
+    clients[0].emitState(1);
+    assert.equal(statusItem.text, '$(warning) WurstScript', 'a server that stopped unexpectedly must be visible');
+    clients[0].emitState(2);
+    probes.shift().resolve([]);
+    await tick();
     assert.equal(await mod.getLanguageClient(), clients[0], 'the handle resolves to the started client');
     assert.equal(mod.getRunningLanguageClient(), clients[0], 'output-channel commands must see the running client without a prior command');
 
     assert.equal(await mod.stopLanguageServerIfRunning(), true);
     assert.equal(clients[0].stopped, true);
-    assert.equal(statusItem.text, '$(circle-slash) WurstScript');
+    assert.equal(clients[0].textWhenStopped, '$(circle-slash) WurstScript', 'an intentional stop must never be reported as a crash');
     assert.equal(mod.getRunningLanguageClient(), null);
     assert.equal(await settled(mod.getLanguageClient()), 'rejected', 'after an intentional stop a command must fail fast instead of waiting forever');
     await assert.rejects(mod.getLanguageClient(), /was stopped/);

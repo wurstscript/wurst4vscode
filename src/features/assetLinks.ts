@@ -686,14 +686,18 @@ class WurstAssetCodeLensProvider implements vscode.CodeLensProvider {
 // ── Wurst / JASS: string literals containing asset paths ─────────────────────
 
 class WurstAssetLinkProvider implements vscode.DocumentLinkProvider {
-    async provideDocumentLinks(document: vscode.TextDocument): Promise<vscode.DocumentLink[]> {
+    async provideDocumentLinks(document: vscode.TextDocument, token: vscode.CancellationToken): Promise<vscode.DocumentLink[]> {
+        if (token.isCancellationRequested) return [];
         const text = document.getText();
+        const version = document.version;
+        const stale = () => token.isCancellationRequested || document.version !== version;
         const roots = await candidateRoots(document);
         const links: vscode.DocumentLink[] = [];
 
-        STRING_LITERAL_RE.lastIndex = 0;
+        const regex = new RegExp(STRING_LITERAL_RE);
         let m: RegExpExecArray | null;
-        while ((m = STRING_LITERAL_RE.exec(text)) !== null) {
+        while ((m = regex.exec(text)) !== null) {
+            if (stale()) return [];
             const [, assetPath, ext] = m;
             if (!isAssetExt(ext)) continue;
             if (isSoundExt(ext)) {
@@ -701,11 +705,12 @@ class WurstAssetLinkProvider implements vscode.DocumentLinkProvider {
                 continue;
             }
             const target = await resolveAssetPath(assetPath, roots);
+            if (stale()) return [];
             if (target) {
                 addLink(links, document, text, m.index + 1, assetPath.length, target);
                 continue;
             }
-            if (isModelExt(ext) || isSoundExt(ext)) {
+            if (isModelExt(ext)) {
                 addLazyCascLink(links, document, m.index + 1, assetPath.length, assetPath);
             }
         }
@@ -716,41 +721,28 @@ class WurstAssetLinkProvider implements vscode.DocumentLinkProvider {
 
 // ── FDF: IncludeFile paths ────────────────────────────────────────────────────
 
-class FdfLinkProvider implements vscode.DocumentLinkProvider {
-    async provideDocumentLinks(document: vscode.TextDocument): Promise<vscode.DocumentLink[]> {
+class FdfLinkProvider extends WurstAssetLinkProvider {
+    async provideDocumentLinks(document: vscode.TextDocument, token: vscode.CancellationToken): Promise<vscode.DocumentLink[]> {
+        if (token.isCancellationRequested) return [];
         const text = document.getText();
+        const version = document.version;
+        const stale = () => token.isCancellationRequested || document.version !== version;
+        const links = await super.provideDocumentLinks(document, token);
+        if (stale()) return [];
         const roots = await candidateRoots(document);
-        const links: vscode.DocumentLink[] = [];
 
         // IncludeFile links
-        FDF_INCLUDE_RE.lastIndex = 0;
+        const includeRegex = new RegExp(FDF_INCLUDE_RE);
         let m: RegExpExecArray | null;
-        while ((m = FDF_INCLUDE_RE.exec(text)) !== null) {
+        while ((m = includeRegex.exec(text)) !== null) {
+            if (stale()) return [];
             const assetPath = m[1];
             const target = await resolveAssetPath(assetPath, roots);
+            if (stale()) return [];
             if (!target) continue;
             // point at the path inside the quotes
             const startOffset = m.index + m[0].indexOf('"') + 1;
             addLink(links, document, text, startOffset, assetPath.length, target);
-        }
-
-        // Also linkify any other quoted asset paths in the file
-        STRING_LITERAL_RE.lastIndex = 0;
-        while ((m = STRING_LITERAL_RE.exec(text)) !== null) {
-            const [, assetPath, ext] = m;
-            if (!isAssetExt(ext)) continue;
-            if (isSoundExt(ext)) {
-                addLazyCascLink(links, document, m.index + 1, assetPath.length, assetPath);
-                continue;
-            }
-            const target = await resolveAssetPath(assetPath, roots);
-            if (target) {
-                addLink(links, document, text, m.index + 1, assetPath.length, target);
-                continue;
-            }
-            if (isModelExt(ext) || isSoundExt(ext)) {
-                addLazyCascLink(links, document, m.index + 1, assetPath.length, assetPath);
-            }
         }
 
         return links;
@@ -760,16 +752,21 @@ class FdfLinkProvider implements vscode.DocumentLinkProvider {
 // ── TOC: bare path lines ──────────────────────────────────────────────────────
 
 class TocLinkProvider implements vscode.DocumentLinkProvider {
-    async provideDocumentLinks(document: vscode.TextDocument): Promise<vscode.DocumentLink[]> {
+    async provideDocumentLinks(document: vscode.TextDocument, token: vscode.CancellationToken): Promise<vscode.DocumentLink[]> {
+        if (token.isCancellationRequested) return [];
         const text = document.getText();
+        const version = document.version;
+        const stale = () => token.isCancellationRequested || document.version !== version;
         const roots = await candidateRoots(document);
         const links: vscode.DocumentLink[] = [];
 
-        TOC_LINE_RE.lastIndex = 0;
+        const regex = new RegExp(TOC_LINE_RE);
         let m: RegExpExecArray | null;
-        while ((m = TOC_LINE_RE.exec(text)) !== null) {
+        while ((m = regex.exec(text)) !== null) {
+            if (stale()) return [];
             const assetPath = m[1];
             const target = await resolveAssetPath(assetPath, roots);
+            if (stale()) return [];
             if (!target) continue;
             // Offset of the captured path within the full match
             const startOffset = m.index + m[0].indexOf(m[1]);

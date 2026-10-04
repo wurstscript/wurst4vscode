@@ -715,18 +715,20 @@ async function testLanguageClientHandleLifecycle() {
     const statusItem = { text: '', show() {}, dispose() {} };
     class FakeLanguageClient {
         constructor() { this.stopped = false; this.outputChannel = { show() {} }; clients.push(this); }
-        start() { return Promise.resolve(); }
+        start() { this.state = 2; return Promise.resolve(); }
+        isRunning() { return this.state === 2; }
         sendRequest(method) {
             assert.equal(method, 'workspace/symbol', 'the initial-load probe must be a request the server queues behind its initial build');
             return new Promise((resolve, reject) => probes.push({ resolve, reject }));
         }
         onDidChangeState(listener) { this.stateListener = listener; return { dispose() {} }; }
-        emitState(newState) { this.stateListener({ oldState: 0, newState }); }
+        emitState(newState) { this.state = newState; this.stateListener({ oldState: 0, newState }); }
         stop() { this.stopped = true; this.stateListener?.({ oldState: 2, newState: 1 }); this.textWhenStopped = statusItem.text; return Promise.resolve(); }
-        onNotification() {}
+        onNotification() { return { dispose() {} }; }
     }
     const mod = loadTsModuleWithMocks('src/languageServer.ts', {
         vscode: {
+            Disposable: { from: (...items) => ({ dispose: () => items.forEach((item) => item.dispose()) }) },
             window: { createStatusBarItem: () => statusItem },
             StatusBarAlignment: { Right: 2 },
             workspace: {

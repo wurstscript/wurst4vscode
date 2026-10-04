@@ -10,6 +10,9 @@ import type { UpdateAvailable } from './install/installer';
 import { appendDiagnostic, formatDiagnosticError } from './features/diagnostics';
 
 let clientRef: LanguageClient | null = null;
+let clientSubscriptions: vscode.Disposable | undefined;
+let startGeneration = 0;
+let rejectStartingClient: ((error: Error) => void) | undefined;
 
 // The status item exists from the first activation frame, before any install check or JVM start,
 // so the user sees Wurst is active and what it is doing while the server boots and builds.
@@ -121,13 +124,16 @@ function trackClientState(client: LanguageClient): vscode.Disposable {
     return client.onDidChangeState(({ newState }) => {
         if (clientRef !== client) return;
         if (newState === State.Running) {
-            probeInitialBuild(client);
+            if (!startingClient) probeInitialBuild(client);
             return;
         }
         probeGeneration++;
+        unavailableReason = new Error(newState === State.Starting
+            ? 'The WurstScript language server is restarting. Retry when it is ready.'
+            : 'The WurstScript language server stopped unexpectedly. See the Wurst output for details.');
         setServerState(newState === State.Starting
             ? { kind: 'starting' }
-            : { kind: 'failed', reason: 'WurstScript language server stopped unexpectedly. See the Wurst output for details.' });
+            : { kind: 'failed', reason: unavailableReason.message });
     });
 }
 
@@ -145,28 +151,39 @@ let unavailableReason: Error = new Error(
 
 /** Resolves with the running language client, or rejects with why there is none. */
 export function getLanguageClient(): Promise<LanguageClient> {
-    if (clientRef) return Promise.resolve(clientRef);
     if (startingClient) return startingClient;
+    const client = getRunningLanguageClient();
+    if (client) return Promise.resolve(client);
     return Promise.reject(unavailableReason);
 }
 
 /** The running client if there is one right now (no waiting). */
 export function getRunningLanguageClient(): LanguageClient | null {
-    return clientRef;
+    return !startingClient && clientRef?.isRunning() ? clientRef : null;
 }
 
-export async function stopLanguageServerIfRunning(): Promise<boolean> {
+// Install and repair may be called by activation itself. They stop an existing client;
+// only explicit user stops and extension disposal cancel a pre-client startup.
+export async function stopLanguageServerIfRunning(cancelPendingStart = false): Promise<boolean> {
     const client = clientRef;
-    if (!client) return false;
+    if (!client && (!startingClient || !cancelPendingStart)) return false;
     // Detach before stopping so the client's own Stopped transition is not reported as a crash.
     clientRef = null;
+    startGeneration++;
     probeGeneration++;
     setServerState({ kind: 'stopped' });
     // Nothing restarts the server after an intentional stop (the install flow reloads the window
     // instead), so commands issued from now on fail fast with this reason.
     unavailableReason = new Error('The WurstScript language server was stopped.');
+    rejectStartingClient?.(unavailableReason);
+    rejectStartingClient = undefined;
+    startingClient = null;
+    clientSubscriptions?.dispose();
+    clientSubscriptions = undefined;
     try {
-        await client.stop();
+        // The library cannot stop an initializing client. The startup continuation stops it
+        // after initialization if this generation was cancelled in the meantime.
+        if (client?.isRunning()) await client.stop();
     } catch (error) {
         appendDiagnostic('VS Code extension', `Language server stop failed: ${formatDiagnosticError(error)}`);
     }
@@ -175,67 +192,72 @@ export async function stopLanguageServerIfRunning(): Promise<boolean> {
 
 export async function startLanguageClient(context: ExtensionContext): Promise<void> {
     if (clientRef || startingClient) return;
+    const generation = ++startGeneration;
     let announceStarted!: (client: LanguageClient) => void;
     let announceFailed!: (error: unknown) => void;
     startingClient = new Promise<LanguageClient>((resolve, reject) => {
         announceStarted = resolve;
         announceFailed = reject;
     });
+    rejectStartingClient = announceFailed;
     // Consumed through getLanguageClient(); avoid an unhandled-rejection report when nobody waits.
     startingClient.catch(() => undefined);
     setServerState({ kind: 'starting' });
+    context.subscriptions.push({ dispose: () => {
+        if (generation === startGeneration) void stopLanguageServerIfRunning(true);
+    } });
 
-    let client: LanguageClient;
+    let client: LanguageClient | undefined;
     try {
         await ensureInstalledOrOfferMigration(false);
+        if (generation !== startGeneration) return;
 
         const serverOptions = await getServerOptions();
+        if (generation !== startGeneration) return;
+        const watcher = workspace.createFileSystemWatcher('**/*.{wurst,jurst,j}');
+        clientSubscriptions = watcher;
         const clientOptions: LanguageClientOptions = {
             documentSelector: ['wurst'],
-            synchronize: { configurationSection: 'wurst' },
+            // The language client batches events and owns notification error handling and
+            // restart subscriptions. Keep external edits to every supported source format.
+            synchronize: { configurationSection: 'wurst', fileEvents: watcher },
         };
 
         client = new LanguageClient('Wurstscript Language Server', serverOptions, clientOptions);
         clientRef = client;
-
-        const startResult = client.start();
-        if (isDisposable(startResult)) {
-            context.subscriptions.push(startResult);
-        } else {
-            context.subscriptions.push({ dispose: () => client.stop() });
-            await startResult;
+        clientSubscriptions = vscode.Disposable.from(watcher, trackClientState(client),
+            client.onNotification('wurst/updateGamePath', (params) => {
+                void workspace.getConfiguration().update('wurst.wc3path', params).then(undefined, (error) => {
+                    appendDiagnostic('VS Code extension', `Could not update game path: ${formatDiagnosticError(error)}`);
+                });
+            }));
+        await client.start();
+        if (generation !== startGeneration) {
+            if (client.isRunning()) await client.stop();
+            return;
         }
-
-        const anyClient = client as LanguageClient & { onReady?: () => Promise<void> };
-        if (typeof anyClient.onReady === 'function') await anyClient.onReady();
+        if (!client.isRunning()) throw new Error('The WurstScript language server stopped during startup.');
     } catch (error) {
+        if (generation !== startGeneration) return;
         clientRef = null;
         startingClient = null;
+        rejectStartingClient = undefined;
+        clientSubscriptions?.dispose();
+        clientSubscriptions = undefined;
         unavailableReason = error instanceof Error ? error : new Error(String(error));
         appendDiagnostic('VS Code extension', `Wurst language server failed to start: ${formatDiagnosticError(error)}`);
         setServerState({ kind: 'failed', reason: `WurstScript language server is not running: ${unavailableReason.message}` });
         announceFailed(error);
+        try { await client?.stop(); } catch { /* Best-effort cleanup of a failed start. */ }
         throw error;
     }
     startingClient = null;
-    if (clientRef !== client) {
-        // Stopped (or replaced) while it was still starting up: report the stop, not a client that
-        // is no longer running.
-        announceFailed(unavailableReason);
-        return;
-    }
+    rejectStartingClient = undefined;
     announceStarted(client);
 
     // The initial Running transition already happened inside start(), so probe once here and let
     // trackClientState handle later restarts.
     probeInitialBuild(client);
-    context.subscriptions.push(trackClientState(client));
-
-    client.onNotification('wurst/updateGamePath', (params) => {
-        workspace.getConfiguration().update('wurst.wc3path', params);
-    });
-
-    context.subscriptions.push(registerFileChanges(client));
 
     // Version detection may start a JVM (once per installed jar, then served from a disk cache) and
     // the update check performs network I/O. Neither should delay language features or block the
@@ -248,16 +270,6 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
         availableUpdate = update;
         renderStatusItem();
     });
-}
-
-export function registerFileChanges(client: LanguageClient): vscode.FileSystemWatcher {
-    const watcher = workspace.createFileSystemWatcher('**/*.wurst');
-    const notify = (type: number, uri: vscode.Uri) =>
-        client.sendNotification('workspace/didChangeWatchedFiles', { changes: [{ uri: uri.toString(), type }] });
-    watcher.onDidCreate((uri) => notify(1, uri));
-    watcher.onDidChange((uri) => notify(2, uri));
-    watcher.onDidDelete((uri) => notify(3, uri));
-    return watcher;
 }
 
 async function getServerOptions(): Promise<ServerOptions> {
@@ -294,8 +306,4 @@ function isPortOpen(port: number): Promise<boolean> {
         srv.once('listening', () => srv.close(() => resolve(true)));
         srv.listen(port);
     });
-}
-
-function isDisposable(value: unknown): value is vscode.Disposable {
-    return !!value && typeof (value as vscode.Disposable).dispose === 'function';
 }

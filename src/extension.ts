@@ -137,7 +137,7 @@ function registerBasicCommands(context: ExtensionContext) {
         vscode.commands.registerCommand('wurst.stopAllProcesses', async () => {
             const conflicts = await findConflictingWurstProcesses();
             if (conflicts.length === 0) {
-                const stoppedLocalServer = await stopLanguageServerIfRunning();
+                const stoppedLocalServer = await stopLanguageServerIfRunning(true);
                 vscode.window.showInformationMessage(stoppedLocalServer
                     ? 'Stopped the WurstScript language server in this VS Code window.'
                     : 'No running WurstScript processes were found.');
@@ -153,7 +153,7 @@ function registerBasicCommands(context: ExtensionContext) {
                 'Force Stop'
             );
             if (choice !== 'Force Stop') return;
-            await stopLanguageServerIfRunning();
+            await stopLanguageServerIfRunning(true);
             const remaining = await forceStopWurstProcesses(await findConflictingWurstProcesses());
             if (remaining.length > 0) {
                 const message = `Could not stop Wurst process${remaining.length === 1 ? '' : 'es'} ${remaining.map((item) => item.pid).join(', ')}.`;

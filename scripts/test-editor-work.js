@@ -160,6 +160,7 @@ function agentsHarness(storage, content) {
     const context = { globalState: state, workspaceState: state, globalStorageUri: uri(path.join(storage, 'snapshots')) };
     let downloads = 0;
     let copied = '';
+    let answer = 'Copy Agent Prompt';
     const requests = [];
     const https = { get: (_url, options, callback) => {
         downloads++;
@@ -180,10 +181,10 @@ function agentsHarness(storage, content) {
     } };
     const load = createTsLoader({ augment: { 'src/features/agentsGuide.ts': 'export { agentsTemplateWarning, createAgentsGuide, downloadAgentsGuide, requestAgentsGuide };' }, mocks: {
         https, vscode: { Uri: { file: uri }, workspace: { workspaceFolders: [folder] }, commands: { executeCommand: async () => {} },
-            window: { showInformationMessage: async () => 'Copy Agent Prompt' }, env: { clipboard: { writeText: async (text) => { copied = text; } } } },
+            window: { showInformationMessage: async () => answer, showTextDocument: async () => {} }, env: { clipboard: { writeText: async (text) => { copied = text; } } } },
         'src/features/notificationOffer.ts': {}, 'src/features/diagnostics.ts': {},
     } });
-    return { api: load('src/features/agentsGuide.ts'), context, folder, downloads: () => downloads, copied: () => copied, requests };
+    return { api: load('src/features/agentsGuide.ts'), context, folder, downloads: () => downloads, copied: () => copied, requests, setAnswer: (value) => { answer = value; } };
 }
 
 async function testAgentsUpdates(temp) {
@@ -217,6 +218,17 @@ async function testAgentsUpdates(temp) {
         await assert.rejects(stalled.api.downloadAgentsGuide(stalled.context), /aborted/);
         assert.equal(deadline, 15000, 'downloads have a total deadline, including stalled responses');
     } finally { global.setTimeout = originalTimeout; }
+    const empty = path.join(temp, 'missing-guide');
+    fs.mkdirSync(empty);
+    const missing = agentsHarness(empty, content);
+    missing.setAnswer(undefined);
+    await missing.api.prepareAgentsGuideUpdate(missing.context, missing.folder);
+    assert.equal(missing.downloads(), 0, 'dismissing a missing-guide offer must not download or open a diff');
+    assert.equal(fs.existsSync(path.join(empty, 'AGENTS.md')), false);
+    missing.setAnswer('Create AGENTS.md');
+    await missing.api.prepareAgentsGuideUpdate(missing.context, missing.folder);
+    assert.equal(missing.downloads(), 1);
+    assert.equal(fs.readFileSync(path.join(empty, 'AGENTS.md'), 'utf8'), content);
 }
 
 async function testHoverCancellation() {

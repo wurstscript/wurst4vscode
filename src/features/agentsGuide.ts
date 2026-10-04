@@ -185,6 +185,18 @@ export async function prepareAgentsGuideUpdate(context: vscode.ExtensionContext,
         (folders.length === 1 ? folders[0] : (await vscode.window.showQuickPick(folders.map((entry) => ({ label: entry.name, folder: entry })), { placeHolder: 'Choose a project for the AGENTS.md update' }))?.folder);
     if (!folder) return;
     const current = vscode.Uri.file(path.join(folder.uri.fsPath, 'AGENTS.md'));
+    const exists = await fs.promises.stat(current.fsPath).then((stat) => stat.isFile(), (error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+    });
+    if (!exists) {
+        const choice = await vscode.window.showInformationMessage(`No AGENTS.md exists in "${folder.name}". Create a guide before reviewing updates?`, CREATE_ACTION);
+        if (choice === CREATE_ACTION) {
+            await createAgentsGuide(folder, context);
+            await vscode.window.showTextDocument(current);
+        }
+        return;
+    }
     // Refresh is explicit and never replaces the project's customized instructions.
     const template = withAgentsTemplateMarker(await downloadAgentsGuide(context, true));
     const projectKey = createHash('sha256').update(folder.uri.toString()).digest('hex').slice(0, 16);

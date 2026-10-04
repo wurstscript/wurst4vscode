@@ -108,7 +108,15 @@ async function waitForInitialBuild(client: LanguageClient): Promise<boolean> {
     }
 }
 
-function probeInitialBuild(client: LanguageClient): void {
+type InitialBuild = { supported: boolean; state?: ServerState };
+
+function probeInitialBuild(client: LanguageClient, initialBuild: InitialBuild): void {
+    // Notifications never flush client 10's delayed opens. Preserve a completion that arrived
+    // during start(), before its promise resolved and this Running transition was handled.
+    if (initialBuild.supported) {
+        setServerState(initialBuild.state ?? { kind: 'loading' });
+        return;
+    }
     const generation = ++probeGeneration;
     setServerState({ kind: 'loading' });
     void waitForInitialBuild(client).then((loaded) => {
@@ -119,16 +127,15 @@ function probeInitialBuild(client: LanguageClient): void {
     });
 }
 
-/** Follows restarts and crashes of the running client, re-probing after each restart. */
-function trackClientState(client: LanguageClient, sentDocuments: Set<string>): vscode.Disposable {
+/** Follows crashes; the static feature chooses readiness after restart capabilities arrive. */
+function trackClientState(client: LanguageClient, sentDocuments: Set<string>, initialBuild: InitialBuild): vscode.Disposable {
     const subscription = client.onDidChangeState(({ newState }) => {
         if (newState !== State.Running) sentDocuments.clear();
         if (clientRef !== client) return;
-        if (newState === State.Running) {
-            if (!startingClient) probeInitialBuild(client);
-            return;
-        }
+        if (newState === State.Running) return;
         probeGeneration++;
+        initialBuild.supported = false;
+        initialBuild.state = undefined;
         unavailableReason = new Error(newState === State.Starting
             ? 'The WurstScript language server is restarting. Retry when it is ready.'
             : 'The WurstScript language server stopped unexpectedly. See the Wurst output for details.');
@@ -241,9 +248,13 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
 
         client = new LanguageClient('Wurstscript Language Server', serverOptions, clientOptions);
         const activeClient = client;
+        const initialBuild: InitialBuild = { supported: false };
         activeClient.registerFeature({
-            fillClientCapabilities() { /* The built-in open feature advertises synchronization. */ },
-            initialize() {
+            fillClientCapabilities(capabilities) {
+                capabilities.experimental = { ...capabilities.experimental, wurstInitialBuildStatus: true };
+            },
+            initialize(capabilities) {
+                initialBuild.supported = capabilities?.experimental?.wurstInitialBuildStatus === true;
                 // Client 10.1.2 registration retains live hidden documents. Use its normal
                 // open path to capture immutable snapshots before incremental edits arrive.
                 const opens = activeClient.getFeature(DidOpenTextDocumentNotification.method);
@@ -254,12 +265,28 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
                         appendDiagnostic('VS Code extension', `Could not snapshot an initial document: ${formatDiagnosticError(error)}`);
                     });
                 }
+                // Running precedes feature initialization in client 10. Decide only now,
+                // after the restarted server's capabilities have arrived.
+                if (!startingClient && clientRef === activeClient) probeInitialBuild(activeClient, initialBuild);
             },
             getState: () => ({ kind: 'static' }),
-            clear() { /* The built-in open feature owns and clears its snapshots. */ },
+            clear() { initialBuild.supported = false; initialBuild.state = undefined; },
         });
         clientRef = client;
-        clientSubscriptions = vscode.Disposable.from(watcher, trackClientState(client, sentDocuments),
+        clientSubscriptions = vscode.Disposable.from(watcher, trackClientState(client, sentDocuments, initialBuild),
+            client.onNotification('wurst/initialBuildStatus', (params: { state?: string }) => {
+                if (clientRef !== activeClient || activeClient.state !== State.Running) return;
+                // initialized is sent before static features initialize; a fast server may
+                // finish first. initializeResult is already available at that point.
+                if (!initialBuild.supported && activeClient.initializeResult?.capabilities.experimental?.wurstInitialBuildStatus !== true) return;
+                if (params?.state === 'loading' || params?.state === 'ready') {
+                    initialBuild.state = { kind: params.state };
+                } else if (params?.state === 'failed') {
+                    initialBuild.state = { kind: 'failed', reason: 'The initial workspace build failed. See the Wurst output for details.' };
+                    appendDiagnostic('VS Code extension', initialBuild.state.reason);
+                } else return;
+                if (initialBuild.state) setServerState(initialBuild.state);
+            }),
             client.onNotification('wurst/updateGamePath', (params) => {
                 void workspace.getConfiguration().update('wurst.wc3path', params).then(undefined, (error) => {
                     appendDiagnostic('VS Code extension', `Could not update game path: ${formatDiagnosticError(error)}`);
@@ -271,6 +298,7 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
             return;
         }
         if (!client.isRunning()) throw new Error('The WurstScript language server stopped during startup.');
+        probeInitialBuild(client, initialBuild);
     } catch (error) {
         if (generation !== startGeneration) return;
         clientRef = null;
@@ -288,10 +316,6 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
     startingClient = null;
     rejectStartingClient = undefined;
     announceStarted(client);
-
-    // The initial Running transition already happened inside start(), so probe once here and let
-    // trackClientState handle later restarts.
-    probeInitialBuild(client);
 
     // Version detection may start a JVM (once per installed jar, then served from a disk cache) and
     // the update check performs network I/O. Neither should delay language features or block the

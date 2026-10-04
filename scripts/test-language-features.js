@@ -50,8 +50,13 @@ function lifecycleHarness(installation = Promise.resolve(), documents = []) {
             this.listener = listener;
             return new TestDisposable(() => { this.listener = undefined; });
         }
-        onNotification() { return new TestDisposable(); }
-        sendRequest() { return Promise.resolve([]); }
+        notifications = new Map();
+        requests = [];
+        onNotification(method, handler) {
+            this.notifications.set(method, handler);
+            return new TestDisposable(() => this.notifications.delete(method));
+        }
+        sendRequest(method) { this.requests.push(method); return Promise.resolve([]); }
     }
     const vscode = {
         Disposable: TestDisposable,
@@ -107,6 +112,37 @@ async function testClientReadinessAndRestarts() {
     await h.server.stopLanguageServerIfRunning();
     assert.equal(h.watchers[0].disposed, true);
     await assert.rejects(h.server.getLanguageClient(), /was stopped/);
+}
+
+async function testBuildNotificationsAvoidRequests() {
+    const h = lifecycleHarness();
+    const start = h.server.startLanguageClient(h.context);
+    await tick();
+    const client = h.clients[0];
+    const feature = client.features[0];
+    const capabilities = {};
+    feature.fillClientCapabilities(capabilities);
+    assert.equal(capabilities.experimental.wurstInitialBuildStatus, true);
+    const serverCapabilities = { experimental: { wurstInitialBuildStatus: true } };
+    client.initializeResult = { capabilities: serverCapabilities };
+    client.transition(h.states.Running);
+    client.notifications.get('wurst/initialBuildStatus')({ state: 'ready' });
+    feature.initialize(serverCapabilities);
+    client.started.resolve();
+    await start;
+    assert.deepEqual(client.requests, [], 'a capable server must not flush hidden opens with a readiness request');
+    client.transition(h.states.Stopped);
+    client.transition(h.states.Starting);
+    client.transition(h.states.Running);
+    feature.initialize(serverCapabilities);
+    client.notifications.get('wurst/initialBuildStatus')({ state: 'failed' });
+    assert.deepEqual(client.requests, [], 'automatic restarts and failed builds must also avoid the probe');
+    client.transition(h.states.Stopped);
+    client.transition(h.states.Starting);
+    client.transition(h.states.Running);
+    feature.initialize({});
+    assert.deepEqual(client.requests, ['workspace/symbol'], 'legacy/no-signal servers must retain the readiness barrier');
+    await h.server.stopLanguageServerIfRunning();
 }
 
 async function testStopDuringInstallation() {
@@ -359,8 +395,6 @@ async function testClient10DocumentSynchronization() {
     const startup = options.server.startLanguageClient(options.context);
     await tick();
     const { textSynchronization, middleware } = options.clients[0].options;
-    options.clients[0].started.resolve();
-    await startup;
     const client = {
         clientOptions: { textSynchronization }, _clientOptions: {}, middleware,
         _didChangeTextDocumentFeature: { syncKind: protocol.TextDocumentSyncKind.Incremental },
@@ -383,12 +417,24 @@ async function testClient10DocumentSynchronization() {
     const opens = new DidOpenTextDocumentFeature(client, synced);
     options.clients[0].openFeature = opens;
     options.clients[0].visibleDocuments = client.visibleDocuments;
+    options.clients[0].sendRequest = client.sendRequest.bind(client);
     client._didOpenTextDocumentFeature = opens;
     const closes = new DidCloseTextDocumentFeature(client, synced, new Map());
-    const capabilities = { resolvedTextDocumentSync: { openClose: true } };
+    const capabilities = { resolvedTextDocumentSync: { openClose: true }, experimental: { wurstInitialBuildStatus: true } };
+    const restored = document('unsaved restored buffer');
+    initiallyOpen.push(restored);
     opens.initialize(capabilities, ['wurst']);
+    options.clients[0].initializeResult = { capabilities };
+    options.clients[0].transition(options.states.Running);
+    options.clients[0].notifications.get('wurst/initialBuildStatus')({ state: 'ready' });
     options.clients[0].features[0].initialize(capabilities);
     closes.initialize(capabilities, ['wurst']);
+    options.clients[0].started.resolve();
+    await startup;
+    assert.equal(sent.length, 0, 'startup readiness must leave real client 10 hidden opens pending');
+    assert.equal(synced.size, 0);
+    await closes.callback(restored);
+    initiallyOpen.length = 0;
     const doc = document('original');
     await opens.callback(doc);
     assert.equal(sent.length, 0, 'hidden opens must be delayed');
@@ -426,8 +472,12 @@ async function testClient10DocumentSynchronization() {
     synced.clear(); visible.clear(); sent.length = 0;
     const initial = document('before registration edit');
     initiallyOpen.push(initial);
+    options.clients[0].transition(options.states.Starting);
+    options.clients[0].transition(options.states.Running);
     opens.initialize(capabilities, ['wurst']);
     options.clients[0].features[0].initialize(capabilities);
+    options.clients[0].notifications.get('wurst/initialBuildStatus')({ state: 'ready' });
+    assert.equal(sent.length, 0, 'restart readiness must also leave existing hidden buffers pending');
     initial.text = 'after registration edit'; initial.version++;
     const replacement = { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } }, text: 'after' };
     await client.sendNotification(protocol.DidChangeTextDocumentNotification.type, { textDocument: { uri: initial.uri.toString(), version: 2 }, contentChanges: [replacement] });
@@ -441,6 +491,7 @@ async function testClient10DocumentSynchronization() {
 
 async function main() {
     await testClientReadinessAndRestarts();
+    await testBuildNotificationsAvoidRequests();
     await testStopDuringInstallation();
     await testInstallerPreservesItsOwnStartup();
     await testFailedStartCleansUp();

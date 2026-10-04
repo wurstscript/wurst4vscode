@@ -29,9 +29,6 @@ const STRING_LITERAL_RE = /"([^"\r\n]+\.([a-zA-Z0-9]+))"/g;
 // Matches bare FDF paths in .toc files (each non-empty, non-comment line)
 const TOC_LINE_RE = /^[ \t]*([^\s/][^\r\n]*\.fdf)[ \t]*$/gim;
 
-// Matches IncludeFile paths in .fdf files: IncludeFile "path\to\file.fdf",
-const FDF_INCLUDE_RE = /\bIncludeFile\s+"([^"\r\n]+\.fdf)"/g;
-
 function isAssetExt(ext: string): boolean {
     return ASSET_EXTS.has(ext.toLowerCase());
 }
@@ -68,56 +65,21 @@ async function resolveAssetPath(assetPath: string, roots: string[]): Promise<vsc
     return resolved ? vscode.Uri.file(resolved) : undefined;
 }
 
-function addLink(
-    links: vscode.DocumentLink[],
-    document: vscode.TextDocument,
-    _text: string,
-    startOffset: number,
-    length: number,
-    target: vscode.Uri,
-): void {
-    const range = new vscode.Range(
-        document.positionAt(startOffset),
-        document.positionAt(startOffset + length),
-    );
-    const link = new vscode.DocumentLink(range, target);
-    link.tooltip = target.fsPath;
-    links.push(link);
-}
-
-function addLazyCascLink(
-    links: vscode.DocumentLink[],
-    document: vscode.TextDocument,
-    startOffset: number,
-    length: number,
-    assetPath: string,
-): void {
-    const range = new vscode.Range(
-        document.positionAt(startOffset),
-        document.positionAt(startOffset + length),
-    );
-    const args = encodeURIComponent(JSON.stringify([assetPath]));
-    const target = vscode.Uri.parse(`command:wurst.openAssetFromString?${args}`);
-    const link = new vscode.DocumentLink(range, target);
-    link.tooltip = `Open ${assetPath}`;
-    links.push(link);
-}
-
 function findAssetStringAt(document: vscode.TextDocument, range: vscode.Range): BrowseAssetTarget | undefined {
     const offset = document.offsetAt(range.start);
-    return findAssetStrings(document).find((target) => {
+    for (const target of findAssetStrings(document)) {
         const start = document.offsetAt(target.range.start) - 1;
         const end = document.offsetAt(target.range.end) + 1;
-        return offset >= start && offset <= end;
-    });
+        if (offset >= start && offset <= end) return target;
+    }
+    return undefined;
 }
 
-function findAssetStrings(document: vscode.TextDocument): BrowseAssetTarget[] {
+function* findAssetStrings(document: vscode.TextDocument): Generator<BrowseAssetTarget> {
     const text = document.getText();
-    const targets: BrowseAssetTarget[] = [];
-    STRING_LITERAL_RE.lastIndex = 0;
+    const regex = new RegExp(STRING_LITERAL_RE);
     let match: RegExpExecArray | null;
-    while ((match = STRING_LITERAL_RE.exec(text)) !== null) {
+    while ((match = regex.exec(text)) !== null) {
         const assetPath = match[1];
         const ext = match[2].toLowerCase();
         const innerStart = match.index + 1;
@@ -127,14 +89,13 @@ function findAssetStrings(document: vscode.TextDocument): BrowseAssetTarget[] {
         if (isModelExt(ext)) kind = 'model';
         else if (isSoundExt(ext)) kind = 'sound';
         else kind = 'icon';
-        targets.push({
+        yield {
             uri: document.uri,
             range: new vscode.Range(document.positionAt(innerStart), document.positionAt(innerEnd)),
             kind,
             currentValue: assetPath,
-        });
+        };
     }
-    return targets;
 }
 
 function escapeWurstStringAssetPath(assetPath: string): string {
@@ -661,123 +622,101 @@ class WurstAssetCodeActionProvider implements vscode.CodeActionProvider {
 class WurstAssetCodeLensProvider implements vscode.CodeLensProvider {
     readonly changes = new vscode.EventEmitter<void>();
     readonly onDidChangeCodeLenses = this.changes.event;
-    provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
-        if (vscode.workspace.getConfiguration('wurst', document.uri).get<boolean>('leanEditor', false)) return [];
+    private readonly targets = new WeakMap<vscode.CodeLens, { document: vscode.TextDocument; version: number; play: boolean }>();
+
+    async provideCodeLenses(document: vscode.TextDocument, token: vscode.CancellationToken): Promise<vscode.CodeLens[]> {
+        if (token.isCancellationRequested || document.isClosed || vscode.workspace.getConfiguration('wurst', document.uri).get<boolean>('leanEditor', false)) return [];
+        const version = document.version;
         const lenses: vscode.CodeLens[] = [];
+        let count = 0;
         for (const target of findAssetStrings(document)) {
+            if (token.isCancellationRequested || document.isClosed || document.version !== version) return [];
+            const browse = new vscode.CodeLens(target.range);
+            this.targets.set(browse, { document, version, play: false });
             if (target.kind === 'sound') {
-                lenses.push(new vscode.CodeLens(target.range, {
-                    command: 'wurst.openAssetFromString',
-                    title: '▶ Play sound',
-                    arguments: [target.currentValue],
-                }));
+                const play = new vscode.CodeLens(target.range);
+                this.targets.set(play, { document, version, play: true });
+                lenses.push(play);
             }
-            let browseTitle: string;
-            if (target.kind === 'model') browseTitle = 'Browse model...';
-            else if (target.kind === 'sound') browseTitle = 'Browse sound...';
-            else browseTitle = 'Browse asset...';
-            lenses.push(new vscode.CodeLens(target.range, {
-                command: 'wurst.browseAssetForString',
-                title: browseTitle,
-                arguments: [target],
-            }));
+            lenses.push(browse);
+            if (++count % 256 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
         }
+        if (token.isCancellationRequested || document.isClosed || document.version !== version) return [];
         return lenses;
+    }
+
+    resolveCodeLens(lens: vscode.CodeLens, token: vscode.CancellationToken): vscode.CodeLens {
+        const source = this.targets.get(lens);
+        // Returning an unresolved lens here makes VS Code log an invalid-provider error.
+        // Obsolete work is cancellation, including edits or a lean-mode switch mid-request.
+        if (!source || token.isCancellationRequested || source.document.isClosed || source.document.version !== source.version) throw new vscode.CancellationError();
+        if (vscode.workspace.getConfiguration('wurst', source.document.uri).get<boolean>('leanEditor', false)) throw new vscode.CancellationError();
+        const currentValue = source.document.getText(lens.range);
+        const ext = path.extname(currentValue).slice(1);
+        let kind: BrowseAssetKind = 'icon';
+        if (isModelExt(ext)) kind = 'model';
+        else if (isSoundExt(ext)) kind = 'sound';
+        const title = kind === 'icon' ? 'Browse asset...' : `Browse ${kind}...`;
+        lens.command = source.play
+            ? { command: 'wurst.openAssetFromString', title: '▶ Play sound', arguments: [currentValue] }
+            : { command: 'wurst.browseAssetForString', title, arguments: [{ uri: source.document.uri, range: lens.range, kind, currentValue } satisfies BrowseAssetTarget] };
+        return lens;
     }
 }
 
 // ── Wurst / JASS: string literals containing asset paths ─────────────────────
 
 class WurstAssetLinkProvider implements vscode.DocumentLinkProvider {
+    private readonly targets = new WeakMap<vscode.DocumentLink, { document: vscode.TextDocument; version: number; assetPath: string }>();
+
+    constructor(private readonly pattern: RegExp = STRING_LITERAL_RE) {}
+
     async provideDocumentLinks(document: vscode.TextDocument, token: vscode.CancellationToken): Promise<vscode.DocumentLink[]> {
-        if (token.isCancellationRequested) return [];
+        if (token.isCancellationRequested || document.isClosed) return [];
         const text = document.getText();
         const version = document.version;
-        const stale = () => token.isCancellationRequested || document.version !== version;
-        const roots = await candidateRoots(document);
         const links: vscode.DocumentLink[] = [];
-
-        const regex = new RegExp(STRING_LITERAL_RE);
+        const regex = new RegExp(this.pattern);
         let m: RegExpExecArray | null;
         while ((m = regex.exec(text)) !== null) {
-            if (stale()) return [];
-            const [, assetPath, ext] = m;
-            if (!isAssetExt(ext)) continue;
-            if (isSoundExt(ext)) {
-                addLazyCascLink(links, document, m.index + 1, assetPath.length, assetPath);
-                continue;
-            }
-            const target = await resolveAssetPath(assetPath, roots);
-            if (stale()) return [];
-            if (target) {
-                addLink(links, document, text, m.index + 1, assetPath.length, target);
-                continue;
-            }
-            if (isModelExt(ext)) {
-                addLazyCascLink(links, document, m.index + 1, assetPath.length, assetPath);
-            }
+            if (token.isCancellationRequested || document.isClosed || document.version !== version) return [];
+            const assetPath = m[1];
+            if (!isAssetExt(path.extname(assetPath).slice(1))) continue;
+            const offset = m.index + m[0].indexOf(assetPath);
+            const link = new vscode.DocumentLink(new vscode.Range(document.positionAt(offset), document.positionAt(offset + assetPath.length)));
+            link.tooltip = `Open ${assetPath}`;
+            this.targets.set(link, { document, version, assetPath });
+            links.push(link);
+            if (links.length % 256 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
         }
-
+        if (token.isCancellationRequested || document.isClosed || document.version !== version) return [];
         return links;
     }
-}
 
-// ── FDF: IncludeFile paths ────────────────────────────────────────────────────
-
-class FdfLinkProvider extends WurstAssetLinkProvider {
-    async provideDocumentLinks(document: vscode.TextDocument, token: vscode.CancellationToken): Promise<vscode.DocumentLink[]> {
-        if (token.isCancellationRequested) return [];
-        const text = document.getText();
-        const version = document.version;
-        const stale = () => token.isCancellationRequested || document.version !== version;
-        const links = await super.provideDocumentLinks(document, token);
-        if (stale()) return [];
-        const roots = await candidateRoots(document);
-        if (stale()) return [];
-
-        // IncludeFile links
-        const includeRegex = new RegExp(FDF_INCLUDE_RE);
-        let m: RegExpExecArray | null;
-        while ((m = includeRegex.exec(text)) !== null) {
-            if (stale()) return [];
-            const assetPath = m[1];
-            const target = await resolveAssetPath(assetPath, roots);
-            if (stale()) return [];
-            if (!target) continue;
-            // point at the path inside the quotes
-            const startOffset = m.index + m[0].indexOf('"') + 1;
-            addLink(links, document, text, startOffset, assetPath.length, target);
+    async resolveDocumentLink(link: vscode.DocumentLink, token: vscode.CancellationToken): Promise<vscode.DocumentLink | undefined> {
+        const source = this.targets.get(link);
+        if (!source) return undefined;
+        const stale = () => token.isCancellationRequested || source.document.isClosed || source.document.version !== source.version;
+        if (stale()) return undefined;
+        const ext = path.extname(source.assetPath).slice(1);
+        // Sound links always use the inline player, including locally imported sounds.
+        if (isSoundExt(ext)) {
+            link.target = vscode.Uri.parse(`command:wurst.openAssetFromString?${encodeURIComponent(JSON.stringify([source.assetPath]))}`);
+            return link;
         }
-
-        return links;
-    }
-}
-
-// ── TOC: bare path lines ──────────────────────────────────────────────────────
-
-class TocLinkProvider implements vscode.DocumentLinkProvider {
-    async provideDocumentLinks(document: vscode.TextDocument, token: vscode.CancellationToken): Promise<vscode.DocumentLink[]> {
-        if (token.isCancellationRequested) return [];
-        const text = document.getText();
-        const version = document.version;
-        const stale = () => token.isCancellationRequested || document.version !== version;
-        const roots = await candidateRoots(document);
-        const links: vscode.DocumentLink[] = [];
-
-        const regex = new RegExp(TOC_LINE_RE);
-        let m: RegExpExecArray | null;
-        while ((m = regex.exec(text)) !== null) {
-            if (stale()) return [];
-            const assetPath = m[1];
-            const target = await resolveAssetPath(assetPath, roots);
-            if (stale()) return [];
-            if (!target) continue;
-            // Offset of the captured path within the full match
-            const startOffset = m.index + m[0].indexOf(m[1]);
-            addLink(links, document, text, startOffset, assetPath.length, target);
+        const roots = await candidateRoots(source.document);
+        if (stale()) return undefined;
+        const target = await resolveAssetPath(source.assetPath, roots);
+        if (stale()) return undefined;
+        if (target) {
+            link.target = target;
+            link.tooltip = target.fsPath;
+        } else if (isModelExt(ext)) {
+            link.target = vscode.Uri.parse(`command:wurst.openAssetFromString?${encodeURIComponent(JSON.stringify([source.assetPath]))}`);
+        } else {
+            return undefined;
         }
-
-        return links;
+        return link;
     }
 }
 
@@ -829,12 +768,12 @@ export function registerAssetLinks(context: vscode.ExtensionContext): vscode.Dis
 
     const fdf = vscode.languages.registerDocumentLinkProvider(
         [{ language: 'wc3-fdf' }, { pattern: '**/*.fdf' }],
-        new FdfLinkProvider(),
+        new WurstAssetLinkProvider(),
     );
 
     const toc = vscode.languages.registerDocumentLinkProvider(
         [{ language: 'wc3-toc' }, { pattern: '**/*.toc' }],
-        new TocLinkProvider(),
+        new WurstAssetLinkProvider(TOC_LINE_RE),
     );
 
     const codeActions = vscode.languages.registerCodeActionsProvider(

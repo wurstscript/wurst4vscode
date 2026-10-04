@@ -22,6 +22,7 @@ function resolveRelative(fromFile, request) {
     const resolved = path.resolve(path.dirname(fromFile), request);
     if (fs.existsSync(resolved) && fs.statSync(resolved).isFile()) return resolved;
     if (fs.existsSync(`${resolved}.ts`)) return `${resolved}.ts`;
+    if (fs.existsSync(`${resolved}.js`)) return `${resolved}.js`;
     if (fs.existsSync(path.join(resolved, 'index.ts'))) return path.join(resolved, 'index.ts');
     return resolved;
 }

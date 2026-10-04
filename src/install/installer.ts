@@ -436,7 +436,9 @@ async function prepareNightlyInstall(existing?: PreparedNightlyInstall): Promise
 }
 
 async function installPreparedNightly(prepared: PreparedNightlyInstall, options: InstallOptions): Promise<void> {
-    const stoppedLocalServer = await stopLanguageServerIfRunning();
+    // Activation can be awaiting this installation before it has created a client. Preserve
+    // that startup; only stop a client which actually owns the compiler being replaced.
+    const stoppedLocalServer = await stopLanguageServerIfRunning(false);
     try {
         await ensureConflictingWurstProcessesStopped();
     } catch (error) {

@@ -730,6 +730,7 @@ class FdfLinkProvider extends WurstAssetLinkProvider {
         const links = await super.provideDocumentLinks(document, token);
         if (stale()) return [];
         const roots = await candidateRoots(document);
+        if (stale()) return [];
 
         // IncludeFile links
         const includeRegex = new RegExp(FDF_INCLUDE_RE);

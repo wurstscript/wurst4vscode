@@ -162,9 +162,9 @@ export function getRunningLanguageClient(): LanguageClient | null {
     return !startingClient && clientRef?.isRunning() ? clientRef : null;
 }
 
-export async function stopLanguageServerIfRunning(): Promise<boolean> {
+export async function stopLanguageServerIfRunning(cancelPendingStart = true): Promise<boolean> {
     const client = clientRef;
-    if (!client && !startingClient) return false;
+    if (!client && (!startingClient || !cancelPendingStart)) return false;
     // Detach before stopping so the client's own Stopped transition is not reported as a crash.
     clientRef = null;
     startGeneration++;

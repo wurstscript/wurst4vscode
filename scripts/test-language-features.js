@@ -67,7 +67,7 @@ function lifecycleHarness(installation = Promise.resolve()) {
         'vscode-languageclient/node': { LanguageClient: Client, State: states },
         'src/paths.ts': {},
         'src/install/installer.ts': {
-            ensureInstalledOrOfferMigration: () => installation,
+            ensureInstalledOrOfferMigration: () => typeof installation === 'function' ? installation() : installation,
             getLanguageServerJava: () => 'java',
             getInstalledVersionString: () => Promise.resolve('test'),
             maybeOfferUpdate: () => Promise.resolve(),
@@ -118,6 +118,19 @@ async function testStopDuringInstallation() {
     assert.equal(await h.server.stopLanguageServerIfRunning(), false);
 }
 
+async function testInstallerPreservesItsOwnStartup() {
+    const h = lifecycleHarness(async () => {
+        assert.equal(await h.server.stopLanguageServerIfRunning(false), false);
+    });
+    const start = h.server.startLanguageClient(h.context);
+    await tick();
+    assert.equal(h.clients.length, 1, 'installation must resume the activation which requested it');
+    h.clients[0].started.resolve();
+    await start;
+    assert.equal(await h.server.getLanguageClient(), h.clients[0]);
+    await h.server.stopLanguageServerIfRunning();
+}
+
 async function testFailedStartCleansUp() {
     const h = lifecycleHarness();
     const start = h.server.startLanguageClient(h.context);
@@ -165,14 +178,14 @@ async function testStoppedStartupTerminatesAfterInitialization() {
     assert.equal(h.server.getRunningLanguageClient(), null);
 }
 
-function linkHarness(resolveAssetPath) {
+function linkHarness(resolveAssetPath, getCandidateRoots = async () => []) {
     class Range { constructor(start, end) { this.start = start; this.end = end; } }
     class DocumentLink { constructor(range, target) { this.range = range; this.target = target; } }
     const load = createTsLoader({
         augment: { 'src/features/assetLinks.ts': 'export { WurstAssetLinkProvider, FdfLinkProvider, TocLinkProvider, findAssetStrings };' },
         mocks: {
             vscode: { Range, DocumentLink, Uri: { file: (fsPath) => ({ fsPath }), parse: (value) => value } },
-            'src/features/imageAssetSupport.ts': { getCandidateRoots: async () => [], resolveAssetPath },
+            'src/features/imageAssetSupport.ts': { getCandidateRoots, resolveAssetPath },
             'src/features/objModPreview.ts': {}, 'src/features/preview/modelPreviewHost.ts': {},
             'src/features/preview/cascStorage.ts': {}, 'src/features/soundPreview.ts': {},
             'src/features/webviewShared.ts': {}, 'src/features/webviewUtils.ts': {},
@@ -237,6 +250,7 @@ async function testLinkCancellationAndEdits() {
 async function main() {
     await testClientReadinessAndRestarts();
     await testStopDuringInstallation();
+    await testInstallerPreservesItsOwnStartup();
     await testFailedStartCleansUp();
     await testStoppedStartupCannotOverwriteReplacement();
     await testStoppedStartupTerminatesAfterInitialization();
@@ -244,6 +258,18 @@ async function main() {
     await testConcurrentLinks('FdfLinkProvider', 'IncludeFile "a-long-first.fdf"\nIncludeFile "a-second.fdf"', 'IncludeFile "b.fdf"\nIncludeFile "c.fdf"');
     await testConcurrentLinks('TocLinkProvider', 'a-long-first.fdf\na-second.fdf', 'b.fdf\nc.fdf');
     await testLinkCancellationAndEdits();
+    const gate = deferred();
+    let rootCalls = 0;
+    const api = linkHarness(async () => '/asset', async () => {
+        if (++rootCalls === 2) await gate.promise;
+        return [];
+    });
+    const doc = document('"a.mdx"');
+    const links = new api.FdfLinkProvider().provideDocumentLinks(doc, { isCancellationRequested: false });
+    await tick();
+    doc.version++;
+    gate.resolve();
+    assert.deepEqual(await links, [], 'FDF root lookup must reject stale links even without includes');
     console.log('Language feature regression tests passed.');
 }
 

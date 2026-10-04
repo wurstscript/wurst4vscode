@@ -78,6 +78,18 @@ async function main() {
     assert(outputShown, 'View Logs should reveal the extension diagnostics output');
     assert(outputLines.some((line) => line.includes('Preview failed.')));
     assert(outputLines.some((line) => line.includes('decoder stack detail')));
+    for (let i = 0; i < 200; i++) mod.exports.appendDiagnostic('Inline icons', 'same failure');
+    const repeated = mod.exports.buildDiagnosticsText(tempHome);
+    assert.equal(repeated.split('same failure').length - 1, 1);
+    assert(repeated.includes('[occurrences: 200]'));
+    for (const source of ['WC3 data', 'MPQ', 'Inline icons', 'VS Code extension']) {
+        for (let i = 0; i < 150; i++) mod.exports.appendDiagnostic(source, `${i} ${'x'.repeat(50000)}`);
+    }
+    fs.writeFileSync(path.join(tempHome, 'logs', 'languageServer.log'), 'y'.repeat(50000));
+    const bounded = mod.exports.buildDiagnosticsText(tempHome);
+    assert(bounded.length <= mod.exports.MAX_DIAGNOSTIC_REPORT_LENGTH);
+    assert(bounded.includes('languageServer.log'), 'each source keeps an independent report budget');
+    assert(bounded.split('\n').every((line) => line.length <= mod.exports.MAX_DIAGNOSTIC_LINE_LENGTH));
     console.log('diagnostics tests passed (bounded tails, stack traces, timestamps, header, path shortening, and View Logs action)');
 }
 

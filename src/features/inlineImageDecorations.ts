@@ -21,8 +21,8 @@ import {
     resolveAssetPath,
     resolveAssetPathWithCasc,
 } from './imageAssetSupport';
-import { AssetIndex, getAssetIndex, invalidateAssetIndex } from '../utils/assetIndex';
-import { appendDiagnostic, diagnosticTimestamp, formatDiagnosticError } from './diagnostics';
+import { AssetIndex, getAssetIndex, registerAssetIndexChanges } from '../utils/assetIndex';
+import { appendDiagnostic, formatDiagnosticError } from './diagnostics';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -40,8 +40,10 @@ const STRING_MODEL_RE  = /"([^"\r\n]+\.(mdx|mdl))"/gi;
 // Matches ClassName.memberName  e.g. Icons.bTNHeal
 const MEMBER_ACCESS_RE = /\b([A-Z]\w*)\.([a-z]\w*)\b/g;
 
-const output = vscode.window.createOutputChannel('Wurst Inline Icons');
+const output = vscode.window.createOutputChannel('Wurst Inline Icons', { log: true });
 let isDisposed = false;
+let updateGeneration = 0;
+let refreshActiveEditor = () => {};
 
 
 function stripStringLiterals(text: string): string {
@@ -69,14 +71,8 @@ const thumbCache = new Map<string, PreviewCacheEntry>();
 
 function log(message: string): void {
     if (isDisposed) return;
-    appendDiagnostic('Inline icons', message);
-    const line = `[inline-icons] ${diagnosticTimestamp()} ${message}`;
-    try {
-        output.appendLine(line);
-    } catch {
-        return;
-    }
-    console.log(line);
+    output.debug(message);
+    if (message.includes(' error:') || message.includes('failed:')) appendDiagnostic('Inline icons', message);
 }
 
 function safeSetDecorations(
@@ -216,6 +212,7 @@ async function collectImageRanges(
     roots: string[],
     scanRanges: readonly vscode.Range[],
     index?: AssetIndex,
+    current = () => true,
 ): Promise<CollectedRanges> {
     const resolved = new Map<string, vscode.Range[]>();
     const pending = new Map<string, vscode.Range[]>();
@@ -261,9 +258,8 @@ async function collectImageRanges(
     }
 
     const uniqueAssetPaths = Array.from(new Set(matches.map((match) => match.assetPath)));
-    const resolvedPaths = new Map<string, string | undefined>(
-        await Promise.all(uniqueAssetPaths.map(async (assetPath): Promise<[string, string | undefined]> => [assetPath, await resolveImagePath(assetPath, roots)]))
-    );
+    const resolvedPaths = await resolveVisiblePaths(uniqueAssetPaths, roots, current);
+    if (!current()) return { resolved, pending, mdxResolved, mdxPending };
 
     for (const match of matches) {
         const fsPath = resolvedPaths.get(match.assetPath);
@@ -275,9 +271,8 @@ async function collectImageRanges(
     }
 
     const uniqueMdxPaths = Array.from(new Set(mdxMatches.map((m) => m.assetPath)));
-    const resolvedMdxPaths = new Map<string, string | undefined>(
-        await Promise.all(uniqueMdxPaths.map(async (assetPath): Promise<[string, string | undefined]> => [assetPath, await resolveImagePath(assetPath, roots)]))
-    );
+    const resolvedMdxPaths = await resolveVisiblePaths(uniqueMdxPaths, roots, current);
+    if (!current()) return { resolved, pending, mdxResolved, mdxPending };
 
     for (const match of mdxMatches) {
         const fsPath = resolvedMdxPaths.get(match.assetPath);
@@ -298,19 +293,19 @@ const unresolvedAssets = new Set<string>();
 const cascResolvedTextures = new Map<string, string>();
 const cascResolvedModels = new Set<string>();
 const mdxFoundRangesByPath = new Map<string, vscode.Range[]>();
-const decorationVersions = new Map<string, number>();
 const pendingThumbJobs = new Set<string>();
 // Maps fsPath/assetPath → the ranges currently showing the ◌ glyph for that path.
 // Cleared per-path when a thumb is applied, so the glyph doesn't linger.
 const loadingRangesByPath = new Map<string, vscode.Range[]>();
-const thumbQueue: Array<() => Promise<void>> = [];
+interface PreviewJob { run: () => Promise<void>; current: () => boolean; cancel: () => void }
+const thumbQueue: PreviewJob[] = [];
 let runningThumbJobs = 0;
-const cascQueue: Array<() => Promise<void>> = [];
+const cascQueue: PreviewJob[] = [];
 let runningCascJobs = 0;
 const updateTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-function scheduleThumbJob(job: () => Promise<void>): void {
-    thumbQueue.push(job);
+function scheduleThumbJob(job: () => Promise<void>, current: () => boolean, cancel = () => {}): void {
+    thumbQueue.push({ run: job, current, cancel });
     runThumbQueue();
 }
 
@@ -318,16 +313,20 @@ function runThumbQueue(): void {
     while (runningThumbJobs < MAX_CONCURRENT_THUMB_JOBS && thumbQueue.length > 0) {
         const next = thumbQueue.shift();
         if (!next) return;
+        if (!next.current()) { next.cancel(); continue; }
         runningThumbJobs += 1;
-        void next().finally(() => {
+        void next.run().catch((error) => log(`thumbnail error: ${formatDiagnosticError(error)}`)).finally(() => {
             runningThumbJobs -= 1;
+            if (isDisposed) thumbCache.clear();
+            trimAssetCaches();
+            if (!next.current() && !isDisposed) refreshActiveEditor();
             runThumbQueue();
         });
     }
 }
 
-function scheduleCascJob(job: () => Promise<void>): void {
-    cascQueue.push(job);
+function scheduleCascJob(job: () => Promise<void>, current: () => boolean, cancel = () => {}): void {
+    cascQueue.push({ run: job, current, cancel });
     runCascQueue();
 }
 
@@ -335,11 +334,38 @@ function runCascQueue(): void {
     while (runningCascJobs < MAX_CONCURRENT_CASC_JOBS && cascQueue.length > 0) {
         const next = cascQueue.shift();
         if (!next) return;
+        if (!next.current()) { next.cancel(); continue; }
         runningCascJobs += 1;
-        void next().finally(() => {
+        void next.run().catch((error) => log(`asset lookup error: ${formatDiagnosticError(error)}`)).finally(() => {
             runningCascJobs -= 1;
+            trimAssetCaches();
+            if (!next.current() && !isDisposed) refreshActiveEditor();
             runCascQueue();
         });
+    }
+}
+
+async function resolveVisiblePaths(paths: string[], roots: string[], current: () => boolean): Promise<Map<string, string | undefined>> {
+    const resolved = new Map<string, string | undefined>();
+    for (let offset = 0; offset < paths.length && current(); offset += 8) {
+        const entries = await Promise.all(paths.slice(offset, offset + 8).map(async (asset): Promise<[string, string | undefined]> => [asset, await resolveImagePath(asset, roots)]));
+        for (const [asset, value] of entries) resolved.set(asset, value);
+    }
+    return resolved;
+}
+
+function trimAssetCaches(): void {
+    for (const cache of [unresolvedAssets, cascResolvedTextures, cascResolvedModels]) {
+        while (cache.size > 512) cache.delete(cache.keys().next().value!);
+    }
+}
+
+function clearEditorDecorations(editor?: vscode.TextEditor): void {
+    for (const type of activeTypes.values()) type.dispose();
+    activeTypes.clear();
+    if (!editor) return;
+    for (const type of [loadingType, missingType, mdxFoundType]) {
+        if (type) safeSetDecorations(editor, type, []);
     }
 }
 
@@ -370,20 +396,21 @@ function clearMissingRanges(editor: vscode.TextEditor, key: string): void {
 }
 
 // eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
-async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
+async function updateDecorations(editor: vscode.TextEditor, generation: number): Promise<void> {
     if (isDisposed) return;
     const document = editor.document;
-    const docKey = document.uri.toString();
-    const version = (decorationVersions.get(docKey) ?? 0) + 1;
-    decorationVersions.set(docKey, version);
+    const version = document.version;
+    const current = () => !isDisposed && generation === updateGeneration && document.version === version && vscode.window.activeTextEditor === editor;
     const roots = await candidateRoots(document.uri.fsPath);
+    if (!current()) return;
     const scanRanges = getScanRanges(editor);
-    const text = document.getText();
-    const useAssetIndex = shouldUseAssetIndex(text);
-    const index = useAssetIndex ? await getAssetIndex() : undefined;
+    const useAssetIndex = scanRanges.some((range) => shouldUseAssetIndex(document.getText(range)));
+    const index = useAssetIndex ? await getAssetIndex(document.uri) : undefined;
+    if (!current()) return;
     if (useAssetIndex) log(`asset index enabled for ${path.basename(document.uri.fsPath)}`);
 
-    const { resolved, pending, mdxResolved, mdxPending } = await collectImageRanges(document, roots, scanRanges, index);
+    const { resolved, pending, mdxResolved, mdxPending } = await collectImageRanges(document, roots, scanRanges, index, current);
+    if (!current()) return;
     // Textures already extracted from the game data are decorated like local files.
     for (const [assetPath, ranges] of pending) {
         const cachePath = cascResolvedTextures.get(assetPath);
@@ -415,6 +442,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
     // Apply thumbnail decorations for already-cached paths and queue the rest.
     for (const [fsPath, ranges] of resolved) {
         const iconUri = await getCachedThumbnailUri(fsPath);
+        if (!current()) return;
         if (iconUri) {
             setLoadingRanges(fsPath, []);
             setMissingRanges(fsPath, []);
@@ -445,8 +473,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
                 log(`thumb ready: ${path.basename(fsPath)} (queue ${thumbQueueWait}ms, gen ${thumbElapsed}ms)`);
 
                 const active = vscode.window.activeTextEditor;
-                const latestVersion = decorationVersions.get(docKey);
-                if (!active || active.document !== document || latestVersion !== version) {
+                if (!active || !current()) {
                     log(`skip stale thumb apply: ${fsPath}`);
                     return;
                 }
@@ -463,7 +490,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
             } finally {
                 pendingThumbJobs.delete(fsPath);
             }
-        });
+        }, current, () => pendingThumbJobs.delete(fsPath));
     }
 
     for (const [assetPath, ranges] of pending) {
@@ -503,6 +530,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
                 const startedAt = Date.now();
                 // Same lookup as hovers: the game ships models as .mdx even where code says .mdl.
                 const cachedPath = await resolveAssetPathWithCasc(assetPath, roots, 'model');
+                if (!current()) return;
                 const elapsed = Date.now() - startedAt;
                 const active = vscode.window.activeTextEditor;
                 if (!active || active.document !== document) return;
@@ -525,7 +553,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
             } finally {
                 extracting.delete(assetPath);
             }
-        });
+        }, current, () => extracting.delete(assetPath));
     }
 
     // Fire off CASC extraction for pending asset paths (deduplicated, non-blocking)
@@ -541,6 +569,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
                 const queueWait = startedAt - queuedAt;
                 log(`start casc extract: ${assetPath} (queued ${queueWait}ms)`);
                 const cachedPath = await ensureGameTextureCached(assetPath);
+                if (!current()) return;
                 const elapsed = Date.now() - startedAt;
                 if (!cachedPath) {
                     unresolvedAssets.add(assetPath);
@@ -566,6 +595,7 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
                     scheduleThumbJob(async () => {
                         const thumbStartedAt2 = Date.now();
                         const iconUri = await getThumbnailUri(cachedPath);
+                        if (!current()) return;
                         const thumbElapsed2 = Date.now() - thumbStartedAt2;
                         if (!iconUri) {
                             log(`thumb failed for casc-resolved: ${path.basename(cachedPath)} (gen ${thumbElapsed2}ms)`);
@@ -583,14 +613,14 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
                         clearLoadingRanges(currentActive, assetPath);
                         clearMissingRanges(currentActive, assetPath);
                         log(`applied thumb (casc): ${path.basename(cachedPath)} ranges=${pendingRanges.length}`);
-                    });
+                    }, current);
                 }
             } catch (error) {
                 log(`casc error: ${assetPath} :: ${formatDiagnosticError(error)}`);
             } finally {
                 extracting.delete(assetPath);
             }
-        });
+        }, current, () => extracting.delete(assetPath));
     }
 }
 
@@ -599,20 +629,30 @@ async function updateDecorations(editor: vscode.TextEditor): Promise<void> {
 export function registerInlineImageDecorations(_context: vscode.ExtensionContext): vscode.Disposable {
     const LANGS = ['wurst', 'jass', 'wc3-fdf'];
 
-    const update = (editor: vscode.TextEditor | undefined) => {
-        if (!editor) return;
+    const update = (editor: vscode.TextEditor | undefined, invalidate = true) => {
+        if (editor && editor !== vscode.window.activeTextEditor) return;
+        const generation = invalidate ? ++updateGeneration : updateGeneration;
+        for (const timer of updateTimers.values()) clearTimeout(timer);
+        updateTimers.clear();
+        if (invalidate) for (const job of [...thumbQueue.splice(0), ...cascQueue.splice(0)]) job.cancel();
+        if (!editor || vscode.workspace.getConfiguration('wurst', editor.document.uri).get<boolean>('leanEditor', false)) {
+            clearEditorDecorations(editor);
+            return;
+        }
         const lang = editor.document.languageId;
         const ext = path.extname(editor.document.uri.fsPath).toLowerCase();
-        if (!LANGS.includes(lang) && ext !== '.j') return;
+        if (!LANGS.includes(lang) && ext !== '.j') { clearEditorDecorations(editor); return; }
         const key = editor.document.uri.toString();
         const existing = updateTimers.get(key);
         if (existing) clearTimeout(existing);
         updateTimers.set(key, setTimeout(() => {
             updateTimers.delete(key);
-            void updateDecorations(editor).catch(() => {
-                // Ignore races from editor/extension shutdown.
-            });
+            void updateDecorations(editor, generation).catch((error) => log(`decoration error: ${formatDiagnosticError(error)}`));
         }, UPDATE_DEBOUNCE_MS));
+    };
+    refreshActiveEditor = () => {
+        const editor = vscode.window.activeTextEditor;
+        if (editor && !vscode.workspace.getConfiguration('wurst', editor.document.uri).get<boolean>('leanEditor', false)) update(editor, false);
     };
 
     const subs = [
@@ -622,13 +662,10 @@ export function registerInlineImageDecorations(_context: vscode.ExtensionContext
             const editor = vscode.window.activeTextEditor;
             if (editor && e.document === editor.document) update(editor);
         }),
-        // Invalidate asset index when .wurst files change
-        vscode.workspace.onDidSaveTextDocument(doc => {
-            if (doc.fileName.endsWith('.wurst')) { invalidateAssetIndex(); update(vscode.window.activeTextEditor); }
-        }),
+        registerAssetIndexChanges(() => update(vscode.window.activeTextEditor)),
         // Game-data hits and misses belong to the previous install once wurst.wc3path changes.
         vscode.workspace.onDidChangeConfiguration((event) => {
-            if (!event.affectsConfiguration('wurst.wc3path')) return;
+            if (!event.affectsConfiguration('wurst.wc3path') && !event.affectsConfiguration('wurst.leanEditor')) return;
             unresolvedAssets.clear();
             cascResolvedTextures.clear();
             cascResolvedModels.clear();
@@ -637,6 +674,12 @@ export function registerInlineImageDecorations(_context: vscode.ExtensionContext
         // Dispose all active types when extension deactivates
         new vscode.Disposable(() => {
             isDisposed = true;
+            updateGeneration++;
+            refreshActiveEditor = () => {};
+            for (const job of [...thumbQueue.splice(0), ...cascQueue.splice(0)]) job.cancel();
+            thumbCache.clear();
+            pendingThumbJobs.clear();
+            extracting.clear();
             for (const timer of updateTimers.values()) clearTimeout(timer);
             updateTimers.clear();
             for (const t of activeTypes.values()) t.dispose();

@@ -162,7 +162,9 @@ export function getRunningLanguageClient(): LanguageClient | null {
     return !startingClient && clientRef?.isRunning() ? clientRef : null;
 }
 
-export async function stopLanguageServerIfRunning(cancelPendingStart = true): Promise<boolean> {
+// Install and repair may be called by activation itself. They stop an existing client;
+// only explicit user stops and extension disposal cancel a pre-client startup.
+export async function stopLanguageServerIfRunning(cancelPendingStart = false): Promise<boolean> {
     const client = clientRef;
     if (!client && (!startingClient || !cancelPendingStart)) return false;
     // Detach before stopping so the client's own Stopped transition is not reported as a crash.
@@ -202,7 +204,7 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
     startingClient.catch(() => undefined);
     setServerState({ kind: 'starting' });
     context.subscriptions.push({ dispose: () => {
-        if (generation === startGeneration) void stopLanguageServerIfRunning();
+        if (generation === startGeneration) void stopLanguageServerIfRunning(true);
     } });
 
     let client: LanguageClient | undefined;

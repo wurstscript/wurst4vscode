@@ -110,7 +110,7 @@ async function testStopDuringInstallation() {
     const h = lifecycleHarness(installation.promise);
     const start = h.server.startLanguageClient(h.context);
     const command = h.server.getLanguageClient();
-    assert.equal(await h.server.stopLanguageServerIfRunning(), true);
+    assert.equal(await h.server.stopLanguageServerIfRunning(true), true);
     await assert.rejects(command, /was stopped/);
     installation.resolve();
     await start;
@@ -120,7 +120,7 @@ async function testStopDuringInstallation() {
 
 async function testInstallerPreservesItsOwnStartup() {
     const h = lifecycleHarness(async () => {
-        assert.equal(await h.server.stopLanguageServerIfRunning(false), false);
+        assert.equal(await h.server.stopLanguageServerIfRunning(), false);
     });
     const start = h.server.startLanguageClient(h.context);
     await tick();
@@ -150,7 +150,7 @@ async function testStoppedStartupCannotOverwriteReplacement() {
     const oldStart = h.server.startLanguageClient(h.context);
     await tick();
     const oldCommand = h.server.getLanguageClient();
-    await h.server.stopLanguageServerIfRunning();
+    await h.server.stopLanguageServerIfRunning(true);
     await assert.rejects(oldCommand, /was stopped/);
     const replacementStart = h.server.startLanguageClient(h.context);
     await tick();
@@ -170,7 +170,7 @@ async function testStoppedStartupTerminatesAfterInitialization() {
     const start = h.server.startLanguageClient(h.context);
     await tick();
     const command = h.server.getLanguageClient();
-    await h.server.stopLanguageServerIfRunning();
+    await h.server.stopLanguageServerIfRunning(true);
     await assert.rejects(command, /was stopped/);
     h.clients[0].started.resolve();
     await start;

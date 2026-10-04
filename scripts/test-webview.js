@@ -709,6 +709,8 @@ function testNonBlockingStartupAndForcedReinstallWiring() {
 /** The server-backed commands await this handle, so its lifecycle decides whether they run, fail fast, or hang. */
 async function testLanguageClientHandleLifecycle() {
     let failStart = false;
+    let serverCapabilities = {};
+    let earlyBuildState;
     const clients = [];
     const probes = [];
     let reportUpdate;
@@ -717,16 +719,33 @@ async function testLanguageClientHandleLifecycle() {
         constructor() { this.stopped = false; this.outputChannel = { show() {} }; clients.push(this); }
         registerFeature(feature) { this.snapshotFeature = feature; }
         getFeature() { return { getProvider: () => undefined }; }
-        start() { this.state = 2; this.snapshotFeature.initialize(); return Promise.resolve(); }
+        start() {
+            this.state = 2;
+            this.initializeResult = { capabilities: serverCapabilities };
+            if (earlyBuildState) this.notifications.get('wurst/initialBuildStatus')({ state: earlyBuildState });
+            this.snapshotFeature.initialize(serverCapabilities);
+            return Promise.resolve();
+        }
         isRunning() { return this.state === 2; }
         sendRequest(method) {
             assert.equal(method, 'workspace/symbol', 'the initial-load probe must be a request the server queues behind its initial build');
             return new Promise((resolve, reject) => probes.push({ resolve, reject }));
         }
         onDidChangeState(listener) { this.stateListener = listener; return { dispose() {} }; }
-        emitState(newState) { this.state = newState; this.stateListener({ oldState: 0, newState }); }
+        emitState(newState) {
+            this.state = newState;
+            this.stateListener({ oldState: 0, newState });
+            if (newState === 2) {
+                this.initializeResult = { capabilities: serverCapabilities };
+                this.snapshotFeature.initialize(serverCapabilities);
+            }
+        }
         stop() { this.stopped = true; this.stateListener?.({ oldState: 2, newState: 1 }); this.textWhenStopped = statusItem.text; return Promise.resolve(); }
-        onNotification() { return { dispose() {} }; }
+        notifications = new Map();
+        onNotification(method, handler) {
+            this.notifications.set(method, handler);
+            return { dispose: () => this.notifications.delete(method) };
+        }
     }
     const mod = loadTsModuleWithMocks('src/languageServer.ts', {
         vscode: {
@@ -811,6 +830,33 @@ async function testLanguageClientHandleLifecycle() {
     await mod.startLanguageClient(context);
     assert.equal(await mod.getLanguageClient(), clients[1], 'a restart hands out a fresh handle');
     await mod.stopLanguageServerIfRunning();
+
+    serverCapabilities = { experimental: { wurstInitialBuildStatus: true } };
+    earlyBuildState = 'ready';
+    const oldProbeCount = probes.length;
+    await mod.startLanguageClient(context);
+    const capable = clients[2];
+    assert.equal(statusItem.text, '$(circle-filled) WurstScript Update', 'completion before feature initialization must survive start()');
+    assert.equal(probes.length, oldProbeCount, 'capable startup must not probe');
+    const reportBuild = capable.notifications.get('wurst/initialBuildStatus');
+    capable.emitState(3);
+    reportBuild({ state: 'ready' });
+    assert.equal(statusItem.text, '$(sync~spin) WurstScript', 'notifications while restarting must not restore old readiness');
+    capable.emitState(2);
+    assert.equal(statusItem.text, '$(sync~spin) WurstScript', 'a new server must await its own build completion');
+    reportBuild({ state: 'unknown' });
+    assert.equal(statusItem.text, '$(sync~spin) WurstScript', 'malformed build states are ignored');
+    reportBuild({ state: 'failed' });
+    assert.equal(statusItem.text, '$(warning) WurstScript');
+    assert.ok(statusItem.tooltip.includes('initial workspace build failed'));
+    assert.equal(probes.length, oldProbeCount, 'failed builds must not flush hidden opens');
+    capable.emitState(3);
+    capable.emitState(2);
+    reportBuild({ state: 'ready' });
+    assert.equal(statusItem.text, '$(circle-filled) WurstScript Update');
+    await mod.stopLanguageServerIfRunning();
+    reportBuild({ state: 'ready' });
+    assert.equal(statusItem.text, '$(circle-slash) WurstScript', 'disposed notifications cannot overwrite an intentional stop');
 
     failStart = true;
     await assert.rejects(mod.startLanguageClient(context));

@@ -87,7 +87,7 @@ Most projects need no custom settings. Common overrides are `wurst.wc3path`, `wu
 
 For projects edited primarily by agents, enable `wurst.leanEditor` to disable automatic asset thumbnails and asset CodeLens scans. Hover previews and explicit asset commands remain available. Empty files stay untouched by default; **Wurst: Insert Package Header** inserts a header on request, and `wurst.autoPackageHeader` restores automatic insertion when opening an empty document.
 
-Asset CodeLens commands resolve on demand, and asset links defer filesystem lookups until resolution. Large scans yield to edits and cancellation. After startup, the language client delays opening hidden documents on the server until they become visible or an edit or request needs them; briefly opened, unedited files can avoid an open/close cycle entirely. Restored tabs still synchronize before the initial-build readiness probe.
+Asset CodeLens commands resolve on demand, and asset links defer filesystem lookups until resolution. Large scans yield to edits and cancellation. The language client delays opening hidden documents on the server until they become visible or an edit or request needs them; briefly opened, unedited files can avoid an open/close cycle entirely. Compilers supporting build-status notifications preserve this deferral during startup and automatic restarts too. Older compilers retain the initial-build readiness probe, which synchronizes pending documents.
 
 **Wurst: Prepare AGENTS.md Update** downloads the current WurstSetup template on demand and opens a diff against the project's guide. **Copy Agent Prompt** provides instructions for reconciling changes with local compiler documentation and project-specific rules. Guides created by the extension retain their original template as a comparison baseline; customized guides without a baseline get a conservative reconciliation prompt. Reviewing an update never overwrites `AGENTS.md` or advances the baseline.
 
@@ -115,3 +115,5 @@ npm test
 npx tsc -p . --noEmit
 npm run vscode:prepublish
 ```
+
+For compiler/client startup changes, build the compiler with `gradlew shadowJar` in its `de.peeeq.wurstscript` directory, then run `node scripts/test-lsp-readiness.js <path-to-wurstscript.jar>` here. This opt-in JSON-RPC test covers progress, clients without progress UI, legacy readiness, failed builds, and deferred unsaved buffers. It requires Java 25 on PATH (or `WURST_LSP_TEST_JAVA`).

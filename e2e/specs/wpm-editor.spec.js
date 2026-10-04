@@ -110,8 +110,12 @@ test('undo and redo restore the painted cell in both the document and the canvas
     const { page, host } = await openWpm();
     await page.click('#btnZoomFit');
     const before = Buffer.from(host.doc.file.data);
+    const viewport = await page.locator('#viewport').boundingBox();
+    const blank = await pixelAt(page, viewport.x + viewport.width / 2, viewport.y + viewport.height / 2);
     const { x, y } = await paintAtViewportCentre(page, 'paint');
     await expect.poll(() => host.isDirty).toBe(true);
+    // Host dirty state can arrive before the requestAnimationFrame canvas redraw.
+    await expect.poll(() => pixelAt(page, x, y)).not.toEqual(blank);
     const painted = await pixelAt(page, x, y);
 
     host.undo();

@@ -120,8 +120,9 @@ function probeInitialBuild(client: LanguageClient): void {
 }
 
 /** Follows restarts and crashes of the running client, re-probing after each restart. */
-function trackClientState(client: LanguageClient): vscode.Disposable {
-    return client.onDidChangeState(({ newState }) => {
+function trackClientState(client: LanguageClient, sentDocuments: Set<string>): vscode.Disposable {
+    const subscription = client.onDidChangeState(({ newState }) => {
+        if (newState !== State.Running) sentDocuments.clear();
         if (clientRef !== client) return;
         if (newState === State.Running) {
             if (!startingClient) probeInitialBuild(client);
@@ -135,6 +136,7 @@ function trackClientState(client: LanguageClient): vscode.Disposable {
             ? { kind: 'starting' }
             : { kind: 'failed', reason: unavailableReason.message });
     });
+    return vscode.Disposable.from(subscription, { dispose: () => sentDocuments.clear() });
 }
 
 // Commands that talk to the server are registered at activation, before (and independent of) the
@@ -216,8 +218,22 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
         if (generation !== startGeneration) return;
         const watcher = workspace.createFileSystemWatcher('**/*.{wurst,jurst,j}');
         clientSubscriptions = watcher;
+        const sentDocuments = new Set<string>();
         const clientOptions: LanguageClientOptions = {
             documentSelector: ['wurst'],
+            // Client 10 drops hidden open/close pairs and flushes pending opens before
+            // edits or requests, preserving the server's document/version ordering.
+            textSynchronization: { delayOpenNotifications: true },
+            middleware: {
+                didOpen: (document, next) => {
+                    const uri = document.uri.toString();
+                    sentDocuments.add(uri);
+                    return next(document).catch((error) => { sentDocuments.delete(uri); throw error; });
+                },
+                // In client 10.1.2 the workspace close listener can discard a delayed
+                // open before the close handler checks for it. Don't send an unpaired close.
+                didClose: (document, next) => sentDocuments.delete(document.uri.toString()) ? next(document) : Promise.resolve(),
+            },
             // The language client batches events and owns notification error handling and
             // restart subscriptions. Keep external edits to every supported source format.
             synchronize: { configurationSection: 'wurst', fileEvents: watcher },
@@ -225,7 +241,7 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
 
         client = new LanguageClient('Wurstscript Language Server', serverOptions, clientOptions);
         clientRef = client;
-        clientSubscriptions = vscode.Disposable.from(watcher, trackClientState(client),
+        clientSubscriptions = vscode.Disposable.from(watcher, trackClientState(client, sentDocuments),
             client.onNotification('wurst/updateGamePath', (params) => {
                 void workspace.getConfiguration().update('wurst.wc3path', params).then(undefined, (error) => {
                     appendDiagnostic('VS Code extension', `Could not update game path: ${formatDiagnosticError(error)}`);

@@ -178,13 +178,18 @@ async function testStoppedStartupTerminatesAfterInitialization() {
     assert.equal(h.server.getRunningLanguageClient(), null);
 }
 
-function linkHarness(resolveAssetPath, getCandidateRoots = async () => []) {
+function linkHarness(resolveAssetPath, getCandidateRoots = async () => [], settings = { lean: false }) {
     class Range { constructor(start, end) { this.start = start; this.end = end; } }
     class DocumentLink { constructor(range, target) { this.range = range; this.target = target; } }
+    class CodeLens { constructor(range, command) { this.range = range; this.command = command; } }
+    class Emitter { event = () => new TestDisposable(); dispose() {} }
     const load = createTsLoader({
-        augment: { 'src/features/assetLinks.ts': 'export { WurstAssetLinkProvider, FdfLinkProvider, TocLinkProvider, findAssetStrings };' },
+        augment: { 'src/features/assetLinks.ts': 'export { WurstAssetLinkProvider, WurstAssetCodeLensProvider, TOC_LINE_RE, findAssetStrings, findAssetStringAt };' },
         mocks: {
-            vscode: { Range, DocumentLink, Uri: { file: (fsPath) => ({ fsPath }), parse: (value) => value } },
+            vscode: { Range, DocumentLink, CodeLens, EventEmitter: Emitter,
+                CancellationError: class extends Error { constructor() { super('Canceled'); this.name = 'Canceled'; } },
+                workspace: { getConfiguration: () => ({ get: () => settings.lean }) },
+                Uri: { file: (fsPath) => ({ fsPath }), parse: (value) => value } },
             'src/features/imageAssetSupport.ts': { getCandidateRoots, resolveAssetPath },
             'src/features/objModPreview.ts': {}, 'src/features/preview/modelPreviewHost.ts': {},
             'src/features/preview/cascStorage.ts': {}, 'src/features/soundPreview.ts': {},
@@ -196,10 +201,13 @@ function linkHarness(resolveAssetPath, getCandidateRoots = async () => []) {
 }
 
 function document(text) {
-    return { uri: { fsPath: '/project/source.wurst' }, version: 1, getText: () => text, positionAt: (offset) => offset };
+    const doc = { uri: { fsPath: '/project/source.wurst', toString: () => '/project/source.wurst' }, languageId: 'wurst', version: 1,
+        text, isClosed: false, reads: [], positionAt: (offset) => offset, offsetAt: (offset) => offset };
+    doc.getText = (range) => { doc.reads.push(range); return range ? doc.text.slice(range.start, range.end) : doc.text; };
+    return doc;
 }
 
-async function testConcurrentLinks(providerName, textA, textB) {
+async function testConcurrentLinks(toc, textA, textB) {
     const gates = new Map();
     const calls = new Map();
     const api = linkHarness(async (asset) => {
@@ -209,42 +217,205 @@ async function testConcurrentLinks(providerName, textA, textB) {
         }
         return asset;
     });
-    const provider = new api[providerName]();
+    const provider = new api.WurstAssetLinkProvider(toc ? api.TOC_LINE_RE : undefined);
     const token = { isCancellationRequested: false };
-    const a = provider.provideDocumentLinks(document(textA), token);
-    const b = provider.provideDocumentLinks(document(textB), token);
+    const [a, b] = await Promise.all([provider.provideDocumentLinks(document(textA), token), provider.provideDocumentLinks(document(textB), token)]);
+    assert.equal(calls.size, 0, 'range discovery must not resolve assets');
+    assert.equal(a.length, 2);
+    assert.equal(b.length, 2);
+    assert(a.every((link) => link.target === undefined));
+    const resolvedA = provider.resolveDocumentLink(a[0], token);
+    const resolvedB = provider.resolveDocumentLink(b[0], token);
     await tick();
-    // CodeLens scanning shares the string-expression definition too.
-    api.findAssetStrings(document('"other.mdx"'));
-    const firstGate = [...gates.values()][0];
-    firstGate();
-    const resultA = await a;
+    // A third scan cannot disturb two in-flight resolutions.
+    assert.equal([...api.findAssetStrings(document('"other.mdx"'))].length, 1);
+    [...gates.values()][0]();
+    assert.equal((await resolvedA).target.fsPath, a[0].tooltip);
     [...gates.values()][1]();
-    const resultB = await b;
-    const expectedCount = providerName === 'FdfLinkProvider' ? 4 : 2;
-    assert.equal(resultA.length, expectedCount);
-    assert.equal(resultB.length, expectedCount);
-    assert.equal(calls.get(providerName === 'WurstAssetLinkProvider' ? 'b.mdx' : 'b.fdf'), providerName === 'FdfLinkProvider' ? 2 : 1);
+    assert.equal((await resolvedB).target.fsPath, b[0].tooltip);
+    assert.equal(calls.size, 2, 'only requested links should touch the filesystem');
 }
 
 async function testLinkCancellationAndEdits() {
-    for (const providerName of ['WurstAssetLinkProvider', 'FdfLinkProvider', 'TocLinkProvider']) {
-        for (const cancel of [false, true]) {
+    for (const stage of ['roots', 'path']) {
+        for (const invalidation of ['cancel', 'edit', 'close']) {
             const gate = deferred();
-            let calls = 0;
-            const api = linkHarness(async () => { calls++; await gate.promise; return '/asset'; });
-            const provider = new api[providerName]();
-            const doc = document(providerName === 'TocLinkProvider' ? 'a.fdf\nb.fdf' : 'IncludeFile "a.fdf"\n"b.fdf"');
+            let pathCalls = 0;
+            const api = linkHarness(async () => {
+                pathCalls++;
+                if (stage === 'path') await gate.promise;
+                return '/asset';
+            }, async () => {
+                if (stage === 'roots') await gate.promise;
+                return [];
+            });
+            const provider = new api.WurstAssetLinkProvider();
+            const doc = document('IncludeFile "a.fdf"\n"b.fdf"');
             const token = { isCancellationRequested: false };
-            const pending = provider.provideDocumentLinks(doc, token);
+            const links = await provider.provideDocumentLinks(doc, token);
+            assert.equal(links.length, 2, 'FDF includes must not produce duplicate links');
+            const pending = provider.resolveDocumentLink(links[0], token);
             await tick();
-            if (cancel) token.isCancellationRequested = true;
-            else doc.version++;
+            if (invalidation === 'cancel') token.isCancellationRequested = true;
+            if (invalidation === 'edit') doc.version++;
+            if (invalidation === 'close') doc.isClosed = true;
             gate.resolve();
-            assert.deepEqual(await pending, [], 'cancelled or changed documents must not receive stale links');
-            assert.equal(calls, 1, 'obsolete requests must stop resolving further assets');
+            assert.equal(await pending, undefined, 'obsolete resolutions must not produce link targets');
+            assert.equal(links[0].target, undefined);
+            assert.equal(pathCalls, stage === 'roots' ? 0 : 1, 'cancel during roots must prevent path I/O');
         }
     }
+}
+
+async function testLazyAssetActions() {
+    const settings = { lean: false };
+    let calls = 0;
+    const api = linkHarness(async () => { calls++; return undefined; }, async () => { calls++; return []; }, settings);
+    const token = { isCancellationRequested: false };
+    const doc = document('"a.mdx"\n"b.wav"\n"c.blp"\n"unknown.other"');
+    const links = new api.WurstAssetLinkProvider();
+    const ranges = await links.provideDocumentLinks(doc, token);
+    assert.equal(ranges.length, 3);
+    assert.equal(calls, 0);
+    assert.equal((await links.resolveDocumentLink(ranges[1], token)).target,
+        `command:wurst.openAssetFromString?${encodeURIComponent(JSON.stringify(['b.wav']))}`);
+    assert.equal(calls, 0, 'inline sound links must not probe files');
+    assert((await links.resolveDocumentLink(ranges[0], token)).target.startsWith('command:wurst.openAssetFromString?'));
+    assert.equal(await links.resolveDocumentLink(ranges[2], token), undefined, 'missing textures remain unresolved');
+
+    const lenses = new api.WurstAssetCodeLensProvider();
+    const items = await lenses.provideCodeLenses(doc, token);
+    assert.equal(items.length, 4);
+    assert(items.every((lens) => lens.command === undefined), 'offscreen lenses must have no command payloads');
+    const fullReads = doc.reads.filter((range) => !range).length;
+    assert.equal(lenses.resolveCodeLens(items[0], token).command.title, 'Browse model...');
+    assert.deepEqual(lenses.resolveCodeLens(items[1], token).command.arguments, ['b.wav']);
+    assert.equal(lenses.resolveCodeLens(items[2], token).command.title, 'Browse sound...');
+    const texture = lenses.resolveCodeLens(items[3], token).command;
+    assert.equal(texture.title, 'Browse asset...');
+    assert.equal(texture.arguments[0].currentValue, 'c.blp');
+    assert.equal(doc.reads.filter((range) => !range).length, fullReads, 'resolution reads only its literal range');
+    assert.equal(api.findAssetStringAt(doc, { start: 11 }).currentValue, 'b.wav');
+    settings.lean = true;
+    assert.throws(() => lenses.resolveCodeLens(items[0], token), /Canceled/);
+    const before = doc.reads.length;
+    assert.deepEqual(await lenses.provideCodeLenses(doc, token), []);
+    assert.equal(doc.reads.length, before, 'lean mode must not scan text');
+    settings.lean = false;
+    for (const invalidation of ['cancel', 'edit', 'close']) {
+        const current = document('"a.mdx"');
+        const item = (await lenses.provideCodeLenses(current, token))[0];
+        if (invalidation === 'edit') current.version++;
+        if (invalidation === 'close') current.isClosed = true;
+        assert.throws(() => lenses.resolveCodeLens(item, { isCancellationRequested: invalidation === 'cancel' }), /Canceled/);
+    }
+}
+
+async function testLargeScansYield() {
+    const api = linkHarness(async () => { throw new Error('range scans must do no I/O'); });
+    const doc = document('"first.mdx"\n' + '"a.wav"\n'.repeat(600));
+    for (const provider of [new api.WurstAssetCodeLensProvider(), new api.WurstAssetLinkProvider()]) {
+        for (const cancel of [false, true]) {
+            const token = { isCancellationRequested: false };
+            const pending = provider.provideCodeLenses ? provider.provideCodeLenses(doc, token) : provider.provideDocumentLinks(doc, token);
+            // The scan must yield before finishing so this invalidation can take effect.
+            if (cancel) token.isCancellationRequested = true;
+            else doc.version++;
+            assert.deepEqual(await pending, []);
+        }
+    }
+}
+
+async function testClient10DocumentSynchronization() {
+    class Emitter {
+        listeners = new Set();
+        event = (listener) => { this.listeners.add(listener); return new TestDisposable(() => this.listeners.delete(listener)); };
+        fire(value) { this.listeners.forEach((listener) => listener(value)); }
+        dispose() { this.listeners.clear(); }
+    }
+    const opened = new Emitter();
+    const closed = new Emitter();
+    const shown = new Emitter();
+    const visible = new Set();
+    const sent = [];
+    const protocol = require('vscode-languageserver-protocol');
+    const load = createTsLoader({ mocks: {
+        'node_modules/vscode-languageclient/lib/common/codeConverter.js': {},
+        'node_modules/vscode-languageclient/lib/common/protocolConverter.js': {},
+        vscode: {
+            EventEmitter: Emitter, CancellationError: class extends Error {}, CodeAction: class {}, Diagnostic: class {},
+            workspace: { textDocuments: [], onDidOpenTextDocument: opened.event, onDidCloseTextDocument: closed.event },
+            languages: { match: () => 1 },
+        },
+    } });
+    const { BaseLanguageClient } = load('node_modules/vscode-languageclient/lib/common/client.js');
+    const { DidOpenTextDocumentFeature, DidCloseTextDocumentFeature } = load('node_modules/vscode-languageclient/lib/common/textSynchronization.js');
+    const options = lifecycleHarness();
+    const startup = options.server.startLanguageClient(options.context);
+    await tick();
+    const { textSynchronization, middleware } = options.clients[0].options;
+    options.clients[0].started.resolve();
+    await startup;
+    const client = {
+        clientOptions: { textSynchronization }, _clientOptions: {}, middleware,
+        _didChangeTextDocumentFeature: { syncKind: protocol.TextDocumentSyncKind.Incremental },
+        visibleDocuments: { isVisible: (doc) => visible.has(doc), onClose: new Emitter().event, onOpen: shown.event },
+        hasDedicatedTextSynchronizationFeature: () => false,
+        protocol2CodeConverter: { asDocumentSelector: (selector) => selector },
+        code2ProtocolConverter: {
+            asOpenTextDocumentParams: (doc) => ({ textDocument: { uri: doc.uri.toString(), version: doc.version, languageId: doc.languageId, text: doc.getText() } }),
+            asCloseTextDocumentParams: (doc) => ({ textDocument: { uri: doc.uri.toString() } }),
+        },
+        $start: async () => ({
+            sendNotification: async (type, params) => { sent.push({ method: type.method, params }); },
+            sendRequest: async (type, params) => { sent.push({ method: type.method, params }); return []; },
+        }),
+        sendNotification: BaseLanguageClient.prototype.sendNotification,
+        sendRequest: BaseLanguageClient.prototype.sendRequest,
+        error: (message, error) => { throw new Error(message, { cause: error }); },
+    };
+    const synced = new Map();
+    const opens = new DidOpenTextDocumentFeature(client, synced);
+    client._didOpenTextDocumentFeature = opens;
+    const closes = new DidCloseTextDocumentFeature(client, synced, new Map());
+    const capabilities = { resolvedTextDocumentSync: { openClose: true } };
+    opens.initialize(capabilities, ['wurst']);
+    closes.initialize(capabilities, ['wurst']);
+    const doc = document('original');
+    await opens.callback(doc);
+    assert.equal(sent.length, 0, 'hidden opens must be delayed');
+    // The real client flushes the captured open before sending an unsaved edit.
+    doc.text = 'changed'; doc.version++;
+    await client.sendNotification(protocol.DidChangeTextDocumentNotification.type, { textDocument: { uri: doc.uri.toString(), version: 2 }, contentChanges: [{ text: 'changed' }] });
+    assert.deepEqual(sent.map((item) => item.method), ['textDocument/didOpen', 'textDocument/didChange']);
+    assert.equal(sent[0].params.textDocument.text, 'original');
+    assert.equal(sent[0].params.textDocument.version, 1);
+    await closes.callback(doc);
+    assert.equal(sent.at(-1).method, 'textDocument/didClose');
+    sent.length = 0;
+    await opens.callback(doc);
+    await closes.callback(doc);
+    assert.equal(sent.length, 0, 'hidden open/close pairs must not reach the server');
+    await opens.callback(doc);
+    closed.fire(doc);
+    await tick();
+    assert.equal(sent.length, 0, 'the workspace close event must also drop hidden open/close pairs');
+    await opens.callback(doc);
+    await client.sendRequest(protocol.DocumentSymbolRequest.type, { textDocument: { uri: doc.uri.toString() } });
+    assert.deepEqual(sent.map((item) => item.method), ['textDocument/didOpen', 'textDocument/documentSymbol']);
+    sent.length = 0;
+    await closes.callback(doc);
+    sent.length = 0;
+    await opens.callback(doc);
+    visible.add(doc); shown.fire([doc.uri]);
+    await tick();
+    assert.deepEqual(sent.map((item) => item.method), ['textDocument/didOpen'], 'visible files must synchronize immediately');
+    options.clients[0].transition(options.states.Stopped);
+    let staleClose = false;
+    await middleware.didClose(doc, async () => { staleClose = true; });
+    assert.equal(staleClose, false, 'restart must clear the previous server process\'s open documents');
+    opens.clear(); closes.clear();
+    await options.server.stopLanguageServerIfRunning();
 }
 
 async function main() {
@@ -254,22 +425,13 @@ async function main() {
     await testFailedStartCleansUp();
     await testStoppedStartupCannotOverwriteReplacement();
     await testStoppedStartupTerminatesAfterInitialization();
-    await testConcurrentLinks('WurstAssetLinkProvider', '"a-long-first.mdx"\n"a-second.mdx"', '"b.mdx"\n"c.mdx"');
-    await testConcurrentLinks('FdfLinkProvider', 'IncludeFile "a-long-first.fdf"\nIncludeFile "a-second.fdf"', 'IncludeFile "b.fdf"\nIncludeFile "c.fdf"');
-    await testConcurrentLinks('TocLinkProvider', 'a-long-first.fdf\na-second.fdf', 'b.fdf\nc.fdf');
+    await testConcurrentLinks(false, '"a-long-first.mdx"\n"a-second.mdx"', '"b.mdx"\n"c.mdx"');
+    await testConcurrentLinks(false, 'IncludeFile "a-long-first.fdf"\nIncludeFile "a-second.fdf"', 'IncludeFile "b.fdf"\nIncludeFile "c.fdf"');
+    await testConcurrentLinks(true, 'a-long-first.fdf\na-second.fdf', 'b.fdf\nc.fdf');
     await testLinkCancellationAndEdits();
-    const gate = deferred();
-    let rootCalls = 0;
-    const api = linkHarness(async () => '/asset', async () => {
-        if (++rootCalls === 2) await gate.promise;
-        return [];
-    });
-    const doc = document('"a.mdx"');
-    const links = new api.FdfLinkProvider().provideDocumentLinks(doc, { isCancellationRequested: false });
-    await tick();
-    doc.version++;
-    gate.resolve();
-    assert.deepEqual(await links, [], 'FDF root lookup must reject stale links even without includes');
+    await testLazyAssetActions();
+    await testLargeScansYield();
+    await testClient10DocumentSynchronization();
     console.log('Language feature regression tests passed.');
 }
 

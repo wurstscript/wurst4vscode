@@ -17,11 +17,14 @@ class TestDisposable {
     static from(...items) { return new TestDisposable(() => items.forEach((item) => item.dispose())); }
 }
 
-function lifecycleHarness(installation = Promise.resolve()) {
+function lifecycleHarness(installation = Promise.resolve(), documents = []) {
     const clients = [];
     const watchers = [];
     const states = { Starting: 1, Running: 2, Stopped: 3 };
     class Client {
+        features = [];
+        registerFeature(feature) { this.features.push(feature); }
+        getFeature() { return this.openFeature; }
         constructor(_name, _server, options) {
             this.options = options;
             this.started = deferred();
@@ -53,6 +56,7 @@ function lifecycleHarness(installation = Promise.resolve()) {
     const vscode = {
         Disposable: TestDisposable,
         workspace: {
+            textDocuments: documents,
             getConfiguration: () => ({ get: (key) => key === 'javaOpts' ? [] : undefined }),
             createFileSystemWatcher: (pattern) => {
                 const watcher = { pattern, disposed: false, dispose() { this.disposed = true; } };
@@ -64,7 +68,7 @@ function lifecycleHarness(installation = Promise.resolve()) {
     const load = createTsLoader({ mocks: {
         vscode,
         fs: { existsSync: () => true },
-        'vscode-languageclient/node': { LanguageClient: Client, State: states },
+        'vscode-languageclient/node': { LanguageClient: Client, State: states, DidOpenTextDocumentNotification: { method: 'textDocument/didOpen' } },
         'src/paths.ts': {},
         'src/install/installer.ts': {
             ensureInstalledOrOfferMigration: () => typeof installation === 'function' ? installation() : installation,
@@ -339,18 +343,19 @@ async function testClient10DocumentSynchronization() {
     const visible = new Set();
     const sent = [];
     const protocol = require('vscode-languageserver-protocol');
+    const initiallyOpen = [];
     const load = createTsLoader({ mocks: {
         'node_modules/vscode-languageclient/lib/common/codeConverter.js': {},
         'node_modules/vscode-languageclient/lib/common/protocolConverter.js': {},
         vscode: {
             EventEmitter: Emitter, CancellationError: class extends Error {}, CodeAction: class {}, Diagnostic: class {},
-            workspace: { textDocuments: [], onDidOpenTextDocument: opened.event, onDidCloseTextDocument: closed.event },
+            workspace: { textDocuments: initiallyOpen, onDidOpenTextDocument: opened.event, onDidCloseTextDocument: closed.event },
             languages: { match: () => 1 },
         },
     } });
     const { BaseLanguageClient } = load('node_modules/vscode-languageclient/lib/common/client.js');
     const { DidOpenTextDocumentFeature, DidCloseTextDocumentFeature } = load('node_modules/vscode-languageclient/lib/common/textSynchronization.js');
-    const options = lifecycleHarness();
+    const options = lifecycleHarness(Promise.resolve(), initiallyOpen);
     const startup = options.server.startLanguageClient(options.context);
     await tick();
     const { textSynchronization, middleware } = options.clients[0].options;
@@ -376,10 +381,13 @@ async function testClient10DocumentSynchronization() {
     };
     const synced = new Map();
     const opens = new DidOpenTextDocumentFeature(client, synced);
+    options.clients[0].openFeature = opens;
+    options.clients[0].visibleDocuments = client.visibleDocuments;
     client._didOpenTextDocumentFeature = opens;
     const closes = new DidCloseTextDocumentFeature(client, synced, new Map());
     const capabilities = { resolvedTextDocumentSync: { openClose: true } };
     opens.initialize(capabilities, ['wurst']);
+    options.clients[0].features[0].initialize(capabilities);
     closes.initialize(capabilities, ['wurst']);
     const doc = document('original');
     await opens.callback(doc);
@@ -415,6 +423,19 @@ async function testClient10DocumentSynchronization() {
     await middleware.didClose(doc, async () => { staleClose = true; });
     assert.equal(staleClose, false, 'restart must clear the previous server process\'s open documents');
     opens.clear(); closes.clear();
+    synced.clear(); visible.clear(); sent.length = 0;
+    const initial = document('before registration edit');
+    initiallyOpen.push(initial);
+    opens.initialize(capabilities, ['wurst']);
+    options.clients[0].features[0].initialize(capabilities);
+    initial.text = 'after registration edit'; initial.version++;
+    const replacement = { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } }, text: 'after' };
+    await client.sendNotification(protocol.DidChangeTextDocumentNotification.type, { textDocument: { uri: initial.uri.toString(), version: 2 }, contentChanges: [replacement] });
+    assert.equal(sent[0].params.textDocument.version, 1, 'initial hidden documents need an immutable registration snapshot');
+    assert.equal(sent[0].params.textDocument.text, 'before registration edit');
+    const openedText = sent[0].params.textDocument.text;
+    assert.equal(replacement.text + openedText.slice(replacement.range.end.character), initial.text, 'the first incremental edit must apply to the original buffer, not its already edited content');
+    opens.clear();
     await options.server.stopLanguageServerIfRunning();
 }
 

@@ -715,7 +715,9 @@ async function testLanguageClientHandleLifecycle() {
     const statusItem = { text: '', show() {}, dispose() {} };
     class FakeLanguageClient {
         constructor() { this.stopped = false; this.outputChannel = { show() {} }; clients.push(this); }
-        start() { this.state = 2; return Promise.resolve(); }
+        registerFeature(feature) { this.snapshotFeature = feature; }
+        getFeature() { return { getProvider: () => undefined }; }
+        start() { this.state = 2; this.snapshotFeature.initialize(); return Promise.resolve(); }
         isRunning() { return this.state === 2; }
         sendRequest(method) {
             assert.equal(method, 'workspace/symbol', 'the initial-load probe must be a request the server queues behind its initial build');
@@ -732,11 +734,12 @@ async function testLanguageClientHandleLifecycle() {
             window: { createStatusBarItem: () => statusItem },
             StatusBarAlignment: { Right: 2 },
             workspace: {
+                textDocuments: [],
                 getConfiguration: () => ({ get: (_key, fallback) => fallback }),
                 createFileSystemWatcher: () => ({ onDidCreate() {}, onDidChange() {}, onDidDelete() {}, dispose() {} }),
             },
         },
-        'vscode-languageclient/node': { LanguageClient: FakeLanguageClient, State: { Stopped: 1, Running: 2, Starting: 3 } },
+        'vscode-languageclient/node': { LanguageClient: FakeLanguageClient, State: { Stopped: 1, Running: 2, Starting: 3 }, DidOpenTextDocumentNotification: { method: 'textDocument/didOpen' } },
         fs: { existsSync: () => true },
         './paths': { RUNTIME_DIR: 'runtime', COMPILER_JAR: 'wurstscript.jar' },
         './install/installer': {

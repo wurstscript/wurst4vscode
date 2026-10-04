@@ -3,7 +3,7 @@
 import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { workspace, ExtensionContext } from 'vscode';
-import { LanguageClient, LanguageClientOptions, ServerOptions, Executable, State } from 'vscode-languageclient/node';
+import { LanguageClient, LanguageClientOptions, ServerOptions, Executable, State, DidOpenTextDocumentNotification } from 'vscode-languageclient/node';
 import { RUNTIME_DIR, COMPILER_JAR } from './paths';
 import { getLanguageServerJava, checkCustomJavaVersion, getInstalledVersionString, ensureInstalledOrOfferMigration, maybeOfferUpdate } from './install/installer';
 import type { UpdateAvailable } from './install/installer';
@@ -240,6 +240,24 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
         };
 
         client = new LanguageClient('Wurstscript Language Server', serverOptions, clientOptions);
+        const activeClient = client;
+        activeClient.registerFeature({
+            fillClientCapabilities() { /* The built-in open feature advertises synchronization. */ },
+            initialize() {
+                // Client 10.1.2 registration retains live hidden documents. Use its normal
+                // open path to capture immutable snapshots before incremental edits arrive.
+                const opens = activeClient.getFeature(DidOpenTextDocumentNotification.method);
+                for (const document of workspace.textDocuments) {
+                    if (activeClient.visibleDocuments.isVisible(document)) continue;
+                    const pending = opens.getProvider(document)?.send(document);
+                    void pending?.catch((error) => {
+                        appendDiagnostic('VS Code extension', `Could not snapshot an initial document: ${formatDiagnosticError(error)}`);
+                    });
+                }
+            },
+            getState: () => ({ kind: 'static' }),
+            clear() { /* The built-in open feature owns and clears its snapshots. */ },
+        });
         clientRef = client;
         clientSubscriptions = vscode.Disposable.from(watcher, trackClientState(client, sentDocuments),
             client.onNotification('wurst/updateGamePath', (params) => {

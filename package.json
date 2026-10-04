@@ -34,7 +34,9 @@
         "onCommand:wurst.openWurstHome",
         "onCommand:wurst.copyDiagnostics",
         "onCommand:wurst.showLogs",
-        "onCommand:wurst.showExtensionLogs"
+        "onCommand:wurst.showExtensionLogs",
+        "onCommand:wurst.insertPackageHeader",
+        "onCommand:wurst.prepareAgentsGuideUpdate"
     ],
     "main": "./dist/extension",
     "browser": "./dist/web/extension.js",
@@ -681,6 +683,14 @@
         ],
         "commands": [
             {
+                "command": "wurst.prepareAgentsGuideUpdate",
+                "title": "Wurst: Prepare AGENTS.md Update"
+            },
+            {
+                "command": "wurst.insertPackageHeader",
+                "title": "Wurst: Insert Package Header"
+            },
+            {
                 "command": "wurst.startmap",
                 "title": "Run wurstscript map",
                 "category": "wurst"
@@ -841,6 +851,18 @@
             "type": "object",
             "title": "Wurst configuration",
             "properties": {
+                "wurst.leanEditor": {
+                    "type": "boolean",
+                    "default": false,
+                    "scope": "resource",
+                    "description": "Disable automatic inline asset previews and asset CodeLens scanning. Language server features and previews requested through hover or commands remain available."
+                },
+                "wurst.autoPackageHeader": {
+                    "type": "boolean",
+                    "default": false,
+                    "scope": "resource",
+                    "description": "Automatically insert a package header when an empty Wurst/Jurst document is opened. Use Wurst: Insert Package Header to request this explicitly."
+                },
                 "wurst.javaExecutable": {
                     "type": "string",
                     "default": "",
@@ -940,7 +962,8 @@
         "lint": "eslint .",
         "compile-web": "webpack",
         "watch-web": "webpack --watch",
-        "test": "npm run test:fuzzy && npm run test:image-decoders && npm run test:diagnostics && npm run test:language-features && npm run test:webview",
+        "test": "npm run test:fuzzy && npm run test:image-decoders && npm run test:diagnostics && npm run test:language-features && npm run test:editor-work && npm run test:webview",
+        "test:editor-work": "node ./scripts/test-editor-work.js",
         "test:e2e": "npm run compile-web && playwright test --project=webview",
         "test:e2e:ui": "npm run compile-web && playwright test --project=webview --ui",
         "test:image-decoders": "node ./scripts/test-image-decoders.js",
@@ -979,7 +1002,7 @@
         "@vscode/codicons": "^0.0.36",
         "casc-ts": "file:../casc-ts",
         "node-stream-zip": "^1.15.0",
-        "vscode-languageclient": "^9.0.1"
+        "vscode-languageclient": "^10.1.2"
     },
     "extensionPack": [
         "redhat.vscode-yaml",

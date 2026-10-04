@@ -659,7 +659,10 @@ class WurstAssetCodeActionProvider implements vscode.CodeActionProvider {
 }
 
 class WurstAssetCodeLensProvider implements vscode.CodeLensProvider {
+    readonly changes = new vscode.EventEmitter<void>();
+    readonly onDidChangeCodeLenses = this.changes.event;
     provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
+        if (vscode.workspace.getConfiguration('wurst', document.uri).get<boolean>('leanEditor', false)) return [];
         const lenses: vscode.CodeLens[] = [];
         for (const target of findAssetStrings(document)) {
             if (target.kind === 'sound') {
@@ -844,14 +847,18 @@ export function registerAssetLinks(context: vscode.ExtensionContext): vscode.Dis
         { providedCodeActionKinds: [vscode.CodeActionKind.RefactorRewrite] },
     );
 
+    const lensProvider = new WurstAssetCodeLensProvider();
+    const lensSettings = vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration('wurst.leanEditor')) lensProvider.changes.fire();
+    });
     const codeLens = vscode.languages.registerCodeLensProvider(
         [
             { language: 'wurst' },
             { language: 'jass' },
             { pattern: '**/*.j' },
         ],
-        new WurstAssetCodeLensProvider(),
+        lensProvider,
     );
 
-    return vscode.Disposable.from(openAsset, browseAsset, wurst, fdf, toc, codeActions, codeLens);
+    return vscode.Disposable.from(openAsset, browseAsset, wurst, fdf, toc, codeActions, codeLens, lensSettings, lensProvider.changes);
 }

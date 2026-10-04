@@ -12,6 +12,8 @@ import { getRunningLanguageClient } from '../languageServer';
 import { describeJavaVersion, displayGitSha, getAvailableUpdate, getInstalledVersionString, getLanguageServerJava } from '../install/installer';
 import { extensionVersion } from './issueReporting';
 import { getCascCacheDir } from './preview/cascStorage';
+import { prepareAgentsGuideUpdate } from './agentsGuide';
+import { insertPackageHeader } from './fileCreation';
 
 function showLanguageServerOutput(): void {
     try {
@@ -84,6 +86,8 @@ async function openWurstHome(): Promise<void> {
 
 export function registerWurstDiagnosticsCommands(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
+        vscode.commands.registerCommand('wurst.insertPackageHeader', () => insertPackageHeader()),
+        vscode.commands.registerCommand('wurst.prepareAgentsGuideUpdate', () => prepareAgentsGuideUpdate(context).catch((error) => showErrorWithLogs('Could not prepare the AGENTS.md update.', error))),
         vscode.commands.registerCommand('wurst.openWurstHome', () => openWurstHome()),
         vscode.commands.registerCommand('wurst.copyDiagnostics', () => copyDiagnostics()),
         vscode.commands.registerCommand('wurst.showLogs', () => showLanguageServerOutput()),

@@ -177,6 +177,10 @@ export function registerAssetRootInvalidation(): vscode.Disposable {
     const watcher = vscode.workspace.createFileSystemWatcher('**/{imports,war3mapImported,war3map,assets,UI,*.[wW]3[xXmM]}', false, true, false);
     return vscode.Disposable.from(
         vscode.workspace.onDidChangeWorkspaceFolders(invalidate),
+        vscode.workspace.onDidCloseTextDocument((doc) => {
+            for (const key of candidateRootsCache.keys()) if (key.startsWith(`${doc.uri.fsPath}|`)) candidateRootsCache.delete(key);
+        }),
+        new vscode.Disposable(invalidate),
         watcher,
         watcher.onDidCreate(invalidate),
         watcher.onDidDelete(invalidate),
@@ -202,6 +206,7 @@ export async function getCandidateRoots(documentFsPath: string, options: Candida
     if (!promise) {
         promise = getCandidateRootsUncached(documentFsPath, options);
         candidateRootsCache.set(cacheKey, promise);
+        if (candidateRootsCache.size > 128) candidateRootsCache.delete(candidateRootsCache.keys().next().value!);
     }
     return [...await promise];
 }
@@ -576,7 +581,7 @@ export async function getCachedPreview(
             origH: 0,
             description: ext.slice(1).toUpperCase(),
         };
-        cache.set(fsPath, entry);
+        rememberPreview(cache, fsPath, entry);
         return entry;
     }
 
@@ -597,7 +602,7 @@ export async function getCachedPreview(
             origH: 0,
             description: ext.slice(1).toUpperCase(),
         };
-        cache.set(fsPath, entry);
+        rememberPreview(cache, fsPath, entry);
         log?.(`preview disk cache hit: ${path.basename(fsPath)}`);
         return entry;
     } catch {
@@ -647,13 +652,19 @@ export async function ensurePreview(
             origH: decoded.height,
             description: decoded.description,
         };
-        cache.set(fsPath, entry);
+        rememberPreview(cache, fsPath, entry);
         log?.(`preview generated: ${path.basename(fsPath)}`);
         return entry;
     } catch (error) {
         log?.(`preview failed: ${fsPath} :: ${formatDiagnosticError(error)}`);
         return undefined;
     }
+}
+
+function rememberPreview(cache: Map<string, PreviewCacheEntry>, key: string, entry: PreviewCacheEntry): void {
+    cache.delete(key);
+    cache.set(key, entry);
+    if (cache.size > 256) cache.delete(cache.keys().next().value!);
 }
 
 /** Resolve an asset referenced from `documentUri` and open it in the matching Wurst preview. */

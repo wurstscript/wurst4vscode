@@ -5,10 +5,13 @@ import * as path from 'path';
 import type * as vscode from 'vscode';
 
 export const MAX_DIAGNOSTIC_LINES = 100;
+export const MAX_DIAGNOSTIC_LINE_LENGTH = 1024;
+export const MAX_DIAGNOSTIC_REPORT_LENGTH = 24 * 1024;
 
 export type DiagnosticSource = 'WC3 data' | 'MPQ' | 'Inline icons' | 'VS Code extension';
 
 const recentLines = new Map<DiagnosticSource, string[]>();
+const lastMessages = new Map<DiagnosticSource, { message: string; repeats: number }>();
 let outputChannel: vscode.OutputChannel | undefined;
 
 function getOutputChannel(): vscode.OutputChannel {
@@ -35,9 +38,21 @@ export function diagnosticTimestamp(date: Date = new Date()): string {
 export function appendDiagnostic(source: DiagnosticSource, message: string): void {
     const lines = recentLines.get(source) ?? [];
     const timestamp = diagnosticTimestamp();
-    String(message).split(/\r?\n/).forEach((text, index) => {
+    const bounded = truncate(String(message), 4096);
+    const previous = lastMessages.get(source);
+    if (previous?.message === bounded) {
+        previous.repeats++;
+        const summary = `[${timestamp}] [occurrences: ${previous.repeats}]`;
+        if (previous.repeats === 2) lines.push(summary);
+        else lines[lines.length - 1] = summary;
+        if (lines.length > MAX_DIAGNOSTIC_LINES) lines.shift();
+        if (previous.repeats === 2 || previous.repeats % 100 === 0) outputChannel?.appendLine(`[${source}] ${summary}`);
+        return;
+    }
+    lastMessages.set(source, { message: bounded, repeats: 1 });
+    bounded.split(/\r?\n/).forEach((text, index) => {
         // Continuation lines (stack frames) keep their own indentation.
-        const line = index === 0 ? `[${timestamp}] ${text}` : text;
+        const line = truncate(index === 0 ? `[${timestamp}] ${text}` : text, MAX_DIAGNOSTIC_LINE_LENGTH);
         lines.push(line);
         outputChannel?.appendLine(`[${source}] ${line}`);
     });
@@ -45,6 +60,10 @@ export function appendDiagnostic(source: DiagnosticSource, message: string): voi
         lines.splice(0, lines.length - MAX_DIAGNOSTIC_LINES);
     }
     recentLines.set(source, lines);
+}
+
+function truncate(text: string, limit: number): string {
+    return text.length <= limit ? text : `${text.slice(0, limit - 14)} [truncated]`;
 }
 
 export function showDiagnosticOutput(): void {
@@ -101,7 +120,10 @@ function readTail(filePath: string): string[] {
 }
 
 function section(title: string, lines: string[]): string[] {
-    return [`--- ${title} (last ${MAX_DIAGNOSTIC_LINES} lines) ---`, ...(lines.length ? lines : ['[no entries recorded]'])];
+    const bounded = lines.map((line) => truncate(line, MAX_DIAGNOSTIC_LINE_LENGTH)).join('\n');
+    // Independent source budgets keep noisy subsystems from hiding server failures.
+    const tail = bounded.length > 4096 ? `[older entries omitted]\n${bounded.slice(-4096)}` : bounded;
+    return [`--- ${title} (last ${MAX_DIAGNOSTIC_LINES} lines) ---`, tail || '[no entries recorded]'];
 }
 
 /** A directory that is replaced by a short label wherever it starts a path in the report. */
@@ -165,5 +187,5 @@ export function buildDiagnosticsText(wurstHome: string, options: DiagnosticsRepo
     lines.push(...section('Inline icons', recentLines.get('Inline icons') ?? []), '');
     lines.push(...section('Wurst VS Code extension output', recentLines.get('VS Code extension') ?? []), '');
     lines.push(...section('languageServer.log', readTail(path.join(wurstHome, 'logs', 'languageServer.log'))));
-    return compactPaths(lines.join('\n'), options.pathAliases ?? []);
+    return truncate(compactPaths(lines.join('\n'), options.pathAliases ?? []), MAX_DIAGNOSTIC_REPORT_LENGTH);
 }

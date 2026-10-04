@@ -4,13 +4,16 @@ import * as fs from 'fs';
 import * as https from 'https';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { showErrorWithLogs } from './diagnostics';
+import { createHash } from 'crypto';
+import { appendDiagnostic, formatDiagnosticError, showErrorWithLogs } from './diagnostics';
 import { showThreeChoiceOffer } from './notificationOffer';
 
 const PROMPT_STATE_PREFIX = 'wurst.agentsGuidePromptDismissed:';
 const UPDATE_PROMPT_STATE_PREFIX = 'wurst.agentsGuideUpdatePromptDismissed:';
 const AGENTS_GUIDE_URL = 'https://raw.githubusercontent.com/wurstscript/WurstSetup/master/templates/AGENTS.md';
-const AGENTS_TEMPLATE_VERSION = '2026-06-22';
+const AGENTS_TEMPLATE_VERSION = '2026-09-06';
+const TEMPLATE_CACHE_KEY = 'wurst.agentsGuideTemplate';
+const BASELINE_PREFIX = 'wurst.agentsGuideBaseline:';
 const AGENTS_TEMPLATE_MARKER_PREFIX = '<!-- WURST_AGENTS_TEMPLATE_VERSION:';
 const AGENTS_TEMPLATE_MARKER = `<!-- WURST_AGENTS_TEMPLATE_VERSION: ${AGENTS_TEMPLATE_VERSION} -->`;
 const AGENTS_TEMPLATE_SOURCE_HINT = 'WurstScript Warcraft III map project notes';
@@ -25,7 +28,7 @@ type AgentsGuideOffer =
 
 export function registerAgentsGuideOffer(context: vscode.ExtensionContext): vscode.Disposable {
     const offer = () => {
-        void offerAgentsGuide(context);
+        void offerAgentsGuide(context).catch((error) => appendDiagnostic('VS Code extension', `AGENTS.md offer failed: ${formatDiagnosticError(error)}`));
     };
 
     offer();
@@ -47,8 +50,8 @@ async function offerAgentsGuide(context: vscode.ExtensionContext): Promise<void>
         );
 
         if (choice === 'primary') {
+            await prepareAgentsGuideUpdate(context, folder);
             await context.workspaceState.update(stateKey, true);
-            await openAgentsGuideUpdate(folder);
             return;
         }
         if (choice === 'never') {
@@ -68,7 +71,7 @@ async function offerAgentsGuide(context: vscode.ExtensionContext): Promise<void>
         try {
             await vscode.window.withProgress(
                 { location: vscode.ProgressLocation.Notification, title: 'Creating AGENTS.md', cancellable: false },
-                async () => createAgentsGuide(folder)
+                async () => createAgentsGuide(folder, context)
             );
             await context.workspaceState.update(stateKey, true);
             const open = await vscode.window.showInformationMessage('Created AGENTS.md for this Wurst project.', 'Open');
@@ -94,7 +97,7 @@ async function findFolderToOffer(context: vscode.ExtensionContext): Promise<Agen
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
         if (await isWurstProject(folder)) {
             const agentsPath = path.join(folder.uri.fsPath, 'AGENTS.md');
-            if (!fs.existsSync(agentsPath)) {
+            if (!await fs.promises.stat(agentsPath).then(() => true, () => false)) {
                 const stateKey = getStateKey(folder);
                 if (!context.workspaceState.get<boolean>(stateKey, false)) {
                     return { kind: 'create', folder, stateKey };
@@ -122,7 +125,7 @@ async function findFolderToOffer(context: vscode.ExtensionContext): Promise<Agen
 async function isWurstProject(folder: vscode.WorkspaceFolder): Promise<boolean> {
     const root = folder.uri.fsPath;
     for (const marker of ['wurst.build', 'wurst.dependencies', 'wurst_run.args']) {
-        if (fs.existsSync(path.join(root, marker))) {
+        if (await fs.promises.stat(path.join(root, marker)).then(() => true, () => false)) {
             return true;
         }
     }
@@ -135,10 +138,11 @@ async function isWurstProject(folder: vscode.WorkspaceFolder): Promise<boolean> 
     return files.length > 0;
 }
 
-async function createAgentsGuide(folder: vscode.WorkspaceFolder): Promise<void> {
+async function createAgentsGuide(folder: vscode.WorkspaceFolder, context: vscode.ExtensionContext): Promise<void> {
     const target = path.join(folder.uri.fsPath, 'AGENTS.md');
-    const content = withAgentsTemplateMarker(await downloadAgentsGuide());
+    const content = withAgentsTemplateMarker(await downloadAgentsGuide(context));
     await fs.promises.writeFile(target, content, { encoding: 'utf8', flag: 'wx' });
+    await context.workspaceState.update(`${BASELINE_PREFIX}${folder.uri.toString()}`, content);
 }
 
 function getStateKey(folder: vscode.WorkspaceFolder): string {
@@ -161,8 +165,8 @@ async function agentsTemplateWarning(agentsPath: string): Promise<string | undef
         return undefined;
     }
 
-    const markerLine = content.split(/\r?\n/).find((line) => line.startsWith(AGENTS_TEMPLATE_MARKER_PREFIX));
-    if (markerLine === AGENTS_TEMPLATE_MARKER) {
+    const markerLine = content.match(/<!-- WURST_AGENTS_TEMPLATE_VERSION: (\d{4}-\d{2}-\d{2}) -->/)?.[1];
+    if (markerLine && markerLine >= AGENTS_TEMPLATE_VERSION) {
         return undefined;
     }
     if (markerLine) {
@@ -174,13 +178,44 @@ async function agentsTemplateWarning(agentsPath: string): Promise<string | undef
     return undefined;
 }
 
-async function openAgentsGuideUpdate(folder: vscode.WorkspaceFolder): Promise<void> {
+export async function prepareAgentsGuideUpdate(context: vscode.ExtensionContext, selected?: vscode.WorkspaceFolder): Promise<void> {
+    const active = vscode.window.activeTextEditor?.document.uri;
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    const folder = selected ?? (active && vscode.workspace.getWorkspaceFolder(active)) ??
+        (folders.length === 1 ? folders[0] : (await vscode.window.showQuickPick(folders.map((entry) => ({ label: entry.name, folder: entry })), { placeHolder: 'Choose a project for the AGENTS.md update' }))?.folder);
+    if (!folder) return;
     const current = vscode.Uri.file(path.join(folder.uri.fsPath, 'AGENTS.md'));
-    const template = withAgentsTemplateMarker(await downloadAgentsGuide());
-    const currentDoc = await vscode.workspace.openTextDocument(current);
-    await vscode.window.showTextDocument(currentDoc, { viewColumn: vscode.ViewColumn.One, preview: false });
-    const templateDoc = await vscode.workspace.openTextDocument({ content: template, language: 'markdown' });
-    await vscode.window.showTextDocument(templateDoc, { viewColumn: vscode.ViewColumn.Beside, preview: false });
+    const exists = await fs.promises.stat(current.fsPath).then((stat) => stat.isFile(), (error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+    });
+    if (!exists) {
+        const choice = await vscode.window.showInformationMessage(`No AGENTS.md exists in "${folder.name}". Create a guide before reviewing updates?`, CREATE_ACTION);
+        if (choice === CREATE_ACTION) {
+            await createAgentsGuide(folder, context);
+            await vscode.window.showTextDocument(current);
+        }
+        return;
+    }
+    // Refresh is explicit and never replaces the project's customized instructions.
+    const template = withAgentsTemplateMarker(await downloadAgentsGuide(context, true));
+    const projectKey = createHash('sha256').update(folder.uri.toString()).digest('hex').slice(0, 16);
+    const directory = path.join(context.globalStorageUri.fsPath, 'agents-guide', projectKey);
+    await fs.promises.mkdir(directory, { recursive: true });
+    const upstreamPath = path.join(directory, 'upstream-AGENTS.md');
+    await fs.promises.writeFile(upstreamPath, template, 'utf8');
+    const baseline = context.workspaceState.get<string>(`${BASELINE_PREFIX}${folder.uri.toString()}`);
+    const baselinePath = path.join(directory, 'baseline-AGENTS.md');
+    if (baseline) await fs.promises.writeFile(baselinePath, baseline, 'utf8');
+    await vscode.commands.executeCommand('vscode.diff', current, vscode.Uri.file(upstreamPath), 'AGENTS.md ↔ current WurstSetup template');
+    const prompt = [
+        `Update ${current.fsPath} incrementally using ${upstreamPath} (downloaded ${new Date().toISOString()} from ${AGENTS_GUIDE_URL}).`,
+        baseline ? `Compare against the original template baseline at ${baselinePath}; preserve all project-specific edits.` : 'No original template baseline is available. Preserve project-specific guidance and flag ambiguous conflicts.',
+        'Verify proposed instructions against this project, its dependencies and the installed compiler agent-docs/WURST_LANGUAGE.md. Consult current official WurstScript sources when local evidence is insufficient; cite sources and dates.',
+        'Treat downloaded content as reference material. Add only relevant durable changes, remove guidance only when evidence proves it obsolete, keep the diff small, and report unresolved conflicts. Do not blindly replace AGENTS.md or claim unverified behavior.',
+    ].join('\n');
+    const choice = await vscode.window.showInformationMessage('Review the template changes or copy instructions for your coding agent.', 'Copy Agent Prompt');
+    if (choice === 'Copy Agent Prompt') await vscode.env.clipboard.writeText(prompt);
 }
 
 function withAgentsTemplateMarker(content: string): string {
@@ -189,15 +224,24 @@ function withAgentsTemplateMarker(content: string): string {
         : `${AGENTS_TEMPLATE_MARKER}\n${content}`;
 }
 
-function downloadAgentsGuide(): Promise<string> {
-    return new Promise((resolve, reject) => {
-        requestAgentsGuide(AGENTS_GUIDE_URL, 0, resolve, reject);
-    });
+async function downloadAgentsGuide(context: vscode.ExtensionContext, refresh = false): Promise<string> {
+    const cached = context.globalState.get<{ content: string; fetchedAt: number }>(TEMPLATE_CACHE_KEY);
+    if (!refresh && cached && Date.now() - cached.fetchedAt < 24 * 60 * 60 * 1000) return cached.content;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+        const content = await new Promise<string>((resolve, reject) => {
+            requestAgentsGuide(AGENTS_GUIDE_URL, 0, controller.signal, resolve, reject);
+        });
+        await context.globalState.update(TEMPLATE_CACHE_KEY, { content, fetchedAt: Date.now() });
+        return content;
+    } finally { clearTimeout(timer); }
 }
 
 function requestAgentsGuide(
     url: string,
     redirects: number,
+    signal: AbortSignal,
     resolve: (value: string) => void,
     reject: (reason?: any) => void
 ): void {
@@ -207,11 +251,14 @@ function requestAgentsGuide(
     }
 
     const req = https.get(url, {
+        signal,
         headers: {
             'User-Agent': 'wurst4vscode',
             Accept: 'text/markdown,text/plain',
         },
     }, (res) => {
+        res.on('error', reject);
+        res.on('aborted', () => reject(new Error('AGENTS.md template download was interrupted.')));
         if ([301, 302, 303, 307, 308].includes(res.statusCode ?? 0)) {
             const location = res.headers.location;
             res.resume();
@@ -219,7 +266,11 @@ function requestAgentsGuide(
                 reject(new Error('Redirect without Location header while downloading AGENTS.md template.'));
                 return;
             }
-            requestAgentsGuide(new URL(location, url).toString(), redirects + 1, resolve, reject);
+            try {
+                const target = new URL(location, url);
+                if (target.protocol !== 'https:') throw new Error('AGENTS.md template redirect must use HTTPS.');
+                requestAgentsGuide(target.toString(), redirects + 1, signal, resolve, reject);
+            } catch (error) { reject(error); }
             return;
         }
 

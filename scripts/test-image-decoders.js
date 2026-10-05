@@ -24,6 +24,10 @@ const expected = {
     'BTNpick-later.blp': ['64x64', 'e3cdefe7c3a5c09be367ad989de180a721628acf671294bebbbbf4145d4b1a18'],
     'FrameTest.blp': ['771x133', 'bbee9dc4b58cfe5cfd1fe2851e51f8f881756fff7d2a4d18df562b79ff1aa77c'],
     'NetherRayTC.blp': ['256x256', 'd7907c3f5c9e850a288a0afb39e67acfd19f990089f6b186801a39c84dabf097'],
+    // Generated 16x16 ramps, one per DXT block format: decoded by the extension's BLP2 fallback, not casc-ts.
+    'blp2_dxt1.blp': ['16x16', '0fbe7baeb45f819f6b8390fe34439099c3ad8b458178c96b7763be2db34799e0'],
+    'blp2_dxt3.blp': ['16x16', 'faaa7d833f9ef81dc44a368335c40c9f990b9d8b28dd0c6e25a298409eb227c9'],
+    'blp2_dxt5.blp': ['16x16', 'b8b50b529ac190d8d53da88ab7bba7c4c7684bbaf91cf651eeed959118d275ab'],
     'btn-afk-check.dds': ['128x128', 'd4bc1f6b44eff54606ae057dc2f8894902382a95e88cc9e7a0a89865bdfcd08a'],
     'fake_alpha.blp': ['256x128', '115074f22f896454dc060495d32bba389e1a8d69330bba31f44a8639ebea5d74'],
     'firering6.blp': ['64x64', 'a6a49a2a0b503113b44cd30f91b2e74c7757265f2c14cced9b26e6f5f02c7713'],

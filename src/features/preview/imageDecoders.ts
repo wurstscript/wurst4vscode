@@ -4,11 +4,12 @@
  * Glue layer over `casc-ts/formats` for the extension's asset previewers.
  * The pure BLP / DDS / TGA decoders live in casc-ts; this file adds the
  * wurst4vscode-specific bits: the MDX passthrough variant, the extension-
- * -dispatched preview helpers and normalization of every raster format to
- * RGBA for all extension-side consumers.
+ * -dispatched preview helpers, normalization of every raster format to
+ * RGBA for all extension-side consumers, and decoders for the layouts
+ * casc-ts does not handle yet (BC4/BC5 DDS, DXT-compressed BLP2).
  */
 
-import { decodeBlp, decodeDds as decodeCascDds, decodeTga, DecodedRasterImage } from 'casc-ts/formats';
+import { decodeBlp as decodeCascBlp, decodeDds as decodeCascDds, decodeTga, DecodedRasterImage } from 'casc-ts/formats';
 
 // war3-model publishes a CommonJS entry alongside its ESM package marker. The
 // extension host is CommonJS, so describe the two decoder exports we consume
@@ -28,7 +29,7 @@ function getWar3ModelDecoder(): War3ModelDecoder {
     return war3Model;
 }
 
-export { decodeBlp, decodeTga };
+export { decodeTga };
 export type { DecodedRasterImage };
 export type DecodedRgbaImage = Extract<DecodedRasterImage, { mode: 'rgba' }>;
 
@@ -47,6 +48,8 @@ export type DecodedBlpImage = DecodedRgbaImage | DecodedMdxRaw;
 
 const DDS_MAGIC = 0x20534444;
 const DDPF_FOURCC = 0x4;
+const BLP2_MAGIC = 0x32504c42;
+const BLP2_PIXMAP_DXT = 2;
 
 function readU32LE(bytes: Uint8Array, offset: number): number {
     return (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0;
@@ -157,6 +160,114 @@ export function decodeDds(bytes: Uint8Array): DecodedRasterImage {
         return decodeCascDds(bytes);
     } catch (err) {
         const decoded = decodeBc4Bc5Dds(bytes);
+        if (decoded) return decoded;
+        throw err;
+    }
+}
+
+function expand565(color: number): number[] {
+    return [
+        Math.floor((255 * ((color >> 11) & 0x1f) + 15) / 31),
+        Math.floor((255 * ((color >> 5) & 0x3f) + 31) / 63),
+        Math.floor((255 * (color & 0x1f) + 15) / 31),
+    ];
+}
+
+/** The four RGBA colours of a DXT colour block; a DXT1 block with c0 <= c1 is in three-colour mode. */
+function decodeDxtColorBlock(bytes: Uint8Array, offset: number, dxt1: boolean): number[][] {
+    const c0 = bytes[offset] | (bytes[offset + 1] << 8);
+    const c1 = bytes[offset + 2] | (bytes[offset + 3] << 8);
+    const [r0, g0, b0] = expand565(c0);
+    const [r1, g1, b1] = expand565(c1);
+    if (dxt1 && c0 <= c1) {
+        return [
+            [r0, g0, b0, 255],
+            [r1, g1, b1, 255],
+            [(r0 + r1) >> 1, (g0 + g1) >> 1, (b0 + b1) >> 1, 255],
+            [0, 0, 0, 0],
+        ];
+    }
+    return [
+        [r0, g0, b0, 255],
+        [r1, g1, b1, 255],
+        [Math.floor((2 * r0 + r1) / 3), Math.floor((2 * g0 + g1) / 3), Math.floor((2 * b0 + b1) / 3), 255],
+        [Math.floor((r0 + 2 * r1) / 3), Math.floor((g0 + 2 * g1) / 3), Math.floor((b0 + 2 * b1) / 3), 255],
+    ];
+}
+
+/** One 4x4 block of a DXT1/3/5 mipmap as 16 RGBA pixels, row by row. */
+function decodeDxtBlock(bytes: Uint8Array, offset: number, dxt: 1 | 3 | 5): Uint8Array {
+    const colorOffset = dxt === 1 ? offset : offset + 8;
+    const colors = decodeDxtColorBlock(bytes, colorOffset, dxt === 1);
+    const indices = readU32LE(bytes, colorOffset + 4);
+    const block = new Uint8Array(64);
+    for (let i = 0; i < 16; i++) block.set(colors[(indices >>> (2 * i)) & 3], i * 4);
+    if (dxt === 5) {
+        const alpha = decodeBcAlphaBlock(bytes, offset);
+        for (let i = 0; i < 16; i++) block[i * 4 + 3] = alpha[i];
+    } else if (dxt === 3) {
+        for (let i = 0; i < 16; i++) block[i * 4 + 3] = ((bytes[offset + (i >> 1)] >> ((i & 1) * 4)) & 0xf) * 17;
+    }
+    return block;
+}
+
+/**
+ * Header of a BLP2 whose mipmaps are DXT-compressed (pixmapType 2). alphaBits 0 or 1 means DXT1,
+ * 4 means DXT3, and 8 means DXT5 when the preferred-format byte is 7, else DXT3.
+ */
+function readDxtBlpHeader(bytes: Uint8Array) {
+    if (bytes.length < 148 || readU32LE(bytes, 0) !== BLP2_MAGIC || bytes[8] !== BLP2_PIXMAP_DXT) return undefined;
+    const alphaBits = bytes[9];
+    let dxt: 1 | 3 | 5 = 5;
+    if (alphaBits <= 1) dxt = 1;
+    else if (alphaBits === 4 || bytes[10] !== 7) dxt = 3;
+    let mipmaps = 0;
+    while (mipmaps < 16 && readU32LE(bytes, 20 + mipmaps * 4) !== 0) mipmaps++;
+    return { dxt, width: readU32LE(bytes, 12), height: readU32LE(bytes, 16), offset: readU32LE(bytes, 20), mipmaps };
+}
+
+/** DXT-compressed BLP2, which casc-ts does not decode yet. Like its other BLP modes, only mipmap 0 is read. */
+function decodeDxtBlp(bytes: Uint8Array): DecodedRasterImage | undefined {
+    const header = readDxtBlpHeader(bytes);
+    if (!header) return undefined;
+    const { dxt, width, height, mipmaps } = header;
+    const blocksWide = Math.max(1, Math.ceil(width / 4));
+    const blocksHigh = Math.max(1, Math.ceil(height / 4));
+    const blockBytes = dxt === 1 ? 8 : 16;
+    let offset = header.offset;
+    if (width <= 0 || height <= 0 || offset + blocksWide * blocksHigh * blockBytes > bytes.length) {
+        throw new Error(`BLP2 DXT${dxt} mipmap 0 is truncated (${width}x${height})`);
+    }
+
+    const rgba = new Uint8Array(width * height * 4);
+    for (let by = 0; by < blocksHigh; by++) {
+        const rows = Math.min(4, height - by * 4);
+        for (let bx = 0; bx < blocksWide; bx++) {
+            const block = decodeDxtBlock(bytes, offset, dxt);
+            offset += blockBytes;
+            const columns = Math.min(4, width - bx * 4);
+            for (let py = 0; py < rows; py++) {
+                rgba.set(block.subarray(py * 16, py * 16 + columns * 4), ((by * 4 + py) * width + bx * 4) * 4);
+            }
+        }
+    }
+
+    return {
+        kind: 'raster',
+        mode: 'rgba',
+        width,
+        height,
+        rgbaBase64: Buffer.from(rgba).toString('base64'),
+        warnings: [],
+        description: `BLP2 DXT${dxt} | mipmaps: ${mipmaps}`,
+    };
+}
+
+export function decodeBlp(bytes: Uint8Array): DecodedRasterImage {
+    try {
+        return decodeCascBlp(bytes);
+    } catch (err) {
+        const decoded = decodeDxtBlp(bytes);
         if (decoded) return decoded;
         throw err;
     }

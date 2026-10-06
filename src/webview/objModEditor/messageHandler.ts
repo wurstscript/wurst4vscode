@@ -299,7 +299,7 @@ export function setupMessageHandler() {
       }
     } else if (msg.type === 'mdxModel') {
       mpvStatus('');
-      if (mpvViewer()) { mpvViewer().loadModel(mpvB64ToArrayBuffer(msg.mdxBase64), msg.fileName || '', msg.format || 'mdx'); mpvSetPlaying(true); }
+      if (mpvViewer()) { mpvViewer().loadModel(mpvB64ToArrayBuffer(msg.mdxBase64), msg.fileName || '', msg.format || 'mdx', { maxTextureDimension: 512 }); mpvSetPlaying(true); }
     } else if (msg.type === 'assetCatalog') {
       setAssetCatalog({ model: msg.models || [], icon: msg.icons || [], sound: msg.sounds || [], pathing: msg.pathing || [] });
     } else if (msg.type === 'assetCatalogFailed') {

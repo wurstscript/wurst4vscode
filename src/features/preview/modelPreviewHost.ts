@@ -46,7 +46,7 @@ async function readCachedThumb(webview: vscode.Webview, cacheKey: string): Promi
 
 function statThumbKey(resolvedPath: string, stat: fs.Stats): string {
     const identity = `${resolvedPath.toLowerCase()}\0${stat.size}\0${Math.round(stat.mtimeMs)}`;
-    return `v8s-${fastByteHash(Buffer.from(identity, 'utf8'))}`;
+    return `v9s-${fastByteHash(Buffer.from(identity, 'utf8'))}`;
 }
 
 /**
@@ -460,6 +460,7 @@ export async function requestModelThumbnail(
                 cacheKey: aliasKey,
                 aliasKey,
                 modelUri,
+                textureNamespace: documentUri.fsPath,
                 format,
                 fileName,
             });
@@ -476,6 +477,7 @@ export async function requestModelThumbnail(
             cacheKey,
             aliasKey,
             mdxBase64: bytes.toString('base64'),
+            textureNamespace: documentUri.fsPath,
             format,
             fileName,
         });
@@ -493,7 +495,7 @@ function isModelFile(filePath: string): boolean {
 
 /** Persist a webview-rendered webp thumbnail and echo it back as a data URL. */
 export async function cacheModelThumbnail(key: string, cacheKey: string, webpBase64: string, webview: vscode.Webview, aliasKey?: string): Promise<void> {
-    const validKey = (value: string | undefined) => !value || /^v(?:2|3s|4s|5s|6s|7s|8s)-[a-f0-9-]+$/i.test(value);
+    const validKey = (value: string | undefined) => !value || /^v(?:2|3s|4s|5s|6s|7s|8s|9s)-[a-f0-9-]+$/i.test(value);
     if (!validKey(cacheKey) || !validKey(aliasKey) || !/^[A-Za-z0-9+/=]+$/.test(webpBase64) || webpBase64.length > 1_000_000) {
         thumbLog(`${key} cache-write rejected key=${cacheKey || '(empty)'} base64Chars=${webpBase64?.length ?? 0}`);
         await webview.postMessage({ type: 'modelThumbMissing', key });

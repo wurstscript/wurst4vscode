@@ -408,19 +408,15 @@ ${ICON_INLINE_CSS}
     var v = mpvViewer();
     if (v && seqs.length) {
       var pick = pickStandSequence(seqs);
-      var seq = seqs[pick];
       try {
-        v.setSequence(pick);
-        v.setFrame(seq ? Math.round(seq.start + Math.max(0, seq.end - seq.start) * 0.2) : 0);
-        v.resetCamera();
-        v.zoomOut();
-        v.zoomOut();
+        v.setPose(pick, 1);
+        v.fitCamera();
         v.setAutoplay(false);
       } catch (e) {}
     }
     var requested = modelJob.requestedTextures ? Array.from(modelJob.requestedTextures) : (texturePaths || []).filter(Boolean).map(String);
     modelJob.pendingTextures = new Set(requested.filter(function (p) { return !modelJob.receivedTextures || !modelJob.receivedTextures.has(p); }));
-    if (!modelJob.pendingTextures.size) scheduleModelCapture(0, 1);
+    if (!modelJob.pendingTextures.size) scheduleModelCapture();
   }
   function base64ToArrayBuffer(b64) {
     var bin = atob(b64 || '');
@@ -447,7 +443,7 @@ ${ICON_INLINE_CSS}
     loadModelBytes(job).then(function (bytes) {
       if (modelJob !== job) return; // superseded while the bytes were in flight
       try {
-        mpvViewer().loadModel(bytes, job.fileName || '', job.format || 'mdx', { autoplay: false, textureCacheKey: 'thumbnail' });
+        mpvViewer().loadModel(bytes, job.fileName || '', job.format || 'mdx', { autoplay: false, freezeAnimation: true, maxTextureDimension: 128, textureCacheKey: job.textureNamespace || job.cacheKey });
       } catch (e) {
         markModelFailed(job.key, 'load-error');
       }
@@ -455,20 +451,15 @@ ${ICON_INLINE_CSS}
       if (modelJob === job) markModelFailed(job.key, 'fetch-error');
     });
   }
-  function scheduleModelCapture(delayMs, frames) {
-    if (!modelJob) return;
-    var waitFrames = Math.max(0, frames == null ? 1 : frames);
-    var run = function () {
-      var remaining = waitFrames;
-      var step = function () {
-        if (!modelJob) return;
-        if (remaining-- > 0) requestAnimationFrame(step);
-        else captureModelThumb();
-      };
-      requestAnimationFrame(step);
-    };
-    if (delayMs > 0) setTimeout(run, delayMs);
-    else run();
+  function scheduleModelCapture() {
+    var job = modelJob;
+    if (!job || job.capturePending) return;
+    job.capturePending = true;
+    mpvViewer().renderStillFrameAsync({ allowMissingTextures: true }).then(function () {
+      if (modelJob === job) captureModelThumb();
+    }, function () {
+      if (modelJob === job) finishModelRender(false, 'capture-error');
+    });
   }
   function applyMdxTexture(msg) {
     var v = mpvViewer();
@@ -490,9 +481,7 @@ ${ICON_INLINE_CSS}
     }
     var canvas = document.getElementById('model-thumb-canvas');
     try {
-      var v = mpvViewer();
-      if (v && typeof v.renderStillFrame === 'function') v.renderStillFrame();
-      var dataUrl = canvas.toDataURL('image/webp', 0.58);
+      var dataUrl = canvas.toDataURL('image/webp', 0.88);
       var marker = 'data:image/webp;base64,';
       if (!dataUrl || dataUrl.indexOf(marker) !== 0) { finishModelRender(false, 'encode-failed'); return; }
       var key = modelJob.key;
@@ -567,7 +556,7 @@ ${ICON_INLINE_CSS}
     } else if (msg.type === 'modelThumbTexturesComplete') {
       if (!modelJob || msg.thumbKey !== modelJob.key) return;
       if (modelJob.pendingTextures) modelJob.pendingTextures.clear();
-      scheduleModelCapture(0, 1);
+      scheduleModelCapture();
     } else if (msg.type === 'mdxTexture') {
       if (!modelJob || (msg.thumbKey && msg.thumbKey !== modelJob.key)) return;
       if (msg.path) {
@@ -575,7 +564,7 @@ ${ICON_INLINE_CSS}
         if (modelJob.pendingTextures) modelJob.pendingTextures.delete(String(msg.path));
       }
       applyMdxTexture(msg);
-      if (!modelJob.pendingTextures || modelJob.pendingTextures.size === 0) scheduleModelCapture(0, 1);
+      if (!modelJob.pendingTextures || modelJob.pendingTextures.size === 0) scheduleModelCapture();
     }
   });
   window.__wurstCodeAssetBrowserDebug = {

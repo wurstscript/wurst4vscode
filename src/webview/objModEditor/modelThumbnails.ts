@@ -491,6 +491,7 @@ function processModelThumbQueue() {
           key: job.key,
           cacheKey: job.cacheKey,
           aliasKey: job.aliasKey,
+          textureNamespace: job.textureNamespace,
           fileName: job.fileName || '',
           format: job.format || 'mdx',
           buffer,

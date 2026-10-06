@@ -47,7 +47,7 @@ export function mpvFillAnims(seqs) {
   sel.value = String(pick);
   sel.hidden = false;
   const v = mpvViewer();
-  if (v) v.setSequence(pick);
+  if (v) { v.setPose(pick, 1); v.fitCamera(); v.setAutoplay(mpvPlaying); }
 }
 
 export function showModelPreview(path) {

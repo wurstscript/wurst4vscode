@@ -294,6 +294,8 @@ let currentSeqs: SequenceInfo[] = [];
 let currentSeqIndex = 0;
 const initialCenter: [number, number, number] = [0, 0, 0];
 let initialDistance = 3.0;
+let lastView: Float32Array | null = null;
+let lastProjection: Float32Array | null = null;
 const studioLightColor = new Float32Array([1.8, 1.8, 1.8]);
 
 function resetCameraOrientation() {
@@ -491,7 +493,7 @@ function renderCurrentScene(delta: number, reportFrame: boolean): boolean {
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
         if (activeRenderer) {
-            const proj = mat4Perspective(50 * Math.PI / 180, w / h, 1, 100000);
+            const proj = mat4Perspective(50 * Math.PI / 180, w / h, Math.max(0.01, distance / 1000), Math.max(1000, distance * 10));
             // Z-up orbit camera
             const cosP = Math.cos(pitch), sinP = Math.sin(pitch);
             const ex = center[0] + distance * Math.cos(yaw) * cosP;
@@ -516,6 +518,8 @@ function renderCurrentScene(delta: number, reportFrame: boolean): boolean {
             activeRenderer.setLightColor(studioLightColor as unknown as import('gl-matrix').vec3);
             if (!animationFrozen) activeRenderer.update(autoplay ? delta : 0);
             const mv = mat4LookAt(ex, ey, ez, center[0], center[1], center[2], 0, 0, 1);
+            lastView = mv;
+            lastProjection = proj;
             activeRenderer.render(mv as unknown as import('gl-matrix').mat4, proj as unknown as import('gl-matrix').mat4, { wireframe });
 
             // report frame to inline script for slider
@@ -702,7 +706,7 @@ const War3Viewer = {
 
             if (!canvas) throw new Error('canvas not initialized');
             const contextStart = performance.now();
-            const newGl = canvas.getContext('webgl2', { antialias: true, alpha: true, depth: true });
+            const newGl = canvas.getContext('webgl2', { antialias: true, alpha: true, depth: true, preserveDrawingBuffer: true });
             if (!newGl) throw new Error('WebGL2 unavailable');
             gl = newGl;
             profile('context', contextStart);
@@ -712,6 +716,7 @@ const War3Viewer = {
             // This viewer renders with studio lighting and never enables renderer environment maps.
             // Avoid synchronous cubemap convolution/prefilter work when a model references one.
             renderer.setEnvironmentMapProcessingEnabled(false);
+            renderer.setTextureSizeLimit(currentMaxTextureDimension);
             renderer.initGL(gl);
             profile('initGL', initStart);
 
@@ -742,15 +747,16 @@ const War3Viewer = {
             }));
             currentSeqIndex = currentSeqs.length > 0 ? 0 : -1;
             if (currentSeqIndex >= 0) {
-                renderer.setSequence(currentSeqIndex);
+                renderer.setPose(currentSeqIndex, 1);
             }
             autoplay = !animationFrozen && opts?.autoplay !== false;
             if (!autoplay) renderer.update(0);
+            War3Viewer.fitCamera();
             profile('setup', setupStart);
 
-            // texture paths (skip replaceable textures like team color)
+            // Empty-path replaceable textures are procedural; named paths must still load.
             const texturePaths = [...new Set(model.Textures
-                .filter(t => !t.ReplaceableId && t.Image)
+                .filter(t => t.Image)
                 .map(t => t.Image))];
             currentModelTexturePaths = new Set(texturePaths.map(normalizedTexturePath));
             const decodedCache = currentDecodedTextureCache();
@@ -813,7 +819,10 @@ const War3Viewer = {
         }
         try {
             const blp = decodeBLP(buffer);
-            const like = getBLPImageData(blp, 0);
+            let level = 0;
+            while (currentMaxTextureDimension > 0 && level + 1 < blp.mipmaps.length &&
+                Math.max(blp.width >> level, blp.height >> level) > currentMaxTextureDimension) level++;
+            const like = getBLPImageData(blp, level);
             const imageData = downscaleTextureImageData(new ImageData(
                 new Uint8ClampedArray(like.data as unknown as ArrayBuffer),
                 like.width,
@@ -878,7 +887,6 @@ const War3Viewer = {
         const w = canvas.width;
         const h = canvas.height;
         if (w <= 0 || h <= 0) return null;
-        gl.finish();
         const pixels = new Uint8ClampedArray(w * h * 4);
         gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
         const flipped = new Uint8ClampedArray(pixels.length);
@@ -907,6 +915,46 @@ const War3Viewer = {
     setAutoplay(enabled: boolean) {
         autoplay = enabled;
         if (enabled) animationFrozen = false;
+    },
+
+    /** Resolve after the first fully textured GPU draw driven by this viewer's frame loop. */
+    async whenRendered(options?: Parameters<ModelRenderer['whenRendered']>[0]): Promise<void> {
+        const instance = renderer;
+        if (!instance) throw new Error('No model loaded');
+        await instance.whenReady(options);
+        if (renderer !== instance) throw new Error('Model changed during capture');
+        renderCurrentScene(0, false);
+        await instance.whenRendered(options);
+    },
+
+    /** Capture callers may explicitly accept host-reported missing textures and their fallbacks. */
+    async renderStillFrameAsync(options?: Parameters<ModelRenderer['renderAsync']>[2]): Promise<void> {
+        const instance = renderer;
+        autoplay = false;
+        if (!instance || !renderCurrentScene(0, false) || !lastView || !lastProjection) throw new Error('No model loaded');
+        await instance.renderAsync(lastView as import('gl-matrix').mat4, lastProjection as import('gl-matrix').mat4,
+            { wireframe, ...options });
+        if (renderer !== instance) throw new Error('Model changed during capture');
+    },
+
+    setPose(index = currentSeqIndex, offsetMs = 1) {
+        if (!renderer) return;
+        autoplay = false;
+        currentSeqIndex = index;
+        renderer.setPose(index, offsetMs);
+    },
+
+    fitCamera() {
+        const bounds = renderer?.getVisibleBounds();
+        if (!bounds) return;
+        const min = bounds.minimum, max = bounds.maximum;
+        for (let axis = 0; axis < 3; axis++) center[axis] = (min[axis] + max[axis]) / 2;
+        const radius = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]) / 2;
+        const aspect = canvas ? Math.max(0.1, canvas.clientWidth / Math.max(1, canvas.clientHeight)) : 1;
+        const halfFov = Math.min(25 * Math.PI / 180, Math.atan(Math.tan(25 * Math.PI / 180) * aspect));
+        distance = Math.max(1, radius * 1.12 / Math.sin(halfFov));
+        initialDistance = distance;
+        for (let axis = 0; axis < 3; axis++) initialCenter[axis] = center[axis];
     },
 
     renderStillFrame(): boolean {

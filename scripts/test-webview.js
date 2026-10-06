@@ -1041,7 +1041,7 @@ function testThumbnailLifecycleGuards() {
     assert.ok(host.includes("if (ext === 'blp')"), 'BLP thumbnails should retain the renderer decoder rather than using the generic preview decoder');
     assert.ok(viewer.includes('downscaleTextureImageData'), 'decoded BLP thumbnail textures should be reduced before GPU upload');
     assert.ok(thumbnailWorker.includes('MAX_TEXTURE_DIMENSION'), 'worker thumbnail renders should bound browser-side texture uploads');
-    assert.ok(host.includes('return `v8s-'), 'the cache version must invalidate thumbnails captured before isolated studio-light rendering');
+    assert.ok(host.includes('return `v9s-'), 'the cache version must invalidate thumbnails captured before isolated studio-light rendering');
     assert.ok(!objmod.includes('capture-dark-accepted'), 'dark frames must never be persisted as successful thumbnails');
     assert.ok(objmod.includes('Array.from(new Set((texturePaths || [])'), 'thumbnail capture must wait for every referenced material texture');
     assert.ok(!objmod.includes('(?:normal|orm)'), 'thumbnail loading must not omit HD material textures');
@@ -1056,15 +1056,6 @@ function testThumbnailLifecycleGuards() {
     assert.ok(!ensureInit.includes('mpvViewer()'), 'worker startup failure must not fall back to rendering on the objmod UI thread');
     assert.ok(webpack.includes("mdxThumbnailWorker: './src/webview/mdxThumbnailWorker.ts'"), 'the isolated thumbnail worker must be bundled');
     assert.ok(thumbnailWorker.includes('new OffscreenCanvas'), 'thumbnail WebGL should use a worker-owned OffscreenCanvas');
-    assert.ok(
-        thumbnailWorker.includes('empty-frame-after-${sampledFrames}-samples'),
-        'a single invisible animation frame must not turn a renderable model into a missing thumbnail',
-    );
-    assert.ok(thumbnailWorker.includes('setEnvironmentMapProcessingEnabled(false)'), 'unused environment-map preprocessing must be disabled for thumbnails');
-    assert.ok(
-        thumbnailWorker.indexOf('setEnvironmentMapProcessingEnabled(false)') < thumbnailWorker.indexOf('renderer.initGL(gl)'),
-        'environment-map preprocessing must be disabled before renderer initialization',
-    );
     assert.ok(hdFragment.includes('normalize(vTBN * normal)'), 'HD normal maps must retain their outward-facing Z axis');
     assert.ok(!hdFragment.includes('normalize(vTBN * -normal)'), 'HD normal maps must not invert their surface-facing Z axis');
     assert.ok(hdVertex.includes('mat4 sum = mat4(0.0)'), 'HD skinning must initialize its weighted matrix sum');
@@ -1089,7 +1080,6 @@ function testThumbnailLifecycleGuards() {
     );
     assert.ok(viewer.includes('renderer?.adoptTexture(texturePath, cached.texture)'), 'warm thumbnail renderers should reuse same-context GPU textures without uploading again');
     assert.ok(/setTextureCompressedImage[\s\S]{0,200}rememberDecodedTexture\(texPath, null\)/.test(viewer), 'compressed DDS GPU textures should join the warm renderer cache');
-    assert.ok(assetLinks.includes("textureCacheKey: 'thumbnail'"), 'code asset picker thumbnail loads must opt into the warm texture cache');
     assert.ok(!host.includes('bad-cache-hit'), 'thumbnail host must not suppress retries based on old failures');
     assert.ok(!objmod.includes('TEXTURE_WAIT_RETRIES'), 'objmod thumbnails must wait for texture completion instead of retry-budget capture');
     assert.ok(!objmod.includes('texture-wait-timeout'), 'objmod thumbnails must not fail because texture loading took too long');

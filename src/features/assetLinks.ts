@@ -1,4 +1,5 @@
 'use strict';
+import ASSET_BROWSER_CSS from '../webview/assetBrowser.css';
 
 import * as vscode from 'vscode';
 import * as path from 'path';
@@ -246,30 +247,7 @@ function buildAssetBrowserHtml(initialJson: string, currentValue: string, cspSou
         // connect-src and img-src, not only script-src.
         csp: `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}' ${cspSource}; img-src data: ${cspSource}; connect-src ${cspSource}; worker-src blob:;`,
         title: browseOnly ? 'Warcraft III Asset Browser' : 'Choose Warcraft III Asset',
-        extraCss: `
-${ICON_INLINE_CSS}
-:root { --obj-icon-size: 42px; }
-.browser { height: calc(100% - 24px); max-width: 1100px; margin: 12px auto; display: grid; grid-template-rows: auto auto 1fr; min-height: 0; border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 6px 24px var(--shadow); overflow: hidden; }
-.toolbar { gap: 6px; padding: 8px 10px; }
-.tab { min-width: 78px; justify-content: center; }
-.search { flex: 1; min-width: 120px; }
-.meta { padding: 6px 10px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.grid { overflow: auto; padding: 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; align-content: start; }
-.card { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 6px; border: 1px solid transparent; background: transparent; color: var(--fg); border-radius: 5px; text-align: center; font-family: var(--font); }
-.card:hover, .card:focus-visible { background: var(--hover); border-color: var(--focus); outline: none; }
-.card-name { display: block; width: 100%; font-size: 11px; line-height: 1.3; height: 2.6em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.asset-preview { display: grid; place-items: center; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
-.asset-preview:focus-visible { outline: 1px solid var(--focus); outline-offset: 2px; }
-.asset-preview .object-icon { width: 72px; height: 72px; }
-.model-thumb { width: 72px; height: 72px; display: grid; place-items: center; border-radius: 3px; background: color-mix(in srgb, var(--fg) 10%, transparent); overflow: hidden; color: var(--muted); font-size: 13px; font-weight: 700; }
-.model-thumb::before { content: '3D'; }
-.model-thumb.pending::before { content: ''; width: 16px; height: 16px; border: 2px solid color-mix(in srgb, var(--fg) 18%, transparent); border-top-color: var(--fg); border-radius: 50%; animation: wv-spin .8s linear infinite; }
-.model-thumb.missing::before { content: '?'; }
-.model-thumb.loaded::before { content: none; }
-.model-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.sound-thumb { width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 3px; background: var(--input-bg); color: var(--muted); font-family: var(--mono); font-size: 11px; font-weight: 700; }
-.empty { color: var(--muted); padding: 24px; text-align: center; }
-`,
+        extraCss: ICON_INLINE_CSS + ASSET_BROWSER_CSS,
         body: `<div class="browser">
   <div class="wv-toolbar toolbar">
     <button id="tab-icon" class="wv-btn tab" type="button" data-tab="icon">Icons</button>

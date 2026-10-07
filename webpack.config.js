@@ -163,7 +163,7 @@ module.exports = (_env, argv = {}) => {
 			rules: [
 				...(config.module?.rules || []),
 				...(production ? [{
-					test: /\.m?js$/,
+					test: /\.[cm]?js$/,
 					include: resource => privateRoots.some(root => resource.startsWith(root)),
 					use: [{ loader: path.resolve(__dirname, 'scripts/private-library-loader.js') }],
 				}] : []),

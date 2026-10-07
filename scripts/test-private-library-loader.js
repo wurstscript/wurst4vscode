@@ -21,7 +21,12 @@ for (const config of configure({}, { mode: 'production' })) {
     assert.strictEqual(config.devtool, false);
     assert.strictEqual(config.optimization.minimize, true);
     const rule = config.module.rules.find(item => item.include);
-    for (const name of ['war3-model', 'casc-ts']) assert(rule.include(require.resolve(name)));
+    for (const name of ['war3-model', 'casc-ts']) {
+        const entry = require.resolve(name);
+        assert(rule.include(entry));
+        assert(rule.test.test(entry), `The production loader must match ${entry}`);
+    }
+    for (const extension of ['js', 'cjs', 'mjs']) assert(rule.test.test(`private.${extension}`));
     assert(!rule.include(path.resolve(__dirname, '../src/extension.js')));
     assert(!rule.include(require.resolve('typescript')));
 }

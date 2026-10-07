@@ -918,6 +918,8 @@ async function testModelThumbnailRequestsTexturesByDefault() {
         },
     });
 
+    fs.mkdirSync(path.join(tmpRoot, 'thumb-cache'), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, 'thumb-cache', 'v10s-abc123.webp'), 'old framing');
     await mod.requestModelThumbnail('Footman.mdx', 'asset-model:0:Footman', { fsPath: docPath }, {
         postMessage: async (message) => {
             posted.push(message);
@@ -927,6 +929,7 @@ async function testModelThumbnailRequestsTexturesByDefault() {
 
     const render = posted.find((message) => message.type === 'modelThumbRender');
     assert.ok(render, 'uncached model thumbnails should render regardless of model byte size');
+    assert.equal(render.cacheKey, 'v11s-abc123', 'older framing captures must be regenerated');
     assert.equal(render.skipTextures, undefined, 'model thumbnail renders must load textures by default');
     assert.ok(render.mdxBase64, 'model bytes should still be sent for thumbnail rendering');
 
@@ -1041,7 +1044,7 @@ function testThumbnailLifecycleGuards() {
     assert.ok(host.includes("if (ext === 'blp')"), 'BLP thumbnails should retain the renderer decoder rather than using the generic preview decoder');
     assert.ok(viewer.includes('downscaleTextureImageData'), 'decoded BLP thumbnail textures should be reduced before GPU upload');
     assert.ok(thumbnailWorker.includes('MAX_TEXTURE_DIMENSION'), 'worker thumbnail renders should bound browser-side texture uploads');
-    assert.ok(host.includes('return `v10s-'), 'the cache version must invalidate thumbnails captured before automatic effects, additive alpha and detail framing');
+    assert.ok(host.includes('return `v11s-'), 'the cache version must invalidate thumbnails captured before the current consumer renderer build');
     assert.ok(!objmod.includes('capture-dark-accepted'), 'dark frames must never be persisted as successful thumbnails');
     assert.ok(objmod.includes('Array.from(new Set((texturePaths || [])'), 'thumbnail capture must wait for every referenced material texture');
     assert.ok(!objmod.includes('(?:normal|orm)'), 'thumbnail loading must not omit HD material textures');

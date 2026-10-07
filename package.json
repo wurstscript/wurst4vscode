@@ -967,7 +967,9 @@
         "lint": "eslint .",
         "compile-web": "webpack",
         "watch-web": "webpack --watch",
-        "test": "npm run test:fuzzy && npm run test:image-decoders && npm run test:diagnostics && npm run test:language-features && npm run test:editor-work && npm run test:webview",
+        "test": "npm run test:fuzzy && npm run test:image-decoders && npm run test:diagnostics && npm run test:language-features && npm run test:editor-work && npm run test:webview && npm run test:private-libraries",
+        "test:private-libraries": "node ./scripts/test-private-library-loader.js",
+        "test:e2e:production": "npm run package-web && playwright test --project=webview",
         "test:editor-work": "node ./scripts/test-editor-work.js",
         "test:e2e": "npm run compile-web && playwright test --project=webview",
         "test:e2e:ui": "npm run compile-web && playwright test --project=webview --ui",
@@ -983,7 +985,7 @@
         "test:e2e:objmod-clipboard:local": "playwright test --project=local-vscode objmod-clipboard",
         "test:wc3-previews": "node ./scripts/wc3-preview-smoke.js",
         "test:fuzzy": "node ./scripts/test-fuzzy.js",
-        "package-web": "webpack --mode production --devtool hidden-source-map",
+        "package-web": "webpack --mode production",
         "publish": "vsce publish --no-dependencies"
     },
     "devDependencies": {
@@ -996,6 +998,7 @@
         "eslint": "^9.39.5",
         "eslint-plugin-sonarjs": "^4.2.0",
         "globals": "^15.15.0",
+        "javascript-obfuscator": "5.9.0",
         "ts-loader": "^9.5.1",
         "typescript": "^5.9.3",
         "typescript-eslint": "^8.63.0",

@@ -151,4 +151,23 @@ const nodeExtensionConfig = {
 	devtool: 'nosources-source-map',
 };
 
-module.exports = [webExtensionConfig, viewerConfig, thumbnailWorkerConfig, nodeExtensionConfig];
+module.exports = (_env, argv = {}) => {
+	const production = argv.mode === 'production';
+	const privateRoots = ['war3-model', 'casc-ts'].map(name => path.dirname(require.resolve(name)) + path.sep);
+	return [webExtensionConfig, viewerConfig, thumbnailWorkerConfig, nodeExtensionConfig].map(config => ({
+		...config,
+		devtool: production ? false : config.devtool,
+		optimization: { minimize: production },
+		module: {
+			...config.module,
+			rules: [
+				...(config.module?.rules || []),
+				...(production ? [{
+					test: /\.[cm]?js$/,
+					include: resource => privateRoots.some(root => resource.startsWith(root)),
+					use: [{ loader: path.resolve(__dirname, 'scripts/private-library-loader.js') }],
+				}] : []),
+			],
+		},
+	}));
+};

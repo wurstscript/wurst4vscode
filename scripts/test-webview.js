@@ -1041,7 +1041,7 @@ function testThumbnailLifecycleGuards() {
     assert.ok(host.includes("if (ext === 'blp')"), 'BLP thumbnails should retain the renderer decoder rather than using the generic preview decoder');
     assert.ok(viewer.includes('downscaleTextureImageData'), 'decoded BLP thumbnail textures should be reduced before GPU upload');
     assert.ok(thumbnailWorker.includes('MAX_TEXTURE_DIMENSION'), 'worker thumbnail renders should bound browser-side texture uploads');
-    assert.ok(host.includes('return `v9s-'), 'the cache version must invalidate thumbnails captured before isolated studio-light rendering');
+    assert.ok(host.includes('return `v10s-'), 'the cache version must invalidate thumbnails captured before automatic effects, additive alpha and detail framing');
     assert.ok(!objmod.includes('capture-dark-accepted'), 'dark frames must never be persisted as successful thumbnails');
     assert.ok(objmod.includes('Array.from(new Set((texturePaths || [])'), 'thumbnail capture must wait for every referenced material texture');
     assert.ok(!objmod.includes('(?:normal|orm)'), 'thumbnail loading must not omit HD material textures');

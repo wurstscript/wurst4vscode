@@ -215,6 +215,10 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
                 dbg(`webview: ${(msg as { message?: string }).message ?? ''}`);
                 return;
             }
+            if (type === 'browseAssets') {
+                await vscode.commands.executeCommand('wurst.openAssetBrowser', document.uri);
+                return;
+            }
             if (type === 'refresh') {
                 dbg(`refresh requested`);
                 cachedBytes = undefined;
@@ -276,6 +280,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       <button class="wv-btn" id="fitBtn" type="button" title="Fit to viewport">Fit</button>
       <button class="wv-btn" id="alphaBtn" type="button" title="Toggle alpha channel display">Alpha</button>
       <div class="wv-sep" id="modelSep" style="display:none"></div>
+      <button class="wv-btn" id="browseAssetsBtn" type="button" title="Browse Warcraft III game assets" style="display:none">Browse assets</button>
       <button class="wv-btn" id="resetCamBtn" type="button" title="Reset camera" style="display:none">&#8635; Reset</button>
       <button class="wv-btn" id="renderModeBtn" type="button" title="Toggle wireframe" style="display:none">Fill</button>
       ${sep()}

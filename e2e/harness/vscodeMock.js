@@ -13,15 +13,16 @@
 const fs = require('fs');
 const path = require('path');
 
-function fileUri(fsPath) {
+function fileUri(fsPath, scheme = 'file', authority = '') {
     const normalized = String(fsPath).replace(/\\/g, '/');
     const withSlash = normalized.startsWith('/') ? normalized : `/${normalized}`;
     return {
-        scheme: 'file',
+        scheme,
+        authority,
         fsPath: path.normalize(fsPath),
         path: withSlash,
-        toString() { return `file://${withSlash}`; },
-        with(change) { return fileUri(change.path ? change.path.replace(/^\//, '') : fsPath); },
+        toString() { return `${scheme}://${authority}${withSlash}`; },
+        with(change) { return fileUri(change.path ? change.path.replace(/^\//, '') : fsPath, scheme, authority); },
     };
 }
 
@@ -65,7 +66,7 @@ function createVscodeMock(options = {}) {
             file: fileUri,
             // `file:///C:/x` must come back as `C:\x`, not `\C:\x`: drop the slash before a drive letter.
             parse: (value) => fileUri(String(value).replace(/^file:\/\//, '').replace(/^\/([A-Za-z]:)/, '$1')),
-            joinPath: (base, ...parts) => fileUri(path.join(base.fsPath, ...parts)),
+            joinPath: (base, ...parts) => fileUri(path.join(base.fsPath, ...parts), base.scheme, base.authority),
         },
         workspace: {
             workspaceFolders: options.workspaceFolders || [],

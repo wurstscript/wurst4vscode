@@ -68,6 +68,8 @@ The extension reads stock Warcraft III data directly from either Reforged CASC s
 
 This powers searchable object catalogs, inline command-button icons, texture hovers, and models with their dependent textures.
 
+Run **Wurst: Browse Warcraft III Assets** from the Command Palette to inspect models, images and sounds, including without an open file or workspace. Model previews also provide a **Browse assets** toolbar button. Clicking an asset opens its preview and keeps the browser available; the existing code and object-editor pickers still select replacement values.
+
 ![Preview an animated Warcraft III model and its textures](https://raw.githubusercontent.com/wurstscript/wurst4vscode/master/images/marketplace/editor_models.webp)
 
 ## Build, test, and run

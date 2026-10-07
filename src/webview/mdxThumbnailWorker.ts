@@ -139,7 +139,6 @@ async function beginJob(message: any): Promise<void> {
             maxTextureSize: MAX_TEXTURE_DIMENSION,
             textureNamespace: input.textureNamespace || input.cacheKey || input.key,
             sequence: pickStandSequence(model), frameOffsetMs: 1, findVisibleFrame: true,
-            warmupMs: model.ParticleEmitters2.length || model.RibbonEmitters.length ? 500 : 0,
             allowMissingTextures: true, useEnvironmentMap: false,
             signal: job.controller.signal,
             loadTexture: (texture: ParsedModel['Textures'][number]) => requestTexture(job, texture.Image),

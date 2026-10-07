@@ -129,15 +129,25 @@ async function replaceAssetString(target: BrowseAssetTarget, assetPath: string):
     await vscode.window.showTextDocument(doc, { preview: false, preserveFocus: true });
 }
 
-async function openCodeAssetBrowser(context: vscode.ExtensionContext, target: BrowseAssetTarget): Promise<void> {
+export async function openAssetBrowser(context: vscode.ExtensionContext, resource?: vscode.Uri): Promise<void> {
+    await openCodeAssetBrowser(context, undefined, resource);
+}
+
+async function openCodeAssetBrowser(context: vscode.ExtensionContext, target?: BrowseAssetTarget, resource?: vscode.Uri): Promise<void> {
+    const workspace = vscode.workspace.workspaceFolders?.find((folder) => folder.uri.scheme === 'file' || folder.uri.scheme === 'vscode-remote');
+    const source = [target?.uri, resource, vscode.window.activeTextEditor?.document.uri,
+        workspace && vscode.Uri.joinPath(workspace.uri, 'asset-browser')].find((uri) => uri?.scheme === 'file' || uri?.scheme === 'vscode-remote');
+    const documentUri = source || vscode.Uri.file(path.join(getGameAssetCacheDir(), 'asset-browser'));
+    const currentValue = target?.currentValue || '';
+    const browseOnly = !target;
     const [catalog, imported, assetRoots] = await Promise.all([
         loadObjValueCatalog(),
-        gatherImportedAssets(target.uri.fsPath),
-        getCandidateRoots(target.uri.fsPath),
+        source ? gatherImportedAssets(source.fsPath) : Promise.resolve({ icon: [], model: [], sound: [] }),
+        getCandidateRoots(documentUri.fsPath),
     ]);
     const panel = vscode.window.createWebviewPanel(
         'wurst.assetBrowser',
-        'Choose Warcraft III Asset',
+        browseOnly ? 'Warcraft III Asset Browser' : 'Choose Warcraft III Asset',
         vscode.ViewColumn.Beside,
         {
             enableScripts: true,
@@ -155,8 +165,9 @@ async function openCodeAssetBrowser(context: vscode.ExtensionContext, target: Br
     );
     const mdxViewerUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview', 'mdxViewer.js')).toString();
     const initial = {
-        activeTab: target.kind,
-        currentValue: target.currentValue,
+        activeTab: target?.kind || 'model',
+        currentValue,
+        browseOnly,
         tabs: {
             icon: assetBrowserItems(dedupeAssetOptions([...imported.icon, ...catalog.icons])),
             model: assetBrowserItems(dedupeAssetOptions([...imported.model, ...catalog.models])),
@@ -164,13 +175,14 @@ async function openCodeAssetBrowser(context: vscode.ExtensionContext, target: Br
         },
     };
     const initialJson = scriptSafeJson(initial);
-    panel.webview.html = buildAssetBrowserHtml(initialJson, target.currentValue, panel.webview.cspSource, mdxViewerUri);
+    panel.webview.html = buildAssetBrowserHtml(initialJson, currentValue, panel.webview.cspSource, mdxViewerUri, browseOnly);
     panel.webview.onDidReceiveMessage((message) => {
         const msg = message || {};
         if (msg.type === 'selectAsset' && typeof msg.value === 'string') {
-            void replaceAssetString(target, msg.value).then(() => panel.dispose());
+            if (target) void replaceAssetString(target, msg.value).then(() => panel.dispose());
+            else void vscode.commands.executeCommand('wurst.openAssetFromString', msg.value, documentUri);
         } else {
-            void handleModelThumbMessage(msg, panel.webview, target.uri);
+            void handleModelThumbMessage(msg, panel.webview, documentUri);
         }
     });
 }
@@ -187,13 +199,13 @@ function dedupeAssetOptions(options: readonly ValueOption[]): ValueOption[] {
     return out;
 }
 
-function buildAssetBrowserHtml(initialJson: string, currentValue: string, cspSource: string, mdxViewerUri: string): string {
+function buildAssetBrowserHtml(initialJson: string, currentValue: string, cspSource: string, mdxViewerUri: string, browseOnly = false): string {
     return buildPage({
         // Models and cached thumbnails are fetched/displayed as webview resource URIs (see
         // requestModelThumbnail with useModelUri), so the extension's cspSource must be admitted for
         // connect-src and img-src, not only script-src.
         csp: `default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' ${cspSource}; img-src data: ${cspSource}; connect-src ${cspSource};`,
-        title: 'Choose Warcraft III Asset',
+        title: browseOnly ? 'Warcraft III Asset Browser' : 'Choose Warcraft III Asset',
         extraCss: `
 ${ICON_INLINE_CSS}
 :root { --obj-icon-size: 42px; }
@@ -225,7 +237,7 @@ ${ICON_INLINE_CSS}
     <button id="tab-sound" class="wv-btn tab" type="button" data-tab="sound">Sounds</button>
     <input id="search" class="wv-input search" type="search" placeholder="Search assets..." aria-label="Search assets">
   </div>
-  <div class="meta">Replacing ${escapeHtml(currentValue)}</div>
+  <div class="meta">${browseOnly ? 'Click an asset to open its preview.' : 'Replacing ' + escapeHtml(currentValue)}</div>
   <div id="grid" class="grid"></div>
 </div>
 <canvas id="model-thumb-canvas" class="thumb-render-canvas" width="96" height="96" aria-hidden="true"></canvas>
@@ -712,7 +724,7 @@ class WurstAssetLinkProvider implements vscode.DocumentLinkProvider {
 // ── Registration ──────────────────────────────────────────────────────────────
 
 export function registerAssetLinks(context: vscode.ExtensionContext): vscode.Disposable {
-    const openAsset = vscode.commands.registerCommand('wurst.openAssetFromString', async (assetPath: string) => {
+    const openAsset = vscode.commands.registerCommand('wurst.openAssetFromString', async (assetPath: string, resource?: vscode.Uri) => {
         if (!assetPath) return;
         const ext = path.extname(assetPath).slice(1).toLowerCase();
         let kind: 'model' | 'sound' | 'any';
@@ -721,7 +733,7 @@ export function registerAssetLinks(context: vscode.ExtensionContext): vscode.Dis
         else kind = 'any';
         const resolved = await resolveAssetPathWithCasc(
             assetPath,
-            await candidateRootsForFsPath(vscode.window.activeTextEditor?.document.uri.fsPath),
+            await candidateRootsForFsPath(resource?.fsPath || vscode.window.activeTextEditor?.document.uri.fsPath),
             kind,
         );
         const target = resolved ? vscode.Uri.file(resolved) : undefined;

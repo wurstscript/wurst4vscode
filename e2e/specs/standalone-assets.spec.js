@@ -2,9 +2,54 @@
 
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { test, expect, root } = require('../fixtures');
 const { createTsLoader } = require('../harness/tsLoader');
 const { createVscodeMock, fileUri } = require('../harness/vscodeMock');
+
+test('rendered model thumbnails stay loaded after saving the current cache version', async ({ page, server }) => {
+    const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wurst-thumb-cache-'));
+    try {
+        const vscode = createVscodeMock();
+        let html;
+        vscode.window.createWebviewPanel = () => ({ webview: {
+            cspSource: server.origin,
+            asWebviewUri: uri => ({ toString: () => server.origin + '/dist/webview/' + path.basename(uri.fsPath) }),
+            set html(value) { html = value; },
+            onDidReceiveMessage() {},
+        } });
+        const load = createTsLoader({ mocks: {
+            vscode,
+            'src/features/preview/cascStorage.ts': { getModelThumbCacheDir: () => cacheDir, getGameAssetCacheDir: () => cacheDir },
+            'src/features/objModPreview.ts': { loadObjValueCatalog: async () => ({ models: [{ value: 'test.mdx', label: 'Test model' }], icons: [], sounds: [] }) },
+            'src/features/imageAssetSupport.ts': { getCandidateRoots: async () => [], gatherImportedAssets: async () => ({ model: [], icon: [], sound: [] }) },
+        } });
+        await load('src/features/assetLinks.ts').openAssetBrowser({ extensionUri: fileUri(root) });
+        await page.addInitScript(() => { window.acquireVsCodeApi = () => ({ postMessage() {} }); });
+        await page.goto(server.publish(html));
+        const thumb = page.locator('.model-thumb');
+        const key = await thumb.getAttribute('data-key');
+        const uri = await page.evaluate(() => document.createElement('canvas').toDataURL('image/webp'));
+        await page.evaluate(msg => window.postMessage(msg, '*'), { type: 'modelThumbLoaded', key, uri });
+        await expect(thumb).toHaveClass(/loaded/);
+        const messages = [];
+        await load('src/features/preview/modelPreviewHost.ts').cacheModelThumbnail(key, 'v2-abc', uri.split(',')[1], {
+            postMessage: async msg => {
+                messages.push(msg);
+                await page.evaluate(message => window.postMessage(message, '*'), msg);
+                return true;
+            },
+        }, 'v10s-def');
+        expect(messages.map(msg => msg.type)).toEqual(['modelThumbLoaded']);
+        expect(fs.readFileSync(path.join(cacheDir, 'v2-abc.webp'))).toEqual(fs.readFileSync(path.join(cacheDir, 'v10s-def.webp')));
+        await expect(thumb).toHaveClass(/loaded/);
+        await expect(thumb).not.toHaveClass(/missing/);
+        expect(await thumb.evaluate(el => getComputedStyle(el, '::before').content)).toBe('none');
+        await expect(thumb.locator('img')).toBeVisible();
+    } finally {
+        fs.rmSync(cacheDir, { recursive: true, force: true });
+    }
+});
 
 for (const editor of ['none', 'untitled', 'workspace']) {
     test(`standalone browser opens assets with ${editor} context without a replacement target`, async ({ page, server }) => {

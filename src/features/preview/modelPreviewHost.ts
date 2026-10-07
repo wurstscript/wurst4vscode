@@ -46,7 +46,7 @@ async function readCachedThumb(webview: vscode.Webview, cacheKey: string): Promi
 
 function statThumbKey(resolvedPath: string, stat: fs.Stats): string {
     const identity = `${resolvedPath.toLowerCase()}\0${stat.size}\0${Math.round(stat.mtimeMs)}`;
-    return `v9s-${fastByteHash(Buffer.from(identity, 'utf8'))}`;
+    return `v10s-${fastByteHash(Buffer.from(identity, 'utf8'))}`;
 }
 
 /**

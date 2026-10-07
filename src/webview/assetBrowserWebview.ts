@@ -1,12 +1,19 @@
 import { assetSearchScore, fuzzyMatch } from '../features/preview/fuzzy';
 import { createModelThumbnailWorker, postThumbnailTexture } from './modelThumbnailWorkerClient';
+import { assetDisplayName, assetCardActions } from './assetBrowserCards';
+import { esc, base64ToBytes } from './webviewUtils';
 declare function acquireVsCodeApi(): any;
 const uiDocument: any = document;
 (function () {
   var vscode = acquireVsCodeApi();
   var initial: any = (window as any).__WURST_ASSET_BROWSER_INITIAL__;
-  var activeTab = initial.activeTab || 'icon';
-  var query = '';
+  var saved = vscode.getState?.() || {};
+  var activeTab = initial.tabs[saved.activeTab] ? saved.activeTab : initial.activeTab || 'icon';
+  var query = typeof saved.query === 'string' ? saved.query : '';
+  function persist() {
+    vscode.setState?.({ ...saved, activeTab: activeTab, query: query, browserContext: initial.browserContext,
+      scrollTop: uiDocument.getElementById('grid').scrollTop });
+  }
   var iconCache = new Map();
   var iconPending = new Set();
   var missingIcons = new Set();
@@ -20,7 +27,6 @@ const uiDocument: any = document;
   var modelJob = null;
   var modelWorker: Worker | null = null;
   var workerPromise: Promise<Worker> | null = null;
-  function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function list() {
     var items = (initial.tabs[activeTab] || []);
     if (!query) return items.slice(0, 500);
@@ -45,8 +51,10 @@ const uiDocument: any = document;
         : activeTab === 'icon' && item.iconPath
         ? '<span class="object-icon" data-key="asset:' + index + ':' + esc(item.iconPath) + '" data-icon="' + esc(item.iconPath) + '"></span>'
         : '<span class="model-thumb" data-key="asset-model:' + index + ':' + esc(item.value) + '" data-model="' + esc(item.value) + '"></span>';
-      return '<button class="card" type="button" data-value="' + esc(item.value) + '">' +
-        icon + '<span class="card-text"><span class="card-name">' + esc(item.label) + '</span><span class="card-path">' + esc(item.value) + '</span></span></button>';
+      var name = assetDisplayName(item.label, item.value);
+      return '<div class="card" data-value="' + esc(item.value) + '" title="' + esc(item.value) + '">' +
+        '<button class="asset-preview" type="button" data-action="open" aria-label="' + esc('Open ' + name) + '">' + icon + '</button>' +
+        '<span class="card-name">' + esc(name) + '</span>' + assetCardActions(!initial.browseOnly) + '</div>';
     }).join('');
     observeIcons(grid);
     if (activeTab === 'model') observeModels(grid);
@@ -130,10 +138,7 @@ const uiDocument: any = document;
     pumpModelQueue();
   }
   function base64ToArrayBuffer(b64) {
-    var bin = atob(b64 || '');
-    var out = new Uint8Array(bin.length);
-    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out.buffer;
+    return base64ToBytes(b64 || '').buffer;
   }
   // The host sends either a webview resource URI (fetched here) or, for test doubles, base64 bytes.
   function loadModelBytes(job) {
@@ -199,13 +204,12 @@ const uiDocument: any = document;
     modelJob = null;
     completeModelRequest(key);
   }
-  function b64ToBytes(b64) { var bin = atob(b64), out = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
   function renderDataUrl(data) {
     try {
       var canvas = uiDocument.createElement('canvas'); canvas.width = data.width; canvas.height = data.height;
       var ctx = canvas.getContext('2d');
       if (data.mode !== 'rgba') return Promise.resolve('');
-      var rgba = b64ToBytes(data.rgbaBase64);
+      var rgba = base64ToBytes(data.rgbaBase64);
       ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength), data.width, data.height), 0, 0);
       return Promise.resolve(canvas.toDataURL('image/png'));
     } catch (e) { return Promise.resolve(''); }
@@ -213,12 +217,15 @@ const uiDocument: any = document;
   function setIcon(el, uri) { el.innerHTML = '<img src="' + esc(uri) + '" alt="">'; }
   function eachIcon(key, fn) { uiDocument.querySelectorAll('.object-icon[data-key]').forEach(function (el) { if ((el.getAttribute('data-key') || '') === key) fn(el); }); }
   uiDocument.querySelectorAll('.tab').forEach(function (btn) {
-    btn.addEventListener('click', function () { activeTab = btn.getAttribute('data-tab') || 'icon'; render(); });
+    btn.addEventListener('click', function () { activeTab = btn.getAttribute('data-tab') || 'icon'; render(); persist(); });
   });
-  uiDocument.getElementById('search').addEventListener('input', function (event) { query = event.target.value || ''; render(); });
+  uiDocument.getElementById('search').addEventListener('input', function (event) { query = event.target.value || ''; render(); persist(); });
   uiDocument.getElementById('grid').addEventListener('click', function (event) {
     var card = event.target.closest('.card[data-value]');
-    if (card) vscode.postMessage({ type: 'selectAsset', value: card.getAttribute('data-value') || '' });
+    if (!card) return;
+    var action = event.target.closest('[data-action]')?.getAttribute('data-action') || 'open';
+    vscode.postMessage({ type: action === 'copy' ? 'copyAssetPath' : action === 'use' ? 'selectAsset' : 'openAsset',
+      value: card.getAttribute('data-value') || '' });
   });
   window.addEventListener('message', function (event) {
     var msg = event.data || {};
@@ -272,5 +279,9 @@ const uiDocument: any = document;
     }
   };
   render();
+  uiDocument.getElementById('search').value = query;
+  uiDocument.getElementById('grid').scrollTop = Number(saved.scrollTop) || 0;
+  uiDocument.getElementById('grid').addEventListener('scroll', persist, { passive: true });
+  persist();
   uiDocument.getElementById('search').focus();
 })();

@@ -674,6 +674,10 @@ export async function handleModelThumbMessage(
     const str = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
     const key = str(msg.key);
     switch (msg.type) {
+        case 'copyAssetPath': {
+            await copyAssetPath(str(msg.value));
+            return true;
+        }
         case 'loadObjectIcon': {
             const iconPath = str(msg.iconPath);
             if (key && iconPath) await requestPreviewIcon(iconPath, key, webview, documentUri);
@@ -699,6 +703,10 @@ export async function handleModelThumbMessage(
         default:
             return false;
     }
+}
+
+async function copyAssetPath(value?: string): Promise<void> {
+    if (value) await vscode.env.clipboard.writeText(value.replace(/\//g, '\\'));
 }
 
 function postRequestedTextures(paths: unknown[], thumbKey: string | undefined, webview: vscode.Webview, documentUri: vscode.Uri, binaryThumbTextures: boolean): void {

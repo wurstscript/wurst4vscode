@@ -1061,7 +1061,7 @@ function testThumbnailLifecycleGuards() {
         host.includes('compactDdsForThumbnail(bytes)'),
         'large DDS textures must transfer only thumbnail-sized mip levels to the worker and GPU',
     );
-    assert.ok(assetBrowser.includes('(e.ctrlKey || e.metaKey)'), 'Ctrl+clicking a model card should open its full preview');
+    assert.ok(assetBrowser.includes('e.ctrlKey || e.metaKey'), 'Ctrl+clicking a model card should open its full preview');
     assert.ok(viewer.includes('applyCachedTexture(texturePath)'), 'the warm thumbnail viewer should reuse decoded textures');
     assert.ok(viewer.includes('clearModel()'), 'the model viewer should expose an explicit stale-preview reset');
     assert.ok(modelPreviewPanel.includes('mpvViewer().clearModel()'), 'inline preview must clear the prior model before resolving a new path');

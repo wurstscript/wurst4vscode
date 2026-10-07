@@ -607,6 +607,35 @@ test('asset picker fields use a Codicon chevron instead of the native datalist g
     await expect(modelRow.locator('.picker-chevron')).toHaveClass(/codicon-chevron-down/);
 });
 
+test('object-editor asset actions copy and open without editing; Use updates the intended model field', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod();
+    await selectObject(page, 'h004');
+    await page.check('#technical-toggle');
+    const modelRow = rowForField(page, 'umdl');
+    await modelRow.locator('.cell-edit').click();
+    await modelRow.locator('[data-browse]').click();
+    await expect(page.locator('#ab-overlay')).toBeVisible();
+    const value = 'Units\\Undead\\Acolyte\\Acolyte.mdx';
+    await page.evaluate(value => window.postMessage({ type: 'assetCatalog', models: [{ value, label: 'Acolyte' }], icons: [], sounds: [], pathing: [] }, '*'), value);
+    const card = page.locator('.ab-card').filter({ hasText: 'Acolyte' }).first();
+    await expect(card.locator('.ab-card-label')).toHaveText('Acolyte');
+    let copied;
+    host.vscodeMock.env.clipboard.writeText = async text => { copied = text; };
+    await card.getByRole('button', { name: 'Copy path', exact: true }).click();
+    await expect.poll(() => copied).toBe(value);
+    expect(host.isDirty).toBe(false);
+    await expect(page.locator('#ab-overlay')).toBeVisible();
+    await card.getByRole('button', { name: 'Open in viewer', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__e2eOutbox.filter(m => m.type === 'openAsset').length)).toBe(1);
+    expect(host.isDirty).toBe(false);
+    await expect(page.locator('#ab-overlay')).toBeVisible();
+    await card.getByRole('button', { name: 'Use asset', exact: true }).click();
+    await expect.poll(() => host.isDirty).toBe(true);
+    await expect(page.locator('#ab-overlay')).toBeHidden();
+    await expect(modelRow.locator('.cell-edit-val')).toContainText(value);
+    expect(host.editLabels).toEqual(['Edit umdl']);
+});
+
 test('editing an int field posts the edit, marks the document dirty, and survives undo/redo', async ({ openObjMod }) => {
     const { page, host } = await openObjMod();
     await selectObject(page, 'h004');

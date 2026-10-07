@@ -1,0 +1,5 @@
+.asset-actions { display: flex; justify-content: center; gap: 4px; }
+.asset-action { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 4px; border: 0; border-radius: 3px; background: transparent; color: var(--muted); cursor: pointer; }
+.asset-action:hover { color: var(--fg); background: var(--hover); }
+.asset-action:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+.asset-action svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }

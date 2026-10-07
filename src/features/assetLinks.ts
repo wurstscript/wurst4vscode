@@ -10,6 +10,7 @@ import { isSoundAssetPath, playSoundInline } from './soundPreview';
 import { buildPage, ICON_INLINE_CSS, scriptSafeJson } from './webviewShared';
 import { escapeHtml, makeNonce } from './webviewUtils';
 import { showWarningWithLogs } from './diagnostics';
+import ASSET_CARD_CSS from '../webview/assetBrowserCards.css';
 
 // Asset file extensions we want to linkify inside string literals
 const ASSET_EXTS = new Set([
@@ -116,23 +117,28 @@ function assetBrowserItems(options: readonly ValueOption[]): Array<{ value: stri
     }));
 }
 
-async function replaceAssetString(target: BrowseAssetTarget, assetPath: string): Promise<void> {
+async function replaceAssetString(target: BrowseAssetTarget, assetPath: string): Promise<boolean> {
+    const doc = await vscode.workspace.openTextDocument(target.uri);
+    if (doc.getText(target.range) !== target.currentValue) {
+        void showWarningWithLogs('The original asset text changed. Reopen its asset picker before using an asset.', new Error('Asset replacement target is stale.'));
+        return false;
+    }
     const edit = new vscode.WorkspaceEdit();
     edit.replace(target.uri, target.range, escapeWurstStringAssetPath(assetPath));
     const ok = await vscode.workspace.applyEdit(edit);
     if (!ok) {
         void showWarningWithLogs(`Could not replace asset path: ${assetPath}`, new Error('VS Code rejected the workspace edit.'));
-        return;
+        return false;
     }
-    const doc = await vscode.workspace.openTextDocument(target.uri);
     await vscode.window.showTextDocument(doc, { preview: false, preserveFocus: true });
+    return true;
 }
 
 export async function openAssetBrowser(context: vscode.ExtensionContext, resource?: vscode.Uri): Promise<void> {
     await openCodeAssetBrowser(context, undefined, resource);
 }
 
-async function openCodeAssetBrowser(context: vscode.ExtensionContext, target?: BrowseAssetTarget, resource?: vscode.Uri): Promise<void> {
+async function openCodeAssetBrowser(context: vscode.ExtensionContext, target?: BrowseAssetTarget, resource?: vscode.Uri, restoredPanel?: vscode.WebviewPanel): Promise<void> {
     const workspace = vscode.workspace.workspaceFolders?.find((folder) => folder.uri.scheme === 'file' || folder.uri.scheme === 'vscode-remote');
     const source = [target?.uri, resource, vscode.window.activeTextEditor?.document.uri,
         workspace && vscode.Uri.joinPath(workspace.uri, 'asset-browser')].find((uri) => uri?.scheme === 'file' || uri?.scheme === 'vscode-remote');
@@ -144,7 +150,7 @@ async function openCodeAssetBrowser(context: vscode.ExtensionContext, target?: B
         source ? gatherImportedAssets(source.fsPath) : Promise.resolve({ icon: [], model: [], sound: [] }),
         getCandidateRoots(documentUri.fsPath),
     ]);
-    const panel = vscode.window.createWebviewPanel(
+    const panel = restoredPanel || vscode.window.createWebviewPanel(
         'wurst.assetBrowser',
         browseOnly ? 'Warcraft III Asset Browser' : 'Choose Warcraft III Asset',
         vscode.ViewColumn.Beside,
@@ -162,10 +168,20 @@ async function openCodeAssetBrowser(context: vscode.ExtensionContext, target?: B
             ],
         },
     );
+    panel.webview.options = {
+        enableScripts: true,
+        localResourceRoots: [context.extensionUri, ...assetRoots.map(root => vscode.Uri.file(root)),
+            vscode.Uri.file(getGameAssetCacheDir()), vscode.Uri.file(getModelThumbCacheDir())],
+    };
     const assetBrowserUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview', 'assetBrowserWebview.js')).toString();
     const thumbnailWorkerUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview', 'mdxThumbnailWorker.js')).toString();
     const initial = {
         thumbnailWorkerUri,
+        browserContext: {
+            documentUri: documentUri.toString(),
+            target: target && { uri: target.uri.toString(), kind: target.kind, currentValue: target.currentValue,
+                range: [target.range.start.line, target.range.start.character, target.range.end.line, target.range.end.character] },
+        },
         activeTab: target?.kind || 'model',
         currentValue,
         browseOnly,
@@ -180,12 +196,35 @@ async function openCodeAssetBrowser(context: vscode.ExtensionContext, target?: B
     panel.webview.onDidReceiveMessage((message) => {
         const msg = message || {};
         if (msg.type === 'selectAsset' && typeof msg.value === 'string') {
-            if (target) void replaceAssetString(target, msg.value).then(() => panel.dispose());
+            if (target) void replaceAssetString(target, msg.value).then(used => { if (used) panel.dispose(); });
             else void vscode.commands.executeCommand('wurst.openAssetFromString', msg.value, documentUri);
+        } else if (msg.type === 'openAsset' && typeof msg.value === 'string') {
+            void vscode.commands.executeCommand('wurst.openAssetFromString', msg.value, documentUri);
+        } else if (msg.type === 'copyAssetPath' && typeof msg.value === 'string') {
+            const value = target ? escapeWurstStringAssetPath(msg.value) : msg.value.replace(/\//g, '\\');
+            void vscode.env.clipboard.writeText(value);
         } else {
             void handleModelThumbMessage(msg, panel.webview, documentUri, true);
         }
     });
+}
+
+export async function restoreAssetBrowser(context: vscode.ExtensionContext, panel: vscode.WebviewPanel, state: unknown): Promise<void> {
+    const saved = (state && typeof state === 'object' ? state : {}) as { browserContext?: { documentUri?: string; target?: { uri?: string; kind?: BrowseAssetKind; currentValue?: string; range?: number[] } } };
+    const source = saved.browserContext;
+    const parseUri = (value: unknown) => {
+        if (typeof value !== 'string') return undefined;
+        const uri = vscode.Uri.parse(value);
+        return uri.scheme === 'file' || uri.scheme === 'vscode-remote' ? uri : undefined;
+    };
+    const uri = parseUri(source?.target?.uri);
+    const range = source?.target?.range;
+    const kind = source?.target?.kind;
+    const currentValue = source?.target?.currentValue;
+    const target = uri && range?.length === 4 && range.every(n => Number.isSafeInteger(n) && n >= 0) &&
+        kind && ['icon', 'model', 'sound'].includes(kind) && typeof currentValue === 'string'
+        ? { uri, range: new vscode.Range(range[0], range[1], range[2], range[3]), kind, currentValue } : undefined;
+    await openCodeAssetBrowser(context, target, parseUri(source?.documentUri), panel);
 }
 
 function dedupeAssetOptions(options: readonly ValueOption[]): ValueOption[] {
@@ -210,19 +249,21 @@ function buildAssetBrowserHtml(initialJson: string, currentValue: string, cspSou
         title: browseOnly ? 'Warcraft III Asset Browser' : 'Choose Warcraft III Asset',
         extraCss: `
 ${ICON_INLINE_CSS}
+${ASSET_CARD_CSS}
 :root { --obj-icon-size: 42px; }
-.browser { height: 100%; display: grid; grid-template-rows: auto auto 1fr; min-height: 0; }
+.browser { height: calc(100% - 24px); max-width: 1100px; margin: 12px auto; display: grid; grid-template-rows: auto auto 1fr; min-height: 0; border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 6px 24px var(--shadow); overflow: hidden; }
 .toolbar { gap: 6px; padding: 8px 10px; }
 .tab { min-width: 78px; justify-content: center; }
 .search { flex: 1; min-width: 120px; }
 .meta { padding: 6px 10px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.grid { overflow: auto; padding: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; align-content: start; }
-.card { min-width: 0; display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 8px; align-items: center; padding: 7px; border: 1px solid var(--border); background: transparent; color: var(--fg); border-radius: 4px; cursor: pointer; text-align: left; font-family: var(--font); }
+.grid { overflow: auto; padding: 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; align-content: start; }
+.card { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 6px; border: 1px solid transparent; background: transparent; color: var(--fg); border-radius: 5px; text-align: center; font-family: var(--font); }
 .card:hover, .card:focus-visible { background: var(--hover); border-color: var(--focus); outline: none; }
-.card-text { display: block; min-width: 0; overflow: hidden; }
-.card-name { display: block; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.card-path { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.model-thumb { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 3px; background: color-mix(in srgb, var(--fg) 10%, transparent); overflow: hidden; color: var(--muted); font-size: 13px; font-weight: 700; }
+.card-name { display: block; width: 100%; font-size: 11px; line-height: 1.3; height: 2.6em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.asset-preview { display: grid; place-items: center; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
+.asset-preview:focus-visible { outline: 1px solid var(--focus); outline-offset: 2px; }
+.asset-preview .object-icon { width: 72px; height: 72px; }
+.model-thumb { width: 72px; height: 72px; display: grid; place-items: center; border-radius: 3px; background: color-mix(in srgb, var(--fg) 10%, transparent); overflow: hidden; color: var(--muted); font-size: 13px; font-weight: 700; }
 .model-thumb::before { content: '3D'; }
 .model-thumb.pending::before { content: ''; width: 16px; height: 16px; border: 2px solid color-mix(in srgb, var(--fg) 18%, transparent); border-top-color: var(--fg); border-radius: 50%; animation: wv-spin .8s linear infinite; }
 .model-thumb.missing::before { content: '?'; }
@@ -364,6 +405,9 @@ class WurstAssetLinkProvider implements vscode.DocumentLinkProvider {
 // ── Registration ──────────────────────────────────────────────────────────────
 
 export function registerAssetLinks(context: vscode.ExtensionContext): vscode.Disposable {
+    const serializer = vscode.window.registerWebviewPanelSerializer('wurst.assetBrowser', {
+        deserializeWebviewPanel: (panel, state) => restoreAssetBrowser(context, panel, state),
+    });
     const openAsset = vscode.commands.registerCommand('wurst.openAssetFromString', async (assetPath: string, resource?: vscode.Uri) => {
         if (!assetPath) return;
         const ext = path.extname(assetPath).slice(1).toLowerCase();
@@ -440,5 +484,5 @@ export function registerAssetLinks(context: vscode.ExtensionContext): vscode.Dis
         lensProvider,
     );
 
-    return vscode.Disposable.from(openAsset, browseAsset, wurst, fdf, toc, codeActions, codeLens, lensSettings, lensProvider.changes);
+    return vscode.Disposable.from(serializer, openAsset, browseAsset, wurst, fdf, toc, codeActions, codeLens, lensSettings, lensProvider.changes);
 }

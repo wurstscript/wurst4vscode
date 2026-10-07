@@ -6,6 +6,7 @@ import { observeModelThumbs, requestVisibleModelThumbs, isAssetBrowserOpen, canc
 import { setModValue, postEdit } from './fieldDisplay';
 import { markModified, collapseCell } from './detailsPanel';
 import type { AssetCatalog, AssetOption } from './types';
+import { assetDisplayName, assetCardActions } from '../assetBrowserCards';
 
 // ── Asset browser (rich visual picker over WC3 game data, by category) ────────
 let abMi = -1;
@@ -140,11 +141,10 @@ export function renderAssetGrid() {
       : (o.iconPath
         ? '<span class="object-icon" data-key="ab:' + esc(o.value) + '" data-icon="' + esc(o.iconPath) + '"></span>'
         : '<span class="object-icon missing"></span>');
-    const previewHint = activeTab
-      ? ' — Ctrl+click to open in previewer'
-      : '';
-    return '<button type="button" class="ab-card" data-value="' + esc(o.value) + '" data-search-score="' + score + '" aria-label="' + esc(o.label + ' — ' + o.value) + '" title="' + esc(o.label + ' — ' + o.value + previewHint) + '">' +
-      icon + '<span class="ab-card-label">' + esc(o.label) + '</span></button>';
+    const name = assetDisplayName(o.label, o.value);
+    return '<div class="ab-card" data-value="' + esc(o.value) + '" data-search-score="' + score + '" title="' + esc(o.value) + '">' +
+      '<button class="ab-preview" type="button" data-action="open" aria-label="' + esc('Open ' + name) + '">' + icon + '</button>' +
+      '<span class="ab-card-label">' + esc(name) + '</span>' + assetCardActions(abMi >= 0) + '</div>';
   }).join('');
   iconLoader.observe(grid);
   if (activeTab === 'model') {
@@ -228,7 +228,12 @@ export function setupAssetBrowser() {
   if (grid) grid.addEventListener('click', e => {
     if (e.target.closest('#ab-catalog-retry')) { requestAssetCatalog(); return; }
     const card = e.target.closest('.ab-card[data-value]');
-    if (card && (e.ctrlKey || e.metaKey)) {
+    const action = e.target.closest('[data-action]')?.getAttribute('data-action');
+    if (card && action === 'copy') {
+      vscodeApi.postMessage({ type: 'copyAssetPath', value: card.getAttribute('data-value') || '' });
+      return;
+    }
+    if (card && (action === 'open' || e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       vscodeApi.postMessage({ type: 'openAsset', path: card.getAttribute('data-value') || '' });
       return;

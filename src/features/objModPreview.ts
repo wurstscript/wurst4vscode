@@ -30,6 +30,7 @@ import {
 import { firstAssetPath, normalizeModelPath } from './preview/objectCatalog';
 import { getGameAssetCacheDir, getModelThumbCacheDir, listGameAssetPaths } from './preview/cascStorage';
 import OBJMOD_EDITOR_CSS from '../webview/objModEditor/objModEditor.css';
+import ASSET_CARD_CSS from '../webview/assetBrowserCards.css';
 import CODICON_CSS_BUNDLE from '@vscode/codicons/dist/codicon.css';
 import '@vscode/codicons/dist/codicon.ttf';
 import { showErrorWithLogs, showWarningWithLogs } from './diagnostics';
@@ -1971,6 +1972,7 @@ async function buildHtml(
         title: escapeHtml(fileName),
         extraHead: codiconCssUri ? `<link rel="stylesheet" href="${codiconCssUri}">` : '',
         extraCss: `${OBJMOD_EDITOR_CSS}
+${ASSET_CARD_CSS}
 :root { --wc3-tip-width: ${tooltipWidthPx}px; }
 ${tooltipFontCss}`,
         body: `<div class="content">

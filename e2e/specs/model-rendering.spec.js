@@ -6,12 +6,19 @@ const { parseMDX, generateMDX } = require('war3-model');
 const { test, expect } = require('../fixtures');
 
 // A static, real WC3 model with deliberately wrong authored extents exercises posed framing.
-function modelBytes(hiddenStand = false) {
+function modelBytes(hiddenStand = false, transparentLastPass = false) {
     const bytes = fs.readFileSync(path.join(__dirname, '../../wc3data/melon.mdx'));
     const model = parseMDX(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
     model.Info.MinimumExtent.fill(-100000);
     model.Info.MaximumExtent.fill(100000);
     model.Info.BoundsRadius = 100000;
+    if (transparentLastPass) {
+        for (const material of model.Materials) {
+            material.Layers[0].FilterMode = 0;
+            material.Layers[0].Shading = 16;
+            material.Layers.push({ ...material.Layers[0], FilterMode: 2, Alpha: 0.25 });
+        }
+    }
     if (hiddenStand) {
         model.Sequences = ['Stand', 'Visible'].map((Name, index) => ({
             ...model.Info, Name, Interval: new Uint32Array([index * 1000, index * 1000 + 500]),
@@ -144,4 +151,28 @@ test('frozen preview exposes first textured GPU draw and asynchronous still capt
             errors: window.viewerErrors };
     });
     expect(result.ready).toBe(true); expect(result.pixels).toBeGreaterThan(100); expect(result.errors).toEqual([]);
+});
+
+test('transparent final passes do not retain depth between preview frames', async ({ page, server }) => {
+    await page.goto(server.publish('<!doctype html><div id="viewport"><canvas id="model" style="width:256px;height:256px"></canvas></div><canvas id="gizmo"></canvas><script src="/dist/webview/mdxViewer.js"></script>'));
+    const counts = await page.evaluate(async bytes => {
+        const viewer = window.War3Viewer;
+        const messages = [];
+        viewer.init({ canvas3d: document.querySelector('#model'), gizmo: document.querySelector('#gizmo'), viewport: document.querySelector('#viewport'),
+            vscodeApi: { postMessage: message => messages.push(message) },
+            callbacks: { onModelLoaded() {}, onFrameUpdate() {}, onDebug() {}, onError() {} } });
+        viewer.loadModel(Uint8Array.from(atob(bytes), value => value.charCodeAt(0)).buffer, 'depth-regression.mdx', 'mdx', { freezeAnimation: true });
+        for (const path of messages.find(message => message.type === 'requestTextures').paths) {
+            viewer.onTextureImageData(path, new ImageData(new Uint8ClampedArray([80, 220, 90, 255]), 1, 1));
+        }
+        await viewer.whenRendered();
+        const coverage = [];
+        for (let frame = 0; frame < 20; frame++) {
+            viewer.renderStillFrame();
+            coverage.push(viewer.readPixelsImageData().data.filter((value, index) => index % 4 === 3 && value > 12).length);
+        }
+        return coverage;
+    }, modelBytes(false, true));
+    expect(counts[0]).toBeGreaterThan(100);
+    for (const count of counts) expect(count).toBe(counts[0]);
 });

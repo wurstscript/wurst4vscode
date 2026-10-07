@@ -490,6 +490,8 @@ function renderCurrentScene(delta: number, reportFrame: boolean): boolean {
         }
         gl.viewport(0, 0, w, h);
         gl.clearColor(0, 0, 0, 0);
+        // Transparent mesh/effect passes disable depth writes. Clear must reset them first.
+        gl.depthMask(true);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
         if (activeRenderer) {
@@ -805,6 +807,7 @@ const War3Viewer = {
             if (context) {
                 context.viewport(0, 0, canvas.width, canvas.height);
                 context.clearColor(0, 0, 0, 0);
+                context.depthMask(true);
                 context.clear(context.COLOR_BUFFER_BIT | context.DEPTH_BUFFER_BIT);
             }
         }

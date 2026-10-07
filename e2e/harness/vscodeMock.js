@@ -94,6 +94,7 @@ function createVscodeMock(options = {}) {
             },
         },
         window: {
+            registerWebviewPanelSerializer: () => ({ dispose() {} }),
             createOutputChannel: () => ({ appendLine() {}, append() {}, show() {}, clear() {}, dispose() {} }),
             registerCustomEditorProvider: () => ({ dispose() {} }),
             showInformationMessage: (message) => { recorded.info.push(message); return Promise.resolve(undefined); },

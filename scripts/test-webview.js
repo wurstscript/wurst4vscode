@@ -929,7 +929,7 @@ async function testModelThumbnailRequestsTexturesByDefault() {
 
     const render = posted.find((message) => message.type === 'modelThumbRender');
     assert.ok(render, 'uncached model thumbnails should render regardless of model byte size');
-    assert.equal(render.cacheKey, 'v11s-abc123', 'older framing captures must be regenerated');
+    assert.equal(render.cacheKey, 'v12s-abc123', 'older framing captures must be regenerated');
     assert.equal(render.skipTextures, undefined, 'model thumbnail renders must load textures by default');
     assert.ok(render.mdxBase64, 'model bytes should still be sent for thumbnail rendering');
 
@@ -947,24 +947,15 @@ async function testModelThumbnailRequestsTexturesByDefault() {
 }
 
 function testAssetBrowserForwardsModelTextures() {
-    const src = fs.readFileSync(path.join(root, 'src/features/assetLinks.ts'), 'utf8');
-    const match = src.match(/<script>\r?\n([\s\S]*?)\r?\n<\/script>`/);
-    assert.ok(match, 'asset browser inline script should be present');
-    const script = match[1]
-        .replace(
-            'var initial = ${initialJson};',
-            "var initial = { activeTab: 'model', tabs: { icon: [], model: [] }, currentValue: '' };"
-        )
-        .replace('${fuzzyMatch.toString()}', 'function fuzzyMatch() { return false; }')
-        .replace('${assetSearchScore.toString()}', 'function assetSearchScore() { return Number.POSITIVE_INFINITY; }');
+    const script = fs.readFileSync(path.join(root, 'src/webview/assetBrowserWebview.ts'), 'utf8');
     // eslint-disable-next-line sonarjs/constructor-for-side-effects -- constructed only to validate the extracted inline script parses (throws SyntaxError otherwise); the instance itself is unused on purpose.
-    new vm.Script(script);
+    new vm.Script(require('typescript').transpileModule(script, { compilerOptions: { module: require('typescript').ModuleKind.CommonJS } }).outputText);
     assert.ok(
         script.includes("msg.type === 'requestTextures'"),
         'asset browser model renderer should handle texture requests'
     );
     assert.ok(
-        script.includes("thumbKey: modelJob.key"),
+        script.includes("thumbKey: msg.key"),
         'asset browser texture requests should be keyed to the active thumbnail job'
     );
     assert.ok(
@@ -1029,6 +1020,7 @@ function testThumbnailLifecycleGuards() {
     const modelPreviewPanel = fs.readFileSync(path.join(root, 'src/webview/objModEditor/modelPreviewPanel.ts'), 'utf8');
     const messageHandler = fs.readFileSync(path.join(root, 'src/webview/objModEditor/messageHandler.ts'), 'utf8');
     const assetBrowser = fs.readFileSync(path.join(root, 'src/webview/objModEditor/assetBrowser.ts'), 'utf8');
+    const scriptWorkerClient = fs.readFileSync(path.join(root, 'src/webview/modelThumbnailWorkerClient.ts'), 'utf8');
     const thumbnailWorker = fs.readFileSync(path.join(root, 'src/webview/mdxThumbnailWorker.ts'), 'utf8');
     const webpack = fs.readFileSync(path.join(root, 'webpack.config.js'), 'utf8');
     const assetLinks = fs.readFileSync(path.join(root, 'src/features/assetLinks.ts'), 'utf8');
@@ -1044,14 +1036,14 @@ function testThumbnailLifecycleGuards() {
     assert.ok(host.includes("if (ext === 'blp')"), 'BLP thumbnails should retain the renderer decoder rather than using the generic preview decoder');
     assert.ok(viewer.includes('downscaleTextureImageData'), 'decoded BLP thumbnail textures should be reduced before GPU upload');
     assert.ok(thumbnailWorker.includes('MAX_TEXTURE_DIMENSION'), 'worker thumbnail renders should bound browser-side texture uploads');
-    assert.ok(host.includes('return `v11s-'), 'the cache version must invalidate thumbnails captured before the current consumer renderer build');
+    assert.ok(host.includes('return `v12s-'), 'the cache version must invalidate thumbnails captured before the current consumer renderer build');
     assert.ok(!objmod.includes('capture-dark-accepted'), 'dark frames must never be persisted as successful thumbnails');
     assert.ok(objmod.includes('Array.from(new Set((texturePaths || [])'), 'thumbnail capture must wait for every referenced material texture');
     assert.ok(!objmod.includes('(?:normal|orm)'), 'thumbnail loading must not omit HD material textures');
     assert.ok(viewer.includes('if (animationFrozen) return'), 'the animation frame loop should not update or rerender frozen thumbnails');
     assert.ok(thumbnailWorker.includes("convertToBlob({ type: 'image/webp', quality: 0.88 })"), 'small thumbnail captures should not use visibly blurry WebP compression');
-    assert.ok(objmod.includes('new Worker(modelThumbWorkerBlobUrl'), 'objmod thumbnail rendering should run in a webview-compatible Blob worker');
-    assert.ok(objmod.includes('fetch(initial.thumbnailWorkerUri'), 'the worker bundle must be fetched before creating its Blob URL');
+    assert.ok(objmod.includes('createModelThumbnailWorker(initial.thumbnailWorkerUri'), 'objmod thumbnails should use the shared worker client');
+    assert.ok(scriptWorkerClient.includes('new Worker(url'), 'the shared client must launch a Blob worker');
     assert.ok(!objmod.includes('new Worker(initial.thumbnailWorkerUri)'), 'VS Code resource URLs cannot be passed directly to the Worker constructor');
     assert.ok(assetBrowser.includes('modelThumbEnsureInit()'), 'opening or selecting the model asset browser should prewarm the thumbnail worker');
     assert.ok(assetBrowser.includes("import { assetSearchScore, fuzzyMatch } from '../../features/preview/fuzzy'"), 'objmod asset search should use the shared relevance scorer');
@@ -1069,7 +1061,7 @@ function testThumbnailLifecycleGuards() {
         host.includes('compactDdsForThumbnail(bytes)'),
         'large DDS textures must transfer only thumbnail-sized mip levels to the worker and GPU',
     );
-    assert.ok(assetBrowser.includes('(e.ctrlKey || e.metaKey)'), 'Ctrl+clicking a model card should open its full preview');
+    assert.ok(assetBrowser.includes('e.ctrlKey || e.metaKey'), 'Ctrl+clicking a model card should open its full preview');
     assert.ok(viewer.includes('applyCachedTexture(texturePath)'), 'the warm thumbnail viewer should reuse decoded textures');
     assert.ok(viewer.includes('clearModel()'), 'the model viewer should expose an explicit stale-preview reset');
     assert.ok(modelPreviewPanel.includes('mpvViewer().clearModel()'), 'inline preview must clear the prior model before resolving a new path');

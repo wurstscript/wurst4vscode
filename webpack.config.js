@@ -70,6 +70,7 @@ const viewerConfig = {
 	mode: 'none',
 	target: 'web',
 	entry: {
+		assetBrowserWebview: './src/webview/assetBrowserWebview.ts',
 		mdxViewer: './src/webview/mdxViewer.ts',
 		mpqViewerWebview: './src/webview/mpqViewerWebview.ts',
 		wpmEditorWebview: './src/webview/wpmEditorWebview.ts',

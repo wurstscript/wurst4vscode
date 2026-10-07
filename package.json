@@ -29,6 +29,7 @@
         "onCustomEditor:wurst.objModPreview",
         "onCustomEditor:wurst.soundPreview",
         "onCommand:wurst.openAssetBrowser",
+        "onWebviewPanel:wurst.assetBrowser",
         "onCommand:wurst.previewMap",
         "onCommand:wurst.reportIssue",
         "onCommand:wurst.showDiagnosticsActions",

@@ -46,8 +46,8 @@ async function readCachedThumb(webview: vscode.Webview, cacheKey: string): Promi
 
 function statThumbKey(resolvedPath: string, stat: fs.Stats): string {
     const identity = `${resolvedPath.toLowerCase()}\0${stat.size}\0${Math.round(stat.mtimeMs)}`;
-    // Regenerate captures made before the consumer bundled the current camera framing.
-    return `v11s-${fastByteHash(Buffer.from(identity, 'utf8'))}`;
+    // Older consumers captured through the live viewer and shared those distant frames.
+    return `v12s-${fastByteHash(Buffer.from(identity, 'utf8'))}`;
 }
 
 /**
@@ -674,6 +674,10 @@ export async function handleModelThumbMessage(
     const str = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
     const key = str(msg.key);
     switch (msg.type) {
+        case 'copyAssetPath': {
+            await copyAssetPath(str(msg.value));
+            return true;
+        }
         case 'loadObjectIcon': {
             const iconPath = str(msg.iconPath);
             if (key && iconPath) await requestPreviewIcon(iconPath, key, webview, documentUri);
@@ -699,6 +703,10 @@ export async function handleModelThumbMessage(
         default:
             return false;
     }
+}
+
+async function copyAssetPath(value?: string): Promise<void> {
+    if (value) await vscode.env.clipboard.writeText(value.replace(/\//g, '\\'));
 }
 
 function postRequestedTextures(paths: unknown[], thumbKey: string | undefined, webview: vscode.Webview, documentUri: vscode.Uri, binaryThumbTextures: boolean): void {

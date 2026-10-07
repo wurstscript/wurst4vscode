@@ -45,3 +45,4 @@ package-lock.json
 # source maps are only useful for local debugging, don't ship them
 dist/**/*.map
 **/*.map
+**/*.d.ts

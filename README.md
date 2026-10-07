@@ -110,6 +110,8 @@ Report extension problems in the [wurst4vscode issue tracker](https://github.com
 
 Install a current Node.js LTS release, clone the repository, and run `npm install`. Open it in VS Code and press `F5` to launch an Extension Development Host.
 
+`npm run package-web` minifies release bundles and locally obfuscates the bundled `war3-model` and `casc-ts` modules. It emits no source maps; VSIX packaging excludes sources, declarations, maps and build tools. Development builds remain readable. Public APIs and model properties retain their names, and hot-path control flow is preserved. This raises the effort needed to inspect distributed code; it does not make client-side code secret. Use `npm run test:e2e:production` to test the actual protected bundles in Chromium.
+
 Before submitting a change:
 
 ```sh

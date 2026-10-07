@@ -33,6 +33,7 @@ const forbidden = [
     /(?:^|\/)vsc-extension-quickstart\.md$/i,
     /(?:^|\/)package-lock\.json$/i,
     /\.map$/i,
+    /\.d\.ts$/i,
     /\.(?:test|spec)\.[cm]?[jt]sx?$/i,
     /\.(?:blp|dds|tga|mdx|w3[a-z0-9]+)$/i,
 ];
@@ -44,7 +45,7 @@ assert.deepStrictEqual(leaked, [], `Test/development files would be packaged:\n$
 // used to ship silently and leave the object editor with a 404'd script. The webview bundles are
 // read from webpack.config.js so a new entry cannot be forgotten here.
 const webviewOutput = path.join(root, 'dist', 'webview');
-const webviewBundles = require('../webpack.config.js')
+const webviewBundles = require('../webpack.config.js')({}, { mode: 'production' })
     .filter((config) => config.output && path.resolve(config.output.path) === webviewOutput)
     .flatMap((config) => Object.keys(config.entry).map((name) => `dist/webview/${name}.js`));
 assert.ok(webviewBundles.includes('dist/webview/objModEditorWebview.js'), 'webview bundles should be discovered from webpack.config.js');

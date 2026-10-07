@@ -50,6 +50,48 @@ for (const editor of ['none', 'untitled', 'workspace']) {
     });
 }
 
+for (const source of ['editor', 'workspace', 'model']) {
+    test(`standalone browser preserves remote ${source} asset roots and source URI`, async ({ page, server }) => {
+        const remoteRoot = fileUri(root, 'vscode-remote', 'ssh-remote+fixture');
+        const remoteDocument = fileUri(path.join(root, 'models', 'preview.mdx'), 'vscode-remote', remoteRoot.authority);
+        const vscode = createVscodeMock({ workspaceFolders: [{ uri: remoteRoot }] });
+        vscode.window.activeTextEditor = { document: { uri: source === 'editor' ? remoteDocument : { scheme: 'untitled', fsPath: '/Untitled-1' } } };
+        let scanned;
+        let candidatePath;
+        let receive;
+        let html;
+        vscode.window.createWebviewPanel = () => ({ webview: {
+            cspSource: server.origin,
+            asWebviewUri: uri => ({ toString: () => server.origin + '/dist/webview/' + path.basename(uri.fsPath) }),
+            set html(value) { html = value; },
+            onDidReceiveMessage(handler) { receive = handler; },
+        } });
+        const load = createTsLoader({ mocks: {
+            vscode,
+            'src/features/objModPreview.ts': { loadObjValueCatalog: async () => ({ models: [], icons: [], sounds: [] }) },
+            'src/features/imageAssetSupport.ts': {
+                getCandidateRoots: async fsPath => { candidatePath = fsPath; return []; },
+                gatherImportedAssets: async fsPath => {
+                    scanned = fsPath;
+                    return { model: [{ value: 'imports\\remote.mdx', label: 'Remote import' }], icon: [], sound: [] };
+                },
+            },
+            'src/features/preview/modelPreviewHost.ts': { handleModelThumbMessage: async () => true },
+        } });
+        await load('src/features/assetLinks.ts').openAssetBrowser({ extensionUri: fileUri(root) }, source === 'model' ? remoteDocument : undefined);
+        const expected = source === 'workspace' ? vscode.Uri.joinPath(remoteRoot, 'asset-browser') : remoteDocument;
+        expect(scanned).toBe(expected.fsPath);
+        expect(candidatePath).toBe(expected.fsPath);
+        await page.exposeFunction('__assetMessage', message => receive(message));
+        await page.addInitScript(() => { window.acquireVsCodeApi = () => ({ postMessage: message => window.__assetMessage(message) }); });
+        await page.goto(server.publish(html));
+        await expect(page.locator('.card')).toContainText('Remote import');
+        await page.locator('.card').click();
+        await expect.poll(() => vscode.recorded.commands.length).toBe(1);
+        expect(vscode.recorded.commands[0].args[1].toString()).toBe(expected.toString());
+    });
+}
+
 test('model preview exposes the asset browser with its source URI', async ({ openBlpPreview }) => {
     const { page, host } = await openBlpPreview();
     await expect(page.locator('#fileMeta')).toHaveText(/8 × 4/);

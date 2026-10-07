@@ -619,6 +619,19 @@ test('object-editor asset actions copy and open without editing; Use updates the
     await page.evaluate(value => window.postMessage({ type: 'assetCatalog', models: [{ value, label: 'Acolyte' }], icons: [], sounds: [], pathing: [] }, '*'), value);
     const card = page.locator('.ab-card').filter({ hasText: 'Acolyte' }).first();
     await expect(card.locator('.ab-card-label')).toHaveText('Acolyte');
+    const dimensions = () => card.evaluate(el => {
+        const icon = getComputedStyle(el.querySelector('.object-icon'));
+        return { icon: parseFloat(icon.width), label: parseFloat(getComputedStyle(el.querySelector('.ab-card-label')).fontSize), action: parseFloat(getComputedStyle(el.querySelector('.asset-action')).height), column: getComputedStyle(el.parentElement).gridTemplateColumns };
+    });
+    const compact = await dimensions();
+    await page.evaluate(() => document.querySelector('#density-toggle').click());
+    const cozy = await dimensions();
+    expect(cozy.icon).toBeGreaterThan(compact.icon);
+    expect(cozy.label).toBeGreaterThan(compact.label);
+    expect(cozy.action).toBeGreaterThan(compact.action);
+    expect(cozy.column).not.toBe(compact.column);
+    await page.evaluate(() => document.querySelector('#density-toggle').click());
+    expect(await dimensions()).toEqual(compact);
     let copied;
     host.vscodeMock.env.clipboard.writeText = async text => { copied = text; };
     await card.getByRole('button', { name: 'Copy path', exact: true }).click();

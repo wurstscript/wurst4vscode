@@ -10,7 +10,6 @@ import { isSoundAssetPath, playSoundInline } from './soundPreview';
 import { buildPage, ICON_INLINE_CSS, scriptSafeJson } from './webviewShared';
 import { escapeHtml, makeNonce } from './webviewUtils';
 import { showWarningWithLogs } from './diagnostics';
-import ASSET_CARD_CSS from '../webview/assetBrowserCards.css';
 
 // Asset file extensions we want to linkify inside string literals
 const ASSET_EXTS = new Set([
@@ -249,7 +248,6 @@ function buildAssetBrowserHtml(initialJson: string, currentValue: string, cspSou
         title: browseOnly ? 'Warcraft III Asset Browser' : 'Choose Warcraft III Asset',
         extraCss: `
 ${ICON_INLINE_CSS}
-${ASSET_CARD_CSS}
 :root { --obj-icon-size: 42px; }
 .browser { height: calc(100% - 24px); max-width: 1100px; margin: 12px auto; display: grid; grid-template-rows: auto auto 1fr; min-height: 0; border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 6px 24px var(--shadow); overflow: hidden; }
 .toolbar { gap: 6px; padding: 8px 10px; }

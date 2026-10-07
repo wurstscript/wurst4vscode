@@ -207,3 +207,10 @@ body {
 /* Unsaved-changes indicator, shared by every editable custom editor. */
 .wv-dirty { color: var(--dirty); font-size: 11px; white-space: nowrap; }
 .wv-dirty[hidden] { display: none; }
+
+/* Asset card actions shared by the standalone browser and object editor. */
+.asset-actions { display: flex; justify-content: center; gap: var(--asset-action-gap, 4px); }
+.asset-action { display: inline-flex; align-items: center; justify-content: center; width: var(--asset-action-width, 26px); height: var(--asset-action-height, 24px); padding: var(--asset-action-padding, 4px); border: 0; border-radius: 3px; background: transparent; color: var(--muted); cursor: pointer; }
+.asset-action:hover { color: var(--fg); background: var(--hover); }
+.asset-action:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+.asset-action svg { width: var(--asset-action-icon, 15px); height: var(--asset-action-icon, 15px); fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }

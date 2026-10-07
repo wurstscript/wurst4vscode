@@ -134,9 +134,9 @@ export async function openAssetBrowser(context: vscode.ExtensionContext, resourc
 }
 
 async function openCodeAssetBrowser(context: vscode.ExtensionContext, target?: BrowseAssetTarget, resource?: vscode.Uri): Promise<void> {
-    const workspace = vscode.workspace.workspaceFolders?.find((folder) => folder.uri.scheme === 'file');
+    const workspace = vscode.workspace.workspaceFolders?.find((folder) => folder.uri.scheme === 'file' || folder.uri.scheme === 'vscode-remote');
     const source = [target?.uri, resource, vscode.window.activeTextEditor?.document.uri,
-        workspace && vscode.Uri.joinPath(workspace.uri, 'asset-browser')].find((uri) => uri?.scheme === 'file');
+        workspace && vscode.Uri.joinPath(workspace.uri, 'asset-browser')].find((uri) => uri?.scheme === 'file' || uri?.scheme === 'vscode-remote');
     const documentUri = source || vscode.Uri.file(path.join(getGameAssetCacheDir(), 'asset-browser'));
     const currentValue = target?.currentValue || '';
     const browseOnly = !target;

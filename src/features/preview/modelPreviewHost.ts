@@ -46,8 +46,8 @@ async function readCachedThumb(webview: vscode.Webview, cacheKey: string): Promi
 
 function statThumbKey(resolvedPath: string, stat: fs.Stats): string {
     const identity = `${resolvedPath.toLowerCase()}\0${stat.size}\0${Math.round(stat.mtimeMs)}`;
-    // Regenerate captures made before the consumer bundled the current camera framing.
-    return `v11s-${fastByteHash(Buffer.from(identity, 'utf8'))}`;
+    // Older consumers captured through the live viewer and shared those distant frames.
+    return `v12s-${fastByteHash(Buffer.from(identity, 'utf8'))}`;
 }
 
 /**

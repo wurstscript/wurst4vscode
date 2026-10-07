@@ -6,8 +6,69 @@ const os = require('os');
 const { test, expect, root } = require('../fixtures');
 const { createTsLoader } = require('../harness/tsLoader');
 const { createVscodeMock, fileUri } = require('../harness/vscodeMock');
+const { parseMDX, generateMDX } = require('war3-model');
 
-for (const cacheVersion of ['v10s', 'v11s']) {
+test('standalone browser uses the thumbnail service, waits for textures and frames posed geometry', async ({ page, server }) => {
+    const bytes = fs.readFileSync(path.join(root, 'wc3data/melon.mdx'));
+    const model = parseMDX(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+    model.Info.MinimumExtent.fill(-100000);
+    model.Info.MaximumExtent.fill(100000);
+    model.Info.BoundsRadius = 100000;
+    const modelBase64 = Buffer.from(generateMDX(model)).toString('base64');
+    const vscode = createVscodeMock();
+    let html;
+    vscode.window.createWebviewPanel = () => ({ webview: {
+        cspSource: server.origin,
+        asWebviewUri: uri => ({ toString: () => server.origin + '/dist/webview/' + path.basename(uri.fsPath) }),
+        set html(value) { html = value; },
+        onDidReceiveMessage() {},
+    } });
+    const load = createTsLoader({ mocks: {
+        vscode,
+        'src/features/objModPreview.ts': { loadObjValueCatalog: async () => ({ models: [{ value: 'test.mdx' }], icons: [], sounds: [] }) },
+        'src/features/imageAssetSupport.ts': { getCandidateRoots: async () => [], gatherImportedAssets: async () => ({ model: [], icon: [], sound: [] }) },
+    } });
+    await load('src/features/assetLinks.ts').openAssetBrowser({ extensionUri: fileUri(root) });
+    await page.addInitScript(() => {
+        window.messages = [];
+        window.acquireVsCodeApi = () => ({ postMessage: message => window.messages.push(message) });
+        window.War3Viewer = new Proxy({}, { get() { throw new Error('Thumbnails must not use the live viewer'); } });
+    });
+    await page.goto(server.publish(html));
+    const thumb = page.locator('.model-thumb');
+    await expect.poll(() => page.evaluate(() => window.messages.some(m => m.type === 'loadModelThumb'))).toBe(true);
+    const key = await thumb.getAttribute('data-key');
+    await page.evaluate(msg => window.postMessage(msg, '*'), {
+        type: 'modelThumbRender', key, cacheKey: 'v12s-abc', mdxBase64: modelBase64, format: 'mdx', textureNamespace: 'standalone-test',
+    });
+    await expect.poll(() => page.evaluate(() => window.messages.some(m => m.type === 'requestTextures'))).toBe(true);
+    expect(await page.evaluate(() => window.messages.some(m => m.type === 'modelThumbRendered'))).toBe(false);
+    await expect(thumb).toHaveClass(/pending/);
+    const paths = await page.evaluate(() => window.messages.find(m => m.type === 'requestTextures').paths);
+    await page.evaluate(({ key, paths }) => {
+        for (const path of paths) window.postMessage({ type: 'mdxTexture', thumbKey: key, path,
+            width: 1, height: 1, rgbaBase64: btoa(String.fromCharCode(80, 220, 90, 255)) }, '*');
+        window.postMessage({ type: 'modelThumbTexturesComplete', thumbKey: key }, '*');
+    }, { key, paths });
+    await expect.poll(() => page.evaluate(() => window.messages.some(m => m.type === 'modelThumbRendered'))).toBe(true);
+    await expect(thumb).toHaveClass(/loaded/);
+    const result = await page.evaluate(async () => {
+        const message = window.messages.find(m => m.type === 'modelThumbRendered');
+        const bitmap = await createImageBitmap(await (await fetch('data:image/webp;base64,' + message.webpBase64)).blob());
+        const canvas = document.createElement('canvas'); canvas.width = 96; canvas.height = 96;
+        const ctx = canvas.getContext('2d'); ctx.drawImage(bitmap, 0, 0); bitmap.close();
+        const rgba = ctx.getImageData(0, 0, 96, 96).data;
+        let minX = 96, minY = 96, maxX = -1, maxY = -1;
+        for (let y = 0; y < 96; y++) for (let x = 0; x < 96; x++) if (rgba[(y * 96 + x) * 4 + 3] > 12) {
+            minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+        }
+        return { span: Math.max(maxX - minX + 1, maxY - minY + 1), cacheKey: message.cacheKey };
+    });
+    expect(result.span).toBeGreaterThan(80);
+    expect(result.cacheKey).toBe('v12s-abc');
+});
+
+for (const cacheVersion of ['v10s', 'v11s', 'v12s']) {
     test(`rendered model thumbnails stay loaded after saving ${cacheVersion}`, async ({ page, server }) => {
         const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wurst-thumb-cache-'));
         try {

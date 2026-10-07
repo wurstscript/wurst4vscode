@@ -1,6 +1,7 @@
 import { esc, base64ToBytes } from '../webviewUtils';
 import { vscodeApi, assetBrowserUi, initial } from './state';
 import { mpvViewer, mpvB64ToArrayBuffer } from './modelViewerShared';
+import { createModelThumbnailWorker, postThumbnailTexture } from '../modelThumbnailWorkerClient';
 
 let modelThumbObserver: IntersectionObserver | undefined;
 export const pendingModelThumbs = new Set<string>();
@@ -15,7 +16,6 @@ let modelThumbAwaitingDecisionKey = '';
 let modelThumbSeq = 0;
 let modelThumbInited = false;
 let modelThumbWorker: Worker | null = null;
-let modelThumbWorkerBlobUrl = '';
 let modelThumbWorkerStartupState: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
 let modelThumbWorkerStartupError = '';
 let modelThumbIdleTimer: ReturnType<typeof setTimeout> | 0 = 0;
@@ -342,14 +342,8 @@ function startModelThumbWorker() {
   modelThumbWorkerStartupState = 'loading';
   // VS Code webviews cannot construct a worker directly from a vscode-resource URL. Fetch the
   // single-file webpack bundle and launch the resulting Blob URL, as required by the webview API.
-  void fetch(initial.thumbnailWorkerUri!)
-    .then(response => {
-      if (!response.ok) throw new Error('worker bundle fetch ' + response.status);
-      return response.text();
-    })
-    .then(source => {
-      modelThumbWorkerBlobUrl = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
-      const worker = new Worker(modelThumbWorkerBlobUrl, { name: 'wurst-model-thumbnails' });
+  void createModelThumbnailWorker(initial.thumbnailWorkerUri!)
+    .then(worker => {
       attachModelThumbWorker(worker);
       modelThumbWorkerStartupState = 'ready';
       modelThumbInited = true;
@@ -525,15 +519,7 @@ export function applyMdxTexture(msg) {
 export function handleMdxTextureMessage(msg) {
   if (modelThumbWorker && msg.thumbKey) {
     if (!modelThumbJob || msg.thumbKey !== modelThumbJob.key) return;
-    if (msg.textureBytes) {
-      const source = msg.textureBytes instanceof Uint8Array
-        ? msg.textureBytes
-        : new Uint8Array(msg.textureBytes);
-      const buffer = source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength);
-      modelThumbWorker.postMessage(Object.assign({}, msg, { type: 'texture', textureBytes: buffer }), [buffer]);
-    } else {
-      modelThumbWorker.postMessage(Object.assign({}, msg, { type: 'texture' }));
-    }
+    postThumbnailTexture(modelThumbWorker, msg);
     return;
   }
   if (msg.thumbKey) return;

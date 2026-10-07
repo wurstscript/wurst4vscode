@@ -104,6 +104,7 @@ function setShown(id: string, shown: boolean) {
 function setModelButtons(visible: boolean) {
   setShown('modelSep', visible);
   setShown('resetCamBtn', visible);
+  setShown('browseAssetsBtn', visible);
   setShown('renderModeBtn', visible);
   setShown('imgSep', !visible);
   setShown('fitBtn', !visible);
@@ -322,6 +323,7 @@ zoomOutBtn.addEventListener('click', () => {
   if (isModelMode) { if (w3v) w3v.zoomOut(); return; }
   zoomByStep(-1);
 });
+byId('browseAssetsBtn').addEventListener('click', () => vscode.postMessage({ type: 'browseAssets' }));
 byId('resetCamBtn').addEventListener('click', () => {
   if (w3v) w3v.resetCamera();
 });

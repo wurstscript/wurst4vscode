@@ -43,6 +43,7 @@ async function createBlpPreviewHost(opts) {
     const provider = new (load('src/features/blpPreview.ts').__e2e.BlpPreviewProvider)(fileUri(root));
 
     const mounted = await mountCustomEditor({ origin: opts.origin, provider, uri: fileUri(target) });
+    mounted.recorded = vscodeMock.recorded;
     mounted.dispose = () => {
         mounted.panel.dispose();
         fs.rmSync(fixtureDir, { recursive: true, force: true });

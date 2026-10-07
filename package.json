@@ -28,6 +28,7 @@
         "onLanguage:wurst-run-args",
         "onCustomEditor:wurst.objModPreview",
         "onCustomEditor:wurst.soundPreview",
+        "onCommand:wurst.openAssetBrowser",
         "onCommand:wurst.previewMap",
         "onCommand:wurst.reportIssue",
         "onCommand:wurst.showDiagnosticsActions",
@@ -682,6 +683,10 @@
             }
         ],
         "commands": [
+            {
+                "command": "wurst.openAssetBrowser",
+                "title": "Wurst: Browse Warcraft III Assets"
+            },
             {
                 "command": "wurst.prepareAgentsGuideUpdate",
                 "title": "Wurst: Prepare AGENTS.md Update"

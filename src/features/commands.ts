@@ -14,6 +14,7 @@ import { extensionVersion } from './issueReporting';
 import { getCascCacheDir } from './preview/cascStorage';
 import { prepareAgentsGuideUpdate } from './agentsGuide';
 import { insertPackageHeader } from './fileCreation';
+import { openAssetBrowser } from './assetLinks';
 
 function showLanguageServerOutput(): void {
     try {
@@ -86,6 +87,7 @@ async function openWurstHome(): Promise<void> {
 
 export function registerWurstDiagnosticsCommands(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
+        vscode.commands.registerCommand('wurst.openAssetBrowser', (resource?: vscode.Uri) => openAssetBrowser(context, resource).catch((error) => showErrorWithLogs('Could not open the Warcraft III asset browser.', error))),
         vscode.commands.registerCommand('wurst.insertPackageHeader', () => insertPackageHeader()),
         vscode.commands.registerCommand('wurst.prepareAgentsGuideUpdate', () => prepareAgentsGuideUpdate(context).catch((error) => showErrorWithLogs('Could not prepare the AGENTS.md update.', error))),
         vscode.commands.registerCommand('wurst.openWurstHome', () => openWurstHome()),

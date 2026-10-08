@@ -228,6 +228,8 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
         clientSubscriptions = watcher;
         const sentDocuments = new Set<string>();
         const clientOptions: LanguageClientOptions = {
+            // Wurst uses one root; retain the same folder for initialization and build output actions.
+            workspaceFolder: workspace.workspaceFolders?.[0],
             documentSelector: ['wurst'],
             // Client 10 drops hidden open/close pairs and flushes pending opens before
             // edits or requests, preserving the server's document/version ordering.

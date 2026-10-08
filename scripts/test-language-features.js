@@ -61,6 +61,7 @@ function lifecycleHarness(installation = Promise.resolve(), documents = []) {
     const vscode = {
         Disposable: TestDisposable,
         workspace: {
+            workspaceFolders: [{ uri: { fsPath: require('path').resolve('initial-project') } }],
             textDocuments: documents,
             getConfiguration: () => ({ get: (key) => key === 'javaOpts' ? [] : undefined }),
             createFileSystemWatcher: (pattern) => {
@@ -83,7 +84,7 @@ function lifecycleHarness(installation = Promise.resolve(), documents = []) {
         },
         'src/features/diagnostics.ts': { appendDiagnostic() {}, formatDiagnosticError: String },
     } });
-    return { server: load('src/languageServer.ts'), context: { subscriptions: [] }, clients, watchers, states };
+    return { server: load('src/languageServer.ts'), context: { subscriptions: [] }, clients, watchers, states, workspace: vscode.workspace };
 }
 
 async function testClientReadinessAndRestarts() {
@@ -107,6 +108,8 @@ async function testClientReadinessAndRestarts() {
     await assert.rejects(h.server.getLanguageClient(), /restarting/);
     client.transition(h.states.Running);
     assert.equal(await h.server.getLanguageClient(), client, 'automatic restart restores readiness');
+    h.workspace.workspaceFolders = [{ uri: { fsPath: require('path').resolve('other-project') } }];
+    assert.equal(client.options.workspaceFolder.uri.fsPath, require('path').resolve('initial-project'), 'the server root must remain pinned after workspace folders change');
     assert.equal(client.options.synchronize.fileEvents, h.watchers[0], 'the language client owns event batching');
     assert.equal(h.watchers[0].pattern, '**/*.{wurst,jurst,j}');
     await h.server.stopLanguageServerIfRunning();
@@ -494,11 +497,14 @@ function commandHarness() {
     const handlers = new Map();
     const notifications = [];
     const failures = [];
+    const completions = [];
+    const foldersOpened = [];
     const actions = [];
     const diagnostics = [];
     const listeners = new Map();
     const requests = [];
     const client = {
+        clientOptions: { workspaceFolder: { uri: { fsPath: require('path').resolve('project') } } },
         outputChannel: { lines: [], shown: 0, appendLine(line) { this.lines.push(line); }, show() { this.shown++; } },
         onProgress(type, token, handler) {
             assert.equal(type, 'workDone');
@@ -514,14 +520,22 @@ function commandHarness() {
     };
     const vscode = {
         Disposable: TestDisposable,
+        Uri: {
+            joinPath: (root, name) => ({ fsPath: require('path').join(root.fsPath, name) }),
+        },
+        env: { openExternal: async (uri) => { foldersOpened.push(uri.fsPath); return true; } },
         ProgressLocation: { Notification: 15 },
-        workspace: { getConfiguration: () => ({ get: () => undefined }) },
+        workspace: { workspaceFolders: [{ uri: { fsPath: require('path').resolve('project') } }], getConfiguration: () => ({ get: () => undefined }) },
         window: {
             withProgress(options, task) {
                 const notification = { options, reports: [], closed: false };
                 notifications.push(notification);
                 return Promise.resolve(task({ report: (value) => notification.reports.push(value) }))
                     .finally(() => { notification.closed = true; });
+            },
+            showInformationMessage: async (message, ...buttons) => {
+                completions.push({ message, buttons });
+                return harness.completionDialog ? harness.completionDialog.promise : harness.completionChoice;
             },
             showErrorMessage: async (message, ...buttons) => {
                 failures.push({ message, buttons });
@@ -547,7 +561,7 @@ function commandHarness() {
         'src/features/assetLinks.ts': {},
     } });
     load('src/features/commands.ts').registerCommands(async () => client);
-    const harness = { handlers, notifications, failures, actions, diagnostics, listeners, requests, client };
+    const harness = { handlers, notifications, failures, completions, foldersOpened, actions, diagnostics, listeners, requests, client, workspace: vscode.workspace };
     return harness;
 }
 
@@ -572,21 +586,39 @@ async function testMapCommandProgress() {
         assert.ok(handler, 'request token must have a listener before work begins');
         handler({ kind: 'begin', title: 'Server title', message: 'Preparing map' });
         handler({ kind: 'report', message: 'Compiling script', percentage: 80 });
-        assert.deepEqual(notification.reports.slice(-2), [{ message: 'Preparing map' }, { message: 'Compiling script' }]);
+        assert.deepEqual(notification.reports.slice(-2), [{ message: 'Preparing map', increment: undefined }, { message: 'Compiling script', increment: 80 }]);
+        handler({ kind: 'report', percentage: 90 });
+        handler({ kind: 'report', message: 'Finalizing map', percentage: 70 });
+        handler({ kind: 'report', percentage: 120 });
+        assert.deepEqual(notification.reports.slice(-3), [
+            { message: undefined, increment: 10 },
+            { message: 'Finalizing map', increment: 0 },
+            { message: undefined, increment: 10 },
+        ], 'absolute server percentages must become bounded, nonnegative VS Code increments');
         handler({ kind: 'end' });
         assert.equal(notification.closed, false, 'progress end must not conceal a pending command failure');
-        request.resolve('done');
-        assert.equal(await running, 'done');
+        request.resolve('ok');
+        assert.equal(await running, 'ok');
         assert.equal(notification.closed, true);
         assert.equal(h.listeners.size, 0, 'listener must be disposed after success');
     }
     assert.equal(new Set(h.requests.map((r) => r.params.workDoneToken)).size, 4, 'each invocation needs a distinct token');
-    assert.equal(h.failures.length, 0, 'success must close quietly');
+    assert.equal(h.failures.length, 0, 'success must not show an error');
+    assert.equal(h.completions.length, 1, 'only Build shows a success notification');
+    assert.deepEqual(h.completions[0].buttons, ['Open Build Folder', 'Show Log']);
+    assert.ok(h.completions[0].message.includes(require('path').resolve('project', '_build')));
 
     const legacy = h.handlers.get('wurst.buildmap')(['example.w3x']);
     await tick();
     h.requests.at(-1).resolve('legacy');
     assert.equal(await legacy, 'legacy', 'older servers without progress events must still complete');
+
+    assert.equal(h.completions.length, 1, 'unrecognized legacy responses must not claim success');
+    const canceled = h.handlers.get('wurst.buildmap')(['example.w3x']);
+    await tick();
+    h.requests.at(-1).resolve({});
+    await canceled;
+    assert.equal(h.completions.length, 1, 'canceled builds must not show success');
 
     for (const choice of ['Show Problems', 'Show Log']) {
         h.errorDialog = deferred();
@@ -604,12 +636,38 @@ async function testMapCommandProgress() {
         assert.equal(h.failures.at(-1).message, 'Generated script failed');
         assert.ok(h.client.outputChannel.lines.at(-1).includes('Detailed diagnostic'), 'full details must remain in output');
     }
+    assert.equal(h.completions.length, 1, 'failed builds must not show success');
     assert.deepEqual(h.actions, ['workbench.actions.view.problems']);
+    assert.equal(h.client.outputChannel.shown, 1);
+}
+
+async function testBuildCompletionActions() {
+    const h = commandHarness();
+    h.client.clientOptions.workspaceFolder = { uri: { fsPath: require('path').resolve('server-project') } };
+    h.workspace.workspaceFolders = [];
+    h.completionDialog = deferred();
+    const building = h.handlers.get('wurst.buildmap')(['elsewhere.w3x']);
+    await tick();
+    h.requests.at(-1).resolve('ok');
+    assert.equal(await building, 'ok', 'the command must finish without waiting for the completion toast');
+    assert.equal(h.notifications[0].closed, true);
+    h.completionDialog.resolve('Open Build Folder');
+    await tick();
+    assert.deepEqual(h.foldersOpened, [require('path').resolve('server-project', '_build')], 'open the server output folder, not the input map folder');
+
+    h.completionDialog = undefined;
+    h.completionChoice = 'Show Log';
+    const nextBuild = h.handlers.get('wurst.buildmap')(['elsewhere.w3x']);
+    await tick();
+    h.requests.at(-1).resolve('ok');
+    await nextBuild;
+    await tick();
     assert.equal(h.client.outputChannel.shown, 1);
 }
 
 async function main() {
     await testMapCommandProgress();
+    await testBuildCompletionActions();
     await testClientReadinessAndRestarts();
     await testBuildNotificationsAvoidRequests();
     await testStopDuringInstallation();

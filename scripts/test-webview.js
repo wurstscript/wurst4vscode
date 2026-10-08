@@ -507,8 +507,8 @@ async function testFolderModeMapAssetResolution() {
     fs.mkdirSync(doodadPath, { recursive: true });
     const numberedModel = path.join(doodadPath, 'AlchemySet0.mdx');
     fs.writeFileSync(numberedModel, Buffer.from('MDLX'));
-    assert.equal(await mod.resolveAssetPathWithCasc(doodadStem + '.mdl', roots, 'model'), numberedModel,
-        'doodad metadata stems resolve to their first numbered model variation');
+    assert.equal(await mod.resolveAssetPathWithCasc(doodadStem + '.mdl', roots, 'model'), undefined,
+        'explicit model requests must not silently resolve a different numbered file');
     const exactModel = path.join(doodadPath, 'AlchemySet.mdx');
     fs.writeFileSync(exactModel, Buffer.from('MDLX'));
     assert.equal(await mod.resolveAssetPathWithCasc(doodadStem + '.mdl', roots, 'model'), exactModel,
@@ -1453,6 +1453,8 @@ async function main() {
         [0, 1, 2, 3, 4].map((i) => `${stem}${i}.mdx`), 'all existing variations replace the unresolved metadata stem');
     assert.strictEqual(variants[5].label, 'Hero', 'unrelated catalog entries are preserved');
     assert.strictEqual(variants[4].label, 'Alchemy Set (variation 4)');
+    assert.ok(variants.slice(0, 5).every((option) => option.detail.includes('UOal')),
+        'expanded variants preserve the owning rawcode for asset searches');
     assert.strictEqual(expandModelVariants(options, [...actualPaths, `${stem}.mdx`])[0].value,
         `${stem}.mdl`, 'a real unsuffixed model is retained alongside its variants');
     testAssetPathNormalization();

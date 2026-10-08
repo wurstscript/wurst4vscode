@@ -33,7 +33,7 @@ export function expandModelVariants<T extends { value: string; label: string; de
         for (const [index, value] of [...variants].sort(([a], [b]) => a - b)) {
             const key = normalize(value);
             if (!result.has(key)) result.set(key, { ...option, value,
-                label: `${option.label} (variation ${index})`, detail: value });
+                label: `${option.label} (variation ${index})`, detail: option.detail ? `${option.detail} - ${value}` : value });
         }
     }
     return [...result.values()];

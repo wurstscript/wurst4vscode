@@ -966,6 +966,7 @@
         "vscode:prepublish": "npm run package-web && npm run test:vsix-contents",
         "compile": "tsc -watch -p ./",
         "lint": "eslint .",
+        "precompile-web": "node ./scripts/build-local-model-library.js",
         "compile-web": "webpack",
         "watch-web": "webpack --watch",
         "test": "npm run test:fuzzy && npm run test:image-decoders && npm run test:diagnostics && npm run test:language-features && npm run test:editor-work && npm run test:webview && npm run test:private-libraries",
@@ -986,6 +987,7 @@
         "test:e2e:objmod-clipboard:local": "playwright test --project=local-vscode objmod-clipboard",
         "test:wc3-previews": "node ./scripts/wc3-preview-smoke.js",
         "test:fuzzy": "node ./scripts/test-fuzzy.js",
+        "prepackage-web": "node ./scripts/build-local-model-library.js",
         "package-web": "webpack --mode production",
         "publish": "vsce publish --no-dependencies"
     },

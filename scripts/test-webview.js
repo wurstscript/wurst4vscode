@@ -502,6 +502,17 @@ async function testFolderModeMapAssetResolution() {
     );
 
     const reforgedVariants = mod.assetPathVariants('Units\\Creeps\\ArachnathidWarrior\\ArachnathidWarrior_Diffuse.tif', 'texture');
+    const doodadStem = 'Doodads\\Undercity\\Props\\AlchemySet\\AlchemySet';
+    const doodadPath = path.join(imported, 'Doodads', 'Undercity', 'Props', 'AlchemySet');
+    fs.mkdirSync(doodadPath, { recursive: true });
+    const numberedModel = path.join(doodadPath, 'AlchemySet0.mdx');
+    fs.writeFileSync(numberedModel, Buffer.from('MDLX'));
+    assert.equal(await mod.resolveAssetPathWithCasc(doodadStem + '.mdl', roots, 'model'), numberedModel,
+        'doodad metadata stems resolve to their first numbered model variation');
+    const exactModel = path.join(doodadPath, 'AlchemySet.mdx');
+    fs.writeFileSync(exactModel, Buffer.from('MDLX'));
+    assert.equal(await mod.resolveAssetPathWithCasc(doodadStem + '.mdl', roots, 'model'), exactModel,
+        'an exact model takes precedence over numbered variations');
     assert.ok(
         reforgedVariants.includes('Units\\Creeps\\ArachnathidWarrior\\ArachnathidWarrior_Diffuse.dds'),
         'Reforged .tif material references should probe .dds by replacing the extension'
@@ -929,7 +940,7 @@ async function testModelThumbnailRequestsTexturesByDefault() {
 
     const render = posted.find((message) => message.type === 'modelThumbRender');
     assert.ok(render, 'uncached model thumbnails should render regardless of model byte size');
-    assert.equal(render.cacheKey, 'v12s-abc123', 'older framing captures must be regenerated');
+    assert.equal(render.cacheKey, 'v14s-abc123', 'older renderer captures must be regenerated');
     assert.equal(render.skipTextures, undefined, 'model thumbnail renders must load textures by default');
     assert.ok(render.mdxBase64, 'model bytes should still be sent for thumbnail rendering');
 
@@ -1036,7 +1047,7 @@ function testThumbnailLifecycleGuards() {
     assert.ok(host.includes("if (ext === 'blp')"), 'BLP thumbnails should retain the renderer decoder rather than using the generic preview decoder');
     assert.ok(viewer.includes('downscaleTextureImageData'), 'decoded BLP thumbnail textures should be reduced before GPU upload');
     assert.ok(thumbnailWorker.includes('MAX_TEXTURE_DIMENSION'), 'worker thumbnail renders should bound browser-side texture uploads');
-    assert.ok(host.includes('return `v12s-'), 'the cache version must invalidate thumbnails captured before the current consumer renderer build');
+    assert.ok(host.includes('return `v14s-'), 'the cache version must invalidate thumbnails captured before the current consumer renderer build');
     assert.ok(!objmod.includes('capture-dark-accepted'), 'dark frames must never be persisted as successful thumbnails');
     assert.ok(objmod.includes('Array.from(new Set((texturePaths || [])'), 'thumbnail capture must wait for every referenced material texture');
     assert.ok(!objmod.includes('(?:normal|orm)'), 'thumbnail loading must not omit HD material textures');
@@ -1432,6 +1443,18 @@ function testMpqReextractUsesFreshUriAfterDeletedOutput() {
 }
 
 async function main() {
+    const { expandModelVariants } = loadTsModule('src/features/preview/modelVariants.ts');
+    const stem = 'Doodads\\Undercity\\Props\\AlchemySet\\AlchemySet';
+    const options = [{ value: `${stem}.mdl`, label: 'Alchemy Set', detail: 'UOal' },
+        { value: 'units\\hero.mdl', label: 'Hero' }];
+    const actualPaths = [4, 0, 2, 1, 3].map((i) => `${stem}${i}.mdx`);
+    const variants = expandModelVariants(options, [...actualPaths, `${stem}0.mdl`, 'Other\\AlchemySet9.mdx']);
+    assert.deepStrictEqual(variants.slice(0, 5).map((option) => option.value),
+        [0, 1, 2, 3, 4].map((i) => `${stem}${i}.mdx`), 'all existing variations replace the unresolved metadata stem');
+    assert.strictEqual(variants[5].label, 'Hero', 'unrelated catalog entries are preserved');
+    assert.strictEqual(variants[4].label, 'Alchemy Set (variation 4)');
+    assert.strictEqual(expandModelVariants(options, [...actualPaths, `${stem}.mdx`])[0].value,
+        `${stem}.mdl`, 'a real unsuffixed model is retained alongside its variants');
     testAssetPathNormalization();
     testSignals();
     testObjModTreeSelectionStaysUntracked();

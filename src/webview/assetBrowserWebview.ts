@@ -24,6 +24,7 @@ const uiDocument: any = document;
   var modelLoaded = new Map();
   var modelMissing = new Map();
   var modelBusy = false;
+  var modelActiveKey = '';
   var modelJob = null;
   var modelWorker: Worker | null = null;
   var workerPromise: Promise<Worker> | null = null;
@@ -41,10 +42,11 @@ const uiDocument: any = document;
     });
   }
   function render() {
+    modelObserver?.disconnect();
     uiDocument.querySelectorAll('.tab').forEach(function (btn) { btn.classList.toggle('active', btn.getAttribute('data-tab') === activeTab); });
     var grid = uiDocument.getElementById('grid');
     var items = list();
-    if (!items.length) { grid.innerHTML = '<div class="empty">No matching assets</div>'; return; }
+    if (!items.length) { grid.innerHTML = '<div class="empty">No matching assets</div>'; refreshVisibleModels(); return; }
     grid.innerHTML = items.map(function (item, index) {
       var icon = activeTab === 'sound'
         ? '<span class="sound-thumb">AUD</span>'
@@ -58,6 +60,7 @@ const uiDocument: any = document;
     }).join('');
     observeIcons(grid);
     if (activeTab === 'model') observeModels(grid);
+    else refreshVisibleModels();
   }
   function observeIcons(root) {
     if (!observer) {
@@ -86,33 +89,73 @@ const uiDocument: any = document;
   function observeModels(root) {
     if (!modelObserver) {
       modelObserver = new IntersectionObserver(function (entries) {
-        entries.forEach(function (entry) {
-          if (!entry.isIntersecting) return;
-          modelObserver.unobserve(entry.target);
-          requestModel(entry.target);
-        });
-      }, { root: null, rootMargin: '160px' });
+        if (entries.length) refreshVisibleModels();
+      }, { root: root, rootMargin: '0px' });
     }
     root.querySelectorAll('.model-thumb[data-model]').forEach(function (el) {
       var key = el.getAttribute('data-key') || '';
       if (modelLoaded.has(key)) setModelLoaded(el, modelLoaded.get(key));
       else if (modelMissing.has(key)) setModelMissing(el, modelMissing.get(key));
-      else if (modelPending.has(key)) el.classList.add('pending');
-      else modelObserver.observe(el);
+      else {
+        if (modelPending.has(key)) el.classList.add('pending');
+        modelObserver.observe(el);
+      }
     });
+    refreshVisibleModels();
+  }
+  function isModelVisible(el) {
+    if (activeTab !== 'model' || !el?.isConnected) return false;
+    var grid = uiDocument.getElementById('grid');
+    if (!grid.contains(el)) return false;
+    var rect = el.getBoundingClientRect();
+    var viewport = grid.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && rect.right > Math.max(0, viewport.left) &&
+      rect.left < Math.min(window.innerWidth, viewport.right) && rect.bottom > Math.max(0, viewport.top) &&
+      rect.top < Math.min(window.innerHeight, viewport.bottom);
+  }
+  function refreshVisibleModels() {
+    var visible = new Set();
+    uiDocument.querySelectorAll('.model-thumb[data-model]').forEach(function (el) {
+      if (!isModelVisible(el)) return;
+      visible.add(el.getAttribute('data-key') || '');
+      requestModel(el);
+    });
+    modelQueue = modelQueue.filter(function (req) {
+      if (visible.has(req.key)) return true;
+      modelPending.delete(req.key);
+      eachModel(req.key, function (el) { el.classList.remove('pending'); });
+      return false;
+    });
+    // Cancel a worker waiting for an offscreen subject's textures. Host resolution already
+    // in flight finishes, but its reply is checked again before any rendering starts.
+    if (modelJob && !visible.has(modelJob.key)) {
+      var key = modelJob.key;
+      modelWorker?.postMessage({ type: 'cancel', key: key });
+      modelJob = null;
+      eachModel(key, function (el) { el.classList.remove('pending'); });
+      modelPending.delete(key);
+      modelActiveKey = '';
+      modelBusy = false;
+    }
+    var order = new Map();
+    uiDocument.querySelectorAll('.model-thumb[data-key]').forEach(function (el, index) {
+      order.set(el.getAttribute('data-key'), index);
+    });
+    modelQueue.sort(function (a, b) { return order.get(a.key) - order.get(b.key); });
+    pumpModelQueue();
   }
   function requestModel(el) {
     var key = el.getAttribute('data-key') || '';
     var path = el.getAttribute('data-model') || '';
-    if (!key || !path || modelPending.has(key) || modelLoaded.has(key) || modelMissing.has(key)) return;
+    if (!isModelVisible(el) || !key || !path || modelPending.has(key) || modelLoaded.has(key) || modelMissing.has(key)) return;
     modelPending.add(key);
     el.classList.add('pending');
     modelQueue.push({ key: key, path: path });
-    pumpModelQueue();
   }
   function pumpModelQueue() {
     if (modelBusy || !modelQueue.length) return;
     var next = modelQueue.shift();
+    modelActiveKey = next.key;
     modelBusy = true;
     vscode.postMessage({ type: 'loadModelThumb', key: next.key, path: next.path });
   }
@@ -132,10 +175,11 @@ const uiDocument: any = document;
     });
   }
   function completeModelRequest(key) {
-    if (!modelPending.has(key)) return;
+    if (key !== modelActiveKey) return;
     modelPending.delete(key);
+    modelActiveKey = '';
     modelBusy = false;
-    pumpModelQueue();
+    refreshVisibleModels();
   }
   function base64ToArrayBuffer(b64) {
     return base64ToBytes(b64 || '').buffer;
@@ -185,6 +229,14 @@ const uiDocument: any = document;
     return workerPromise;
   }
   function renderModelThumb(job) {
+    if (job.key !== modelActiveKey) return;
+    var visible = false;
+    eachModel(job.key, function (el) { if (isModelVisible(el)) visible = true; });
+    if (!visible) {
+      eachModel(job.key, function (el) { el.classList.remove('pending'); });
+      completeModelRequest(job.key);
+      return;
+    }
     modelJob = job;
     Promise.all([ensureModelWorker(), loadModelBytes(job)]).then(function (values) {
       if (modelJob !== job) return;
@@ -282,6 +334,8 @@ const uiDocument: any = document;
   uiDocument.getElementById('search').value = query;
   uiDocument.getElementById('grid').scrollTop = Number(saved.scrollTop) || 0;
   uiDocument.getElementById('grid').addEventListener('scroll', persist, { passive: true });
+  uiDocument.getElementById('grid').addEventListener('scroll', refreshVisibleModels, { passive: true });
+  window.addEventListener('resize', refreshVisibleModels);
   persist();
   uiDocument.getElementById('search').focus();
 })();

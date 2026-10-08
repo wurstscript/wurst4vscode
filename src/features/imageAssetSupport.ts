@@ -511,6 +511,11 @@ export function assetPathVariants(assetPath: string, kind: AssetKind = 'any'): s
         const v = `${base}.${e}`;
         if (!variants.includes(v)) variants.push(v);
     }
+    // Doodad metadata names a model family (AlchemySet.mdl); the files are
+    // AlchemySet0.mdx, AlchemySet1.mdx, etc. Prefer exact models before variation zero.
+    if (kind === 'model' || MODEL_EXTS.includes(ext)) {
+        variants.push(`${base}0.mdx`, `${base}0.mdl`);
+    }
     return variants;
 }
 

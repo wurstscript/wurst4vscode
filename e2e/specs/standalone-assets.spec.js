@@ -135,7 +135,64 @@ test('standalone browser uses the thumbnail service, waits for textures and fram
     expect(result.cacheKey).toBe('v12s-abc');
 });
 
-for (const cacheVersion of ['v10s', 'v11s', 'v12s']) {
+test('scrolling defers old thumbnails and requests the current viewport first', async ({ page, server }) => {
+    const vscode = createVscodeMock();
+    let html;
+    vscode.window.createWebviewPanel = () => ({ webview: {
+        cspSource: server.origin,
+        asWebviewUri: uri => ({ toString: () => server.origin + '/dist/webview/' + path.basename(uri.fsPath) }),
+        set html(value) { html = value; }, onDidReceiveMessage() {},
+    } });
+    const load = createTsLoader({ mocks: { vscode,
+        'src/features/objModPreview.ts': { loadObjValueCatalog: async () => ({
+            models: Array.from({ length: 120 }, (_, index) => ({ value: `model-${index}.mdx` })), icons: [], sounds: [],
+        }) },
+        'src/features/imageAssetSupport.ts': { getCandidateRoots: async () => [], gatherImportedAssets: async () => ({ model: [], icon: [], sound: [] }) },
+    } });
+    await load('src/features/assetLinks.ts').openAssetBrowser({ extensionUri: fileUri(root) });
+    await page.addInitScript(() => {
+        window.messages = [];
+        window.acquireVsCodeApi = () => ({ postMessage: message => window.messages.push(message) });
+    });
+    await page.goto(server.publish(html));
+    const requests = () => page.evaluate(() => window.messages.filter(m => m.type === 'loadModelThumb'));
+    await expect.poll(async () => (await requests()).length).toBe(1);
+    const first = (await requests())[0];
+    await page.locator('#grid').evaluate(grid => { grid.scrollTop = grid.scrollHeight / 2; });
+    // Let the offscreen host response arrive after the scroll. No texture/render work may start.
+    await page.evaluate(key => window.postMessage({ type: 'modelThumbRender', key,
+        cacheKey: 'unused', mdxBase64: 'AA==' }, '*'), first.key);
+    await expect.poll(async () => (await requests()).length).toBe(2);
+    const second = (await requests())[1];
+    const firstVisibleKey = await page.evaluate(() => {
+        const viewport = document.querySelector('#grid').getBoundingClientRect();
+        return [...document.querySelectorAll('.model-thumb')].find(el => {
+            const rect = el.getBoundingClientRect();
+            return rect.bottom > viewport.top && rect.top < viewport.bottom;
+        }).getAttribute('data-key');
+    });
+    expect(second.key).toBe(firstVisibleKey);
+    expect(second.key).not.toBe(first.key);
+    expect(await page.evaluate(() => window.messages.some(m => m.type === 'requestTextures' || m.type === 'modelThumbFailed'))).toBe(false);
+    // A stale acknowledgement must not unlock the current request.
+    await page.evaluate(key => window.postMessage({ type: 'modelThumbLoaded', key, uri: 'data:image/png;base64,AA==' }, '*'), first.key);
+    await expect.poll(async () => (await requests()).length).toBe(2);
+    const bytes = fs.readFileSync(path.join(root, 'wc3data/melon.mdx'));
+    await page.evaluate(({ key, bytes }) => window.postMessage({ type: 'modelThumbRender', key,
+        cacheKey: 'current', mdxBase64: bytes, format: 'mdx' }, '*'), { key: second.key, bytes: bytes.toString('base64') });
+    await expect.poll(() => page.evaluate(() => window.messages.some(m => m.type === 'requestTextures' && m.thumbKey === window.messages.filter(m => m.type === 'loadModelThumb')[1].key))).toBe(true);
+    // Scrolling away while the worker waits for textures cancels that render immediately.
+    await page.locator('#grid').evaluate(grid => { grid.scrollTop = 0; });
+    await expect.poll(async () => (await requests()).length).toBe(3);
+    const third = (await requests())[2];
+    expect(third.path).toBe('model-1.mdx');
+    await page.evaluate(key => window.postMessage({ type: 'modelThumbMissing', key }, '*'), second.key);
+    await expect.poll(async () => (await requests()).length).toBe(3);
+    expect(await page.evaluate(() => window.messages.some(m => m.type === 'modelThumbFailed'))).toBe(false);
+    await page.screenshot({ path: test.info().outputPath('visible-thumbnail-queue.png') });
+});
+
+for (const cacheVersion of ['v10s', 'v11s', 'v12s', 'v13s', 'v14s']) {
     test(`rendered model thumbnails stay loaded after saving ${cacheVersion}`, async ({ page, server }) => {
         const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wurst-thumb-cache-'));
         try {

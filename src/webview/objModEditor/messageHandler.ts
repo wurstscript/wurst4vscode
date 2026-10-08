@@ -11,7 +11,7 @@ import {
   missingModelThumbReasons,
   updateModelThumbElements,
   setModelThumbLoaded,
-  setModelThumbQueuedOrCancelled,
+  cancelPendingModelThumb,
   recordModelThumbEvent,
   clearAwaitingDecisionKey,
   scheduleModelThumbQueues,
@@ -177,8 +177,7 @@ export function setupMessageHandler() {
     } else if (msg.type === 'modelThumbRender') {
       completeModelThumbHostRequest(msg.key);
       if (isAssetBrowserModelKey(msg.key) && (!isAssetBrowserOpen() || !hasVisibleModelThumbElement(msg.key))) {
-        pendingModelThumbs.delete(msg.key);
-        updateModelThumbElements(msg.key, setModelThumbQueuedOrCancelled);
+        cancelPendingModelThumb(msg.key);
         return;
       }
       if (!msg.key || !msg.cacheKey || (!msg.modelUri && !msg.mdxBase64)) {

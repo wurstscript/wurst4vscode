@@ -125,8 +125,16 @@ async function executeMapCommand(client: LanguageClient, request: ExecuteCommand
     try {
         return await window.withProgress({ location: vscode.ProgressLocation.Notification, title, cancellable: false }, async (progress) => {
             const token = randomUUID();
+            let percentage = 0;
             const listener = client.onProgress(WorkDoneProgress.type, token, (update) => {
-                if (update.kind !== 'end' && update.message) progress.report({ message: update.message });
+                if (update.kind === 'end') return;
+                let increment: number | undefined;
+                if (typeof update.percentage === 'number' && Number.isFinite(update.percentage)) {
+                    const next = Math.max(percentage, Math.min(100, update.percentage));
+                    increment = next - percentage;
+                    percentage = next;
+                }
+                if (update.message || increment !== undefined) progress.report({ message: update.message, increment });
             });
             try {
                 progress.report({ message: 'Waiting for compiler' });
@@ -282,7 +290,31 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
                 },
             ],
         };
-        return withClient((client) => executeMapCommand(client, request, 'Building Wurst map'));
+        return withClient(async (client) => {
+            // The server builds relative to its workspace root, even when the input map is elsewhere.
+            const root = client.clientOptions.workspaceFolder?.uri ?? workspace.workspaceFolders?.[0]?.uri;
+            const buildFolder = root ? vscode.Uri.joinPath(root, '_build') : undefined;
+            const result = await executeMapCommand(client, request, 'Building Wurst map');
+            // Canceled commands can resolve with an empty object; only 'ok' confirms a completed build.
+            if (result === 'ok') {
+                void window.showInformationMessage(
+                    buildFolder ? `Wurst map build finished. Output: ${buildFolder.fsPath}` : 'Wurst map build finished.',
+                    ...(buildFolder ? ['Open Build Folder', 'Show Log'] : ['Show Log']),
+                ).then(async (choice) => {
+                    if (choice === 'Show Log') showClientOutput(client);
+                    else if (choice === 'Open Build Folder' && buildFolder) {
+                        try {
+                            if (!await vscode.env.openExternal(buildFolder)) {
+                                throw new Error('The operating system could not open the build folder.');
+                            }
+                        } catch (error) {
+                            void showErrorWithLogs('Could not open the build folder.', error);
+                        }
+                    }
+                });
+            }
+            return result;
+        });
     };
 
     const startMap = async (cmd: 'wurst.startmap' | 'wurst.hotstartmap', args: any) => {

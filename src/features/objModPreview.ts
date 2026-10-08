@@ -795,10 +795,10 @@ function enhancePreviewRow(row: PreviewMod, field: MetaField, catalog: ObjValueC
 
     const assetType = fieldAssetType(field);
     if (assetType) {
+        row.assetType = assetType;
         const assetPath = normalizeAssetValue(raw, assetType);
         if (assetPath) {
             row.displayKind = 'asset';
-            row.assetType = assetType;
             row.assetPath = assetPath;
             row.displayValue = assetLabel(assetPath, assetType);
             row.displayDetail = assetPath;

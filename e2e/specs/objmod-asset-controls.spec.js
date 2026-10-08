@@ -1,6 +1,10 @@
 'use strict';
 
 const { test, expect } = require('../fixtures');
+const { repoRequire } = require('../harness/tsLoader');
+const fs = require('fs');
+const path = require('path');
+const { parseObjMod, serializeObjMod } = repoRequire('casc-ts/formats');
 
 test('collapsed model fields offer one-click selection and a two-line thumbnail', async ({ openObjMod }) => {
     const { page, host } = await openObjMod();
@@ -84,3 +88,34 @@ test('object actions have padding and gaps in both density modes', async ({ open
         expect(spacing.gap).toBeGreaterThanOrEqual(4);
     }
 });
+
+for (const initialValue of ['', '-']) {
+    test(`empty asset fields offer Browse for ${JSON.stringify(initialValue)}`, async ({ openObjMod }) => {
+        const { page, host } = await openObjMod({
+            setupFixture: dir => {
+                const filePath = path.join(dir, 'war3map.w3u');
+                const file = parseObjMod(fs.readFileSync(filePath), '.w3u');
+                const object = file.customObjs.find(obj => obj.newId === 'h004');
+                object.mods = object.mods.filter(mod => mod.fieldId !== 'umdl');
+                object.mods.push({ fieldId: 'umdl', varType: 'string', value: initialValue, endToken: '\0\0\0\0' });
+                fs.writeFileSync(filePath, serializeObjMod(file));
+            },
+        });
+        await page.fill('#search', 'h004');
+        await page.locator('#tree .object-row', { has: page.locator('.object-id:text-is("h004")') }).first().click();
+        await page.check('#technical-toggle');
+        const row = page.locator('#details tbody tr', { has: page.locator('td.id:text-is("umdl")') });
+        await row.getByRole('button', { name: 'Choose asset', exact: true }).click();
+        await expect(page.locator('#ab-overlay')).toBeVisible();
+        const value = 'Units\\Undead\\Acolyte\\Acolyte.mdx';
+        await page.evaluate(value => window.postMessage({ type: 'assetCatalog', models: [{ value, label: 'Acolyte' }] }, '*'), value);
+        await page.locator('.ab-card').filter({ hasText: 'Acolyte' }).getByRole('button', { name: 'Use asset', exact: true }).click();
+        await expect.poll(() => host.isDirty).toBe(true);
+        await host.save();
+        const object = parseObjMod(host.readFile(), '.w3u').customObjs.find(obj => obj.newId === 'h004');
+        expect(object.mods.find(mod => mod.fieldId === 'umdl').value).toBe(value);
+        host.undo();
+        await expect(row.locator('[data-browse]')).toHaveCount(1);
+        await expect(row.locator('.asset-model-preview')).toHaveCount(0);
+    });
+}

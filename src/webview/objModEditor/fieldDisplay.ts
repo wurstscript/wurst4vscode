@@ -286,7 +286,7 @@ export function refreshDecoratedValue(mod) {
     }
   }
   if (mod.displayKind === 'asset') {
-    mod.assetPath = normalizeAssetPathForType(v, mod.assetType) || v || '';
+    mod.assetPath = normalizeAssetPathForType(v, mod.assetType) || firstAssetPath(v);
     if (!v) {
       mod.displayValue = '';
       mod.displayDetail = '';

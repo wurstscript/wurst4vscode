@@ -967,6 +967,7 @@
         "compile": "tsc -watch -p ./",
         "lint": "eslint .",
         "precompile-web": "node ./scripts/build-local-model-library.js",
+        "prewatch-web": "node ./scripts/build-local-model-library.js",
         "compile-web": "webpack",
         "watch-web": "webpack --watch",
         "test": "npm run test:fuzzy && npm run test:image-decoders && npm run test:diagnostics && npm run test:language-features && npm run test:editor-work && npm run test:webview && npm run test:private-libraries",

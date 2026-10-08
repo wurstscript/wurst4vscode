@@ -1,7 +1,7 @@
 'use strict';
 
 // Opt-in cross-repository test: pass the compiler jar of a built distribution and the java of its runtime
-// (the runtime needs the base CDS archive jlink makes): node scripts/test-lsp-appcds.js <compiler.jar> <java>
+// (the runtime needs the base CDS archive for compact object headers, classes_coh.jsa): node scripts/test-lsp-appcds.js <compiler.jar> <java>
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
@@ -11,7 +11,12 @@ const { spawn } = require('child_process');
 const { createProtocolConnection, StreamMessageReader, StreamMessageWriter } = require('vscode-languageserver-protocol/node');
 const { createTsLoader } = require('../e2e/harness/tsLoader');
 
-const { appCdsJvmOptions } = createTsLoader()('src/install/fsUtils.ts');
+const { appCdsJvmOptions, COMPACT_OBJECT_HEADERS } = createTsLoader()('src/install/fsUtils.ts');
+
+// the options the extension starts the server with, as getServerOptions builds them
+function serverOptions(java, jar, javaOpts = []) {
+    return [COMPACT_OBJECT_HEADERS, ...appCdsJvmOptions(java, jar, [COMPACT_OBJECT_HEADERS, ...javaOpts]), ...javaOpts];
+}
 
 async function session(java, jar, project, options) {
     const child = spawn(java, [...options, '-jar', jar, '-languageServer'], { windowsHide: true, stdio: 'pipe' });
@@ -71,8 +76,8 @@ async function main() {
         const copy = path.join(compilerDir, path.basename(jar));
         fs.copyFileSync(jar, copy);
 
-        const options = appCdsJvmOptions(java, copy);
-        assert.ok(options.length > 0, 'the options are empty');
+        const options = serverOptions(java, copy);
+        assert.ok(options.includes('-XX:+AutoCreateSharedArchive'), 'the options have no archive');
         const archive = options.find((option) => option.startsWith('-XX:SharedArchiveFile=')).slice('-XX:SharedArchiveFile='.length);
 
         const first = await session(java, copy, project, options);
@@ -92,13 +97,21 @@ async function main() {
         fs.appendFileSync(copy, '');
         const stat = fs.statSync(copy);
         fs.utimesSync(copy, stat.atime, new Date(stat.mtimeMs + 5000));
-        const updatedOptions = appCdsJvmOptions(java, copy);
+        const updatedOptions = serverOptions(java, copy);
         assert.notDeepStrictEqual(updatedOptions, options);
         assert.ok(!fs.existsSync(archive), 'the archive of the old jar is removed');
         const third = await session(java, copy, project, updatedOptions);
         assert.deepStrictEqual(third.states, ['loading', 'ready']);
         assert.strictEqual(third.code, 0);
         assert.ok(fs.existsSync(updatedOptions.find((option) => option.startsWith('-XX:SharedArchiveFile=')).slice('-XX:SharedArchiveFile='.length)));
+
+        // a wurst.javaOpts entry which switches the headers off: the runtime has no base archive for that mode, so the
+        // server starts without any archive, and ends cleanly
+        const plain = serverOptions(java, copy, ['-XX:-UseCompactObjectHeaders']);
+        const fourth = await session(java, copy, project, plain);
+        assert.deepStrictEqual(fourth.states, ['loading', 'ready']);
+        assert.strictEqual(fourth.protocolErrors, 0);
+        assert.strictEqual(fourth.code, 0, 'the server ends cleanly without compact object headers');
         console.log(`appcds language server ok (ready after ${first.readyMs} ms, then ${second.readyMs} ms)`);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });

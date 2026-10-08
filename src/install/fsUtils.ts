@@ -8,6 +8,23 @@ import {
 } from '../paths';
 
 /**
+ * The language server holds millions of small objects, which compact object headers make 6% smaller on a large
+ * project (castle fight: 488 to 457 MB after a collection), at the same start time. It is always passed first, so a
+ * `wurst.javaOpts` entry can still switch it off.
+ */
+export const COMPACT_OBJECT_HEADERS = '-XX:+UseCompactObjectHeaders';
+
+/** Whether a JVM started with these options has compact object headers: the last of the two options wins. */
+export function hasCompactObjectHeaders(jvmOptions: string[]): boolean {
+    let compact = false;
+    for (const option of jvmOptions) {
+        if (option === '-XX:+UseCompactObjectHeaders') compact = true;
+        else if (option === '-XX:-UseCompactObjectHeaders') compact = false;
+    }
+    return compact;
+}
+
+/**
  * JVM options which start the language server from an AppCDS archive next to the compiler jar: the JVM writes the
  * archive when the first session ends, and the sessions after it start from it (about 15% sooner).
  *
@@ -17,10 +34,11 @@ import {
  * be written, because the JVM then aborts when the session ends. `-Xlog:disable` because the JVM reports archive
  * trouble on stdout, which is the protocol stream.
  *
- * Needs the runtime's own base archive, which the distribution builds (jlink --generate-cds-archive); without it
- * the JVM runs as before.
+ * Needs the runtime's own base archive, which the distribution builds, for compact object headers (classes_coh.jsa);
+ * without it the JVM runs as before. A JVM uses an archive only for the object header mode it runs with, so the mode
+ * is part of what the archive is named after; `jvmOptions` are the options the server is started with.
  */
-export function appCdsJvmOptions(javaExecutable: string, compilerJar: string): string[] {
+export function appCdsJvmOptions(javaExecutable: string, compilerJar: string, jvmOptions: string[]): string[] {
     try {
         const dir = path.dirname(compilerJar);
         // access(W_OK) says yes to any folder on Windows
@@ -36,7 +54,8 @@ export function appCdsJvmOptions(javaExecutable: string, compilerJar: string): s
         }
         const jar = fs.statSync(compilerJar);
         const key = crypto.createHash('sha1')
-            .update([javaExecutable, release, compilerJar, jar.size, Math.floor(jar.mtimeMs)].join('|'))
+            .update([javaExecutable, release, compilerJar, jar.size, Math.floor(jar.mtimeMs),
+                hasCompactObjectHeaders(jvmOptions)].join('|'))
             .digest('hex').slice(0, 12);
         const archive = path.join(dir, `wurstscript-${key}.jsa`);
         for (const entry of fs.readdirSync(dir)) {

@@ -20,7 +20,9 @@ import {
  * Needs the runtime's own base archive, which the distribution builds (jlink --generate-cds-archive); without it
  * the JVM runs as before.
  */
-export function appCdsJvmOptions(javaExecutable: string, compilerJar: string): string[] {
+export function appCdsJvmOptions(javaExecutable: string, compilerJar: string, javaOpts: string[] = []): string[] {
+    // CDS dumping rejects native JVMTI agents (including JDWP). Agent sessions run without archive creation.
+    if (javaOpts.some((option) => ['-agentlib:', '-agentpath:', '-javaagent:', '-Xrun'].some((prefix) => option.startsWith(prefix)))) return [];
     try {
         const dir = path.dirname(compilerJar);
         // access(W_OK) says yes to any folder on Windows

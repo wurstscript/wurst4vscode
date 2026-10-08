@@ -17,7 +17,8 @@ class TestDisposable {
     static from(...items) { return new TestDisposable(() => items.forEach((item) => item.dispose())); }
 }
 
-function lifecycleHarness(installation = Promise.resolve(), documents = []) {
+function lifecycleHarness(installation = Promise.resolve(), documents = [], settings = {}) {
+    const cdsCalls = [];
     const clients = [];
     const watchers = [];
     const states = { Starting: 1, Running: 2, Stopped: 3 };
@@ -27,6 +28,7 @@ function lifecycleHarness(installation = Promise.resolve(), documents = []) {
         getFeature() { return this.openFeature; }
         constructor(_name, _server, options) {
             this.options = options;
+            this.serverOptions = _server;
             this.started = deferred();
             this.state = states.Stopped;
             this.stopCount = 0;
@@ -63,7 +65,7 @@ function lifecycleHarness(installation = Promise.resolve(), documents = []) {
         workspace: {
             workspaceFolders: [{ uri: { fsPath: require('path').resolve('initial-project') } }],
             textDocuments: documents,
-            getConfiguration: () => ({ get: (key) => key === 'javaOpts' ? [] : undefined }),
+            getConfiguration: () => ({ get: (key, fallback) => settings[key] ?? (key === 'javaOpts' ? [] : fallback) }),
             createFileSystemWatcher: (pattern) => {
                 const watcher = { pattern, disposed: false, dispose() { this.disposed = true; } };
                 watchers.push(watcher);
@@ -74,6 +76,19 @@ function lifecycleHarness(installation = Promise.resolve(), documents = []) {
     const load = createTsLoader({ mocks: {
         vscode,
         fs: { existsSync: () => true },
+        net: {
+            createServer() {
+                const handlers = {};
+                return {
+                    once(event, handler) { handlers[event] = handler; },
+                    listen() { queueMicrotask(() => handlers.listening()); },
+                    close(callback) { callback(); },
+                };
+            },
+        },
+        'src/install/fsUtils.ts': {
+            appCdsJvmOptions: (...args) => { cdsCalls.push(args); return ['-XX:+AutoCreateSharedArchive']; },
+        },
         'vscode-languageclient/node': { LanguageClient: Client, State: states, DidOpenTextDocumentNotification: { method: 'textDocument/didOpen' } },
         'src/paths.ts': {},
         'src/install/installer.ts': {
@@ -84,7 +99,7 @@ function lifecycleHarness(installation = Promise.resolve(), documents = []) {
         },
         'src/features/diagnostics.ts': { appendDiagnostic() {}, formatDiagnosticError: String },
     } });
-    return { server: load('src/languageServer.ts'), context: { subscriptions: [] }, clients, watchers, states, workspace: vscode.workspace };
+    return { server: load('src/languageServer.ts'), context: { subscriptions: [] }, clients, watchers, states, workspace: vscode.workspace, cdsCalls };
 }
 
 async function testClientReadinessAndRestarts() {
@@ -115,6 +130,25 @@ async function testClientReadinessAndRestarts() {
     await h.server.stopLanguageServerIfRunning();
     assert.equal(h.watchers[0].disposed, true);
     await assert.rejects(h.server.getLanguageClient(), /was stopped/);
+}
+
+async function testDebugStartupDisablesAppCds() {
+    for (const debugMode of [false, true]) {
+        const javaOpts = ['-Xmx2G'];
+        const h = lifecycleHarness(Promise.resolve(), [], { debugMode, javaOpts });
+        const start = h.server.startLanguageClient(h.context);
+        await tick();
+        const client = h.clients[0];
+        assert.ok(client);
+        const args = client.serverOptions.run.args;
+        assert.equal(args.includes('-XX:+AutoCreateSharedArchive'), !debugMode);
+        assert.equal(args.some((arg) => typeof arg === 'string' && arg.startsWith('-agentlib:jdwp=')), debugMode);
+        assert.equal(h.cdsCalls.length, debugMode ? 0 : 1, 'debug sessions must not create or clean CDS archives');
+        if (!debugMode) assert.deepEqual(h.cdsCalls[0][2], javaOpts, 'custom agents must reach the CDS compatibility guard');
+        client.started.resolve();
+        await start;
+        await h.server.stopLanguageServerIfRunning();
+    }
 }
 
 async function testBuildNotificationsAvoidRequests() {
@@ -669,6 +703,7 @@ async function main() {
     await testMapCommandProgress();
     await testBuildCompletionActions();
     await testClientReadinessAndRestarts();
+    await testDebugStartupDisablesAppCds();
     await testBuildNotificationsAvoidRequests();
     await testStopDuringInstallation();
     await testInstallerPreservesItsOwnStartup();

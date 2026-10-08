@@ -349,7 +349,7 @@ async function getServerOptions(): Promise<ServerOptions> {
     const java = getLanguageServerJava();
     if (customJava) await checkCustomJavaVersion(customJava);
     const platformOpts = process.platform === 'darwin' ? ['-Dapple.awt.UIElement=true'] : [];
-    const args = [...platformOpts, ...appCdsJvmOptions(java, COMPILER_JAR), ...javaOpts, '-jar', COMPILER_JAR, '-languageServer'];
+    const args = [...platformOpts, ...(debugMode ? [] : appCdsJvmOptions(java, COMPILER_JAR, javaOpts)), ...javaOpts, '-jar', COMPILER_JAR, '-languageServer'];
 
     if (debugMode && (await isPortOpen(5005))) {
         args.unshift('-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005,quiet=y');

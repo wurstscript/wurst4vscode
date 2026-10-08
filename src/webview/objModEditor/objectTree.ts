@@ -287,7 +287,8 @@ export function updateDetailsHeader(obj) {
     const next = wrap.firstElementChild;
     if (next) {
       iconSlot.replaceWith(next);
-      iconLoader.observe(next);
+      iconLoader.observe(head);
+      observeModelThumbs(head);
     }
   }
   const title = head.querySelector('.details-title');

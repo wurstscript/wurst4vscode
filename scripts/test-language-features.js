@@ -489,7 +489,127 @@ async function testClient10DocumentSynchronization() {
     await options.server.stopLanguageServerIfRunning();
 }
 
+
+function commandHarness() {
+    const handlers = new Map();
+    const notifications = [];
+    const failures = [];
+    const actions = [];
+    const diagnostics = [];
+    const listeners = new Map();
+    const requests = [];
+    const client = {
+        outputChannel: { lines: [], shown: 0, appendLine(line) { this.lines.push(line); }, show() { this.shown++; } },
+        onProgress(type, token, handler) {
+            assert.equal(type, 'workDone');
+            listeners.set(token, handler);
+            return new TestDisposable(() => listeners.delete(token));
+        },
+        sendRequest(type, params) {
+            assert.equal(type, 'executeCommand');
+            const request = deferred();
+            requests.push({ params, ...request });
+            return request.promise;
+        },
+    };
+    const vscode = {
+        Disposable: TestDisposable,
+        ProgressLocation: { Notification: 15 },
+        workspace: { getConfiguration: () => ({ get: () => undefined }) },
+        window: {
+            withProgress(options, task) {
+                const notification = { options, reports: [], closed: false };
+                notifications.push(notification);
+                return Promise.resolve(task({ report: (value) => notification.reports.push(value) }))
+                    .finally(() => { notification.closed = true; });
+            },
+            showErrorMessage: async (message, ...buttons) => {
+                failures.push({ message, buttons });
+                return harness.errorDialog ? harness.errorDialog.promise : harness.choice;
+            },
+        },
+        commands: {
+            registerCommand: (id, handler) => { handlers.set(id, handler); return new TestDisposable(); },
+            executeCommand: async (id) => { actions.push(id); },
+        },
+    };
+    const load = createTsLoader({ mocks: {
+        vscode,
+        'vscode-languageclient/node': { ExecuteCommandRequest: { type: 'executeCommand' }, WorkDoneProgress: { type: 'workDone' } },
+        'src/paths.ts': {},
+        'src/features/diagnostics.ts': { appendDiagnostic: (...args) => diagnostics.push(args), formatDiagnosticError: String },
+        'src/languageServer.ts': {},
+        'src/install/installer.ts': {},
+        'src/features/issueReporting.ts': {},
+        'src/features/preview/cascStorage.ts': {},
+        'src/features/agentsGuide.ts': {},
+        'src/features/fileCreation.ts': {},
+        'src/features/assetLinks.ts': {},
+    } });
+    load('src/features/commands.ts').registerCommands(async () => client);
+    const harness = { handlers, notifications, failures, actions, diagnostics, listeners, requests, client };
+    return harness;
+}
+
+async function testMapCommandProgress() {
+    const h = commandHarness();
+    for (const [id, title] of [
+        ['wurst.buildmap', 'Building Wurst map'],
+        ['wurst.startmap', 'Running Wurst map'],
+        ['wurst.hotstartmap', 'Running Wurst map'],
+        ['wurst.hotreload', 'Reloading Wurst map'],
+    ]) {
+        const running = h.handlers.get(id)(['example.w3x']);
+        await tick();
+        const request = h.requests.at(-1);
+        assert.ok(request, 'command must send its existing execute-command request');
+        assert.equal(request.params.command, id);
+        assert.equal(request.params.arguments[0].mappath, id === 'wurst.hotreload' ? undefined : 'example.w3x');
+        const notification = h.notifications.at(-1);
+        assert.ok(notification, 'build/run must open a native progress notification');
+        assert.deepEqual(notification.options, { location: 15, title, cancellable: false });
+        const handler = h.listeners.get(request.params.workDoneToken);
+        assert.ok(handler, 'request token must have a listener before work begins');
+        handler({ kind: 'begin', title: 'Server title', message: 'Preparing map' });
+        handler({ kind: 'report', message: 'Compiling script', percentage: 80 });
+        assert.deepEqual(notification.reports.slice(-2), [{ message: 'Preparing map' }, { message: 'Compiling script' }]);
+        handler({ kind: 'end' });
+        assert.equal(notification.closed, false, 'progress end must not conceal a pending command failure');
+        request.resolve('done');
+        assert.equal(await running, 'done');
+        assert.equal(notification.closed, true);
+        assert.equal(h.listeners.size, 0, 'listener must be disposed after success');
+    }
+    assert.equal(new Set(h.requests.map((r) => r.params.workDoneToken)).size, 4, 'each invocation needs a distinct token');
+    assert.equal(h.failures.length, 0, 'success must close quietly');
+
+    const legacy = h.handlers.get('wurst.buildmap')(['example.w3x']);
+    await tick();
+    h.requests.at(-1).resolve('legacy');
+    assert.equal(await legacy, 'legacy', 'older servers without progress events must still complete');
+
+    for (const choice of ['Show Problems', 'Show Log']) {
+        h.errorDialog = deferred();
+        const failing = h.handlers.get('wurst.buildmap')(['example.w3x']);
+        await tick();
+        h.requests.at(-1).reject(new Error('Generated script failed\nDetailed diagnostic'));
+        await tick();
+        assert.equal(h.notifications.at(-1).closed, true, 'failed progress must close before the user dismisses the error');
+        assert.equal(h.listeners.size, 0);
+        h.errorDialog.resolve(choice);
+        await failing;
+        assert.equal(h.listeners.size, 0, 'listener must be disposed after failure');
+        assert.equal(h.notifications.at(-1).closed, true);
+        assert.deepEqual(h.failures.at(-1).buttons, ['Show Problems', 'Show Log']);
+        assert.equal(h.failures.at(-1).message, 'Generated script failed');
+        assert.ok(h.client.outputChannel.lines.at(-1).includes('Detailed diagnostic'), 'full details must remain in output');
+    }
+    assert.deepEqual(h.actions, ['workbench.actions.view.problems']);
+    assert.equal(h.client.outputChannel.shown, 1);
+}
+
 async function main() {
+    await testMapCommandProgress();
     await testClientReadinessAndRestarts();
     await testBuildNotificationsAvoidRequests();
     await testStopDuringInstallation();

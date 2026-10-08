@@ -148,7 +148,7 @@ export function isRecoverableInstallError(error: unknown): boolean {
 }
 
 export function cleanupOldWurstHome() {
-    const allowed = new Set(['logs', 'grill', 'grill-cli', 'grill.cmd', 'wurstscript', 'wurstscript.cmd', 'wurst-runtime', 'wurst-compiler']);
+    const allowed = new Set(['logs', 'grill', 'grill-cli', 'grill.cmd', 'wurstscript', 'wurstscript.cmd', 'wurst-runtime', 'wurst-compiler', 'compiler-version.json']);
     if (!fs.existsSync(WURST_HOME)) return;
     for (const entry of fs.readdirSync(WURST_HOME)) {
         if (!allowed.has(entry)) forceDeletePath(path.join(WURST_HOME, entry));

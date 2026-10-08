@@ -12,6 +12,8 @@ The extension installs and updates the Wurst compiler, bundled Java runtime, and
 2. Accept the installation prompt.
 3. Open a `.wurst` file and use the play button to build and run your map.
 
+**Choose WurstScript compiler version** in the Command Palette or the WurstScript status menu lets you install a specific stable release, including an older version. Selecting a specific version pins it across VS Code windows until you choose **Follow latest stable** in the picker. Install/Update honors the pin, and automatic update prompts stay quiet while pinned. The status item shows the installed compiler version. Update prompts follow stable semantic versions; development builds and prereleases are excluded.
+
 Installation and updates are managed under `~/.wurst`. Updates are coordinated across VS Code windows, reuse prepared downloads when retrying, and detect Wurst processes that are locking installation files.
 
 Supported on Windows, macOS, and Linux, with x64 and Arm64 builds where available. NixOS and custom environments can provide Java through `wurst.javaExecutable`.

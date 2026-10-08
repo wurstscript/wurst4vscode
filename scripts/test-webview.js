@@ -664,7 +664,7 @@ async function testInstalledVersionDetection() {
             execFile: (_command, _args, _options, callback) => callback(new Error('version failed'), '', ''),
         },
         './downloader': {
-            fetchNightlyCommitSha: async () => { fetchedLatest = true; return 'a'.repeat(40); },
+            fetchLatestCompilerRelease: async () => { fetchedLatest = true; return { version: '2.0.0' }; },
         },
     });
 
@@ -767,6 +767,7 @@ async function testLanguageClientHandleLifecycle() {
             checkCustomJavaVersion: async () => undefined,
             getInstalledVersionString: async () => 'v1',
             maybeOfferUpdate: async (onUpdateAvailable) => { reportUpdate = onUpdateAvailable; },
+            getCompilerVersionPin: () => undefined,
         },
         './features/diagnostics': { appendDiagnostic() {}, formatDiagnosticError: (e) => String(e) },
     });
@@ -809,7 +810,7 @@ async function testLanguageClientHandleLifecycle() {
     probes.shift().resolve([]);
     await tick();
     assert.equal(statusItem.text, '$(check) WurstScript');
-    reportUpdate({ installedSha: 'a'.repeat(40), latestSha: 'b'.repeat(40) });
+    reportUpdate({ installedVersion: '2.0.0', latestVersion: '2.1.0' });
     assert.equal(statusItem.text, '$(circle-filled) WurstScript Update', 'a healthy server shows a known update');
     clients[0].emitState(1);
     assert.equal(statusItem.text, '$(warning) WurstScript', 'a server that stopped unexpectedly must be visible, even with an update known');

@@ -3,7 +3,8 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
-import { LanguageClient, ExecuteCommandParams, ExecuteCommandRequest } from 'vscode-languageclient/node';
+import { randomUUID } from 'crypto';
+import { LanguageClient, ExecuteCommandParams, ExecuteCommandRequest, WorkDoneProgress } from 'vscode-languageclient/node';
 import { workspace, window } from 'vscode';
 import { WURST_HOME } from '../paths';
 import { appendDiagnostic, buildDiagnosticsText, formatDiagnosticError, showDiagnosticOutput, showErrorWithLogs } from './diagnostics';
@@ -118,6 +119,32 @@ function showClientOutput(client: LanguageClient): void {
     try {
         (client as any).outputChannel?.show();
     } catch {}
+}
+
+async function executeMapCommand(client: LanguageClient, request: ExecuteCommandParams, title: string): Promise<unknown> {
+    try {
+        return await window.withProgress({ location: vscode.ProgressLocation.Notification, title, cancellable: false }, async (progress) => {
+            const token = randomUUID();
+            const listener = client.onProgress(WorkDoneProgress.type, token, (update) => {
+                if (update.kind !== 'end' && update.message) progress.report({ message: update.message });
+            });
+            try {
+                progress.report({ message: 'Waiting for compiler' });
+                return await client.sendRequest(ExecuteCommandRequest.type, { ...request, workDoneToken: token });
+            } finally {
+                listener.dispose();
+            }
+        });
+    } catch (error) {
+        const details = formatDiagnosticError(error);
+        client.outputChannel.appendLine(`${title} failed: ${details}`);
+        appendDiagnostic('VS Code extension', `${title} failed: ${details}`);
+        const message = error instanceof Error ? error.message.split('\n')[0].trim() : `${title} failed. See the WurstScript output for details.`;
+        const choice = await window.showErrorMessage(message, 'Show Problems', 'Show Log');
+        if (choice === 'Show Problems') await vscode.commands.executeCommand('workbench.actions.view.problems');
+        else if (choice === 'Show Log') showClientOutput(client);
+        return undefined;
+    }
 }
 
 function runTests(client: LanguageClient, request: ExecuteCommandParams): Thenable<unknown> {
@@ -255,7 +282,7 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
                 },
             ],
         };
-        return withClient((client) => client.sendRequest(ExecuteCommandRequest.type, request));
+        return withClient((client) => executeMapCommand(client, request, 'Building Wurst map'));
     };
 
     const startMap = async (cmd: 'wurst.startmap' | 'wurst.hotstartmap', args: any) => {
@@ -290,7 +317,7 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
             ],
         };
         _lastMapConfig = mappath;
-        return withClient((client) => client.sendRequest(ExecuteCommandRequest.type, request));
+        return withClient((client) => executeMapCommand(client, request, 'Running Wurst map'));
     };
 
     const reloadMap = async () => {
@@ -298,7 +325,7 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
             command: 'wurst.hotreload',
             arguments: [{}],
         };
-        return withClient((client) => client.sendRequest(ExecuteCommandRequest.type, request));
+        return withClient((client) => executeMapCommand(client, request, 'Reloading Wurst map'));
     };
 
     const startLast = () => {

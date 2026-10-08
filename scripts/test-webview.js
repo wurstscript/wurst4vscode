@@ -767,6 +767,7 @@ async function testLanguageClientHandleLifecycle() {
             checkCustomJavaVersion: async () => undefined,
             getInstalledVersionString: async () => 'v1',
             maybeOfferUpdate: async (onUpdateAvailable) => { reportUpdate = onUpdateAvailable; },
+            getCompilerVersionPin: () => undefined,
         },
         './features/diagnostics': { appendDiagnostic() {}, formatDiagnosticError: (e) => String(e) },
     });

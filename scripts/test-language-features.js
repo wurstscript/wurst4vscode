@@ -80,6 +80,7 @@ function lifecycleHarness(installation = Promise.resolve(), documents = []) {
             getLanguageServerJava: () => 'java',
             getInstalledVersionString: () => Promise.resolve('test'),
             maybeOfferUpdate: () => Promise.resolve(),
+            getCompilerVersionPin: () => undefined,
         },
         'src/features/diagnostics.ts': { appendDiagnostic() {}, formatDiagnosticError: String },
     } });
@@ -536,7 +537,9 @@ async function testStableCompilerReleases() {
     await assert.rejects(empty.downloader.fetchLatestCompilerRelease(), /No stable WurstScript compiler release/);
 }
 
-function versionInstallerHarness(version, releases) {
+function versionInstallerHarness(version, releases, pinned) {
+    let pin = pinned;
+    let failDownload = false;
     const messages = [];
     const picks = [];
     const commands = [];
@@ -549,6 +552,7 @@ function versionInstallerHarness(version, releases) {
             workspace: { getConfiguration: () => ({ get: () => undefined }) },
             window: {
                 withProgress: async (_options, task) => task({ report() {} }),
+                showErrorMessage: async () => undefined,
                 showInformationMessage: async (...args) => { messages.push(args); return undefined; },
                 showQuickPick: async (items, options) => { picks.push({ items, options }); return items.at(-1); },
             },
@@ -559,32 +563,36 @@ function versionInstallerHarness(version, releases) {
             existsSync: () => true,
             statSync: () => ({ size: 1, mtimeMs: 2, ctimeMs: 3 }),
             mkdirSync() {}, unlinkSync() {}, copyFileSync() {},
+            writeFileSync: (file, contents) => { if (file === 'pin.json') pin = JSON.parse(contents).version; },
+            rmSync: (file) => { if (file === 'pin.json') pin = undefined; },
             readFileSync: (file) => {
+                if (file === 'pin.json' && pin) return JSON.stringify({ version: pin });
                 if (file === 'compiler/installed-version.json') return JSON.stringify({ cacheKey: require('path').join('runtime', 'bin', process.platform === 'win32' ? 'java.exe' : 'java') + '|1:2', version });
                 throw new Error('missing');
             },
         },
-        'src/paths.ts': { WURST_HOME: 'wurst-home', GRILL_HOME_DIR: 'grill', RUNTIME_DIR: 'runtime', COMPILER_DIR: 'compiler', COMPILER_JAR: 'compiler/wurstscript.jar', INSTALLED_VERSION_CACHE_FILE: 'compiler/installed-version.json' },
+        'src/paths.ts': { COMPILER_VERSION_PIN_FILE: 'pin.json', WURST_HOME: 'wurst-home', GRILL_HOME_DIR: 'grill', RUNTIME_DIR: 'runtime', COMPILER_DIR: 'compiler', COMPILER_JAR: 'compiler/wurstscript.jar', INSTALLED_VERSION_CACHE_FILE: 'compiler/installed-version.json' },
         'src/install/fsUtils.ts': {
             removeDirSafe: async () => {}, copyDirContents() {}, installLauncherExecutable() {},
             cleanupOldWurstHome() {}, cleanupWurstSetupJar() {}, ensureDirectoryPath() {},
             upgradeFolder: async (src, dest) => replacements.push({ src, dest }),
-            withRetry: async (task) => task(),
+            withRetry: async (task) => task(), isRecoverableInstallError: () => false,
         },
         'src/install/downloader.ts': { stableCompilerVersion: releaseApi.stableCompilerVersion, compareCompilerVersions: releaseApi.compareCompilerVersions, fetchLatestCompilerRelease: async () => { fetches++; return releases[0]; }, fetchCompilerReleases: async () => releases,
             fetchLatestGrillAsset: async () => ({ url: 'grill-release' }),
-            downloadFileWithProgress: async (url) => { downloads.push(url); return 1; },
+            downloadFileWithProgress: async (url) => { if (failDownload) { throw new Error('download failed'); } downloads.push(url); return 1; },
             extractZipWithByteProgress: async () => {},
         },
         'src/install/pathManager.ts': { ensureCliOnPath: async () => {} },
         'src/languageServer.ts': { stopLanguageServerIfRunning: async () => false },
         'src/install/installCoordination.ts': {
+            InstallCoordinationCancelledError: class extends Error {},
             withWurstInstallLock: async (task) => task(true),
             ensureConflictingWurstProcessesStopped: async () => {},
         },
         'src/features/diagnostics.ts': { appendDiagnostic() {}, formatDiagnosticError: String },
     } });
-    return { installer: load('src/install/installer.ts'), messages, picks, commands, downloads, replacements, fetches: () => fetches };
+    return { installer: load('src/install/installer.ts'), messages, picks, commands, downloads, replacements, fetches: () => fetches, pin: () => pin, failDownloads: () => { failDownload = true; } };
 }
 
 async function testVersionedCompilerUpdates() {
@@ -603,17 +611,65 @@ async function testVersionedCompilerUpdates() {
     const nightly = versionInstallerHarness('1.9.0-482-gaaaaaaa', releases);
     await nightly.installer.maybeOfferUpdate();
     assert.ok(nightly.messages[0][0].includes('stable'), 'nightly builds must offer an explicit stable migration');
+    await nightly.installer.chooseCompilerVersion();
+    assert.ok(nightly.picks[0].options.placeHolder.includes('1.9.0-482-gaaaaaaa'));
+    assert.ok(nightly.picks[0].items.every((item) => !item.description.includes('Installed')), 'a development build must not be mislabeled as the corresponding stable release');
     const picker = versionInstallerHarness('1.10.0', releases);
     assert.equal((await picker.installer.chooseCompilerVersion()).version, '1.9.0', 'picker must allow choosing an older stable release');
-    assert.equal(picker.picks[0].items[0].description, 'Installed · Latest');
-    assert.equal(picker.picks[0].items[1].description, 'Downgrade');
+    assert.equal(picker.picks[0].items[1].description, 'Installed · Latest');
+    assert.equal(picker.picks[0].items[2].description, 'Downgrade');
     await picker.installer.installWithRetry({ compilerRelease: releases[1], offerPostInstallActions: false });
+    assert.equal(picker.pin(), '1.9.0', 'explicit version choice pins only after installation succeeds');
     assert.equal(picker.fetches(), 0, 'installing a selected older release must never switch back to latest');
     assert.deepEqual(picker.downloads, ['older', 'grill-release']);
     assert.deepEqual(picker.replacements.map((item) => item.dest), ['runtime', 'compiler'], 'selected versions must use the existing coordinated replacement pipeline');
 }
 
+
+async function testCompilerVersionPins() {
+    const releases = [{ version: '2.1.0', tag: 'v2.1.0', url: 'latest' }, { version: '2.0.0', tag: 'v2.0.0', url: 'older' }];
+    const pinned = versionInstallerHarness('2.0.0', releases, '2.0.0');
+    await pinned.installer.maybeOfferUpdate();
+    assert.equal(pinned.fetches(), 0, 'pinned installations must skip automatic release lookups and prompts');
+    assert.equal(pinned.messages.length, 0);
+    await pinned.installer.chooseCompilerVersion();
+    assert.equal(pinned.picks[0].items[0].label, 'Follow latest stable');
+    assert.ok(pinned.picks[0].items[2].description.includes('Pinned'));
+    await pinned.installer.installWithRetry({ offerPostInstallActions: false });
+    assert.equal(pinned.downloads[0], 'older', 'ordinary Install/Update must honor the stored version pin');
+    assert.equal(pinned.pin(), '2.0.0');
+    await pinned.installer.installWithRetry({ followLatest: true, offerPostInstallActions: false });
+    assert.equal(pinned.downloads.at(-2), 'latest', 'Follow latest must ignore a saved pin');
+    assert.equal(pinned.pin(), undefined, 'following latest clears the pin after a successful install');
+
+    const failed = versionInstallerHarness('2.0.0', releases, '2.0.0');
+    failed.failDownloads();
+    await assert.rejects(failed.installer.installWithRetry({ compilerRelease: releases[0], followLatest: true }), /download failed/);
+    assert.equal(failed.pin(), '2.0.0', 'a failed migration to latest must preserve the old pin');
+    const freshFailed = versionInstallerHarness('2.1.0', releases);
+    freshFailed.failDownloads();
+    await assert.rejects(freshFailed.installer.installWithRetry({ compilerRelease: releases[1] }), /download failed/);
+    assert.equal(freshFailed.pin(), undefined, 'a failed selected-version install must not create a pin');
+}
+
+function testInstallationCleanupPreservesPin() {
+    const removed = [];
+    const load = createTsLoader({ mocks: {
+        'src/paths.ts': { WURST_HOME: 'wurst-home' },
+        fs: {
+            existsSync: () => true,
+            readdirSync: () => ['compiler-version.json', 'wurst-compiler', 'obsolete.jar'],
+            lstatSync: () => ({ isDirectory: () => false }),
+            unlinkSync: (file) => removed.push(file),
+        },
+    } });
+    load('src/install/fsUtils.ts').cleanupOldWurstHome();
+    assert.deepEqual(removed.map((file) => require('path').basename(file)), ['obsolete.jar'], 'reinstallation cleanup must preserve the persistent compiler pin');
+}
+
 async function main() {
+    testInstallationCleanupPreservesPin();
+    await testCompilerVersionPins();
     await testStableCompilerReleases();
     await testVersionedCompilerUpdates();
     await testClientReadinessAndRestarts();

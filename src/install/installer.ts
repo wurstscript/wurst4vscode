@@ -7,7 +7,7 @@ import { execFile, spawnSync } from 'child_process';
 import * as vscode from 'vscode';
 import { workspace } from 'vscode';
 import {
-    WURST_HOME, RUNTIME_DIR, COMPILER_DIR, COMPILER_JAR, GRILL_HOME_DIR, UPDATE_SNOOZE_FILE, INSTALLED_VERSION_CACHE_FILE,
+    WURST_HOME, RUNTIME_DIR, COMPILER_DIR, COMPILER_JAR, GRILL_HOME_DIR, UPDATE_SNOOZE_FILE, INSTALLED_VERSION_CACHE_FILE, COMPILER_VERSION_PIN_FILE,
 } from '../paths';
 import {
     normalizeInstallerPaths, migrateLegacyGrillLayout, installLauncherExecutable,
@@ -29,6 +29,7 @@ import { appendDiagnostic, formatDiagnosticError, showDiagnosticOutput } from '.
 type InstallOptions = {
     offerPostInstallActions?: boolean;
     compilerRelease?: CompilerRelease;
+    followLatest?: boolean;
 };
 
 type PreparedCompilerInstall = {
@@ -45,6 +46,35 @@ export type UpdateAvailable = {
 // The newer stable release found by the last update check in this window, so the status item, the actions
 // menu and the install command can offer it as an update instead of a generic reinstall.
 let availableUpdate: UpdateAvailable | undefined;
+
+export function getCompilerVersionPin(): string | undefined {
+    try {
+        const data = JSON.parse(fs.readFileSync(COMPILER_VERSION_PIN_FILE, 'utf8'));
+        return typeof data.version === 'string' ? stableCompilerVersion(data.version) ?? undefined : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+function saveCompilerVersionPin(version: string | undefined): void {
+    if (!version) {
+        fs.rmSync(COMPILER_VERSION_PIN_FILE, { force: true });
+        return;
+    }
+    fs.mkdirSync(WURST_HOME, { recursive: true });
+    fs.writeFileSync(COMPILER_VERSION_PIN_FILE, JSON.stringify({ version }));
+}
+
+async function resolveCompilerRelease(selected?: CompilerRelease, followLatest = false): Promise<CompilerRelease> {
+    if (selected) return selected;
+    if (followLatest) return fetchLatestCompilerRelease();
+    const pin = getCompilerVersionPin();
+    if (!pin) return fetchLatestCompilerRelease();
+    const releases = await fetchCompilerReleases();
+    const release = releases.find((item) => item.version === pin);
+    if (!release) throw new Error(`Pinned WurstScript compiler ${pin} is unavailable for this platform. Choose another compiler version.`);
+    return release;
+}
 
 export function getAvailableUpdate(): UpdateAvailable | undefined {
     return availableUpdate;
@@ -310,7 +340,7 @@ export async function ensureGrillAvailable(options: InstallOptions = {}): Promis
 let activeInstallPromise: Promise<void> | undefined;
 
 export function installWithRetry(options: InstallOptions = {}): Promise<void> {
-    if (activeInstallPromise && options.compilerRelease) {
+    if (activeInstallPromise && (options.compilerRelease || options.followLatest)) {
         return activeInstallPromise.then(() => installWithRetry(options));
     }
     if (!activeInstallPromise) {
@@ -330,12 +360,14 @@ async function runInstallWithRetry(options: InstallOptions): Promise<void> {
         while (true) {
             try {
                 await withWurstInstallLock(async (waited) => {
-                    if (waited && !options.compilerRelease && getInstallationStamp() !== initialInstallationStamp) {
+                    if (waited && !options.compilerRelease && !options.followLatest && !getCompilerVersionPin() && getInstallationStamp() !== initialInstallationStamp) {
                         console.log('[wurst] Another VS Code window completed the WurstScript installation; skipping duplicate work.');
                         return;
                     }
-                    prepared = await prepareCompilerInstall(prepared, options.compilerRelease);
+                    prepared = await prepareCompilerInstall(prepared, options.compilerRelease, options.followLatest);
                     await installPreparedCompiler(prepared, options);
+                    if (options.followLatest) saveCompilerVersionPin(undefined);
+                    else if (options.compilerRelease) saveCompilerVersionPin(options.compilerRelease.version);
                 });
                 return;
             } catch (error) {
@@ -380,7 +412,7 @@ function getInstallationStamp(): string {
     }
 }
 
-async function prepareCompilerInstall(existing?: PreparedCompilerInstall, selected?: CompilerRelease): Promise<PreparedCompilerInstall> {
+async function prepareCompilerInstall(existing?: PreparedCompilerInstall, selected?: CompilerRelease, followLatest = false): Promise<PreparedCompilerInstall> {
     if (existing && fs.existsSync(existing.unpack) && fs.existsSync(existing.grillJar)) {
         return existing;
     }
@@ -391,7 +423,7 @@ async function prepareCompilerInstall(existing?: PreparedCompilerInstall, select
             { location: vscode.ProgressLocation.Notification, title: 'Preparing WurstScript installer', cancellable: false },
             async (progress) => {
                 progress.report({ message: 'Fetching release info...', increment: 5 });
-                const asset = selected ?? await fetchLatestCompilerRelease();
+                const asset = await resolveCompilerRelease(selected, followLatest);
 
                 tmpWork = path.join(os.tmpdir(), `wurst-install-${Date.now()}-${process.pid}`);
                 const tmpZip = path.join(tmpWork, 'payload.zip');
@@ -500,28 +532,33 @@ async function installPreparedCompiler(prepared: PreparedCompilerInstall, option
     );
 }
 
-export async function chooseCompilerVersion(): Promise<CompilerRelease | undefined> {
+export async function chooseCompilerVersion(): Promise<(CompilerRelease & { followLatest?: boolean }) | undefined> {
+    const pin = getCompilerVersionPin();
     const [releases, installed] = await Promise.all([fetchCompilerReleases(), getInstalledVersionString()]);
     if (!releases.length) throw new Error('No stable WurstScript compiler releases are available for this platform.');
     const current = installed ? stableCompilerVersion(installed) : null;
     const items = releases.map((release, index) => {
         const description = [
             release.version === current ? 'Installed' : undefined,
+            release.version === pin ? 'Pinned' : undefined,
             index === 0 ? 'Latest' : undefined,
             current && compareCompilerVersions(release.version, current) < 0 ? 'Downgrade' : undefined,
         ].filter(Boolean).join(' · ');
         return { label: release.version, description, release };
     });
-    const selected = await vscode.window.showQuickPick(items, {
+    const selected = await vscode.window.showQuickPick([
+        { label: 'Follow latest stable', description: pin ? 'Unpin and receive stable updates' : 'Receive stable updates', release: { ...releases[0], followLatest: true } },
+        ...items,
+    ], {
         title: 'Wurst: Choose compiler version',
-        placeHolder: 'Choose a stable release to install. VS Code will reload when installation completes.',
+        placeHolder: `Installed: ${installed ?? 'none'}. Choose a stable release; VS Code reloads after installation.`,
     });
     return selected?.release;
 }
 
 export async function maybeOfferUpdate(onUpdateAvailable?: (update: UpdateAvailable) => void): Promise<void> {
     try {
-        if (!hasNewLayout() || !fs.existsSync(COMPILER_JAR)) return;
+        if (!hasNewLayout() || !fs.existsSync(COMPILER_JAR) || getCompilerVersionPin()) return;
         const installed = await getInstalledVersionString();
         if (!installed) {
             appendDiagnostic('VS Code extension', 'Update check skipped: installed WurstScript version could not be determined.');

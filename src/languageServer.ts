@@ -5,7 +5,7 @@ import * as vscode from 'vscode';
 import { workspace, ExtensionContext } from 'vscode';
 import { LanguageClient, LanguageClientOptions, ServerOptions, Executable, State, DidOpenTextDocumentNotification } from 'vscode-languageclient/node';
 import { RUNTIME_DIR, COMPILER_JAR } from './paths';
-import { getLanguageServerJava, checkCustomJavaVersion, getInstalledVersionString, ensureInstalledOrOfferMigration, maybeOfferUpdate } from './install/installer';
+import { getLanguageServerJava, checkCustomJavaVersion, getInstalledVersionString, ensureInstalledOrOfferMigration, maybeOfferUpdate, getCompilerVersionPin } from './install/installer';
 import type { UpdateAvailable } from './install/installer';
 import { appendDiagnostic, formatDiagnosticError } from './features/diagnostics';
 
@@ -27,6 +27,7 @@ type ServerState =
 let statusItem: vscode.StatusBarItem | undefined;
 let serverState: ServerState = { kind: 'noWorkspace' };
 let installedVersion: string | undefined;
+let compilerVersionPin: string | undefined;
 let availableUpdate: UpdateAvailable | undefined;
 // Bumped whenever a probe's answer stops being meaningful (server restart, stop), so a late reply
 // from an earlier server process cannot mark the current one ready.
@@ -93,6 +94,7 @@ function renderStatusItem(): void {
         summary,
         update ? 'A newer WurstScript version is available.' : undefined,
         installedVersion ? `Version: ${installedVersion}` : undefined,
+        compilerVersionPin ? `Pinned compiler: ${compilerVersionPin}. Choose Follow latest stable to receive updates.` : undefined,
         update ? `Latest: ${update.latestVersion}` : undefined,
         update ? 'Click to update WurstScript.' : 'Click for WurstScript actions.',
     ].filter(Boolean).join('\n');
@@ -220,6 +222,7 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
     let client: LanguageClient | undefined;
     try {
         await ensureInstalledOrOfferMigration(false);
+        compilerVersionPin = getCompilerVersionPin();
         if (generation !== startGeneration) return;
 
         const serverOptions = await getServerOptions();

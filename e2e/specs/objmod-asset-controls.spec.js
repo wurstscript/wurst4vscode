@@ -48,6 +48,28 @@ test('detail header refresh reuses a loaded tree icon without leaving a spinner'
     await expect(page.locator('.details-icon')).not.toHaveClass(/loading/);
 });
 
+test('asset fields keep one wrapper through repeated edits, undo, and redo', async ({ openObjMod }) => {
+    const { page, host } = await openObjMod();
+    await page.fill('#search', 'h004');
+    await page.locator('#tree .object-row', { has: page.locator('.object-id:text-is("h004")') }).first().click();
+    await page.check('#technical-toggle');
+    const row = page.locator('#details tbody tr', { has: page.locator('td.id:text-is("umdl")') });
+    for (let i = 0; i < 3; i++) {
+        await row.locator('.cell-edit').click();
+        await row.locator('.edit-raw').fill('Units\\Undead\\Acolyte\\Acolyte.mdx');
+        await row.locator('.edit-raw').press('Enter');
+        await expect(row.locator('.cell-edit')).toBeVisible();
+        await expect(row.locator('.asset-cell')).toHaveCount(1);
+        await expect(row.locator('[data-browse]')).toHaveCount(1);
+        host.undo();
+        await expect(row.locator('.asset-cell')).toHaveCount(1);
+        host.redo();
+        await expect(row.locator('.asset-cell')).toHaveCount(1);
+    }
+    await row.getByRole('button', { name: 'Choose asset', exact: true }).click();
+    await expect(page.locator('#ab-overlay')).toBeVisible();
+});
+
 test('object actions have padding and gaps in both density modes', async ({ openObjMod }) => {
     const { page } = await openObjMod();
     for (const cozy of [false, true]) {

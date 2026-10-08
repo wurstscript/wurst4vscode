@@ -18,6 +18,12 @@ function serverOptions(java, jar, javaOpts = []) {
     return [COMPACT_OBJECT_HEADERS, ...appCdsJvmOptions(java, jar, [COMPACT_OBJECT_HEADERS, ...javaOpts]), ...javaOpts];
 }
 
+function archiveOf(options) {
+    const flag = options.find((option) => option.startsWith('-XX:SharedArchiveFile='));
+    assert.ok(flag, 'the options name no archive');
+    return flag.slice('-XX:SharedArchiveFile='.length);
+}
+
 async function session(java, jar, project, options) {
     const child = spawn(java, [...options, '-jar', jar, '-languageServer'], { windowsHide: true, stdio: 'pipe' });
     const connection = createProtocolConnection(new StreamMessageReader(child.stdout), new StreamMessageWriter(child.stdin));
@@ -78,7 +84,7 @@ async function main() {
 
         const options = serverOptions(java, copy);
         assert.ok(options.includes('-XX:+AutoCreateSharedArchive'), 'the options have no archive');
-        const archive = options.find((option) => option.startsWith('-XX:SharedArchiveFile=')).slice('-XX:SharedArchiveFile='.length);
+        const archive = archiveOf(options);
 
         const first = await session(java, copy, project, options);
         assert.deepStrictEqual(first.states, ['loading', 'ready']);
@@ -103,7 +109,20 @@ async function main() {
         const third = await session(java, copy, project, updatedOptions);
         assert.deepStrictEqual(third.states, ['loading', 'ready']);
         assert.strictEqual(third.code, 0);
-        assert.ok(fs.existsSync(updatedOptions.find((option) => option.startsWith('-XX:SharedArchiveFile=')).slice('-XX:SharedArchiveFile='.length)));
+        const updatedArchive = archiveOf(updatedOptions);
+        assert.ok(fs.existsSync(updatedArchive));
+
+        // people already have the option in wurst.javaOpts, so the server is started with it twice: the same archive,
+        // and a session which starts from it
+        const twice = serverOptions(java, copy, ['-XX:+UseCompactObjectHeaders']);
+        assert.strictEqual(twice.filter((option) => option === '-XX:+UseCompactObjectHeaders').length, 2);
+        assert.strictEqual(archiveOf(twice), updatedArchive);
+        const writtenUpdated = fs.statSync(updatedArchive).mtimeMs;
+        const duplicate = await session(java, copy, project, twice);
+        assert.deepStrictEqual(duplicate.states, ['loading', 'ready']);
+        assert.strictEqual(duplicate.protocolErrors, 0);
+        assert.strictEqual(duplicate.code, 0, 'the option twice starts and ends cleanly');
+        assert.strictEqual(fs.statSync(updatedArchive).mtimeMs, writtenUpdated, 'and starts from the archive');
 
         // a wurst.javaOpts entry which switches the headers off: the runtime has no base archive for that mode, so the
         // server starts without any archive, and ends cleanly

@@ -50,6 +50,8 @@ try {
     assert.match(path.basename(archive), /^wurstscript-[0-9a-f]{12}\.jsa$/);
     assert.deepStrictEqual(appCdsJvmOptions(java, jar, COMPACT), options, 'the same install gets the same archive');
     assert.deepStrictEqual(appCdsJvmOptions(java, jar, [...COMPACT, '-Xmx2g']), options, 'other options keep the archive');
+    // people already have the option in wurst.javaOpts: given twice it is the same mode, so the same archive
+    assert.deepStrictEqual(appCdsJvmOptions(java, jar, [...COMPACT, ...COMPACT]), options, 'the option twice keeps the archive');
     // a JVM uses an archive only for its object header mode, so switching it off gets an archive of its own
     const withoutCompact = appCdsJvmOptions(java, jar, [...COMPACT, '-XX:-UseCompactObjectHeaders']);
     assert.notStrictEqual(archiveOf(withoutCompact), archive);

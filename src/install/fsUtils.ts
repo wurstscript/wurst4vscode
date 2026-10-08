@@ -1,10 +1,54 @@
 'use strict';
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
     WURST_HOME, RUNTIME_DIR, COMPILER_DIR, GRILL_HOME_DIR, LEGACY_GRILL_DIR,
 } from '../paths';
+
+/**
+ * JVM options which start the language server from an AppCDS archive next to the compiler jar: the JVM writes the
+ * archive when the first session ends, and the sessions after it start from it (about 15% sooner).
+ *
+ * The archive is named after what it was recorded for (runtime, jar path, size and modification time). The JVM
+ * only ignores an archive which does not fit, it does not write a new one, so an update would leave the server
+ * without; the archives of other jars and runtimes are removed here instead. No options when the folder cannot
+ * be written, because the JVM then aborts when the session ends. `-Xlog:disable` because the JVM reports archive
+ * trouble on stdout, which is the protocol stream.
+ *
+ * Needs the runtime's own base archive, which the distribution builds (jlink --generate-cds-archive); without it
+ * the JVM runs as before.
+ */
+export function appCdsJvmOptions(javaExecutable: string, compilerJar: string): string[] {
+    try {
+        const dir = path.dirname(compilerJar);
+        // access(W_OK) says yes to any folder on Windows
+        const probe = path.join(dir, `.write-probe-${process.pid}`);
+        fs.writeFileSync(probe, '');
+        fs.unlinkSync(probe);
+
+        let release = '';
+        try {
+            release = fs.readFileSync(path.join(path.dirname(path.dirname(javaExecutable)), 'release'), 'utf8');
+        } catch {
+            // a java without a release file (from PATH) is told apart by its path
+        }
+        const jar = fs.statSync(compilerJar);
+        const key = crypto.createHash('sha1')
+            .update([javaExecutable, release, compilerJar, jar.size, Math.floor(jar.mtimeMs)].join('|'))
+            .digest('hex').slice(0, 12);
+        const archive = path.join(dir, `wurstscript-${key}.jsa`);
+        for (const entry of fs.readdirSync(dir)) {
+            if (/^wurstscript-[0-9a-f]{12}\.jsa$/.test(entry) && entry !== path.basename(archive)) {
+                try { fs.unlinkSync(path.join(dir, entry)); } catch { /* in use by a session of the old version */ }
+            }
+        }
+        return ['-XX:+AutoCreateSharedArchive', `-XX:SharedArchiveFile=${archive}`, '-Xlog:disable'];
+    } catch {
+        return [];
+    }
+}
 
 export function sleep(ms: number) {
     return new Promise((res) => setTimeout(res, ms));

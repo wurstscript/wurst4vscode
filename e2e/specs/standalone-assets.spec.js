@@ -135,6 +135,46 @@ test('standalone browser uses the thumbnail service, waits for textures and fram
     expect(result.cacheKey).toBe('v12s-abc');
 });
 
+test('restored viewport gets the first thumbnail request', async ({ page, server }) => {
+    const vscode = createVscodeMock();
+    let html;
+    vscode.window.createWebviewPanel = () => ({ webview: {
+        cspSource: server.origin,
+        asWebviewUri: uri => ({ toString: () => server.origin + '/dist/webview/' + path.basename(uri.fsPath) }),
+        set html(value) { html = value; }, onDidReceiveMessage() {},
+    } });
+    const load = createTsLoader({ mocks: { vscode,
+        'src/features/objModPreview.ts': { loadObjValueCatalog: async () => ({
+            models: Array.from({ length: 120 }, (_, index) => ({ value: `model-${index}.mdx` })), icons: [], sounds: [],
+        }) },
+        'src/features/imageAssetSupport.ts': { getCandidateRoots: async () => [], gatherImportedAssets: async () => ({ model: [], icon: [], sound: [] }) },
+    } });
+    await load('src/features/assetLinks.ts').openAssetBrowser({ extensionUri: fileUri(root) });
+    await page.addInitScript(() => {
+        window.messages = [];
+        window.acquireVsCodeApi = () => ({
+            postMessage: message => window.messages.push(message),
+            getState: () => ({ activeTab: 'model', scrollTop: 1000 }),
+        });
+    });
+    await page.goto(server.publish(html));
+    await expect.poll(() => page.evaluate(() => window.messages.filter(m => m.type === 'loadModelThumb').length)).toBe(1);
+    const result = await page.evaluate(() => {
+        const grid = document.querySelector('#grid');
+        const viewport = grid.getBoundingClientRect();
+        const visible = [...grid.querySelectorAll('.model-thumb')].find(el => {
+            const rect = el.getBoundingClientRect();
+            return rect.bottom > viewport.top && rect.top < viewport.bottom;
+        });
+        return { scrollTop: grid.scrollTop, visibleKey: visible.getAttribute('data-key'),
+            requestKey: window.messages.find(m => m.type === 'loadModelThumb').key };
+    });
+    // The saved position may clamp to the grid's maximum scroll offset.
+    expect(result.scrollTop).toBeGreaterThan(500);
+    expect(result.requestKey).toBe(result.visibleKey);
+    expect(result.requestKey).not.toContain('model-0.mdx');
+});
+
 test('scrolling defers old thumbnails and requests the current viewport first', async ({ page, server }) => {
     const vscode = createVscodeMock();
     let html;

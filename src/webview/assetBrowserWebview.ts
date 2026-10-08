@@ -41,7 +41,7 @@ const uiDocument: any = document;
       return entry.item;
     });
   }
-  function render() {
+  function render(restoredScrollTop?: number) {
     modelObserver?.disconnect();
     uiDocument.querySelectorAll('.tab').forEach(function (btn) { btn.classList.toggle('active', btn.getAttribute('data-tab') === activeTab); });
     var grid = uiDocument.getElementById('grid');
@@ -58,6 +58,7 @@ const uiDocument: any = document;
         '<button class="asset-preview" type="button" data-action="open" aria-label="' + esc('Open ' + name) + '">' + icon + '</button>' +
         '<span class="card-name">' + esc(name) + '</span>' + assetCardActions(!initial.browseOnly) + '</div>';
     }).join('');
+    if (restoredScrollTop !== undefined) grid.scrollTop = restoredScrollTop;
     observeIcons(grid);
     if (activeTab === 'model') observeModels(grid);
     else refreshVisibleModels();
@@ -330,9 +331,8 @@ const uiDocument: any = document;
       };
     }
   };
-  render();
+  render(Number(saved.scrollTop) || 0);
   uiDocument.getElementById('search').value = query;
-  uiDocument.getElementById('grid').scrollTop = Number(saved.scrollTop) || 0;
   uiDocument.getElementById('grid').addEventListener('scroll', persist, { passive: true });
   uiDocument.getElementById('grid').addEventListener('scroll', refreshVisibleModels, { passive: true });
   window.addEventListener('resize', refreshVisibleModels);

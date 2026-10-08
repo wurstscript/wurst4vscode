@@ -38,6 +38,7 @@ for (const contextual of [false, true]) {
         if (contextual) await host.restoreAssetBrowser(context, panel, { browserContext: { documentUri: targetUri,
             target: { uri: targetUri, kind: 'model', currentValue: original, range: [0, 0, 0, original.length] } } });
         else await host.openAssetBrowser(context);
+        expect(vscode.recorded.commands.filter(entry => entry.command === 'workbench.action.moveEditorToNewWindow')).toHaveLength(contextual ? 0 : 1);
         await page.exposeFunction('__assetAction', msg => receive(msg));
         await page.addInitScript(() => {
             window.acquireVsCodeApi = () => ({
@@ -53,14 +54,15 @@ for (const contextual of [false, true]) {
         await expect.poll(() => copied).toBe(contextual ? 'Units\\\\Human\\\\Footman\\\\Footman.mdx' : 'Units\\Human\\Footman\\Footman.mdx');
         expect(replacement).toBeUndefined(); expect(disposed).toBe(false);
         await page.getByRole('button', { name: 'Open in viewer', exact: true }).click();
-        await expect.poll(() => vscode.recorded.commands.length).toBe(1);
-        expect(vscode.recorded.commands[0].args[0]).toBe(value);
+        await expect.poll(() => vscode.recorded.commands.filter(entry => entry.command === 'wurst.openAssetFromString').length).toBe(1);
+        expect(vscode.recorded.commands.find(entry => entry.command === 'wurst.openAssetFromString').args[0]).toBe(value);
         expect(replacement).toBeUndefined(); expect(disposed).toBe(false);
         await page.locator('#search').fill('Foot');
         const state = await page.evaluate(() => JSON.parse(sessionStorage.getItem('asset-state')));
         expect(state.query).toBe('Foot');
         // Simulate the serializer repopulating the panel, then a webview reload using VS Code state.
         await host.restoreAssetBrowser(context, panel, state);
+        expect(vscode.recorded.commands.filter(entry => entry.command === 'workbench.action.moveEditorToNewWindow')).toHaveLength(contextual ? 0 : 1);
         await page.goto(server.publish(html));
         await expect(page.locator('#search')).toHaveValue('Foot');
         await expect(page.locator('#tab-model')).toHaveClass(/active/);
@@ -216,9 +218,9 @@ for (const editor of ['none', 'untitled', 'workspace']) {
         await expect(page.locator('.meta')).toHaveText('Click an asset to open its preview.');
         await expect(page.locator('#tab-model')).toHaveClass(/active/);
         await page.locator('.card').click();
-        await expect.poll(() => vscode.recorded.commands.length).toBe(1);
-        expect(vscode.recorded.commands[0].command).toBe('wurst.openAssetFromString');
-        expect(vscode.recorded.commands[0].args[0]).toBe('Units\\Human\\Footman\\Footman.mdx');
+        await expect.poll(() => vscode.recorded.commands.filter(entry => entry.command === 'wurst.openAssetFromString').length).toBe(1);
+        expect(vscode.recorded.commands.find(entry => entry.command === 'wurst.openAssetFromString').command).toBe('wurst.openAssetFromString');
+        expect(vscode.recorded.commands.find(entry => entry.command === 'wurst.openAssetFromString').args[0]).toBe('Units\\Human\\Footman\\Footman.mdx');
         expect(disposed).toBe(false);
     });
 }
@@ -260,8 +262,8 @@ for (const source of ['editor', 'workspace', 'model']) {
         await page.goto(server.publish(html));
         await expect(page.locator('.card')).toContainText('Remote import');
         await page.locator('.card').click();
-        await expect.poll(() => vscode.recorded.commands.length).toBe(1);
-        expect(vscode.recorded.commands[0].args[1].toString()).toBe(expected.toString());
+        await expect.poll(() => vscode.recorded.commands.filter(entry => entry.command === 'wurst.openAssetFromString').length).toBe(1);
+        expect(vscode.recorded.commands.find(entry => entry.command === 'wurst.openAssetFromString').args[1].toString()).toBe(expected.toString());
     });
 }
 

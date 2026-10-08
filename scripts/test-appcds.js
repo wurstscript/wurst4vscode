@@ -32,7 +32,7 @@ try {
     const { java, jar, compiler } = install(tmp);
 
     // the options: a JDK managed archive next to the jar, and no JVM log lines on the protocol stream
-    for (const agent of ['-agentlib:jdwp=transport=dt_socket', '-agentpath:C:/agents/profiler.dll', '-javaagent:profiler.jar']) {
+    for (const agent of ['-agentlib:jdwp=transport=dt_socket', '-agentpath:C:/agents/profiler.dll', '-javaagent:profiler.jar', '-Xrunjdwp:transport=dt_socket']) {
         assert.deepStrictEqual(appCdsJvmOptions(java, jar, [agent]), [], 'agent sessions must not request CDS dumping');
     }
 

@@ -1442,6 +1442,52 @@ function testMpqReextractUsesFreshUriAfterDeletedOutput() {
     }
 }
 
+
+async function testGameFileAliases() {
+    const load = createTsLoader({
+        mocks: { vscode: {}, 'casc-ts': {}, 'src/features/diagnostics.ts': {} },
+        augment: { 'src/features/preview/cascStorage.ts': 'export { CascGameStorage };' },
+    });
+    const { CascGameStorage } = load('src/features/preview/cascStorage.ts');
+    const table = [
+        { src: 'Textures/GenericGlow2_mip1.blp', dest: 'Textures/GenericGlow2.blp', assetType: 'Texture' },
+        { src: 'Models/old.mdx', dest: 'Models/new.mdx', assetType: 'Model' },
+        { src: 'Models/chain.mdx', dest: 'Models/old.mdx', assetType: 'Model' },
+        { src: 'Models/cycle-a.mdx', dest: 'Models/cycle-b.mdx' },
+        { src: 'Models/cycle-b.mdx', dest: 'Models/cycle-a.mdx' },
+        { src: 3, dest: null },
+    ];
+    const files = new Map([
+        ['war3.w3mod:filealiases.json', Buffer.from(JSON.stringify(table))],
+        ['war3.w3mod:textures/genericglow2.dds', Buffer.from('glow')],
+        ['war3.w3mod:_hd.w3mod:textures/genericglow2.dds', Buffer.from('hd glow')],
+        ['war3.w3mod:models/new.mdx', Buffer.from('model')],
+    ]);
+    let tableReads = 0;
+    const storage = {
+        hasFileAsync: async p => files.has(p),
+        readFileAsync: async p => {
+            if (p.endsWith('filealiases.json')) tableReads++;
+            if (!files.has(p)) throw new Error('missing ' + p);
+            return files.get(p);
+        },
+    };
+    const adapter = new CascGameStorage(storage);
+    const alias = 'war3.w3mod:Textures\\GenericGlow2_mip1.dds';
+    assert.equal(await adapter.hasFileAsync(alias), true);
+    assert.equal((await adapter.readFileAsync(alias)).toString(), 'glow');
+    assert.equal((await adapter.readFileAsync('war3.w3mod:_hd.w3mod:Textures/GenericGlow2_mip1.dds')).toString(), 'hd glow');
+    assert.equal((await adapter.readFileAsync('war3.w3mod:Models/chain.mdx')).toString(), 'model');
+    assert.equal(await adapter.hasFileAsync('war3.w3mod:Models/cycle-a.mdx'), false);
+    assert.equal(await adapter.hasFileAsync('war3.w3mod:Textures/Unknown_mip1.dds'), false, 'suffix alone never implies an alias');
+    await new CascGameStorage(storage).hasFileAsync(alias);
+    assert.equal(tableReads, 1, 'the installation alias table is shared across adapter instances');
+    files.set('war3.w3mod:textures/genericglow2_mip1.dds', Buffer.from('original'));
+    assert.equal((await adapter.readFileAsync(alias)).toString(), 'original', 'physical requested files win');
+    const legacy = new CascGameStorage({hasFileAsync: async () => false});
+    assert.equal(await legacy.hasFileAsync(alias), false, 'installations without alias tables stay supported');
+}
+
 async function main() {
     const { expandModelVariants } = loadTsModule('src/features/preview/modelVariants.ts');
     const stem = 'Doodads\\Undercity\\Props\\AlchemySet\\AlchemySet';
@@ -1457,6 +1503,7 @@ async function main() {
         'expanded variants preserve the owning rawcode for asset searches');
     assert.strictEqual(expandModelVariants(options, [...actualPaths, `${stem}.mdx`])[0].value,
         `${stem}.mdl`, 'a real unsuffixed model is retained alongside its variants');
+    await testGameFileAliases();
     testAssetPathNormalization();
     testSignals();
     testObjModTreeSelectionStaysUntracked();

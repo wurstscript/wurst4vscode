@@ -43,12 +43,72 @@ class CascGameStorage implements GameStorage {
 
     constructor(private readonly storage: CascStorage) {}
 
-    get fileCount(): number { return this.storage.fileCount; }
-    readFileAsync(filePath: string): Promise<Buffer> {
-        return this.storage.readFileAsync(normalizeCascAssetPath(filePath).replace(/\\/g, '/'));
+    // Adapters are short-lived; cache the table on the underlying installation storage.
+    private static readonly aliases = new WeakMap<CascStorage, Promise<Map<string, string>>>();
+
+    private getAliases(): Promise<Map<string, string>> {
+        let pending = CascGameStorage.aliases.get(this.storage);
+        if (!pending) {
+            pending = this.readAliases();
+            CascGameStorage.aliases.set(this.storage, pending);
+        }
+        return pending;
     }
-    hasFileAsync(filePath: string): Promise<boolean> {
-        return this.storage.hasFileAsync(normalizeCascAssetPath(filePath).replace(/\\/g, '/'));
+
+    private async readAliases(): Promise<Map<string, string>> {
+        const aliases = new Map<string, string>();
+        const aliasPath = 'war3.w3mod:filealiases.json';
+        if (!await this.storage.hasFileAsync(aliasPath)) return aliases;
+        try {
+            const entries: unknown = JSON.parse((await this.storage.readFileAsync(aliasPath)).toString('utf8').replace(/^\uFEFF/, ''));
+            if (!Array.isArray(entries)) return aliases;
+            for (const entry of entries) {
+                if (typeof entry?.src !== 'string' || typeof entry?.dest !== 'string') continue;
+                const src = normalizeCascAssetPath(entry.src);
+                const dest = normalizeCascAssetPath(entry.dest);
+                aliases.set(src, dest);
+            }
+            // The alias table uses legacy BLP names, while Reforged stores textures as DDS.
+            for (const entry of entries) {
+                if (entry?.assetType !== 'Texture' || typeof entry.src !== 'string' || typeof entry.dest !== 'string') continue;
+                const src = textureBasePath(entry.src);
+                const dest = textureBasePath(entry.dest);
+                for (const ext of ['dds', 'blp', 'tga']) {
+                    const key = src + '.' + ext;
+                    if (!aliases.has(key)) aliases.set(key, dest + '.' + ext);
+                }
+            }
+        } catch (error) {
+            channelLog('CASC file aliases unavailable: ' + formatDiagnosticError(error));
+        }
+        return aliases;
+    }
+
+    private async resolveFilePath(filePath: string): Promise<string> {
+        const normalized = normalizeCascAssetPath(filePath);
+        const boundary = normalized.lastIndexOf(':') + 1;
+        const prefix = normalized.slice(0, boundary);
+        let relative = normalized.slice(boundary);
+        const seen = new Set<string>();
+        while (!seen.has(relative)) {
+            seen.add(relative);
+            const candidate = (prefix + relative).replace(/\\/g, '/');
+            // A real file at the requested path takes precedence over its alias.
+            if (await this.storage.hasFileAsync(candidate)) return candidate;
+            const target = (await this.getAliases()).get(relative);
+            if (!target) break;
+            relative = target;
+        }
+        return normalized.replace(/\\/g, '/');
+    }
+
+
+    get fileCount(): number { return this.storage.fileCount; }
+    async readFileAsync(filePath: string): Promise<Buffer> {
+        return this.storage.readFileAsync(await this.resolveFilePath(filePath));
+    }
+    async hasFileAsync(filePath: string): Promise<boolean> {
+        return this.storage.hasFileAsync(await this.resolveFilePath(filePath));
     }
     listFiles(): Promise<string[]> {
         return Promise.resolve(this.storage.listFiles().map(normalizeGameAssetSeparators));

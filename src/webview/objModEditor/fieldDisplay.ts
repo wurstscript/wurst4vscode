@@ -200,7 +200,7 @@ export function assetMiniHtml(mod, mi) {
   // Model: clickable badge that renders an inline 3D preview square (no separate window).
   if (mod.assetType === 'model') {
     const modelKey = ui.selectedKey + ':model-field:' + mi + ':' + assetPath;
-    return '<button type="button" class="asset-mini asset-open" data-model-preview="' + esc(assetPath) + '" title="' + esc('Preview model: ' + assetPath) + '">' +
+    return '<button type="button" class="asset-mini asset-open asset-model-preview" data-model-preview="' + esc(assetPath) + '" title="' + esc('Preview model: ' + assetPath) + '">' +
       '<span class="asset-mini model-thumb" data-key="' + esc(modelKey) + '" data-model="' + esc(assetPath) + '"></span></button>';
   }
   if (mod.assetType === 'sound') {
@@ -286,7 +286,7 @@ export function refreshDecoratedValue(mod) {
     }
   }
   if (mod.displayKind === 'asset') {
-    mod.assetPath = normalizeAssetPathForType(v, mod.assetType) || v || '';
+    mod.assetPath = normalizeAssetPathForType(v, mod.assetType) || firstAssetPath(v);
     if (!v) {
       mod.displayValue = '';
       mod.displayDetail = '';
@@ -396,9 +396,12 @@ export function collapsedView(mod, mi) {
   }
   const badge = mod.overridden ? '<span class="override-badge" title="This field overrides the base value">modified</span>' : '';
   const disp = decoratedValueHtml(mod, mi, dv);
-  return '<span class="cell-edit" data-mi="' + mi + '" tabindex="0" role="button" title="Click or press Enter to edit">' +
+  const value = '<span class="cell-edit" data-mi="' + mi + '" tabindex="0" role="button" title="Click or press Enter to edit">' +
     '<span class="cell-edit-val">' + disp + '</span>' + badge + (mod.source ? sourcePill(mod) : '') +
     '</span>';
+  if (!mod.assetType) return value;
+  return '<span class="asset-cell">' + value +
+    '<button type="button" class="browse-btn asset-browse" data-browse="' + mi + '" title="Choose asset" aria-label="Choose asset">Browse…</button></span>';
 }
 
 export function valueCell(mod, mi) {

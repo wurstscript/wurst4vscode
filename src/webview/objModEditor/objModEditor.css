@@ -82,7 +82,9 @@
   --add-object-button-h: 26px;
   --add-object-button-pad: 0 7px;
   --object-action-button-pad: 0 6px;
-  --object-action-gap: 3px;
+  --object-action-gap: 4px;
+  --object-action-pad: 6px;
+  --field-model-size: 36px;
   --header-control-h: 20px;
   --asset-card-min-width: 104px;
   --asset-thumb-size: 64px;
@@ -142,7 +144,9 @@ body.density-cozy {
   --add-object-button-h: 32px;
   --add-object-button-pad: 0 9px;
   --object-action-button-pad: 0 8px;
-  --object-action-gap: 5px;
+  --object-action-gap: 6px;
+  --object-action-pad: 8px;
+  --field-model-size: 40px;
   --header-control-h: 22px;
   --asset-card-min-width: 120px;
   --asset-thumb-size: 72px;
@@ -599,6 +603,20 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   cursor: pointer;
   white-space: nowrap;
 }
+.asset-model-preview {
+  grid-row: 1 / span 2;
+  width: var(--field-model-size);
+  height: var(--field-model-size);
+  padding: 0;
+}
+.asset-model-preview .model-thumb {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.asset-cell { display: flex; align-items: center; gap: var(--object-action-gap); }
+.asset-cell > .cell-edit { flex: 1; width: auto; }
+.asset-browse { flex: 0 0 auto; }
 .asset-open:hover {
   background: var(--btn-hover);
   color: var(--fg);
@@ -1068,7 +1086,7 @@ tr.hidden { display: none; }
   display: flex;
   align-items: center;
   gap: var(--object-action-gap);
-  padding: var(--search-pad) var(--search-pad) 0;
+  padding: var(--object-action-pad);
   flex: 0 0 auto;
   container-type: inline-size;
 }

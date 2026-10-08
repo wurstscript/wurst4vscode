@@ -292,7 +292,7 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
         };
         return withClient(async (client) => {
             // The server builds relative to its workspace root, even when the input map is elsewhere.
-            const root = client.clientOptions.workspaceFolder?.uri ?? workspace.workspaceFolders?.[0]?.uri;
+            const root = client.clientOptions.workspaceFolder?.uri;
             const buildFolder = root ? vscode.Uri.joinPath(root, '_build') : undefined;
             const result = await executeMapCommand(client, request, 'Building Wurst map');
             // Canceled commands can resolve with an empty object; only 'ok' confirms a completed build.

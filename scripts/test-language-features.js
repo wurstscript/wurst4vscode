@@ -61,6 +61,7 @@ function lifecycleHarness(installation = Promise.resolve(), documents = []) {
     const vscode = {
         Disposable: TestDisposable,
         workspace: {
+            workspaceFolders: [{ uri: { fsPath: require('path').resolve('initial-project') } }],
             textDocuments: documents,
             getConfiguration: () => ({ get: (key) => key === 'javaOpts' ? [] : undefined }),
             createFileSystemWatcher: (pattern) => {
@@ -83,7 +84,7 @@ function lifecycleHarness(installation = Promise.resolve(), documents = []) {
         },
         'src/features/diagnostics.ts': { appendDiagnostic() {}, formatDiagnosticError: String },
     } });
-    return { server: load('src/languageServer.ts'), context: { subscriptions: [] }, clients, watchers, states };
+    return { server: load('src/languageServer.ts'), context: { subscriptions: [] }, clients, watchers, states, workspace: vscode.workspace };
 }
 
 async function testClientReadinessAndRestarts() {
@@ -107,6 +108,8 @@ async function testClientReadinessAndRestarts() {
     await assert.rejects(h.server.getLanguageClient(), /restarting/);
     client.transition(h.states.Running);
     assert.equal(await h.server.getLanguageClient(), client, 'automatic restart restores readiness');
+    h.workspace.workspaceFolders = [{ uri: { fsPath: require('path').resolve('other-project') } }];
+    assert.equal(client.options.workspaceFolder.uri.fsPath, require('path').resolve('initial-project'), 'the server root must remain pinned after workspace folders change');
     assert.equal(client.options.synchronize.fileEvents, h.watchers[0], 'the language client owns event batching');
     assert.equal(h.watchers[0].pattern, '**/*.{wurst,jurst,j}');
     await h.server.stopLanguageServerIfRunning();
@@ -501,7 +504,7 @@ function commandHarness() {
     const listeners = new Map();
     const requests = [];
     const client = {
-        clientOptions: {},
+        clientOptions: { workspaceFolder: { uri: { fsPath: require('path').resolve('project') } } },
         outputChannel: { lines: [], shown: 0, appendLine(line) { this.lines.push(line); }, show() { this.shown++; } },
         onProgress(type, token, handler) {
             assert.equal(type, 'workDone');
@@ -558,7 +561,7 @@ function commandHarness() {
         'src/features/assetLinks.ts': {},
     } });
     load('src/features/commands.ts').registerCommands(async () => client);
-    const harness = { handlers, notifications, failures, completions, foldersOpened, actions, diagnostics, listeners, requests, client };
+    const harness = { handlers, notifications, failures, completions, foldersOpened, actions, diagnostics, listeners, requests, client, workspace: vscode.workspace };
     return harness;
 }
 
@@ -641,6 +644,7 @@ async function testMapCommandProgress() {
 async function testBuildCompletionActions() {
     const h = commandHarness();
     h.client.clientOptions.workspaceFolder = { uri: { fsPath: require('path').resolve('server-project') } };
+    h.workspace.workspaceFolders = [];
     h.completionDialog = deferred();
     const building = h.handlers.get('wurst.buildmap')(['elsewhere.w3x']);
     await tick();

@@ -9,7 +9,7 @@ import { WURST_HOME } from '../paths';
 import { appendDiagnostic, buildDiagnosticsText, formatDiagnosticError, showDiagnosticOutput, showErrorWithLogs } from './diagnostics';
 import type { PathAlias } from './diagnostics';
 import { getRunningLanguageClient } from '../languageServer';
-import { describeJavaVersion, displayGitSha, getAvailableUpdate, getInstalledVersionString, getLanguageServerJava } from '../install/installer';
+import { describeJavaVersion, getAvailableUpdate, getInstalledVersionString, getLanguageServerJava } from '../install/installer';
 import { extensionVersion } from './issueReporting';
 import { getCascCacheDir } from './preview/cascStorage';
 import { prepareAgentsGuideUpdate } from './agentsGuide';
@@ -100,10 +100,11 @@ export function registerWurstDiagnosticsCommands(context: vscode.ExtensionContex
                 update
                     ? {
                         label: '$(cloud-download) Update WurstScript',
-                        description: `${displayGitSha(update.installedSha)} → ${displayGitSha(update.latestSha)}`,
+                        description: `${update.installedVersion} → ${update.latestVersion}`,
                         command: 'wurst.installOrUpdate',
                     }
                     : { label: '$(cloud-download) Install/update WurstScript', command: 'wurst.installOrUpdate' },
+                { label: '$(versions) Choose compiler version', command: 'wurst.chooseCompilerVersion' },
                 { label: '$(folder-opened) Open Wurst home', command: 'wurst.openWurstHome' },
                 { label: '$(copy) Copy diagnostics', command: 'wurst.copyDiagnostics' },
                 { label: '$(output) Open Wurst output', command: 'wurst.showLogs' },

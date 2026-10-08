@@ -489,7 +489,133 @@ async function testClient10DocumentSynchronization() {
     await options.server.stopLanguageServerIfRunning();
 }
 
+
+function releaseHarness(releases) {
+    const { EventEmitter } = require('events');
+    const requested = [];
+    const load = createTsLoader({ mocks: {
+        vscode: {},
+        'src/paths.ts': { COMPILER_RELEASES_API: 'https://test/releases' },
+        https: { request(url, _options, callback) {
+            requested.push(url);
+            const req = new EventEmitter();
+            req.destroy = () => {};
+            req.end = () => setImmediate(() => {
+                const res = new EventEmitter();
+                res.statusCode = 200;
+                callback(res);
+                res.emit('data', Buffer.from(JSON.stringify(releases)));
+                res.emit('end');
+            });
+            return req;
+        } },
+    } });
+    return { downloader: load('src/install/downloader.ts'), requested };
+}
+
+async function testStableCompilerReleases() {
+    const platform = { win32: 'win', linux: 'linux', darwin: 'macos' }[process.platform];
+    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+    const release = (version, extra = {}) => ({
+        tag_name: `v${version}`, draft: false, prerelease: false,
+        assets: [{ name: `wurst-compiler-${version}-${platform}-${arch}.zip`, browser_download_url: `https://test/${version}.zip` }],
+        ...extra,
+    });
+    const h = releaseHarness([
+        release('1.9.0'), release('1.10.0'), release('2.0.0', { draft: true }),
+        release('2.1.0', { prerelease: true }), release('3.0.0-beta.1'),
+        release('4.0.0', { tag_name: 'nightly' }), release('5.0.0', { assets: [] }),
+        release('6.0.0', { assets: [{ name: `wurst-compiler-nightly-${platform}-${arch}.zip`, browser_download_url: 'https://test/nightly' }] }),
+    ]);
+    const releases = await h.downloader.fetchCompilerReleases();
+    assert.deepEqual(releases.map((r) => r.version), ['1.10.0', '1.9.0'], 'stable releases must sort numerically and require an exact versioned platform archive');
+    assert.equal(releases[0].url, 'https://test/1.10.0.zip');
+    assert.equal(releases[0].tag, 'v1.10.0');
+    assert.ok(h.requested.every((url) => !url.includes('nightly')), 'release discovery must never resolve mutable nightly tags');
+    const empty = releaseHarness([release('1.0.0', { prerelease: true })]);
+    await assert.rejects(empty.downloader.fetchLatestCompilerRelease(), /No stable WurstScript compiler release/);
+}
+
+function versionInstallerHarness(version, releases) {
+    const messages = [];
+    const picks = [];
+    const commands = [];
+    const downloads = [];
+    const replacements = [];
+    let fetches = 0;
+    const releaseApi = releaseHarness([]).downloader;
+    const load = createTsLoader({ mocks: {
+        vscode: {
+            workspace: { getConfiguration: () => ({ get: () => undefined }) },
+            window: {
+                withProgress: async (_options, task) => task({ report() {} }),
+                showInformationMessage: async (...args) => { messages.push(args); return undefined; },
+                showQuickPick: async (items, options) => { picks.push({ items, options }); return items.at(-1); },
+            },
+            commands: { executeCommand: async (...args) => commands.push(args) },
+            ProgressLocation: { Notification: 15 },
+        },
+        fs: {
+            existsSync: () => true,
+            statSync: () => ({ size: 1, mtimeMs: 2, ctimeMs: 3 }),
+            mkdirSync() {}, unlinkSync() {}, copyFileSync() {},
+            readFileSync: (file) => {
+                if (file === 'compiler/installed-version.json') return JSON.stringify({ cacheKey: require('path').join('runtime', 'bin', process.platform === 'win32' ? 'java.exe' : 'java') + '|1:2', version });
+                throw new Error('missing');
+            },
+        },
+        'src/paths.ts': { WURST_HOME: 'wurst-home', GRILL_HOME_DIR: 'grill', RUNTIME_DIR: 'runtime', COMPILER_DIR: 'compiler', COMPILER_JAR: 'compiler/wurstscript.jar', INSTALLED_VERSION_CACHE_FILE: 'compiler/installed-version.json' },
+        'src/install/fsUtils.ts': {
+            removeDirSafe: async () => {}, copyDirContents() {}, installLauncherExecutable() {},
+            cleanupOldWurstHome() {}, cleanupWurstSetupJar() {}, ensureDirectoryPath() {},
+            upgradeFolder: async (src, dest) => replacements.push({ src, dest }),
+            withRetry: async (task) => task(),
+        },
+        'src/install/downloader.ts': { stableCompilerVersion: releaseApi.stableCompilerVersion, compareCompilerVersions: releaseApi.compareCompilerVersions, fetchLatestCompilerRelease: async () => { fetches++; return releases[0]; }, fetchCompilerReleases: async () => releases,
+            fetchLatestGrillAsset: async () => ({ url: 'grill-release' }),
+            downloadFileWithProgress: async (url) => { downloads.push(url); return 1; },
+            extractZipWithByteProgress: async () => {},
+        },
+        'src/install/pathManager.ts': { ensureCliOnPath: async () => {} },
+        'src/languageServer.ts': { stopLanguageServerIfRunning: async () => false },
+        'src/install/installCoordination.ts': {
+            withWurstInstallLock: async (task) => task(true),
+            ensureConflictingWurstProcessesStopped: async () => {},
+        },
+        'src/features/diagnostics.ts': { appendDiagnostic() {}, formatDiagnosticError: String },
+    } });
+    return { installer: load('src/install/installer.ts'), messages, picks, commands, downloads, replacements, fetches: () => fetches };
+}
+
+async function testVersionedCompilerUpdates() {
+    const releases = [{ version: '1.10.0', tag: 'v1.10.0', url: 'latest' }, { version: '1.9.0', tag: 'v1.9.0', url: 'older' }];
+    for (const installed of ['1.10.0', '1.11.0']) {
+        const h = versionInstallerHarness(installed, releases);
+        await h.installer.maybeOfferUpdate();
+        assert.equal(h.messages.length, 0, 'equal/newer installed stable releases must not offer a downgrade');
+        assert.equal(h.installer.getAvailableUpdate(), undefined);
+    }
+    const older = versionInstallerHarness('1.9.0', releases);
+    await older.installer.maybeOfferUpdate();
+    assert.equal(older.installer.getAvailableUpdate().latestVersion, '1.10.0');
+    assert.equal(older.installer.getAvailableUpdate().installedVersion, '1.9.0');
+    assert.ok(older.messages[0][0].includes('1.10.0'));
+    const nightly = versionInstallerHarness('1.9.0-482-gaaaaaaa', releases);
+    await nightly.installer.maybeOfferUpdate();
+    assert.ok(nightly.messages[0][0].includes('stable'), 'nightly builds must offer an explicit stable migration');
+    const picker = versionInstallerHarness('1.10.0', releases);
+    assert.equal((await picker.installer.chooseCompilerVersion()).version, '1.9.0', 'picker must allow choosing an older stable release');
+    assert.equal(picker.picks[0].items[0].description, 'Installed · Latest');
+    assert.equal(picker.picks[0].items[1].description, 'Downgrade');
+    await picker.installer.installWithRetry({ compilerRelease: releases[1], offerPostInstallActions: false });
+    assert.equal(picker.fetches(), 0, 'installing a selected older release must never switch back to latest');
+    assert.deepEqual(picker.downloads, ['older', 'grill-release']);
+    assert.deepEqual(picker.replacements.map((item) => item.dest), ['runtime', 'compiler'], 'selected versions must use the existing coordinated replacement pipeline');
+}
+
 async function main() {
+    await testStableCompilerReleases();
+    await testVersionedCompilerUpdates();
     await testClientReadinessAndRestarts();
     await testBuildNotificationsAvoidRequests();
     await testStopDuringInstallation();

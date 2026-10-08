@@ -86,13 +86,14 @@ function renderStatusItem(): void {
             summary = 'WurstScript language server was stopped.';
             break;
     }
-    sb.text = showUpdateBadge ? '$(circle-filled) WurstScript Update' : `${icon} WurstScript`;
+    const versionLabel = installedVersion && /^\d+\.\d+\.\d+$/.test(installedVersion) ? ` ${installedVersion}` : '';
+    sb.text = showUpdateBadge ? '$(circle-filled) WurstScript Update' : `${icon} WurstScript${versionLabel}`;
     sb.color = showUpdateBadge ? '#3794ff' : undefined;
     sb.tooltip = [
         summary,
         update ? 'A newer WurstScript version is available.' : undefined,
         installedVersion ? `Version: ${installedVersion}` : undefined,
-        update ? `Latest: ${update.latestSha.slice(0, 7)}` : undefined,
+        update ? `Latest: ${update.latestVersion}` : undefined,
         update ? 'Click to update WurstScript.' : 'Click for WurstScript actions.',
     ].filter(Boolean).join('\n');
 }

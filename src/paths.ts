@@ -12,6 +12,5 @@ export const GRILL_HOME_DIR = path.join(WURST_HOME, 'grill-cli');
 export const UPDATE_SNOOZE_FILE = path.join(WURST_HOME, 'update-snooze.json');
 export const INSTALLED_VERSION_CACHE_FILE = path.join(COMPILER_DIR, 'installed-version.json');
 
-export const NIGHTLY_RELEASE_BY_TAG_API = 'https://api.github.com/repos/wurstscript/WurstScript/releases/tags/nightly';
-export const NIGHTLY_COMMIT_API = 'https://api.github.com/repos/wurstscript/WurstScript/commits/nightly';
+export const COMPILER_RELEASES_API = 'https://api.github.com/repos/wurstscript/WurstScript/releases';
 export const WURSTSETUP_RELEASE = 'https://api.github.com/repos/wurstscript/WurstSetup/releases/tags/nightly-master';

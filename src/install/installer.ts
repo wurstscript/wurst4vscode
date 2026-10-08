@@ -15,7 +15,8 @@ import {
     removeDirSafe, upgradeFolder, ensureDirectoryPath,
     copyDirContents, withRetry,
 } from './fsUtils';
-import { fetchNightlyZipAsset, fetchLatestGrillAsset, fetchNightlyCommitSha, downloadFileWithProgress, extractZipWithByteProgress } from './downloader';
+import { fetchCompilerReleases, fetchLatestCompilerRelease, stableCompilerVersion, compareCompilerVersions, fetchLatestGrillAsset, downloadFileWithProgress, extractZipWithByteProgress } from './downloader';
+import type { CompilerRelease } from './downloader';
 import { ensureCliOnPath, offerPostInstallActions } from './pathManager';
 import { stopLanguageServerIfRunning } from '../languageServer';
 import {
@@ -27,20 +28,21 @@ import { appendDiagnostic, formatDiagnosticError, showDiagnosticOutput } from '.
 
 type InstallOptions = {
     offerPostInstallActions?: boolean;
+    compilerRelease?: CompilerRelease;
 };
 
-type PreparedNightlyInstall = {
+type PreparedCompilerInstall = {
     tmpWork: string;
     unpack: string;
     grillJar: string;
 };
 
 export type UpdateAvailable = {
-    installedSha: string;
-    latestSha: string;
+    installedVersion: string;
+    latestVersion: string;
 };
 
-// The newer nightly found by the last update check in this window, so the status item, the actions
+// The newer stable release found by the last update check in this window, so the status item, the actions
 // menu and the install command can offer it as an update instead of a generic reinstall.
 let availableUpdate: UpdateAvailable | undefined;
 
@@ -308,6 +310,9 @@ export async function ensureGrillAvailable(options: InstallOptions = {}): Promis
 let activeInstallPromise: Promise<void> | undefined;
 
 export function installWithRetry(options: InstallOptions = {}): Promise<void> {
+    if (activeInstallPromise && options.compilerRelease) {
+        return activeInstallPromise.then(() => installWithRetry(options));
+    }
     if (!activeInstallPromise) {
         activeInstallPromise = runInstallWithRetry(options).finally(() => {
             activeInstallPromise = undefined;
@@ -319,18 +324,18 @@ export function installWithRetry(options: InstallOptions = {}): Promise<void> {
 // eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
 async function runInstallWithRetry(options: InstallOptions): Promise<void> {
     let autoRepairAttempted = false;
-    let prepared: PreparedNightlyInstall | undefined;
+    let prepared: PreparedCompilerInstall | undefined;
     const initialInstallationStamp = getInstallationStamp();
     try {
         while (true) {
             try {
                 await withWurstInstallLock(async (waited) => {
-                    if (waited && getInstallationStamp() !== initialInstallationStamp) {
+                    if (waited && !options.compilerRelease && getInstallationStamp() !== initialInstallationStamp) {
                         console.log('[wurst] Another VS Code window completed the WurstScript installation; skipping duplicate work.');
                         return;
                     }
-                    prepared = await prepareNightlyInstall(prepared);
-                    await installPreparedNightly(prepared, options);
+                    prepared = await prepareCompilerInstall(prepared, options.compilerRelease);
+                    await installPreparedCompiler(prepared, options);
                 });
                 return;
             } catch (error) {
@@ -375,7 +380,7 @@ function getInstallationStamp(): string {
     }
 }
 
-async function prepareNightlyInstall(existing?: PreparedNightlyInstall): Promise<PreparedNightlyInstall> {
+async function prepareCompilerInstall(existing?: PreparedCompilerInstall, selected?: CompilerRelease): Promise<PreparedCompilerInstall> {
     if (existing && fs.existsSync(existing.unpack) && fs.existsSync(existing.grillJar)) {
         return existing;
     }
@@ -386,7 +391,7 @@ async function prepareNightlyInstall(existing?: PreparedNightlyInstall): Promise
             { location: vscode.ProgressLocation.Notification, title: 'Preparing WurstScript installer', cancellable: false },
             async (progress) => {
                 progress.report({ message: 'Fetching release info...', increment: 5 });
-                const asset = await fetchNightlyZipAsset();
+                const asset = selected ?? await fetchLatestCompilerRelease();
 
                 tmpWork = path.join(os.tmpdir(), `wurst-install-${Date.now()}-${process.pid}`);
                 const tmpZip = path.join(tmpWork, 'payload.zip');
@@ -400,7 +405,7 @@ async function prepareNightlyInstall(existing?: PreparedNightlyInstall): Promise
                 await downloadFileWithProgress(asset.url, tmpZip, (pct) => {
                     const scaled = (pct / 100) * DL_WEIGHT;
                     const inc = Math.max(0, scaled - last); last += inc;
-                    progress.report({ message: `Downloading compiler... ${Math.floor(pct)}%`, increment: inc });
+                    progress.report({ message: `Downloading compiler ${asset.version}... ${Math.floor(pct)}%`, increment: inc });
                 });
 
                 await extractZipWithByteProgress(tmpZip, unpack, (pct) => {
@@ -435,7 +440,7 @@ async function prepareNightlyInstall(existing?: PreparedNightlyInstall): Promise
     }
 }
 
-async function installPreparedNightly(prepared: PreparedNightlyInstall, options: InstallOptions): Promise<void> {
+async function installPreparedCompiler(prepared: PreparedCompilerInstall, options: InstallOptions): Promise<void> {
     // Activation can be awaiting this installation before it has created a client. Preserve
     // that startup; only stop a client which actually owns the compiler being replaced.
     const stoppedLocalServer = await stopLanguageServerIfRunning(false);
@@ -495,37 +500,46 @@ async function installPreparedNightly(prepared: PreparedNightlyInstall, options:
     );
 }
 
+export async function chooseCompilerVersion(): Promise<CompilerRelease | undefined> {
+    const [releases, installed] = await Promise.all([fetchCompilerReleases(), getInstalledVersionString()]);
+    if (!releases.length) throw new Error('No stable WurstScript compiler releases are available for this platform.');
+    const current = installed ? stableCompilerVersion(installed) : null;
+    const items = releases.map((release, index) => {
+        const description = [
+            release.version === current ? 'Installed' : undefined,
+            index === 0 ? 'Latest' : undefined,
+            current && compareCompilerVersions(release.version, current) < 0 ? 'Downgrade' : undefined,
+        ].filter(Boolean).join(' · ');
+        return { label: release.version, description, release };
+    });
+    const selected = await vscode.window.showQuickPick(items, {
+        title: 'Wurst: Choose compiler version',
+        placeHolder: 'Choose a stable release to install. VS Code will reload when installation completes.',
+    });
+    return selected?.release;
+}
+
 export async function maybeOfferUpdate(onUpdateAvailable?: (update: UpdateAvailable) => void): Promise<void> {
     try {
         if (!hasNewLayout() || !fs.existsSync(COMPILER_JAR)) return;
-
         const installed = await getInstalledVersionString();
-        const installedSha = installed ? extractGitSha(installed) : null;
-        if (!installedSha) {
-            appendDiagnostic(
-                'VS Code extension',
-                installed
-                    ? `Update check skipped: installed version did not contain a Git revision: ${installed}`
-                    : 'Update check skipped: installed WurstScript version could not be determined.'
-            );
+        if (!installed) {
+            appendDiagnostic('VS Code extension', 'Update check skipped: installed WurstScript version could not be determined.');
             return;
         }
-        const latestSha = await fetchNightlyCommitSha();
-        if (gitShasMatch(installedSha, latestSha)) return;
-
-        availableUpdate = { installedSha, latestSha };
+        const current = stableCompilerVersion(installed);
+        const latest = await fetchLatestCompilerRelease();
+        if (current && compareCompilerVersions(current, latest.version) >= 0) {
+            availableUpdate = undefined;
+            return;
+        }
+        availableUpdate = { installedVersion: current ?? installed, latestVersion: latest.version };
         onUpdateAvailable?.(availableUpdate);
         if (readUpdateSnoozedUntil() > Date.now()) return;
-
-        const versions = [
-            `Installed: ${displayGitSha(installedSha)}`,
-            `Latest: ${displayGitSha(latestSha)}`,
-        ].join(' · ');
-
-        const choice = await vscode.window.showInformationMessage(
-            `A newer WurstScript version is available. ${versions}`,
-            'Update', 'Later'
-        );
+        const message = current
+            ? `A newer WurstScript version is available. Installed: ${current} · Latest: ${latest.version}`
+            : `WurstScript now uses stable releases. Move from ${installed} to version ${latest.version}?`;
+        const choice = await vscode.window.showInformationMessage(message, 'Update', 'Later');
         if (choice === 'Update') {
             writeUpdateSnoozedUntil(undefined);
             await vscode.commands.executeCommand('wurst.installOrUpdate');
@@ -533,7 +547,7 @@ export async function maybeOfferUpdate(onUpdateAvailable?: (update: UpdateAvaila
             writeUpdateSnoozedUntil(nextLocalDayStartMs());
         }
     } catch (e) {
-        console.warn('Update check failed:', e);
+        appendDiagnostic('VS Code extension', `Update check failed: ${formatDiagnosticError(e)}`);
     }
 }
 

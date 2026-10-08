@@ -6,6 +6,40 @@
 
 const { test, expect } = require('../fixtures');
 
+for (const filter of ['search', 'source', 'empty']) {
+    test(`asset ${filter} filter cancels a removed thumbnail texture wait`, async ({ openObjMod }) => {
+        const { page, host } = await openObjMod();
+        const received = [];
+        const originalReceive = host.receive.bind(host);
+        host.receive = message => {
+            if (message.type === 'loadModelThumb' || message.type === 'requestAssetCatalog' || message.type === 'requestTextures') {
+                received.push(message);
+                return;
+            }
+            return originalReceive(message);
+        };
+        await page.evaluate(() => {
+            window.__wurstModelThumbDebug.openModelAssetBrowser();
+            window.postMessage({ type: 'assetCatalog', models: [
+                { value: 'old.mdx', label: 'Old', source: 'wc3' },
+                { value: 'new.mdx', label: 'New', source: 'import' }], icons: [], sounds: [],
+            }, '*');
+        });
+        await expect.poll(() => received.filter(m => m.type === 'loadModelThumb' && m.key.startsWith('ab-model:')).length).toBe(1);
+        const first = received.find(m => m.type === 'loadModelThumb' && m.key.startsWith('ab-model:'));
+        const bytes = require('fs').readFileSync(require('path').join(__dirname, '../../wc3data/melon.mdx')).toString('base64');
+        await page.evaluate(({ key, bytes }) => window.postMessage({ type: 'modelThumbRender', key,
+            cacheKey: 'filter-test', mdxBase64: bytes, format: 'mdx' }, '*'), { key: first.key, bytes });
+        await expect.poll(() => received.some(m => m.type === 'requestTextures' && m.thumbKey === first.key)).toBe(true);
+        if (filter === 'source') await page.locator('#ab-source').selectOption('import');
+        else await page.locator('#ab-search').fill(filter === 'empty' ? 'no-such-asset' : 'New');
+        await expect.poll(() => page.evaluate(() => window.__wurstModelThumbDebug.state().activeJob)).not.toBe(first.key);
+        if (filter === 'empty') await expect(page.locator('#ab-grid')).toContainText('No matching assets');
+        else await expect.poll(async () => ({ requests: received.filter(m => m.type === 'loadModelThumb').map(m => m.path),
+            state: await page.evaluate(() => window.__wurstModelThumbDebug.state()) }), { timeout: 7000 }).toMatchObject({ requests: expect.arrayContaining(['new.mdx']) });
+    });
+}
+
 /** Rows only exist for expanded branches, so "all objects" means expanding everything first. */
 async function expandAll(page) {
     for (let i = 0; i < 6; i++) {

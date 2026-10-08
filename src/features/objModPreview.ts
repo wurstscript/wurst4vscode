@@ -28,6 +28,7 @@ import {
     ITEM_PROFILE_PATHS, DESTRUCTABLE_PROFILE_PATHS, DOODAD_PROFILE_PATHS,
 } from './preview/wc3Data';
 import { firstAssetPath, normalizeModelPath } from './preview/objectCatalog';
+import { expandModelVariants } from './preview/modelVariants';
 import { getGameAssetCacheDir, getModelThumbCacheDir, listGameAssetPaths } from './preview/cascStorage';
 import OBJMOD_EDITOR_CSS from '../webview/objModEditor/objModEditor.css';
 import CODICON_CSS_BUNDLE from '@vscode/codicons/dist/codicon.css';
@@ -1433,13 +1434,15 @@ async function loadObjValueCatalogUncached(): Promise<ObjValueCatalog> {
     }
     await addSlkModelAssets(modelMap, objects, worldStrings);
     addModelFallbacks(modelMap);
+    const modelPaths = await listGameAssetPaths((assetPath) => /\.(mdx|mdl)$/i.test(assetPath));
+    const modelOptions = expandModelVariants(modelMap.values(), modelPaths);
     await addCascSoundAssets(soundMap);
 
     addPathingFallbacks(pathingMap);
     return {
         objects,
         icons: sortOptions([...iconMap.values()]).slice(0, 700),
-        models: sortOptions([...modelMap.values()]),
+        models: sortOptions(modelOptions),
         sounds: sortOptions([...soundMap.values()]),
         pathing: sortOptions([...pathingMap.values()]).slice(0, 300),
     };

@@ -700,9 +700,12 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
         : [
             [`war3.w3mod:${ddsPath}`, 'dds'],
             [`war3.w3mod:_hd.w3mod:${ddsPath}`, 'dds'],
+            [`war3.w3mod:_de.w3mod:${ddsPath}`, 'dds'],
             [`war3.w3mod:${blpPath}`, 'blp'],
+            [`war3.w3mod:_de.w3mod:${blpPath}`, 'blp'],
             [`war3.w3mod:${tgaPath}`, 'tga'],
             [`war3.w3mod:_hd.w3mod:${tgaPath}`, 'tga'],
+            [`war3.w3mod:_de.w3mod:${tgaPath}`, 'tga'],
         ];
     if (fallbackDdsPath) {
         candidates.push([gameRoot!.kind === 'mpq' ? fallbackDdsPath : `war3.w3mod:${fallbackDdsPath}`, 'dds']);
@@ -765,6 +768,7 @@ function gameAssetCandidates(root: GameDataRoot, normalized: string): string[] {
     return [
         `war3.w3mod:${normalized}`,
         `war3.w3mod:_hd.w3mod:${normalized}`,
+        `war3.w3mod:_de.w3mod:${normalized}`,
         `war3.w3mod:enus.w3mod:${normalized}`,
         `war3.w3mod:enus.w3mod:_hd.w3mod:${normalized}`,
         `war3.w3mod:_locales\\enus.w3mod:${normalized}`,

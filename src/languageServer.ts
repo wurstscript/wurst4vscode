@@ -5,6 +5,7 @@ import * as vscode from 'vscode';
 import { workspace, ExtensionContext } from 'vscode';
 import { LanguageClient, LanguageClientOptions, ServerOptions, Executable, State, DidOpenTextDocumentNotification } from 'vscode-languageclient/node';
 import { RUNTIME_DIR, COMPILER_JAR } from './paths';
+import { appCdsJvmOptions } from './install/fsUtils';
 import { getLanguageServerJava, checkCustomJavaVersion, getInstalledVersionString, ensureInstalledOrOfferMigration, maybeOfferUpdate } from './install/installer';
 import type { UpdateAvailable } from './install/installer';
 import { appendDiagnostic, formatDiagnosticError } from './features/diagnostics';
@@ -346,7 +347,7 @@ async function getServerOptions(): Promise<ServerOptions> {
     const java = getLanguageServerJava();
     if (customJava) await checkCustomJavaVersion(customJava);
     const platformOpts = process.platform === 'darwin' ? ['-Dapple.awt.UIElement=true'] : [];
-    const args = [...platformOpts, ...javaOpts, '-jar', COMPILER_JAR, '-languageServer'];
+    const args = [...platformOpts, ...appCdsJvmOptions(java, COMPILER_JAR), ...javaOpts, '-jar', COMPILER_JAR, '-languageServer'];
 
     if (debugMode && (await isPortOpen(5005))) {
         args.unshift('-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005,quiet=y');

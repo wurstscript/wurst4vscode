@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
 import { randomUUID } from 'crypto';
-import { LanguageClient, ExecuteCommandParams, ExecuteCommandRequest, WorkDoneProgress } from 'vscode-languageclient/node';
+import { LanguageClient, ExecuteCommandParams, ExecuteCommandRequest, WorkDoneProgress, WorkDoneProgressCancelNotification } from 'vscode-languageclient/node';
 import { workspace, window } from 'vscode';
 import { WURST_HOME } from '../paths';
 import { appendDiagnostic, buildDiagnosticsText, formatDiagnosticError, showDiagnosticOutput, showErrorWithLogs } from './diagnostics';
@@ -122,11 +122,23 @@ function showClientOutput(client: LanguageClient): void {
 }
 
 async function executeMapCommand(client: LanguageClient, request: ExecuteCommandParams, title: string): Promise<unknown> {
+    let canceled = false;
     try {
-        return await window.withProgress({ location: vscode.ProgressLocation.Notification, title, cancellable: false }, async (progress) => {
+        const cancellable = client.initializeResult?.capabilities.experimental?.wurstMapCancellation === true;
+        return await window.withProgress({ location: vscode.ProgressLocation.Notification, title, cancellable }, async (progress, cancellation) => {
             const token = randomUUID();
+            const cancellationListener = cancellation.onCancellationRequested(() => {
+                canceled = true;
+                progress.report({ message: 'Canceling; waiting for compiler to stop' });
+                // Progress cancellation keeps the request alive until the compiler has unwound.
+                // Canceling the JSON-RPC response future could release our guard too early.
+                void client.sendNotification(WorkDoneProgressCancelNotification.type, { token }).catch((error) => {
+                    appendDiagnostic('VS Code extension', `Could not cancel map command: ${formatDiagnosticError(error)}`);
+                });
+            });
             let percentage = 0;
             const listener = client.onProgress(WorkDoneProgress.type, token, (update) => {
+                if (canceled) return;
                 if (update.kind === 'end') return;
                 let increment: number | undefined;
                 if (typeof update.percentage === 'number' && Number.isFinite(update.percentage)) {
@@ -138,19 +150,23 @@ async function executeMapCommand(client: LanguageClient, request: ExecuteCommand
             });
             try {
                 progress.report({ message: 'Waiting for compiler' });
-                return await client.sendRequest(ExecuteCommandRequest.type, { ...request, workDoneToken: token });
+                const result = await client.sendRequest(ExecuteCommandRequest.type, { ...request, workDoneToken: token });
+                return cancellation.isCancellationRequested ? undefined : result;
             } finally {
                 listener.dispose();
+                cancellationListener.dispose();
             }
         });
     } catch (error) {
+        if (canceled) return undefined;
         const details = formatDiagnosticError(error);
         client.outputChannel.appendLine(`${title} failed: ${details}`);
         appendDiagnostic('VS Code extension', `${title} failed: ${details}`);
         const message = error instanceof Error ? error.message.split('\n')[0].trim() : `${title} failed. See the WurstScript output for details.`;
-        const choice = await window.showErrorMessage(message, 'Show Problems', 'Show Log');
-        if (choice === 'Show Problems') await vscode.commands.executeCommand('workbench.actions.view.problems');
-        else if (choice === 'Show Log') showClientOutput(client);
+        void window.showErrorMessage(message, 'Show Problems', 'Show Log').then(async (choice) => {
+            if (choice === 'Show Problems') await vscode.commands.executeCommand('workbench.actions.view.problems');
+            else if (choice === 'Show Log') showClientOutput(client);
+        });
         return undefined;
     }
 }
@@ -185,6 +201,22 @@ function runTests(client: LanguageClient, request: ExecuteCommandParams): Thenab
  */
 export function registerCommands(getClient: () => Promise<LanguageClient>): vscode.Disposable {
     let _lastMapConfig: string | undefined = undefined;
+    let mapCommandRunning = false;
+
+    const withMapCommand = async (action: () => Promise<unknown>): Promise<unknown> => {
+        if (mapCommandRunning) {
+            void window.showInformationMessage('A Wurst map command is already in progress. Cancel it or wait for it to finish.');
+            return undefined;
+        }
+        // Reserve before map selection or client startup can yield, and do not release merely
+        // because Cancel was clicked: the server must settle the request first.
+        mapCommandRunning = true;
+        try {
+            return await action();
+        } finally {
+            mapCommandRunning = false;
+        }
+    };
 
     const withClient = async <T>(action: (client: LanguageClient) => Thenable<T> | T): Promise<T | undefined> => {
         let client: LanguageClient;
@@ -193,12 +225,13 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
         } catch (error) {
             appendDiagnostic('VS Code extension', `Command skipped, language server unavailable: ${formatDiagnosticError(error)}`);
             const reason = error instanceof Error ? error.message : String(error);
-            const choice = await vscode.window.showErrorMessage(
+            void vscode.window.showErrorMessage(
                 `This command needs the WurstScript language server, which is not running. ${reason}`,
                 'Install/Update', 'View Logs',
-            );
-            if (choice === 'Install/Update') void vscode.commands.executeCommand('wurst.installOrUpdate');
-            else if (choice === 'View Logs') showDiagnosticOutput();
+            ).then((choice) => {
+                if (choice === 'Install/Update') void vscode.commands.executeCommand('wurst.installOrUpdate');
+                else if (choice === 'View Logs') showDiagnosticOutput();
+            });
             return undefined;
         }
         return action(client);
@@ -419,12 +452,12 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
     };
 
     return vscode.Disposable.from(
-        vscode.commands.registerCommand('wurst.startmap', (args: any[]) => startMap('wurst.startmap', args)),
-        vscode.commands.registerCommand('wurst.hotstartmap', (args: any[]) => startMap('wurst.hotstartmap', args)),
-        vscode.commands.registerCommand('wurst.hotreload', () => reloadMap()),
-        vscode.commands.registerCommand('wurst.runmap', (args: any) => runMapSmart(args)),
-        vscode.commands.registerCommand('wurst.startlast', () => startLast()),
-        vscode.commands.registerCommand('wurst.buildmap', (args: any[]) => buildMap(args)),
+        vscode.commands.registerCommand('wurst.startmap', (args: any[]) => withMapCommand(() => startMap('wurst.startmap', args))),
+        vscode.commands.registerCommand('wurst.hotstartmap', (args: any[]) => withMapCommand(() => startMap('wurst.hotstartmap', args))),
+        vscode.commands.registerCommand('wurst.hotreload', () => withMapCommand(() => reloadMap())),
+        vscode.commands.registerCommand('wurst.runmap', (args: any) => withMapCommand(() => runMapSmart(args))),
+        vscode.commands.registerCommand('wurst.startlast', () => withMapCommand(() => startLast())),
+        vscode.commands.registerCommand('wurst.buildmap', (args: any[]) => withMapCommand(() => buildMap(args))),
         vscode.commands.registerCommand('wurst.tests', (args: any[]) => tests('all', args)),
         vscode.commands.registerCommand('wurst.tests_file', (args: any[]) => tests('file', args)),
         vscode.commands.registerCommand('wurst.tests_func', (args: any[]) => tests('func', args)),

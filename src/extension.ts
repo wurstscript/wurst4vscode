@@ -3,7 +3,7 @@
 import * as vscode from 'vscode';
 import { workspace, ExtensionContext } from 'vscode';
 import { initPathManager } from './install/pathManager';
-import { getAvailableUpdate, getCompilerVersionPin, installWithRetry, chooseCompilerVersion } from './install/installer';
+import { getAvailableUpdate, getCompilerVersionPin, installWithRetry } from './install/installer';
 import { getLanguageClient, showWurstStatusItem, startLanguageClient, stopLanguageServerIfRunning } from './languageServer';
 import {
     findConflictingWurstProcesses,
@@ -134,17 +134,6 @@ function registerBasicCommands(context: ExtensionContext) {
             } catch (e: any) {
                 if (e instanceof InstallCoordinationCancelledError) return;
                 void showErrorWithLogs(`Install/Update failed: ${e?.message || e}`, e);
-            }
-        }),
-        vscode.commands.registerCommand('wurst.chooseCompilerVersion', async () => {
-            try {
-                const compilerRelease = await chooseCompilerVersion();
-                if (!compilerRelease) return;
-                await installWithRetry({ offerPostInstallActions: false, compilerRelease, followLatest: compilerRelease.followLatest });
-                await vscode.commands.executeCommand('workbench.action.reloadWindow');
-            } catch (error) {
-                if (error instanceof InstallCoordinationCancelledError) return;
-                void showErrorWithLogs('Could not install the selected WurstScript compiler version.', error);
             }
         }),
         vscode.commands.registerCommand('wurst.stopAllProcesses', async () => {

@@ -132,7 +132,11 @@ export function renderAssetGrid() {
   const matches = ranked.slice(0, 600);
   const count = document.getElementById('ab-count');
   if (count) count.textContent = matches.length + (ranked.length > 600 ? '+' : '') + ' / ' + opts.length;
-  if (!matches.length) { grid.innerHTML = '<div class="ab-empty">No matching assets</div>'; return; }
+  if (!matches.length) {
+    grid.innerHTML = '<div class="ab-empty">No matching assets</div>';
+    noteModelThumbUserActivity();
+    return;
+  }
   grid.innerHTML = matches.map(({ option: o, score }) => {
     const icon = activeTab === 'model'
       ? '<span class="object-icon model-thumb" data-key="ab-model:' + esc(o.value) + '" data-model="' + esc(o.value) + '"></span>'
@@ -146,6 +150,8 @@ export function renderAssetGrid() {
       '<button class="ab-preview" type="button" data-action="open" aria-label="' + esc('Open ' + name) + '">' + icon + '</button>' +
       '<span class="ab-card-label">' + esc(name) + '</span>' + assetCardActions(abMi >= 0) + '</div>';
   }).join('');
+  // Filters replace the active card without a scroll event; reconcile after the DOM changes.
+  noteModelThumbUserActivity();
   iconLoader.observe(grid);
   if (activeTab === 'model') {
     observeModelThumbs(grid);

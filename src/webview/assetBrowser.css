@@ -1,5 +1,5 @@
 :root { --obj-icon-size: 42px; }
-.browser { height: calc(100% - 24px); max-width: 1100px; margin: 12px auto; display: grid; grid-template-rows: auto auto 1fr; min-height: 0; border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 6px 24px var(--shadow); overflow: hidden; }
+.browser { height: 100%; width: 100%; display: grid; grid-template-rows: auto auto 1fr; min-height: 0; overflow: hidden; }
 .toolbar { gap: 6px; padding: 8px 10px; }
 .tab { min-width: 78px; justify-content: center; }
 .search { flex: 1; min-width: 120px; }

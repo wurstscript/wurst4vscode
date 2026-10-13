@@ -1,7 +1,7 @@
 'use strict';
 
 import * as fs from 'fs';
-import { ClientRequest } from 'http';
+import { ClientRequest, IncomingMessage } from 'http';
 import * as path from 'path';
 import * as https from 'https';
 import * as vscode from 'vscode';
@@ -178,6 +178,38 @@ export async function downloadFileWithProgress(
             }
         };
 
+        const handleResponse = (res: IncomingMessage, currentUrl: string, redirects: number) => {
+            clearDownloadTimeout();
+            if ([301, 302, 303, 307, 308].includes(res.statusCode!)) {
+                const loc = res.headers.location;
+                if (!loc) return finishFailure(new Error('Redirect without Location header'));
+                res.destroy();
+                return requestUrl(resolveRedirect(currentUrl, String(loc)), redirects + 1);
+            }
+            if (res.statusCode !== 200) {
+                const status = res.statusCode == null ? 'unknown' : res.statusCode;
+                res.destroy();
+                return finishFailure(new Error(`Download failed: HTTP ${status}`));
+            }
+
+            total = parseInt(res.headers['content-length'] || '0', 10);
+            output = fs.createWriteStream(destination);
+
+            res.on('data', (chunk) => {
+                if (cancelled) return finishFailure(new Error('Download cancelled by user'));
+                received += chunk.length;
+                if (total > 0 && onPct) onPct((received / total) * 100);
+            });
+            output.on('finish', () => {
+                output?.close();
+                if (cancelled) return finishFailure(new Error('Download cancelled by user'));
+                finishSuccess();
+            });
+            res.on('error', (err) => { finishFailure(err); });
+            output.on('error', (err) => { finishFailure(err); });
+            res.pipe(output);
+        };
+
         const requestUrl = (currentUrl: string, redirects: number) => {
             if (settled) return;
             if (cancelled) return finishFailure(new Error('Download cancelled by user'));
@@ -185,36 +217,8 @@ export async function downloadFileWithProgress(
 
             clearDownloadTimeout();
             const req = https.get(currentUrl, { headers: { 'User-Agent': 'wurst4vscode' } }, (res) => {
-                clearDownloadTimeout();
-                if ([301, 302, 303, 307, 308].includes(res.statusCode!)) {
-                    const loc = res.headers.location;
-                    if (!loc) return finishFailure(new Error('Redirect without Location header'));
-                    res.destroy();
-                    return requestUrl(resolveRedirect(currentUrl, String(loc)), redirects + 1);
-                }
-                if (res.statusCode !== 200) {
-                    const status = res.statusCode == null ? 'unknown' : res.statusCode;
-                    res.destroy();
-                    return finishFailure(new Error(`Download failed: HTTP ${status}`));
-                }
-
-                total = parseInt(res.headers['content-length'] || '0', 10);
-                output = fs.createWriteStream(destination);
-
-                res.on('data', (chunk) => {
-                    if (cancelled) return finishFailure(new Error('Download cancelled by user'));
-                    received += chunk.length;
-                    if (total > 0 && onPct) onPct((received / total) * 100);
-                });
-                output.on('finish', () => {
-                    output?.close();
-                    if (cancelled) return finishFailure(new Error('Download cancelled by user'));
-                    finishSuccess();
-                });
-                res.on('error', (err) => { finishFailure(err); });
-            output.on('error', (err) => { finishFailure(err); });
-            res.pipe(output);
-        });
+                handleResponse(res, currentUrl, redirects);
+            });
             req.setTimeout(DOWNLOAD_TIMEOUT_MS, () => {
                 finishFailure(new Error(`Download timed out after ${DOWNLOAD_TIMEOUT_MS}ms`));
             });
@@ -239,6 +243,20 @@ export async function extractZipWithByteProgress(
     onPct?: (pct: number) => void
 ): Promise<void> {
     fs.mkdirSync(destDir, { recursive: true });
+
+    const extractFile = (zip: StreamZip, name: string, outPath: string, onBytes: (chunk: Buffer) => void): Promise<void> => {
+        return new Promise<void>((res, rej) => {
+            zip.stream(name, (err: any, stream: any) => {
+                if (err || !stream) return rej(err || new Error('stream error'));
+                const out = fs.createWriteStream(outPath);
+                stream.on('data', onBytes);
+                stream.on('end', res);
+                stream.on('error', rej);
+                out.on('error', rej);
+                stream.pipe(out);
+            });
+        });
+    };
 
     await new Promise<void>((resolve, reject) => {
         const zip = new StreamZip({ file: zipPath, storeEntries: true });
@@ -270,17 +288,7 @@ export async function extractZipWithByteProgress(
                         processed += chunk.length;
                         onPct?.((processed / total) * 100);
                     };
-                    await new Promise<void>((res, rej) => {
-                        zip.stream(name, (err: any, stream: any) => {
-                            if (err || !stream) return rej(err || new Error('stream error'));
-                            const out = fs.createWriteStream(outPath);
-                            stream.on('data', onBytes);
-                            stream.on('end', res);
-                            stream.on('error', rej);
-                            out.on('error', rej);
-                            stream.pipe(out);
-                        });
-                    });
+                    await extractFile(zip, name, outPath, onBytes);
                 }
 
                 zip.close();

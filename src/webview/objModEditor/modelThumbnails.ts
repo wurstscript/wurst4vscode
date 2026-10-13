@@ -162,6 +162,9 @@ export function scheduleModelThumbQueues(delay) {
 }
 
 export function noteModelThumbUserActivity() {
+  if (modelThumbJob && !hasVisibleModelThumbElement(modelThumbJob.key)) {
+    cancelCurrentModelThumb('offscreen');
+  }
   requestVisibleModelThumbs(document);
   pruneInvisibleQueuedModelThumbs();
   scheduleModelThumbQueues(0);

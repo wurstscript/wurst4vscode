@@ -5,6 +5,7 @@ import * as vscode from 'vscode';
 import { workspace, ExtensionContext } from 'vscode';
 import { LanguageClient, LanguageClientOptions, ServerOptions, Executable, State, DidOpenTextDocumentNotification } from 'vscode-languageclient/node';
 import { RUNTIME_DIR, COMPILER_JAR } from './paths';
+import { appCdsJvmOptions } from './install/fsUtils';
 import { getLanguageServerJava, checkCustomJavaVersion, getInstalledVersionString, ensureInstalledOrOfferMigration, maybeOfferUpdate, getCompilerVersionPin } from './install/installer';
 import type { UpdateAvailable } from './install/installer';
 import { appendDiagnostic, formatDiagnosticError } from './features/diagnostics';
@@ -231,6 +232,8 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
         clientSubscriptions = watcher;
         const sentDocuments = new Set<string>();
         const clientOptions: LanguageClientOptions = {
+            // Wurst uses one root; retain the same folder for initialization and build output actions.
+            workspaceFolder: workspace.workspaceFolders?.[0],
             documentSelector: ['wurst'],
             // Client 10 drops hidden open/close pairs and flushes pending opens before
             // edits or requests, preserving the server's document/version ordering.
@@ -350,7 +353,7 @@ async function getServerOptions(): Promise<ServerOptions> {
     const java = getLanguageServerJava();
     if (customJava) await checkCustomJavaVersion(customJava);
     const platformOpts = process.platform === 'darwin' ? ['-Dapple.awt.UIElement=true'] : [];
-    const args = [...platformOpts, ...javaOpts, '-jar', COMPILER_JAR, '-languageServer'];
+    const args = [...platformOpts, ...(debugMode ? [] : appCdsJvmOptions(java, COMPILER_JAR, javaOpts)), ...javaOpts, '-jar', COMPILER_JAR, '-languageServer'];
 
     if (debugMode && (await isPortOpen(5005))) {
         args.unshift('-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005,quiet=y');

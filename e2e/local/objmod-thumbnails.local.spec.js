@@ -213,7 +213,7 @@ test.describe('objmod model thumbnails', () => {
         expect(state.fileInfo.skinName).toBe('war3mapSkin.w3a');
     });
 
-    test('a "Browse model" CodeLens opens the asset browser with relevance-sorted results', async ({ openVsCode }) => {
+    test('a "Browse model" CodeLens opens a floating asset browser with relevance-sorted results', async ({ openVsCode }) => {
         // Without an override, the generated fixture supplies its own AssetBrowserE2e.wurst.
         const session = CODE_ASSET_FILE
             ? await openVsCode({ projectPath: PROJECT_PATH, files: [CODE_ASSET_FILE], env: THUMB_ENV })
@@ -233,6 +233,7 @@ test.describe('objmod model thumbnails', () => {
             'the CodeLens-launched asset browser',
             30000,
         );
+        expect(browser.page(), 'the asset browser should be in a separate VS Code window').not.toBe(workbench);
         await browser.evaluate(() => window.__wurstCodeAssetBrowserDebug.search('footman'));
         const state = await waitFor(
             () => browser.evaluate(() => window.__wurstCodeAssetBrowserDebug.state()),

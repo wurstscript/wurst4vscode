@@ -502,6 +502,17 @@ async function testFolderModeMapAssetResolution() {
     );
 
     const reforgedVariants = mod.assetPathVariants('Units\\Creeps\\ArachnathidWarrior\\ArachnathidWarrior_Diffuse.tif', 'texture');
+    const doodadStem = 'Doodads\\Undercity\\Props\\AlchemySet\\AlchemySet';
+    const doodadPath = path.join(imported, 'Doodads', 'Undercity', 'Props', 'AlchemySet');
+    fs.mkdirSync(doodadPath, { recursive: true });
+    const numberedModel = path.join(doodadPath, 'AlchemySet0.mdx');
+    fs.writeFileSync(numberedModel, Buffer.from('MDLX'));
+    assert.equal(await mod.resolveAssetPathWithCasc(doodadStem + '.mdl', roots, 'model'), undefined,
+        'explicit model requests must not silently resolve a different numbered file');
+    const exactModel = path.join(doodadPath, 'AlchemySet.mdx');
+    fs.writeFileSync(exactModel, Buffer.from('MDLX'));
+    assert.equal(await mod.resolveAssetPathWithCasc(doodadStem + '.mdl', roots, 'model'), exactModel,
+        'an exact model takes precedence over numbered variations');
     assert.ok(
         reforgedVariants.includes('Units\\Creeps\\ArachnathidWarrior\\ArachnathidWarrior_Diffuse.dds'),
         'Reforged .tif material references should probe .dds by replacing the extension'
@@ -930,7 +941,7 @@ async function testModelThumbnailRequestsTexturesByDefault() {
 
     const render = posted.find((message) => message.type === 'modelThumbRender');
     assert.ok(render, 'uncached model thumbnails should render regardless of model byte size');
-    assert.equal(render.cacheKey, 'v12s-abc123', 'older framing captures must be regenerated');
+    assert.equal(render.cacheKey, 'v14s-abc123', 'older renderer captures must be regenerated');
     assert.equal(render.skipTextures, undefined, 'model thumbnail renders must load textures by default');
     assert.ok(render.mdxBase64, 'model bytes should still be sent for thumbnail rendering');
 
@@ -1037,7 +1048,7 @@ function testThumbnailLifecycleGuards() {
     assert.ok(host.includes("if (ext === 'blp')"), 'BLP thumbnails should retain the renderer decoder rather than using the generic preview decoder');
     assert.ok(viewer.includes('downscaleTextureImageData'), 'decoded BLP thumbnail textures should be reduced before GPU upload');
     assert.ok(thumbnailWorker.includes('MAX_TEXTURE_DIMENSION'), 'worker thumbnail renders should bound browser-side texture uploads');
-    assert.ok(host.includes('return `v12s-'), 'the cache version must invalidate thumbnails captured before the current consumer renderer build');
+    assert.ok(host.includes('return `v14s-'), 'the cache version must invalidate thumbnails captured before the current consumer renderer build');
     assert.ok(!objmod.includes('capture-dark-accepted'), 'dark frames must never be persisted as successful thumbnails');
     assert.ok(objmod.includes('Array.from(new Set((texturePaths || [])'), 'thumbnail capture must wait for every referenced material texture');
     assert.ok(!objmod.includes('(?:normal|orm)'), 'thumbnail loading must not omit HD material textures');
@@ -1432,7 +1443,68 @@ function testMpqReextractUsesFreshUriAfterDeletedOutput() {
     }
 }
 
+
+async function testGameFileAliases() {
+    const load = createTsLoader({
+        mocks: { vscode: {}, 'casc-ts': {}, 'src/features/diagnostics.ts': {} },
+        augment: { 'src/features/preview/cascStorage.ts': 'export { CascGameStorage };' },
+    });
+    const { CascGameStorage } = load('src/features/preview/cascStorage.ts');
+    const table = [
+        { src: 'Textures/GenericGlow2_mip1.blp', dest: 'Textures/GenericGlow2.blp', assetType: 'Texture' },
+        { src: 'Models/old.mdx', dest: 'Models/new.mdx', assetType: 'Model' },
+        { src: 'Models/chain.mdx', dest: 'Models/old.mdx', assetType: 'Model' },
+        { src: 'Models/cycle-a.mdx', dest: 'Models/cycle-b.mdx' },
+        { src: 'Models/cycle-b.mdx', dest: 'Models/cycle-a.mdx' },
+        { src: 3, dest: null },
+    ];
+    const files = new Map([
+        ['war3.w3mod:filealiases.json', Buffer.from(JSON.stringify(table))],
+        ['war3.w3mod:textures/genericglow2.dds', Buffer.from('glow')],
+        ['war3.w3mod:_hd.w3mod:textures/genericglow2.dds', Buffer.from('hd glow')],
+        ['war3.w3mod:models/new.mdx', Buffer.from('model')],
+    ]);
+    let tableReads = 0;
+    const storage = {
+        hasFileAsync: async p => files.has(p),
+        readFileAsync: async p => {
+            if (p.endsWith('filealiases.json')) tableReads++;
+            if (!files.has(p)) throw new Error('missing ' + p);
+            return files.get(p);
+        },
+    };
+    const adapter = new CascGameStorage(storage);
+    const alias = 'war3.w3mod:Textures\\GenericGlow2_mip1.dds';
+    assert.equal(await adapter.hasFileAsync(alias), true);
+    assert.equal((await adapter.readFileAsync(alias)).toString(), 'glow');
+    assert.equal((await adapter.readFileAsync('war3.w3mod:_hd.w3mod:Textures/GenericGlow2_mip1.dds')).toString(), 'hd glow');
+    assert.equal((await adapter.readFileAsync('war3.w3mod:Models/chain.mdx')).toString(), 'model');
+    assert.equal(await adapter.hasFileAsync('war3.w3mod:Models/cycle-a.mdx'), false);
+    assert.equal(await adapter.hasFileAsync('war3.w3mod:Textures/Unknown_mip1.dds'), false, 'suffix alone never implies an alias');
+    await new CascGameStorage(storage).hasFileAsync(alias);
+    assert.equal(tableReads, 1, 'the installation alias table is shared across adapter instances');
+    files.set('war3.w3mod:textures/genericglow2_mip1.dds', Buffer.from('original'));
+    assert.equal((await adapter.readFileAsync(alias)).toString(), 'original', 'physical requested files win');
+    const legacy = new CascGameStorage({hasFileAsync: async () => false});
+    assert.equal(await legacy.hasFileAsync(alias), false, 'installations without alias tables stay supported');
+}
+
 async function main() {
+    const { expandModelVariants } = loadTsModule('src/features/preview/modelVariants.ts');
+    const stem = 'Doodads\\Undercity\\Props\\AlchemySet\\AlchemySet';
+    const options = [{ value: `${stem}.mdl`, label: 'Alchemy Set', detail: 'UOal' },
+        { value: 'units\\hero.mdl', label: 'Hero' }];
+    const actualPaths = [4, 0, 2, 1, 3].map((i) => `${stem}${i}.mdx`);
+    const variants = expandModelVariants(options, [...actualPaths, `${stem}0.mdl`, 'Other\\AlchemySet9.mdx']);
+    assert.deepStrictEqual(variants.slice(0, 5).map((option) => option.value),
+        [0, 1, 2, 3, 4].map((i) => `${stem}${i}.mdx`), 'all existing variations replace the unresolved metadata stem');
+    assert.strictEqual(variants[5].label, 'Hero', 'unrelated catalog entries are preserved');
+    assert.strictEqual(variants[4].label, 'Alchemy Set (variation 4)');
+    assert.ok(variants.slice(0, 5).every((option) => option.detail.includes('UOal')),
+        'expanded variants preserve the owning rawcode for asset searches');
+    assert.strictEqual(expandModelVariants(options, [...actualPaths, `${stem}.mdx`])[0].value,
+        `${stem}.mdl`, 'a real unsuffixed model is retained alongside its variants');
+    await testGameFileAliases();
     testAssetPathNormalization();
     testSignals();
     testObjModTreeSelectionStaysUntracked();

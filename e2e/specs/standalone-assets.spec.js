@@ -38,6 +38,7 @@ for (const contextual of [false, true]) {
         if (contextual) await host.restoreAssetBrowser(context, panel, { browserContext: { documentUri: targetUri,
             target: { uri: targetUri, kind: 'model', currentValue: original, range: [0, 0, 0, original.length] } } });
         else await host.openAssetBrowser(context);
+        expect(vscode.recorded.commands.filter(entry => entry.command === 'workbench.action.moveEditorToNewWindow')).toHaveLength(contextual ? 0 : 1);
         await page.exposeFunction('__assetAction', msg => receive(msg));
         await page.addInitScript(() => {
             window.acquireVsCodeApi = () => ({
@@ -53,14 +54,15 @@ for (const contextual of [false, true]) {
         await expect.poll(() => copied).toBe(contextual ? 'Units\\\\Human\\\\Footman\\\\Footman.mdx' : 'Units\\Human\\Footman\\Footman.mdx');
         expect(replacement).toBeUndefined(); expect(disposed).toBe(false);
         await page.getByRole('button', { name: 'Open in viewer', exact: true }).click();
-        await expect.poll(() => vscode.recorded.commands.length).toBe(1);
-        expect(vscode.recorded.commands[0].args[0]).toBe(value);
+        await expect.poll(() => vscode.recorded.commands.filter(entry => entry.command === 'wurst.openAssetFromString').length).toBe(1);
+        expect(vscode.recorded.commands.find(entry => entry.command === 'wurst.openAssetFromString').args[0]).toBe(value);
         expect(replacement).toBeUndefined(); expect(disposed).toBe(false);
         await page.locator('#search').fill('Foot');
         const state = await page.evaluate(() => JSON.parse(sessionStorage.getItem('asset-state')));
         expect(state.query).toBe('Foot');
         // Simulate the serializer repopulating the panel, then a webview reload using VS Code state.
         await host.restoreAssetBrowser(context, panel, state);
+        expect(vscode.recorded.commands.filter(entry => entry.command === 'workbench.action.moveEditorToNewWindow')).toHaveLength(contextual ? 0 : 1);
         await page.goto(server.publish(html));
         await expect(page.locator('#search')).toHaveValue('Foot');
         await expect(page.locator('#tab-model')).toHaveClass(/active/);
@@ -133,7 +135,104 @@ test('standalone browser uses the thumbnail service, waits for textures and fram
     expect(result.cacheKey).toBe('v12s-abc');
 });
 
-for (const cacheVersion of ['v10s', 'v11s', 'v12s']) {
+test('restored viewport gets the first thumbnail request', async ({ page, server }) => {
+    const vscode = createVscodeMock();
+    let html;
+    vscode.window.createWebviewPanel = () => ({ webview: {
+        cspSource: server.origin,
+        asWebviewUri: uri => ({ toString: () => server.origin + '/dist/webview/' + path.basename(uri.fsPath) }),
+        set html(value) { html = value; }, onDidReceiveMessage() {},
+    } });
+    const load = createTsLoader({ mocks: { vscode,
+        'src/features/objModPreview.ts': { loadObjValueCatalog: async () => ({
+            models: Array.from({ length: 120 }, (_, index) => ({ value: `model-${index}.mdx` })), icons: [], sounds: [],
+        }) },
+        'src/features/imageAssetSupport.ts': { getCandidateRoots: async () => [], gatherImportedAssets: async () => ({ model: [], icon: [], sound: [] }) },
+    } });
+    await load('src/features/assetLinks.ts').openAssetBrowser({ extensionUri: fileUri(root) });
+    await page.addInitScript(() => {
+        window.messages = [];
+        window.acquireVsCodeApi = () => ({
+            postMessage: message => window.messages.push(message),
+            getState: () => ({ activeTab: 'model', scrollTop: 1000 }),
+        });
+    });
+    await page.goto(server.publish(html));
+    await expect.poll(() => page.evaluate(() => window.messages.filter(m => m.type === 'loadModelThumb').length)).toBe(1);
+    const result = await page.evaluate(() => {
+        const grid = document.querySelector('#grid');
+        const viewport = grid.getBoundingClientRect();
+        const visible = [...grid.querySelectorAll('.model-thumb')].find(el => {
+            const rect = el.getBoundingClientRect();
+            return rect.bottom > viewport.top && rect.top < viewport.bottom;
+        });
+        return { scrollTop: grid.scrollTop, visibleKey: visible.getAttribute('data-key'),
+            requestKey: window.messages.find(m => m.type === 'loadModelThumb').key };
+    });
+    // The saved position may clamp to the grid's maximum scroll offset.
+    expect(result.scrollTop).toBeGreaterThan(500);
+    expect(result.requestKey).toBe(result.visibleKey);
+    expect(result.requestKey).not.toContain('model-0.mdx');
+});
+
+test('scrolling defers old thumbnails and requests the current viewport first', async ({ page, server }) => {
+    const vscode = createVscodeMock();
+    let html;
+    vscode.window.createWebviewPanel = () => ({ webview: {
+        cspSource: server.origin,
+        asWebviewUri: uri => ({ toString: () => server.origin + '/dist/webview/' + path.basename(uri.fsPath) }),
+        set html(value) { html = value; }, onDidReceiveMessage() {},
+    } });
+    const load = createTsLoader({ mocks: { vscode,
+        'src/features/objModPreview.ts': { loadObjValueCatalog: async () => ({
+            models: Array.from({ length: 120 }, (_, index) => ({ value: `model-${index}.mdx` })), icons: [], sounds: [],
+        }) },
+        'src/features/imageAssetSupport.ts': { getCandidateRoots: async () => [], gatherImportedAssets: async () => ({ model: [], icon: [], sound: [] }) },
+    } });
+    await load('src/features/assetLinks.ts').openAssetBrowser({ extensionUri: fileUri(root) });
+    await page.addInitScript(() => {
+        window.messages = [];
+        window.acquireVsCodeApi = () => ({ postMessage: message => window.messages.push(message) });
+    });
+    await page.goto(server.publish(html));
+    const requests = () => page.evaluate(() => window.messages.filter(m => m.type === 'loadModelThumb'));
+    await expect.poll(async () => (await requests()).length).toBe(1);
+    const first = (await requests())[0];
+    await page.locator('#grid').evaluate(grid => { grid.scrollTop = grid.scrollHeight / 2; });
+    // Let the offscreen host response arrive after the scroll. No texture/render work may start.
+    await page.evaluate(key => window.postMessage({ type: 'modelThumbRender', key,
+        cacheKey: 'unused', mdxBase64: 'AA==' }, '*'), first.key);
+    await expect.poll(async () => (await requests()).length).toBe(2);
+    const second = (await requests())[1];
+    const firstVisibleKey = await page.evaluate(() => {
+        const viewport = document.querySelector('#grid').getBoundingClientRect();
+        return [...document.querySelectorAll('.model-thumb')].find(el => {
+            const rect = el.getBoundingClientRect();
+            return rect.bottom > viewport.top && rect.top < viewport.bottom;
+        }).getAttribute('data-key');
+    });
+    expect(second.key).toBe(firstVisibleKey);
+    expect(second.key).not.toBe(first.key);
+    expect(await page.evaluate(() => window.messages.some(m => m.type === 'requestTextures' || m.type === 'modelThumbFailed'))).toBe(false);
+    // A stale acknowledgement must not unlock the current request.
+    await page.evaluate(key => window.postMessage({ type: 'modelThumbLoaded', key, uri: 'data:image/png;base64,AA==' }, '*'), first.key);
+    await expect.poll(async () => (await requests()).length).toBe(2);
+    const bytes = fs.readFileSync(path.join(root, 'wc3data/melon.mdx'));
+    await page.evaluate(({ key, bytes }) => window.postMessage({ type: 'modelThumbRender', key,
+        cacheKey: 'current', mdxBase64: bytes, format: 'mdx' }, '*'), { key: second.key, bytes: bytes.toString('base64') });
+    await expect.poll(() => page.evaluate(() => window.messages.some(m => m.type === 'requestTextures' && m.thumbKey === window.messages.filter(m => m.type === 'loadModelThumb')[1].key))).toBe(true);
+    // Scrolling away while the worker waits for textures cancels that render immediately.
+    await page.locator('#grid').evaluate(grid => { grid.scrollTop = 0; });
+    await expect.poll(async () => (await requests()).length).toBe(3);
+    const third = (await requests())[2];
+    expect(third.path).toBe('model-1.mdx');
+    await page.evaluate(key => window.postMessage({ type: 'modelThumbMissing', key }, '*'), second.key);
+    await expect.poll(async () => (await requests()).length).toBe(3);
+    expect(await page.evaluate(() => window.messages.some(m => m.type === 'modelThumbFailed'))).toBe(false);
+    await page.screenshot({ path: test.info().outputPath('visible-thumbnail-queue.png') });
+});
+
+for (const cacheVersion of ['v10s', 'v11s', 'v12s', 'v13s', 'v14s']) {
     test(`rendered model thumbnails stay loaded after saving ${cacheVersion}`, async ({ page, server }) => {
         const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wurst-thumb-cache-'));
         try {
@@ -216,9 +315,9 @@ for (const editor of ['none', 'untitled', 'workspace']) {
         await expect(page.locator('.meta')).toHaveText('Click an asset to open its preview.');
         await expect(page.locator('#tab-model')).toHaveClass(/active/);
         await page.locator('.card').click();
-        await expect.poll(() => vscode.recorded.commands.length).toBe(1);
-        expect(vscode.recorded.commands[0].command).toBe('wurst.openAssetFromString');
-        expect(vscode.recorded.commands[0].args[0]).toBe('Units\\Human\\Footman\\Footman.mdx');
+        await expect.poll(() => vscode.recorded.commands.filter(entry => entry.command === 'wurst.openAssetFromString').length).toBe(1);
+        expect(vscode.recorded.commands.find(entry => entry.command === 'wurst.openAssetFromString').command).toBe('wurst.openAssetFromString');
+        expect(vscode.recorded.commands.find(entry => entry.command === 'wurst.openAssetFromString').args[0]).toBe('Units\\Human\\Footman\\Footman.mdx');
         expect(disposed).toBe(false);
     });
 }
@@ -260,8 +359,8 @@ for (const source of ['editor', 'workspace', 'model']) {
         await page.goto(server.publish(html));
         await expect(page.locator('.card')).toContainText('Remote import');
         await page.locator('.card').click();
-        await expect.poll(() => vscode.recorded.commands.length).toBe(1);
-        expect(vscode.recorded.commands[0].args[1].toString()).toBe(expected.toString());
+        await expect.poll(() => vscode.recorded.commands.filter(entry => entry.command === 'wurst.openAssetFromString').length).toBe(1);
+        expect(vscode.recorded.commands.find(entry => entry.command === 'wurst.openAssetFromString').args[1].toString()).toBe(expected.toString());
     });
 }
 

@@ -153,7 +153,7 @@ async function openCodeAssetBrowser(context: vscode.ExtensionContext, target?: B
     const panel = restoredPanel || vscode.window.createWebviewPanel(
         'wurst.assetBrowser',
         browseOnly ? 'Warcraft III Asset Browser' : 'Choose Warcraft III Asset',
-        vscode.ViewColumn.Beside,
+        vscode.ViewColumn.Active,
         {
             enableScripts: true,
             retainContextWhenHidden: true,
@@ -207,6 +207,15 @@ async function openCodeAssetBrowser(context: vscode.ExtensionContext, target?: B
             void handleModelThumbMessage(msg, panel.webview, documentUri, true);
         }
     });
+    if (!restoredPanel) {
+        // Creation focuses this panel; detach it before yielding to any other editor action.
+        // Restored panels already have their saved window placement.
+        try {
+            await vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow');
+        } catch (error) {
+            void showWarningWithLogs('Could not open the asset browser in a separate window. It is available in the editor tab.', error);
+        }
+    }
 }
 
 export async function restoreAssetBrowser(context: vscode.ExtensionContext, panel: vscode.WebviewPanel, state: unknown): Promise<void> {

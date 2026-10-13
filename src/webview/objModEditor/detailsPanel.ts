@@ -785,7 +785,7 @@ export function wireEditRaw(el) {
 // (Tooltip/color fields never reach this — they edit in place via enterTooltipEdit instead.)
 export function expandEditor(c) {
   const mi = Number(c.getAttribute('data-mi'));
-  const cell = c.parentElement;
+  const cell = c.closest('td');
   const mods = detailCache.get(ui.selectedKey) || [];
   const mod = mods[mi];
   if (!cell || !mod) return;
@@ -884,9 +884,10 @@ export function updateFieldCell(mods, mod) {
     return;
   }
   const col = details.querySelector('.tt-collapsed[data-mi="' + mi + '"], .cell-edit[data-mi="' + mi + '"]');
-  if (col && col.parentElement) {
-    col.parentElement._refocusOnCollapse = false; // programmatic (undo/redo) collapse must not steal focus
-    collapseCell(col.parentElement, mi);
+  const cell = col?.closest('td');
+  if (cell) {
+    cell._refocusOnCollapse = false; // programmatic (undo/redo) collapse must not steal focus
+    collapseCell(cell, mi);
   }
 }
 

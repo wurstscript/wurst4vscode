@@ -34,6 +34,7 @@
         "onCommand:wurst.reportIssue",
         "onCommand:wurst.showDiagnosticsActions",
         "onCommand:wurst.chooseCompilerVersion",
+        "onCommand:wurst.showCompilerReleaseNotes",
         "onCommand:wurst.openWurstHome",
         "onCommand:wurst.copyDiagnostics",
         "onCommand:wurst.showLogs",
@@ -764,6 +765,11 @@
             {
                 "command": "wurst.chooseCompilerVersion",
                 "title": "Choose WurstScript compiler version",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.showCompilerReleaseNotes",
+                "title": "What's new in the WurstScript compiler",
                 "category": "wurst"
             },
             {

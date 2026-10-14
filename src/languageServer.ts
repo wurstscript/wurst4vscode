@@ -1,6 +1,7 @@
 'use strict';
 
 import * as fs from 'fs';
+import { performance } from 'perf_hooks';
 import * as vscode from 'vscode';
 import { workspace, ExtensionContext } from 'vscode';
 import { LanguageClient, LanguageClientOptions, ServerOptions, Executable, State, DidOpenTextDocumentNotification } from 'vscode-languageclient/node';
@@ -8,6 +9,7 @@ import { RUNTIME_DIR, COMPILER_JAR } from './paths';
 import { appCdsJvmOptions } from './install/fsUtils';
 import { getLanguageServerJava, checkCustomJavaVersion, getInstalledVersionString, ensureInstalledOrOfferMigration, maybeOfferUpdate, getCompilerVersionPin } from './install/installer';
 import type { UpdateAvailable } from './install/installer';
+import { stableCompilerVersion, compilerReleaseNotesUrl, fetchCompilerReleaseSummary } from './install/downloader';
 import { appendDiagnostic, formatDiagnosticError } from './features/diagnostics';
 
 let clientRef: LanguageClient | null = null;
@@ -28,8 +30,13 @@ type ServerState =
 let statusItem: vscode.StatusBarItem | undefined;
 let serverState: ServerState = { kind: 'noWorkspace' };
 let installedVersion: string | undefined;
+let versionDetectionPending = false;
 let compilerVersionPin: string | undefined;
 let availableUpdate: UpdateAvailable | undefined;
+let startupStartedAt: number | undefined;
+let initializedAfterMs: number | undefined;
+let startupCompletion: { afterMs: number; kind: 'ready' | 'failed' | 'stopped' } | undefined;
+const releaseSummaries = new Map<string, string[] | null | undefined>();
 // Bumped whenever a probe's answer stops being meaningful (server restart, stop), so a late reply
 // from an earlier server process cannot mark the current one ready.
 let probeGeneration = 0;
@@ -41,14 +48,30 @@ const INITIAL_BUILD_PROBE_QUERY = '\u0000wurst-initial-build-probe';
 export function showWurstStatusItem(context: ExtensionContext): void {
     if (statusItem) return;
     const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    item.name = 'WurstScript compiler';
     item.command = 'wurst.showDiagnosticsActions';
     statusItem = item;
+    compilerVersionPin = getCompilerVersionPin();
     context.subscriptions.push(item, { dispose: () => { if (statusItem === item) statusItem = undefined; } });
     renderStatusItem();
     item.show();
 }
 
 function setServerState(state: ServerState): void {
+    const now = performance.now();
+    if (state.kind === 'starting' && serverState.kind !== 'starting') {
+        startupStartedAt = now;
+        initializedAfterMs = undefined;
+        startupCompletion = undefined;
+    }
+    if (startupStartedAt !== undefined) {
+        if (state.kind === 'loading' && initializedAfterMs === undefined) {
+            initializedAfterMs = now - startupStartedAt;
+        }
+        if ((state.kind === 'ready' || state.kind === 'failed' || state.kind === 'stopped') && startupCompletion === undefined) {
+            startupCompletion = { afterMs: now - startupStartedAt, kind: state.kind };
+        }
+    }
     serverState = state;
     renderStatusItem();
 }
@@ -88,17 +111,90 @@ function renderStatusItem(): void {
             summary = 'WurstScript language server was stopped.';
             break;
     }
-    const versionLabel = installedVersion && /^\d+\.\d+\.\d+$/.test(installedVersion) ? ` ${installedVersion}` : '';
-    sb.text = showUpdateBadge ? '$(circle-filled) WurstScript Update' : `${icon} WurstScript${versionLabel}`;
-    sb.color = showUpdateBadge ? '#3794ff' : undefined;
-    sb.tooltip = [
-        summary,
-        update ? 'A newer WurstScript version is available.' : undefined,
-        installedVersion ? `Version: ${installedVersion}` : undefined,
-        compilerVersionPin ? `Pinned compiler: ${compilerVersionPin}. Choose Follow latest stable to receive updates.` : undefined,
-        update ? `Latest: ${update.latestVersion}` : undefined,
-        update ? 'Click to update WurstScript.' : 'Click for WurstScript actions.',
-    ].filter(Boolean).join('\n');
+    const version = installedVersion ? stableCompilerVersion(installedVersion) : null;
+    const versionLabel = version ? ` ${version}` : '';
+    sb.text = `${showUpdateBadge ? '$(circle-filled)' : icon} WurstScript${versionLabel}${showUpdateBadge ? ' Update' : ''}`;
+    sb.color = showUpdateBadge ? new vscode.ThemeColor('statusBarItem.prominentForeground') : undefined;
+    const updateSummary = update ? ` Update available: ${update.latestVersion}.` : '';
+    sb.accessibilityInformation = { label: `WurstScript ${version ?? ''}. ${summary}${updateSummary}` };
+    sb.tooltip = buildStatusHover(icon, summary, version);
+}
+
+function buildStatusHover(icon: string, summary: string, version: string | null): vscode.MarkdownString {
+    const update = availableUpdate;
+    const versionLabel = version ? ` ${version}` : '';
+    const hover = new vscode.MarkdownString('', true);
+    hover.isTrusted = { enabledCommands: ['wurst.showDiagnosticsActions', 'wurst.showLogs', 'wurst.chooseCompilerVersion', 'wurst.installOrUpdate'] };
+    const stateLabel = { noWorkspace: 'Waiting for a project', starting: 'Starting compiler', loading: 'Building workspace', ready: 'Ready', failed: 'Needs attention', stopped: 'Stopped' }[serverState.kind];
+    hover.appendMarkdown(`### $(terminal) WurstScript${versionLabel}\n\n${icon} **${stateLabel}**\n\n`);
+    hover.appendText(summary);
+    hover.appendMarkdown('\n\n---\n\n');
+    hover.appendMarkdown('| | Details |\n| :--- | :--- |\n');
+    const pendingVersionLabel = versionDetectionPending ? 'Detecting version…' : 'Version check deferred until server startup';
+    hover.appendMarkdown(`| $(versions) Compiler | ${statusTableText(installedVersion ?? pendingVersionLabel)} |\n`);
+    hover.appendMarkdown(`| $(folder) Workspace | ${statusTableText(workspace.workspaceFolders?.[0]?.name ?? 'No folder open')} |\n`);
+    const updatePolicy = compilerVersionPin ? `Pinned to ${statusTableText(compilerVersionPin)}` : 'Following latest stable';
+    hover.appendMarkdown(`| $(pin) Updates | ${updatePolicy} |\n`);
+    appendStartupTimings(hover);
+    if (update) {
+        hover.appendMarkdown(`\n---\n\n$(cloud-download) **Update available: ${statusTableText(update.latestVersion)}**\n\n`);
+        hover.appendMarkdown(`[Install update](command:wurst.installOrUpdate) · [What’s new in ${update.latestVersion}](${compilerReleaseNotesUrl(update.latestVersion)})\n`);
+        appendReleaseSummary(hover, update.latestVersion);
+    }
+    const notesLabel = version ? `What’s new in ${version}` : 'What’s new';
+    hover.appendMarkdown(`\n---\n\n$(book) [${notesLabel}](${compilerReleaseNotesUrl(installedVersion)})\n\n`);
+    if (version) appendReleaseSummary(hover, version);
+    hover.appendMarkdown('[Choose version](command:wurst.chooseCompilerVersion) · [Server output](command:wurst.showLogs) · [All actions](command:wurst.showDiagnosticsActions)');
+    return hover;
+}
+
+function loadReleaseSummary(version: string | undefined): void {
+    const stable = version ? stableCompilerVersion(version) : null;
+    if (!stable || releaseSummaries.has(stable)) return;
+    releaseSummaries.set(stable, undefined);
+    void fetchCompilerReleaseSummary(stable).then((summary) => {
+        releaseSummaries.set(stable, summary);
+        renderStatusItem();
+    });
+}
+
+function appendReleaseSummary(hover: vscode.MarkdownString, version: string): void {
+    const stable = stableCompilerVersion(version);
+    if (!stable) return;
+    const summary = releaseSummaries.get(stable);
+    if (summary === undefined) {
+        hover.appendMarkdown('\n*Loading release highlights…*\n\n');
+    } else if (summary === null) {
+        hover.appendMarkdown('\n*Release highlights unavailable. Read the full notes using the link above.*\n\n');
+    } else if (summary.length === 0) {
+        hover.appendMarkdown('\n*This release has no published highlights.*\n\n');
+    } else {
+        for (const highlight of summary) {
+            hover.appendMarkdown('\n- ');
+            hover.appendText(highlight);
+        }
+        hover.appendMarkdown('\n\n');
+    }
+}
+
+function appendStartupTimings(hover: vscode.MarkdownString): void {
+    if (initializedAfterMs !== undefined) hover.appendMarkdown(`| $(rocket) Server initialized | ${formatStartupDuration(initializedAfterMs)} |\n`);
+    if (startupCompletion !== undefined) {
+        const label = startupCompletion.kind === 'ready' ? 'Workspace ready' : 'Startup attempt';
+        hover.appendMarkdown(`| $(watch) ${label} | ${formatStartupDuration(startupCompletion.afterMs)} |\n`);
+    }
+    if (initializedAfterMs !== undefined && startupCompletion?.kind === 'ready') {
+        hover.appendMarkdown(`| $(tools) Initial build | ${formatStartupDuration(startupCompletion.afterMs - initializedAfterMs)} |\n`);
+    }
+    if (startupStartedAt !== undefined) hover.appendMarkdown('\n*Timings cover this startup, including installation checks, through the initial workspace build.*\n');
+}
+
+function statusTableText(value: string): string {
+    return new vscode.MarkdownString().appendText(value).value.replace(/\r?\n/g, ' ').replace(/\|/g, '&#124;');
+}
+
+function formatStartupDuration(ms: number): string {
+    return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
 }
 
 /** Resolves true once the server answered the probe, false if the request failed. */
@@ -173,6 +269,11 @@ export function getLanguageClient(): Promise<LanguageClient> {
 /** The running client if there is one right now (no waiting). */
 export function getRunningLanguageClient(): LanguageClient | null {
     return !startingClient && clientRef?.isRunning() ? clientRef : null;
+}
+
+/** Version already resolved by normal startup; UI actions must not launch another detector. */
+export function getKnownCompilerVersion(): string | undefined {
+    return installedVersion;
 }
 
 // Install and repair may be called by activation itself. They stop an existing client;
@@ -327,12 +428,22 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
     // Version detection may start a JVM (once per installed jar, then served from a disk cache) and
     // the update check performs network I/O. Neither should delay language features or block the
     // extension host.
+    versionDetectionPending = true;
+    renderStatusItem();
     void getInstalledVersionString().then((version) => {
+        versionDetectionPending = false;
         installedVersion = version ?? 'unknown';
+        loadReleaseSummary(installedVersion);
+        renderStatusItem();
+    }, (error) => {
+        versionDetectionPending = false;
+        installedVersion = 'unknown';
+        appendDiagnostic('VS Code extension', `Compiler version detection failed: ${formatDiagnosticError(error)}`);
         renderStatusItem();
     });
     void maybeOfferUpdate((update) => {
         availableUpdate = update;
+        loadReleaseSummary(update.latestVersion);
         renderStatusItem();
     });
 }

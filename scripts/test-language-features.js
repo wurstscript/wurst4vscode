@@ -11,6 +11,7 @@ function deferred() {
 }
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+const resumeResponse = () => {};
 
 class TestDisposable {
     constructor(dispose = () => {}) { this.dispose = dispose; }
@@ -528,7 +529,7 @@ async function testClient10DocumentSynchronization() {
 }
 
 
-function releaseHarness(releases) {
+function releaseHarness(releases, statusCode = 200) {
     const { EventEmitter } = require('events');
     const requested = [];
     const load = createTsLoader({ mocks: {
@@ -540,7 +541,8 @@ function releaseHarness(releases) {
             req.destroy = () => {};
             req.end = () => setImmediate(() => {
                 const res = new EventEmitter();
-                res.statusCode = 200;
+                res.statusCode = statusCode;
+                res.resume = resumeResponse;
                 callback(res);
                 res.emit('data', Buffer.from(JSON.stringify(releases)));
                 res.emit('end');
@@ -572,6 +574,55 @@ async function testStableCompilerReleases() {
     assert.ok(h.requested.every((url) => !url.includes('nightly')), 'release discovery must never resolve mutable nightly tags');
     const empty = releaseHarness([release('1.0.0', { prerelease: true })]);
     await assert.rejects(empty.downloader.fetchLatestCompilerRelease(), /No stable WurstScript compiler release/);
+}
+
+async function testCompilerReleaseHighlights() {
+    const h = releaseHarness({ tag_name: 'v2.1.0', body: [
+        '## Highlights',
+        '* Faster overall map builds',
+        '* More **reliable** compilation',
+        '* ' + 'A'.repeat(300),
+        '* Fourth change should stay in the full notes',
+        "## What's Changed",
+        '* Technical details belong in the full changelog',
+    ].join('\n') });
+    const pending = h.downloader.fetchCompilerReleaseSummary('v2.1.0');
+    assert.equal(h.downloader.fetchCompilerReleaseSummary('2.1.0'), pending, 'tagged and plain versions share the same request');
+    const summary = await pending;
+    assert.deepEqual(summary.slice(0, 2), ['Faster overall map builds', 'More reliable compilation']);
+    assert.equal(summary.length, 3);
+    assert.equal(summary[2].length, 158, 'long highlights are bounded');
+    assert.deepEqual(h.requested, ['https://test/releases/tags/v2.1.0']);
+    assert.equal(await h.downloader.fetchCompilerReleaseSummary('nightly'), null);
+    const empty = releaseHarness({ tag_name: 'v2.1.0', body: '## Highlights\n\n## Changes\n* Technical details' });
+    assert.deepEqual(await empty.downloader.fetchCompilerReleaseSummary('2.1.0'), []);
+    const mismatch = releaseHarness({ tag_name: 'v3.0.0', body: '* Different release' });
+    assert.equal(await mismatch.downloader.fetchCompilerReleaseSummary('2.1.0'), null, 'notes from another tag must not be displayed');
+    const malformed = releaseHarness({ tag_name: 'v2.1.0', body: null });
+    assert.equal(await malformed.downloader.fetchCompilerReleaseSummary('2.1.0'), null);
+    const offline = releaseHarness({}, 503);
+    assert.equal(await offline.downloader.fetchCompilerReleaseSummary('2.1.0'), null);
+    assert.equal(await offline.downloader.fetchCompilerReleaseSummary('2.1.0'), null);
+    assert.equal(offline.requested.length, 1, 'failed fetches are cached instead of retrying on every render');
+    assert.equal(h.downloader.extractCompilerReleaseHighlights("## What's Changed\n* Make one internal method faster"), null, 'technical PR titles must not masquerade as user-facing summaries');
+    assert.deepEqual(h.downloader.extractCompilerReleaseHighlights([
+        '## Highlights', '- Faster overall', '  map builds, including', '  packaging.',
+        '- Better compiler correctness.', '- Predictable versioned releases.', '- Fourth highlight.',
+        "## What's Changed", '* Full details',
+    ].join('\n')), ['Faster overall map builds, including packaging.', 'Better compiler correctness.', 'Predictable versioned releases.'],
+    'wrapped continuations belong to their bullet and do not consume the three-highlight limit');
+    assert.deepEqual(h.downloader.extractCompilerReleaseHighlights([
+        '## Highlights', '- Faster builds', '  - Less compile work', '    - Less packaging work',
+        '- Better reliability', '- Predictable updates',
+    ].join('\n')), ['Faster builds Less compile work Less packaging work', 'Better reliability', 'Predictable updates'],
+    'nested details belong to their parent instead of consuming top-level highlight slots');
+    assert.deepEqual(h.downloader.extractCompilerReleaseHighlights([
+        '## Highlights', '  1. Faster builds', '    - Less compile work', '  2. Better reliability',
+    ].join('\n')), ['Faster builds Less compile work', 'Better reliability'],
+    'indented numbered lists retain their top-level boundaries');
+    const current = releaseHarness({ tag_name: 'v2.0.0', body: '## Highlights\n* Compiler-owned summary' });
+    assert.deepEqual(await current.downloader.fetchCompilerReleaseSummary('v2.0.0'), ['Compiler-owned summary']);
+    assert.deepEqual(current.requested, ['https://test/releases/tags/v2.0.0'], 'the current release is fetched too; the extension bundles no per-version summaries');
 }
 
 function versionInstallerHarness(version, releases, pinned) {
@@ -705,6 +756,8 @@ function testInstallationCleanupPreservesPin() {
 }
 
 function commandHarness(getClient) {
+    let knownVersion;
+    let versionDetections = 0;
     const handlers = new Map();
     const notifications = [];
     const failures = [];
@@ -739,6 +792,7 @@ function commandHarness(getClient) {
     const vscode = {
         Disposable: TestDisposable,
         Uri: {
+            parse: (url) => ({ fsPath: url }),
             joinPath: (root, name) => ({ fsPath: require('path').join(root.fsPath, name) }),
         },
         env: { openExternal: async (uri) => { foldersOpened.push(uri.fsPath); return true; } },
@@ -778,10 +832,10 @@ function commandHarness(getClient) {
     const load = createTsLoader({ mocks: {
         vscode,
         'vscode-languageclient/node': { ExecuteCommandRequest: { type: 'executeCommand' }, WorkDoneProgress: { type: 'workDone' }, WorkDoneProgressCancelNotification: { type: 'cancelProgress' } },
-        'src/paths.ts': {},
+        'src/paths.ts': { COMPILER_RELEASES_URL: 'https://github.com/wurstscript/WurstScript/releases' },
         'src/features/diagnostics.ts': { appendDiagnostic: (...args) => diagnostics.push(args), formatDiagnosticError: String },
-        'src/languageServer.ts': {},
-        'src/install/installer.ts': {},
+        'src/languageServer.ts': { getKnownCompilerVersion: () => knownVersion },
+        'src/install/installer.ts': { getInstalledVersionString: async () => { versionDetections++; return null; } },
         'src/features/issueReporting.ts': {},
         'src/features/preview/cascStorage.ts': {},
         'src/features/agentsGuide.ts': {},
@@ -789,8 +843,22 @@ function commandHarness(getClient) {
         'src/features/assetLinks.ts': {},
     } });
     load('src/features/commands.ts').registerCommands(getClient || (async () => client));
-    const harness = { handlers, notifications, failures, completions, foldersOpened, actions, diagnostics, listeners, requests, cancellations, client, workspace: vscode.workspace };
+    load('src/features/commands.ts').registerWurstDiagnosticsCommands({ subscriptions: [] });
+    const harness = { handlers, notifications, failures, completions, foldersOpened, actions, diagnostics, listeners, requests, cancellations, client, workspace: vscode.workspace,
+        setKnownVersion: (version) => { knownVersion = version; }, get versionDetections() { return versionDetections; } };
     return harness;
+}
+
+async function testReleaseNotesCommandUsesKnownVersion() {
+    const h = commandHarness();
+    const openNotes = h.handlers.get('wurst.showCompilerReleaseNotes');
+    await openNotes();
+    assert.equal(h.versionDetections, 0, 'cold release-note commands must not launch a version-detection JVM');
+    assert.deepEqual(h.foldersOpened, ['https://github.com/wurstscript/WurstScript/releases']);
+    h.setKnownVersion('v2.0.0');
+    await openNotes();
+    assert.equal(h.foldersOpened.at(-1), 'https://github.com/wurstscript/WurstScript/releases/tag/v2.0.0');
+    assert.equal(h.versionDetections, 0, 'known versions are reused without another detector');
 }
 
 async function testMapCommandProgress() {
@@ -954,12 +1022,14 @@ async function testMapCommandCancellationAndOverlap() {
 }
 
 async function main() {
+    await testReleaseNotesCommandUsesKnownVersion();
     await testMapCommandCancellationAndOverlap();
     await testMapCommandProgress();
     await testBuildCompletionActions();
     testInstallationCleanupPreservesPin();
     await testCompilerVersionPins();
     await testStableCompilerReleases();
+    await testCompilerReleaseHighlights();
     await testVersionedCompilerUpdates();
     await testClientReadinessAndRestarts();
     await testDebugStartupDisablesAppCds();

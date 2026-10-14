@@ -5,7 +5,7 @@ import { ClientRequest, IncomingMessage } from 'http';
 import * as path from 'path';
 import * as https from 'https';
 import * as vscode from 'vscode';
-import { COMPILER_RELEASES_API, WURSTSETUP_RELEASE } from '../paths';
+import { COMPILER_RELEASES_API, COMPILER_RELEASES_URL, WURSTSETUP_RELEASE } from '../paths';
 import StreamZip = require('node-stream-zip');
 
 const DOWNLOAD_TIMEOUT_MS = 30_000;
@@ -88,6 +88,52 @@ export type CompilerRelease = { version: string; tag: string; name: string; url:
 
 export function stableCompilerVersion(value: string): string | null {
     return /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value) ? value.replace(/^v/, '') : null;
+}
+
+export function compilerReleaseNotesUrl(version?: string): string {
+    const stable = version ? stableCompilerVersion(version) : null;
+    return stable ? `${COMPILER_RELEASES_URL}/tag/v${stable}` : COMPILER_RELEASES_URL;
+}
+
+/** Read the compiler-owned user-facing summary, never substitute technical PR titles. */
+export function extractCompilerReleaseHighlights(body: string): string[] | null {
+    const lines = body.slice(0, 16_000).split(/\r?\n/);
+    const start = lines.findIndex((line) => /^## (?:Release highlights|Highlights|What's new|What’s new)\s*$/i.test(line.trim()));
+    if (start === -1) return null;
+    const section = lines.slice(start + 1);
+    const end = section.findIndex((line) => line.trim().startsWith('#'));
+    const highlights: string[] = [];
+    let listIndent: number | undefined;
+    for (const line of section.slice(0, end === -1 ? section.length : end)) {
+        if (!line.trim()) continue;
+        const bullet = /^([ \t]*)(?:[-*+] |\d+\. )(.*)$/.exec(line);
+        const indentation = bullet?.[1].replace(/\t/g, '    ').length ?? 0;
+        if (bullet && (listIndent === undefined || indentation <= listIndent)) {
+            listIndent = indentation;
+            highlights.push(bullet[2]);
+        } else if (highlights.length) highlights[highlights.length - 1] += ` ${bullet?.[2] ?? line.trim()}`;
+    }
+    return highlights.slice(0, 3).map((highlight) => {
+        const text = highlight.replace(/[`*]/g, '').trim();
+        return text.length > 160 ? `${text.slice(0, 157)}…` : text;
+    }).filter(Boolean);
+}
+
+const compilerReleaseSummaries = new Map<string, Promise<string[] | null>>();
+
+/** One background request per semantic version per window, including failed requests. */
+export function fetchCompilerReleaseSummary(version: string): Promise<string[] | null> {
+    const stable = stableCompilerVersion(version);
+    if (!stable) return Promise.resolve(null);
+    let pending = compilerReleaseSummaries.get(stable);
+    if (!pending) {
+        pending = githubJson<{ tag_name?: string; body?: string }>(`${COMPILER_RELEASES_API}/tags/v${stable}`)
+            .then((release) => release.tag_name === `v${stable}` && typeof release.body === 'string'
+                ? extractCompilerReleaseHighlights(release.body) : null)
+            .catch(() => null);
+        compilerReleaseSummaries.set(stable, pending);
+    }
+    return pending;
 }
 
 export function compareCompilerVersions(left: string, right: string): number {

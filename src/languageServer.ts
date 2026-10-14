@@ -30,6 +30,7 @@ type ServerState =
 let statusItem: vscode.StatusBarItem | undefined;
 let serverState: ServerState = { kind: 'noWorkspace' };
 let installedVersion: string | undefined;
+let versionDetectionPending = false;
 let compilerVersionPin: string | undefined;
 let availableUpdate: UpdateAvailable | undefined;
 let startupStartedAt: number | undefined;
@@ -128,7 +129,8 @@ function buildStatusHover(icon: string, summary: string, version: string | null)
     hover.appendText(summary);
     hover.appendMarkdown('\n\n---\n\n');
     hover.appendMarkdown('| | Details |\n| :--- | :--- |\n');
-    hover.appendMarkdown(`| $(versions) Compiler | ${statusTableText(installedVersion ?? 'Detecting version…')} |\n`);
+    const pendingVersionLabel = versionDetectionPending ? 'Detecting version…' : 'Version check deferred until server startup';
+    hover.appendMarkdown(`| $(versions) Compiler | ${statusTableText(installedVersion ?? pendingVersionLabel)} |\n`);
     hover.appendMarkdown(`| $(folder) Workspace | ${statusTableText(workspace.workspaceFolders?.[0]?.name ?? 'No folder open')} |\n`);
     const updatePolicy = compilerVersionPin ? `Pinned to ${statusTableText(compilerVersionPin)}` : 'Following latest stable';
     hover.appendMarkdown(`| $(pin) Updates | ${updatePolicy} |\n`);
@@ -420,9 +422,17 @@ export async function startLanguageClient(context: ExtensionContext): Promise<vo
     // Version detection may start a JVM (once per installed jar, then served from a disk cache) and
     // the update check performs network I/O. Neither should delay language features or block the
     // extension host.
+    versionDetectionPending = true;
+    renderStatusItem();
     void getInstalledVersionString().then((version) => {
+        versionDetectionPending = false;
         installedVersion = version ?? 'unknown';
         loadReleaseSummary(installedVersion);
+        renderStatusItem();
+    }, (error) => {
+        versionDetectionPending = false;
+        installedVersion = 'unknown';
+        appendDiagnostic('VS Code extension', `Compiler version detection failed: ${formatDiagnosticError(error)}`);
         renderStatusItem();
     });
     void maybeOfferUpdate((update) => {

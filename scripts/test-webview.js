@@ -722,6 +722,7 @@ function testNonBlockingStartupAndForcedReinstallWiring() {
 async function testLanguageClientHandleLifecycle() {
     let clockMs = 0;
     let versionString = 'v1';
+    let versionRequests = 0;
     const summaryRequests = [];
     const summaryResolvers = new Map();
     class MarkdownString {
@@ -788,7 +789,7 @@ async function testLanguageClientHandleLifecycle() {
             ensureInstalledOrOfferMigration: async () => { if (failStart) throw new Error('not installed'); },
             getLanguageServerJava: () => 'java',
             checkCustomJavaVersion: async () => undefined,
-            getInstalledVersionString: async () => versionString,
+            getInstalledVersionString: async () => { versionRequests++; return versionString; },
             maybeOfferUpdate: async (onUpdateAvailable) => { reportUpdate = onUpdateAvailable; },
             getCompilerVersionPin: () => undefined,
         },
@@ -814,6 +815,13 @@ async function testLanguageClientHandleLifecycle() {
 
     mod.showWurstStatusItem(context);
     assert.equal(statusItem.text, '$(circle-outline) WurstScript', 'the status item must exist before any server start');
+    assert.ok(!statusItem.tooltip.value.includes('Detecting version'), 'an empty window must not claim version detection is running');
+    assert.ok(statusItem.tooltip.value.includes('Version check deferred'), 'version detection waits for server startup without another JVM');
+    failStart = true;
+    await assert.rejects(mod.startLanguageClient(context));
+    assert.equal(versionRequests, 0, 'a failed pre-client start must not boot a version-detection JVM');
+    assert.ok(statusItem.tooltip.value.includes('Version check deferred'), 'a failed startup must not claim a version check started');
+    failStart = false;
     const starting = mod.startLanguageClient(context);
     clockMs = 125;
     assert.equal(statusItem.text, '$(sync~spin) WurstScript', 'the status item must show progress as soon as the start begins');

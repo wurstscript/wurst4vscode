@@ -102,8 +102,15 @@ export function extractCompilerReleaseHighlights(body: string): string[] | null 
     if (start === -1) return null;
     const section = lines.slice(start + 1);
     const end = section.findIndex((line) => line.startsWith('#'));
-    return section.slice(0, end === -1 ? section.length : end).filter(Boolean).slice(0, 3).map((line) => {
-        const text = line.replace(/^(?:[-*+] |\d+\. )/, '').replace(/[`*]/g, '').trim();
+    const highlights: string[] = [];
+    for (const line of section.slice(0, end === -1 ? section.length : end)) {
+        if (!line) continue;
+        const bullet = /^(?:[-*+] |\d+\. )(.*)$/.exec(line);
+        if (bullet) highlights.push(bullet[1]);
+        else if (highlights.length) highlights[highlights.length - 1] += ` ${line}`;
+    }
+    return highlights.slice(0, 3).map((highlight) => {
+        const text = highlight.replace(/[`*]/g, '').trim();
         return text.length > 160 ? `${text.slice(0, 157)}…` : text;
     }).filter(Boolean);
 }

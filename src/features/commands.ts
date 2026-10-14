@@ -12,6 +12,7 @@ import type { PathAlias } from './diagnostics';
 import { getRunningLanguageClient } from '../languageServer';
 import { describeJavaVersion, getAvailableUpdate, getInstalledVersionString, getLanguageServerJava, chooseCompilerVersion, installWithRetry } from '../install/installer';
 import { InstallCoordinationCancelledError } from '../install/installCoordination';
+import { compilerReleaseNotesUrl } from '../install/downloader';
 import { extensionVersion } from './issueReporting';
 import { getCascCacheDir } from './preview/cascStorage';
 import { prepareAgentsGuideUpdate } from './agentsGuide';
@@ -89,6 +90,10 @@ async function openWurstHome(): Promise<void> {
 
 export function registerWurstDiagnosticsCommands(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
+        vscode.commands.registerCommand('wurst.showCompilerReleaseNotes', async () => {
+            const version = await getInstalledVersionString().catch(() => null);
+            await vscode.env.openExternal(vscode.Uri.parse(compilerReleaseNotesUrl(version ?? undefined)));
+        }),
         vscode.commands.registerCommand('wurst.chooseCompilerVersion', async () => {
             try {
                 const compilerRelease = await chooseCompilerVersion();
@@ -118,6 +123,7 @@ export function registerWurstDiagnosticsCommands(context: vscode.ExtensionContex
                     }
                     : { label: '$(cloud-download) Install/update WurstScript', command: 'wurst.installOrUpdate' },
                 { label: '$(versions) Choose compiler version', command: 'wurst.chooseCompilerVersion' },
+                { label: '$(book) What’s new in the compiler', command: 'wurst.showCompilerReleaseNotes' },
                 { label: '$(folder-opened) Open Wurst home', command: 'wurst.openWurstHome' },
                 { label: '$(copy) Copy diagnostics', command: 'wurst.copyDiagnostics' },
                 { label: '$(output) Open Wurst output', command: 'wurst.showLogs' },

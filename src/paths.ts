@@ -14,4 +14,5 @@ export const UPDATE_SNOOZE_FILE = path.join(WURST_HOME, 'update-snooze.json');
 export const INSTALLED_VERSION_CACHE_FILE = path.join(COMPILER_DIR, 'installed-version.json');
 
 export const COMPILER_RELEASES_API = 'https://api.github.com/repos/wurstscript/WurstScript/releases';
+export const COMPILER_RELEASES_URL = 'https://github.com/wurstscript/WurstScript/releases';
 export const WURSTSETUP_RELEASE = 'https://api.github.com/repos/wurstscript/WurstSetup/releases/tags/nightly-master';

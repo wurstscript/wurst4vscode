@@ -11,6 +11,7 @@ function deferred() {
 }
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+const resumeResponse = () => {};
 
 class TestDisposable {
     constructor(dispose = () => {}) { this.dispose = dispose; }
@@ -528,7 +529,7 @@ async function testClient10DocumentSynchronization() {
 }
 
 
-function releaseHarness(releases) {
+function releaseHarness(releases, statusCode = 200) {
     const { EventEmitter } = require('events');
     const requested = [];
     const load = createTsLoader({ mocks: {
@@ -540,7 +541,8 @@ function releaseHarness(releases) {
             req.destroy = () => {};
             req.end = () => setImmediate(() => {
                 const res = new EventEmitter();
-                res.statusCode = 200;
+                res.statusCode = statusCode;
+                res.resume = resumeResponse;
                 callback(res);
                 res.emit('data', Buffer.from(JSON.stringify(releases)));
                 res.emit('end');
@@ -572,6 +574,44 @@ async function testStableCompilerReleases() {
     assert.ok(h.requested.every((url) => !url.includes('nightly')), 'release discovery must never resolve mutable nightly tags');
     const empty = releaseHarness([release('1.0.0', { prerelease: true })]);
     await assert.rejects(empty.downloader.fetchLatestCompilerRelease(), /No stable WurstScript compiler release/);
+}
+
+async function testCompilerReleaseHighlights() {
+    const h = releaseHarness({ tag_name: 'v2.1.0', body: [
+        '## Highlights',
+        '* Faster overall map builds',
+        '* More **reliable** compilation',
+        '* ' + 'A'.repeat(300),
+        '* Fourth change should stay in the full notes',
+        "## What's Changed",
+        '* Technical details belong in the full changelog',
+    ].join('\n') });
+    const pending = h.downloader.fetchCompilerReleaseSummary('v2.1.0');
+    assert.equal(h.downloader.fetchCompilerReleaseSummary('2.1.0'), pending, 'tagged and plain versions share the same request');
+    const summary = await pending;
+    assert.deepEqual(summary.slice(0, 2), ['Faster overall map builds', 'More reliable compilation']);
+    assert.equal(summary.length, 3);
+    assert.equal(summary[2].length, 158, 'long highlights are bounded');
+    assert.deepEqual(h.requested, ['https://test/releases/tags/v2.1.0']);
+    assert.equal(await h.downloader.fetchCompilerReleaseSummary('nightly'), null);
+    const empty = releaseHarness({ tag_name: 'v2.1.0', body: '## Highlights\n\n## Changes\n* Technical details' });
+    assert.deepEqual(await empty.downloader.fetchCompilerReleaseSummary('2.1.0'), []);
+    const mismatch = releaseHarness({ tag_name: 'v3.0.0', body: '* Different release' });
+    assert.equal(await mismatch.downloader.fetchCompilerReleaseSummary('2.1.0'), null, 'notes from another tag must not be displayed');
+    const malformed = releaseHarness({ tag_name: 'v2.1.0', body: null });
+    assert.equal(await malformed.downloader.fetchCompilerReleaseSummary('2.1.0'), null);
+    const offline = releaseHarness({}, 503);
+    assert.equal(await offline.downloader.fetchCompilerReleaseSummary('2.1.0'), null);
+    assert.equal(await offline.downloader.fetchCompilerReleaseSummary('2.1.0'), null);
+    assert.equal(offline.requested.length, 1, 'failed fetches are cached instead of retrying on every render');
+    assert.equal(h.downloader.extractCompilerReleaseHighlights("## What's Changed\n* Make one internal method faster"), null, 'technical PR titles must not masquerade as user-facing summaries');
+    const bundled = releaseHarness({}, 503);
+    assert.deepEqual(await bundled.downloader.fetchCompilerReleaseSummary('v2.0.0'), [
+        'Faster overall map builds, with less time spent compiling and packaging your map.',
+        'Compiler fixes for generics and compile-time code improve build reliability.',
+        'Stable semantic releases make compiler updates and version pinning predictable.',
+    ]);
+    assert.equal(bundled.requested.length, 0, 'AI-written highlights for the current release work offline');
 }
 
 function versionInstallerHarness(version, releases, pinned) {
@@ -960,6 +1000,7 @@ async function main() {
     testInstallationCleanupPreservesPin();
     await testCompilerVersionPins();
     await testStableCompilerReleases();
+    await testCompilerReleaseHighlights();
     await testVersionedCompilerUpdates();
     await testClientReadinessAndRestarts();
     await testDebugStartupDisablesAppCds();

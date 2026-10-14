@@ -5,7 +5,7 @@ import { ClientRequest, IncomingMessage } from 'http';
 import * as path from 'path';
 import * as https from 'https';
 import * as vscode from 'vscode';
-import { COMPILER_RELEASES_API, WURSTSETUP_RELEASE } from '../paths';
+import { COMPILER_RELEASES_API, COMPILER_RELEASES_URL, WURSTSETUP_RELEASE } from '../paths';
 import StreamZip = require('node-stream-zip');
 
 const DOWNLOAD_TIMEOUT_MS = 30_000;
@@ -88,6 +88,53 @@ export type CompilerRelease = { version: string; tag: string; name: string; url:
 
 export function stableCompilerVersion(value: string): string | null {
     return /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value) ? value.replace(/^v/, '') : null;
+}
+
+export function compilerReleaseNotesUrl(version?: string): string {
+    const stable = version ? stableCompilerVersion(version) : null;
+    return stable ? `${COMPILER_RELEASES_URL}/tag/v${stable}` : COMPILER_RELEASES_URL;
+}
+
+// AI-written user-facing summary of https://github.com/wurstscript/WurstScript/releases/tag/v2.0.0.
+// Keep summaries tied to exact versions; do not substitute technical PR titles for highlights.
+const COMPILER_RELEASE_HIGHLIGHTS: Readonly<Record<string, readonly string[]>> = {
+    '2.0.0': [
+        'Faster overall map builds, with less time spent compiling and packaging your map.',
+        'Compiler fixes for generics and compile-time code improve build reliability.',
+        'Stable semantic releases make compiler updates and version pinning predictable.',
+    ],
+};
+
+/** Future releases can publish an AI-written Highlights section alongside their full changelog. */
+export function extractCompilerReleaseHighlights(body: string): string[] | null {
+    const lines = body.slice(0, 16_000).split(/\r?\n/).map((line) => line.trim());
+    const start = lines.findIndex((line) => /^## (?:Release highlights|Highlights|What's new|What’s new)\s*$/i.test(line));
+    if (start === -1) return null;
+    const section = lines.slice(start + 1);
+    const end = section.findIndex((line) => line.startsWith('#'));
+    return section.slice(0, end === -1 ? section.length : end).filter(Boolean).slice(0, 3).map((line) => {
+        const text = line.replace(/^(?:[-*+] |\d+\. )/, '').replace(/[`*]/g, '').trim();
+        return text.length > 160 ? `${text.slice(0, 157)}…` : text;
+    }).filter(Boolean);
+}
+
+const compilerReleaseSummaries = new Map<string, Promise<string[] | null>>();
+
+/** One background request per semantic version per window, including failed requests. */
+export function fetchCompilerReleaseSummary(version: string): Promise<string[] | null> {
+    const stable = stableCompilerVersion(version);
+    if (!stable) return Promise.resolve(null);
+    const bundled = COMPILER_RELEASE_HIGHLIGHTS[stable];
+    if (bundled) return Promise.resolve([...bundled]);
+    let pending = compilerReleaseSummaries.get(stable);
+    if (!pending) {
+        pending = githubJson<{ tag_name?: string; body?: string }>(`${COMPILER_RELEASES_API}/tags/v${stable}`)
+            .then((release) => release.tag_name === `v${stable}` && typeof release.body === 'string'
+                ? extractCompilerReleaseHighlights(release.body) : null)
+            .catch(() => null);
+        compilerReleaseSummaries.set(stable, pending);
+    }
+    return pending;
 }
 
 export function compareCompilerVersions(left: string, right: string): number {

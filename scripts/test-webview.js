@@ -702,7 +702,8 @@ function testNonBlockingStartupAndForcedReinstallWiring() {
     assert.ok(languageServer.includes('void maybeOfferUpdate((update) =>'), 'update checks should still run in the background and update the status item');
     assert.ok(extension.indexOf('showWurstStatusItem(context)') < extension.indexOf('initPathManager('), 'the status item must be shown before any other activation work');
     assert.ok(manifest.activationEvents.includes('onLanguage:wurst-run-args'), 'opening wurst_run.args must activate the extension');
-    assert.ok(languageServer.includes("'$(circle-filled) WurstScript Update'"), 'the status item must indicate when an update is available');
+    assert.ok(manifest.activationEvents.includes('onCommand:wurst.showCompilerReleaseNotes'), 'release notes must be available from a cold start');
+    assert.ok(manifest.contributes.commands.some((item) => item.command === 'wurst.showCompilerReleaseNotes'), 'release notes must appear in the command palette');
     assert.ok(!installer.includes("{ modal: true, detail }, 'Update', 'Later'"), 'the automatic update notification must not be modal');
     assert.ok(installer.includes("'Update', 'Later'"), 'the non-modal update notification must retain its actions');
     assert.ok(extension.includes('if (!getAvailableUpdate()) {'), 'installing a detected update must not ask for a reinstall confirmation');
@@ -719,6 +720,15 @@ function testNonBlockingStartupAndForcedReinstallWiring() {
 
 /** The server-backed commands await this handle, so its lifecycle decides whether they run, fail fast, or hang. */
 async function testLanguageClientHandleLifecycle() {
+    let clockMs = 0;
+    let versionString = 'v1';
+    const summaryRequests = [];
+    const summaryResolvers = new Map();
+    class MarkdownString {
+        constructor(value = '', supportThemeIcons = false) { this.value = value; this.supportThemeIcons = supportThemeIcons; }
+        appendMarkdown(value) { this.value += value; return this; }
+        appendText(value) { this.value += value.replace(/[\\`*_{}[\]()#+\-.!]/g, '\\$&'); return this; }
+    }
     let failStart = false;
     let serverCapabilities = {};
     let earlyBuildState;
@@ -760,6 +770,8 @@ async function testLanguageClientHandleLifecycle() {
     }
     const mod = loadTsModuleWithMocks('src/languageServer.ts', {
         vscode: {
+            MarkdownString,
+            ThemeColor: class { constructor(id) { this.id = id; } },
             Disposable: { from: (...items) => ({ dispose: () => items.forEach((item) => item.dispose()) }) },
             window: { createStatusBarItem: () => statusItem },
             StatusBarAlignment: { Right: 2 },
@@ -771,16 +783,24 @@ async function testLanguageClientHandleLifecycle() {
         },
         'vscode-languageclient/node': { LanguageClient: FakeLanguageClient, State: { Stopped: 1, Running: 2, Starting: 3 }, DidOpenTextDocumentNotification: { method: 'textDocument/didOpen' } },
         fs: { existsSync: () => true },
-        './paths': { RUNTIME_DIR: 'runtime', COMPILER_JAR: 'wurstscript.jar' },
+        './paths': { RUNTIME_DIR: 'runtime', COMPILER_JAR: 'wurstscript.jar', COMPILER_RELEASES_URL: 'https://github.com/wurstscript/WurstScript/releases' },
         './install/installer': {
             ensureInstalledOrOfferMigration: async () => { if (failStart) throw new Error('not installed'); },
             getLanguageServerJava: () => 'java',
             checkCustomJavaVersion: async () => undefined,
-            getInstalledVersionString: async () => 'v1',
+            getInstalledVersionString: async () => versionString,
             maybeOfferUpdate: async (onUpdateAvailable) => { reportUpdate = onUpdateAvailable; },
             getCompilerVersionPin: () => undefined,
         },
         './features/diagnostics': { appendDiagnostic() {}, formatDiagnosticError: (e) => String(e) },
+        './install/downloader': {
+            ...loadTsModuleWithMocks('src/install/downloader.ts', { vscode: {} }),
+            fetchCompilerReleaseSummary: (version) => {
+                summaryRequests.push(version);
+                return new Promise((resolve) => summaryResolvers.set(version, resolve));
+            },
+        },
+        perf_hooks: { performance: { now: () => clockMs } },
     });
     const context = { subscriptions: [] };
     const settled = (promise) => Promise.race([
@@ -795,17 +815,26 @@ async function testLanguageClientHandleLifecycle() {
     mod.showWurstStatusItem(context);
     assert.equal(statusItem.text, '$(circle-outline) WurstScript', 'the status item must exist before any server start');
     const starting = mod.startLanguageClient(context);
+    clockMs = 125;
     assert.equal(statusItem.text, '$(sync~spin) WurstScript', 'the status item must show progress as soon as the start begins');
     assert.equal(await settled(mod.getLanguageClient()), 'resolved', 'a request during startup waits for that start');
     await starting;
     assert.equal(statusItem.text, '$(sync~spin) WurstScript', 'the status item must keep spinning until the initial workspace load finished');
     const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+    clockMs = 1625;
     probes.shift().resolve([]);
     await tick();
     assert.equal(statusItem.text, '$(check) WurstScript', 'the status item must turn ready once the initial build probe answers');
+    assert.ok(statusItem.tooltip instanceof MarkdownString);
+    assert.equal(statusItem.tooltip.supportThemeIcons, true);
+    assert.ok(statusItem.tooltip.value.includes('Server initialized | 125 ms'));
+    assert.ok(statusItem.tooltip.value.includes('Workspace ready | 1.63 s'));
+    assert.ok(statusItem.tooltip.value.includes('Initial build | 1.50 s'));
+    assert.ok(!statusItem.tooltip.isTrusted.enabledCommands.includes('wurst.showCompilerReleaseNotes'), 'only directly linked action commands are trusted');
 
     // The client restarts a crashed server by itself: spin again and re-probe the new process.
     clients[0].emitState(3);
+    assert.ok(!statusItem.tooltip.value.includes('Workspace ready'), 'a restart clears old startup measurements');
     assert.equal(statusItem.text, '$(sync~spin) WurstScript', 'a server restart must show progress again');
     clients[0].emitState(2);
     assert.equal(probes.length, 1, 'a restarted server must be probed again');
@@ -823,9 +852,13 @@ async function testLanguageClientHandleLifecycle() {
     assert.equal(statusItem.text, '$(check) WurstScript');
     reportUpdate({ installedVersion: '2.0.0', latestVersion: '2.1.0' });
     assert.equal(statusItem.text, '$(circle-filled) WurstScript Update', 'a healthy server shows a known update');
+    assert.ok(statusItem.tooltip.value.includes('Loading release highlights'));
+    summaryResolvers.get('2.1.0')(['Faster map builds']);
+    await tick();
+    assert.ok(statusItem.tooltip.value.includes('- Faster map builds'), 'available release highlights appear directly in the hover');
     clients[0].emitState(1);
     assert.equal(statusItem.text, '$(warning) WurstScript', 'a server that stopped unexpectedly must be visible, even with an update known');
-    assert.ok(statusItem.tooltip.includes('A newer WurstScript version is available.'), 'a hidden update badge must still be mentioned in the tooltip');
+    assert.ok(statusItem.tooltip.value.includes('Update available: 2\\.1\\.0'), 'a hidden update badge must still be mentioned in the tooltip');
     clients[0].emitState(2);
     probes.shift().resolve([]);
     await tick();
@@ -860,7 +893,7 @@ async function testLanguageClientHandleLifecycle() {
     assert.equal(statusItem.text, '$(sync~spin) WurstScript', 'malformed build states are ignored');
     reportBuild({ state: 'failed' });
     assert.equal(statusItem.text, '$(warning) WurstScript');
-    assert.ok(statusItem.tooltip.includes('initial workspace build failed'));
+    assert.ok(statusItem.tooltip.value.includes('initial workspace build failed'));
     assert.equal(probes.length, oldProbeCount, 'failed builds must not flush hidden opens');
     capable.emitState(3);
     capable.emitState(2);
@@ -875,7 +908,27 @@ async function testLanguageClientHandleLifecycle() {
     assert.equal(await settled(mod.getLanguageClient()), 'rejected', 'a failed start must reject the handle');
     await assert.rejects(mod.getLanguageClient(), /not installed/);
     assert.equal(statusItem.text, '$(warning) WurstScript', 'a failed start must be visible in the status item');
-    assert.ok(statusItem.tooltip.includes('not installed'));
+    assert.ok(statusItem.tooltip.value.includes('not installed'));
+
+    failStart = false;
+    versionString = 'v2.0.0';
+    await mod.startLanguageClient(context);
+    assert.equal(statusItem.text, '$(circle-filled) WurstScript 2.0.0 Update', 'normalize tagged semantic versions and retain the installed version with an update badge');
+    assert.ok(statusItem.tooltip.value.includes('/releases/tag/v2.0.0'), 'installed release notes target the installed version');
+    assert.ok(statusItem.tooltip.value.includes('/releases/tag/v2.1.0'), 'update release notes target the available version');
+    assert.ok(statusItem.accessibilityInformation.label.includes('2.0.0'));
+    assert.ok(statusItem.tooltip.value.includes('Loading release highlights'));
+    summaryResolvers.get('2.0.0')(['Fix [run](command:evil)']);
+    await tick();
+    assert.ok(statusItem.tooltip.value.includes('Fix \\[run\\]\\(command:evil\\)'), 'remote highlights must be escaped even though action links are trusted');
+    assert.deepEqual(summaryRequests, ['2.1.0', '2.0.0'], 'each semantic version is fetched only once across restarts');
+    await mod.stopLanguageServerIfRunning();
+    versionString = '2.2.0';
+    await mod.startLanguageClient(context);
+    summaryResolvers.get('2.2.0')(null);
+    await tick();
+    assert.ok(statusItem.tooltip.value.includes('Release highlights unavailable'), 'offline fetch failures retain a readable fallback');
+    await mod.stopLanguageServerIfRunning();
 }
 
 function testWurstProcessMatching() {

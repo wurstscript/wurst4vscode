@@ -35,7 +35,7 @@ let compilerVersionPin: string | undefined;
 let availableUpdate: UpdateAvailable | undefined;
 let startupStartedAt: number | undefined;
 let initializedAfterMs: number | undefined;
-let startupFinishedAfterMs: number | undefined;
+let startupCompletion: { afterMs: number; kind: 'ready' | 'failed' | 'stopped' } | undefined;
 const releaseSummaries = new Map<string, string[] | null | undefined>();
 // Bumped whenever a probe's answer stops being meaningful (server restart, stop), so a late reply
 // from an earlier server process cannot mark the current one ready.
@@ -62,14 +62,14 @@ function setServerState(state: ServerState): void {
     if (state.kind === 'starting' && serverState.kind !== 'starting') {
         startupStartedAt = now;
         initializedAfterMs = undefined;
-        startupFinishedAfterMs = undefined;
+        startupCompletion = undefined;
     }
     if (startupStartedAt !== undefined) {
         if (state.kind === 'loading' && initializedAfterMs === undefined) {
             initializedAfterMs = now - startupStartedAt;
         }
-        if ((state.kind === 'ready' || state.kind === 'failed' || state.kind === 'stopped') && startupFinishedAfterMs === undefined) {
-            startupFinishedAfterMs = now - startupStartedAt;
+        if ((state.kind === 'ready' || state.kind === 'failed' || state.kind === 'stopped') && startupCompletion === undefined) {
+            startupCompletion = { afterMs: now - startupStartedAt, kind: state.kind };
         }
     }
     serverState = state;
@@ -179,12 +179,12 @@ function appendReleaseSummary(hover: vscode.MarkdownString, version: string): vo
 
 function appendStartupTimings(hover: vscode.MarkdownString): void {
     if (initializedAfterMs !== undefined) hover.appendMarkdown(`| $(rocket) Server initialized | ${formatStartupDuration(initializedAfterMs)} |\n`);
-    if (startupFinishedAfterMs !== undefined) {
-        const label = serverState.kind === 'ready' ? 'Workspace ready' : 'Startup attempt';
-        hover.appendMarkdown(`| $(watch) ${label} | ${formatStartupDuration(startupFinishedAfterMs)} |\n`);
+    if (startupCompletion !== undefined) {
+        const label = startupCompletion.kind === 'ready' ? 'Workspace ready' : 'Startup attempt';
+        hover.appendMarkdown(`| $(watch) ${label} | ${formatStartupDuration(startupCompletion.afterMs)} |\n`);
     }
-    if (initializedAfterMs !== undefined && startupFinishedAfterMs !== undefined && serverState.kind === 'ready') {
-        hover.appendMarkdown(`| $(tools) Initial build | ${formatStartupDuration(startupFinishedAfterMs - initializedAfterMs)} |\n`);
+    if (initializedAfterMs !== undefined && startupCompletion?.kind === 'ready') {
+        hover.appendMarkdown(`| $(tools) Initial build | ${formatStartupDuration(startupCompletion.afterMs - initializedAfterMs)} |\n`);
     }
     if (startupStartedAt !== undefined) hover.appendMarkdown('\n*Timings cover this startup, including installation checks, through the initial workspace build.*\n');
 }

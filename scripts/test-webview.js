@@ -840,6 +840,9 @@ async function testLanguageClientHandleLifecycle() {
     assert.ok(statusItem.tooltip.value.includes('Workspace ready | 1.63 s'));
     assert.ok(statusItem.tooltip.value.includes('Initial build | 1.50 s'));
     assert.ok(!statusItem.tooltip.isTrusted.enabledCommands.includes('wurst.showCompilerReleaseNotes'), 'only directly linked action commands are trusted');
+    clients[0].emitState(1);
+    assert.ok(statusItem.tooltip.value.includes('Workspace ready | 1.63 s'), 'a later crash preserves the outcome of a successful startup measurement');
+    assert.ok(statusItem.tooltip.value.includes('Initial build | 1.50 s'), 'a later crash retains completed initial-build timings');
 
     // The client restarts a crashed server by itself: spin again and re-probe the new process.
     clients[0].emitState(3);
@@ -912,6 +915,7 @@ async function testLanguageClientHandleLifecycle() {
     reportBuild({ state: 'ready' });
     assert.equal(statusItem.text, '$(circle-filled) WurstScript Update');
     await mod.stopLanguageServerIfRunning();
+    assert.ok(statusItem.tooltip.value.includes('Workspace ready |'), 'stopping after a successful startup retains that measurement outcome');
     reportBuild({ state: 'ready' });
     assert.equal(statusItem.text, '$(circle-slash) WurstScript', 'disposed notifications cannot overwrite an intentional stop');
 

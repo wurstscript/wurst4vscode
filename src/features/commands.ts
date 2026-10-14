@@ -10,7 +10,8 @@ import { WURST_HOME } from '../paths';
 import { appendDiagnostic, buildDiagnosticsText, formatDiagnosticError, showDiagnosticOutput, showErrorWithLogs } from './diagnostics';
 import type { PathAlias } from './diagnostics';
 import { getRunningLanguageClient } from '../languageServer';
-import { describeJavaVersion, displayGitSha, getAvailableUpdate, getInstalledVersionString, getLanguageServerJava } from '../install/installer';
+import { describeJavaVersion, getAvailableUpdate, getInstalledVersionString, getLanguageServerJava, chooseCompilerVersion, installWithRetry } from '../install/installer';
+import { InstallCoordinationCancelledError } from '../install/installCoordination';
 import { extensionVersion } from './issueReporting';
 import { getCascCacheDir } from './preview/cascStorage';
 import { prepareAgentsGuideUpdate } from './agentsGuide';
@@ -88,6 +89,17 @@ async function openWurstHome(): Promise<void> {
 
 export function registerWurstDiagnosticsCommands(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
+        vscode.commands.registerCommand('wurst.chooseCompilerVersion', async () => {
+            try {
+                const compilerRelease = await chooseCompilerVersion();
+                if (!compilerRelease) return;
+                await installWithRetry({ offerPostInstallActions: false, compilerRelease, followLatest: compilerRelease.followLatest });
+                await vscode.commands.executeCommand('workbench.action.reloadWindow');
+            } catch (error) {
+                if (error instanceof InstallCoordinationCancelledError) return;
+                void showErrorWithLogs('Could not install the selected WurstScript compiler version.', error);
+            }
+        }),
         vscode.commands.registerCommand('wurst.openAssetBrowser', (resource?: vscode.Uri) => openAssetBrowser(context, resource).catch((error) => showErrorWithLogs('Could not open the Warcraft III asset browser.', error))),
         vscode.commands.registerCommand('wurst.insertPackageHeader', () => insertPackageHeader()),
         vscode.commands.registerCommand('wurst.prepareAgentsGuideUpdate', () => prepareAgentsGuideUpdate(context).catch((error) => showErrorWithLogs('Could not prepare the AGENTS.md update.', error))),
@@ -101,10 +113,11 @@ export function registerWurstDiagnosticsCommands(context: vscode.ExtensionContex
                 update
                     ? {
                         label: '$(cloud-download) Update WurstScript',
-                        description: `${displayGitSha(update.installedSha)} → ${displayGitSha(update.latestSha)}`,
+                        description: `${update.installedVersion} → ${update.latestVersion}`,
                         command: 'wurst.installOrUpdate',
                     }
                     : { label: '$(cloud-download) Install/update WurstScript', command: 'wurst.installOrUpdate' },
+                { label: '$(versions) Choose compiler version', command: 'wurst.chooseCompilerVersion' },
                 { label: '$(folder-opened) Open Wurst home', command: 'wurst.openWurstHome' },
                 { label: '$(copy) Copy diagnostics', command: 'wurst.copyDiagnostics' },
                 { label: '$(output) Open Wurst output', command: 'wurst.showLogs' },

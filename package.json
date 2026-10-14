@@ -33,6 +33,7 @@
         "onCommand:wurst.previewMap",
         "onCommand:wurst.reportIssue",
         "onCommand:wurst.showDiagnosticsActions",
+        "onCommand:wurst.chooseCompilerVersion",
         "onCommand:wurst.openWurstHome",
         "onCommand:wurst.copyDiagnostics",
         "onCommand:wurst.showLogs",
@@ -758,6 +759,11 @@
             {
                 "command": "wurst.chooseGameExecutable",
                 "title": "Choose Warcraft III executable",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.chooseCompilerVersion",
+                "title": "Choose WurstScript compiler version",
                 "category": "wurst"
             },
             {

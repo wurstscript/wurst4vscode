@@ -3,7 +3,7 @@
 import * as vscode from 'vscode';
 import { workspace, ExtensionContext } from 'vscode';
 import { initPathManager } from './install/pathManager';
-import { getAvailableUpdate, installWithRetry } from './install/installer';
+import { getAvailableUpdate, getCompilerVersionPin, installWithRetry } from './install/installer';
 import { getLanguageClient, showWurstStatusItem, startLanguageClient, stopLanguageServerIfRunning } from './languageServer';
 import {
     findConflictingWurstProcesses,
@@ -120,7 +120,9 @@ function registerBasicCommands(context: ExtensionContext) {
             // installs right away. Only a reinstall of the current version needs a confirmation.
             if (!getAvailableUpdate()) {
                 const choice = await vscode.window.showWarningMessage(
-                    'Reinstall WurstScript from the latest nightly build? VS Code will reload when installation completes.',
+                    getCompilerVersionPin()
+                        ? `Reinstall pinned WurstScript compiler ${getCompilerVersionPin()}? VS Code will reload when installation completes.`
+                        : 'Reinstall WurstScript from the latest stable release? VS Code will reload when installation completes.',
                     { modal: true },
                     'Reinstall'
                 );

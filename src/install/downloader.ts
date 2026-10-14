@@ -1,11 +1,11 @@
 'use strict';
 
 import * as fs from 'fs';
-import { ClientRequest } from 'http';
+import { ClientRequest, IncomingMessage } from 'http';
 import * as path from 'path';
 import * as https from 'https';
 import * as vscode from 'vscode';
-import { NIGHTLY_RELEASE_BY_TAG_API, NIGHTLY_COMMIT_API, WURSTSETUP_RELEASE } from '../paths';
+import { COMPILER_RELEASES_API, WURSTSETUP_RELEASE } from '../paths';
 import StreamZip = require('node-stream-zip');
 
 const DOWNLOAD_TIMEOUT_MS = 30_000;
@@ -84,32 +84,51 @@ export async function fetchLatestGrillAsset(): Promise<{ name: string; url: stri
     return { name: wanted.name, url: wanted.browser_download_url };
 }
 
-export async function fetchNightlyZipAsset(): Promise<{ name: string; url: string }> {
-    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
-    let plat: string;
-    if (process.platform === 'win32') plat = `win-${arch}`;
-    else if (process.platform === 'linux') plat = `linux-${arch}`;
-    else if (process.platform === 'darwin') plat = `macos-${arch}`;
-    else throw new Error(`Unsupported platform: ${process.platform} ${process.arch}`);
+export type CompilerRelease = { version: string; tag: string; name: string; url: string };
 
-    const rel = await githubJson(NIGHTLY_RELEASE_BY_TAG_API);
-    const assets = Array.isArray(rel?.assets) ? rel.assets : [];
-    const wanted = assets.find((a: any) => {
-        const n = String(a?.name ?? '').toLowerCase();
-        return n.endsWith(`${plat}.zip`) && n.startsWith('wurst-compiler-nightly-');
-    });
-    if (!wanted?.browser_download_url) {
-        if (process.platform === 'darwin') throw new Error('No macOS build found on the nightly release.');
-        throw new Error(`No matching asset found for ${plat}.`);
-    }
-    return { name: wanted.name, url: wanted.browser_download_url };
+export function stableCompilerVersion(value: string): string | null {
+    return /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value) ? value.replace(/^v/, '') : null;
 }
 
-export async function fetchNightlyCommitSha(): Promise<string> {
-    const obj = await githubJson(NIGHTLY_COMMIT_API);
-    const sha: string | undefined = obj?.sha;
-    if (!sha || !/^[0-9a-f]{40}$/i.test(sha)) throw new Error('Could not resolve nightly commit SHA.');
-    return sha.toLowerCase();
+export function compareCompilerVersions(left: string, right: string): number {
+    const a = left.split('.').map(BigInt);
+    const b = right.split('.').map(BigInt);
+    for (let i = 0; i < 3; i++) {
+        if (a[i] !== b[i]) return a[i] > b[i] ? 1 : -1;
+    }
+    return 0;
+}
+
+function compilerPlatform(): string {
+    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+    if (process.platform === 'win32') return `win-${arch}`;
+    if (process.platform === 'linux') return `linux-${arch}`;
+    if (process.platform === 'darwin') return `macos-${arch}`;
+    throw new Error(`Unsupported platform: ${process.platform} ${process.arch}`);
+}
+
+export async function fetchCompilerReleases(): Promise<CompilerRelease[]> {
+    const platform = compilerPlatform();
+    const releases: CompilerRelease[] = [];
+    for (let page = 1; ; page++) {
+        const batch = await githubJson<any[]>(`${COMPILER_RELEASES_API}?per_page=100&page=${page}`);
+        if (!Array.isArray(batch)) throw new Error('Invalid WurstScript release response.');
+        for (const release of batch) {
+            const version = stableCompilerVersion(String(release.tag_name ?? ''));
+            if (!version || !String(release.tag_name).startsWith('v') || release.draft || release.prerelease) continue;
+            const name = `wurst-compiler-${version}-${platform}.zip`;
+            const asset = release.assets?.find((item: any) => item.name === name && item.browser_download_url);
+            if (asset) releases.push({ version, tag: release.tag_name, name, url: asset.browser_download_url });
+        }
+        if (batch.length < 100) break;
+    }
+    return releases.sort((a, b) => compareCompilerVersions(b.version, a.version));
+}
+
+export async function fetchLatestCompilerRelease(): Promise<CompilerRelease> {
+    const releases = await fetchCompilerReleases();
+    if (!releases.length) throw new Error(`No stable WurstScript compiler release is available for ${compilerPlatform()}.`);
+    return releases[0];
 }
 
 export async function downloadFileWithProgress(
@@ -159,6 +178,38 @@ export async function downloadFileWithProgress(
             }
         };
 
+        const handleResponse = (res: IncomingMessage, currentUrl: string, redirects: number) => {
+            clearDownloadTimeout();
+            if ([301, 302, 303, 307, 308].includes(res.statusCode!)) {
+                const loc = res.headers.location;
+                if (!loc) return finishFailure(new Error('Redirect without Location header'));
+                res.destroy();
+                return requestUrl(resolveRedirect(currentUrl, String(loc)), redirects + 1);
+            }
+            if (res.statusCode !== 200) {
+                const status = res.statusCode == null ? 'unknown' : res.statusCode;
+                res.destroy();
+                return finishFailure(new Error(`Download failed: HTTP ${status}`));
+            }
+
+            total = parseInt(res.headers['content-length'] || '0', 10);
+            output = fs.createWriteStream(destination);
+
+            res.on('data', (chunk) => {
+                if (cancelled) return finishFailure(new Error('Download cancelled by user'));
+                received += chunk.length;
+                if (total > 0 && onPct) onPct((received / total) * 100);
+            });
+            output.on('finish', () => {
+                output?.close();
+                if (cancelled) return finishFailure(new Error('Download cancelled by user'));
+                finishSuccess();
+            });
+            res.on('error', (err) => { finishFailure(err); });
+            output.on('error', (err) => { finishFailure(err); });
+            res.pipe(output);
+        };
+
         const requestUrl = (currentUrl: string, redirects: number) => {
             if (settled) return;
             if (cancelled) return finishFailure(new Error('Download cancelled by user'));
@@ -166,40 +217,8 @@ export async function downloadFileWithProgress(
 
             clearDownloadTimeout();
             const req = https.get(currentUrl, { headers: { 'User-Agent': 'wurst4vscode' } }, (res) => {
-                clearDownloadTimeout();
-                if ([301, 302, 303, 307, 308].includes(res.statusCode!)) {
-                    const loc = res.headers.location;
-                    if (!loc) return finishFailure(new Error('Redirect without Location header'));
-                    res.destroy();
-                    return requestUrl(resolveRedirect(currentUrl, String(loc)), redirects + 1);
-                }
-                if (res.statusCode !== 200) {
-                    const status = res.statusCode == null ? 'unknown' : res.statusCode;
-                    res.destroy();
-                    return finishFailure(new Error(`Download failed: HTTP ${status}`));
-                }
-
-                total = parseInt(res.headers['content-length'] || '0', 10);
-                output = fs.createWriteStream(destination);
-
-                // eslint-disable-next-line sonarjs/no-nested-functions -- TODO(lint-cleanup): pre-existing Node callback-style download logic; tracked for an async/await refactor rather than a rushed change to this path.
-                res.on('data', (chunk) => {
-                    if (cancelled) return finishFailure(new Error('Download cancelled by user'));
-                    received += chunk.length;
-                    if (total > 0 && onPct) onPct((received / total) * 100);
-                });
-                // eslint-disable-next-line sonarjs/no-nested-functions -- TODO(lint-cleanup): pre-existing Node callback-style download logic; tracked for an async/await refactor rather than a rushed change to this path.
-                output.on('finish', () => {
-                    output?.close();
-                    if (cancelled) return finishFailure(new Error('Download cancelled by user'));
-                    finishSuccess();
-                });
-                // eslint-disable-next-line sonarjs/no-nested-functions -- TODO(lint-cleanup): pre-existing Node callback-style download logic; tracked for an async/await refactor rather than a rushed change to this path.
-                res.on('error', (err) => { finishFailure(err); });
-            // eslint-disable-next-line sonarjs/no-nested-functions -- TODO(lint-cleanup): pre-existing Node callback-style download logic; tracked for an async/await refactor rather than a rushed change to this path.
-            output.on('error', (err) => { finishFailure(err); });
-            res.pipe(output);
-        });
+                handleResponse(res, currentUrl, redirects);
+            });
             req.setTimeout(DOWNLOAD_TIMEOUT_MS, () => {
                 finishFailure(new Error(`Download timed out after ${DOWNLOAD_TIMEOUT_MS}ms`));
             });
@@ -224,6 +243,20 @@ export async function extractZipWithByteProgress(
     onPct?: (pct: number) => void
 ): Promise<void> {
     fs.mkdirSync(destDir, { recursive: true });
+
+    const extractFile = (zip: StreamZip, name: string, outPath: string, onBytes: (chunk: Buffer) => void): Promise<void> => {
+        return new Promise<void>((res, rej) => {
+            zip.stream(name, (err: any, stream: any) => {
+                if (err || !stream) return rej(err || new Error('stream error'));
+                const out = fs.createWriteStream(outPath);
+                stream.on('data', onBytes);
+                stream.on('end', res);
+                stream.on('error', rej);
+                out.on('error', rej);
+                stream.pipe(out);
+            });
+        });
+    };
 
     await new Promise<void>((resolve, reject) => {
         const zip = new StreamZip({ file: zipPath, storeEntries: true });
@@ -251,21 +284,11 @@ export async function extractZipWithByteProgress(
                     if (!within(destDir, outPath)) throw new Error('Illegal path in zip');
                     fs.mkdirSync(path.dirname(outPath), { recursive: true });
 
-                    await new Promise<void>((res, rej) => {
-                        // eslint-disable-next-line sonarjs/no-nested-functions -- TODO(lint-cleanup): pre-existing Node callback-style zip-extraction logic; tracked for an async/await refactor rather than a rushed change to this path.
-                        zip.stream(name, (err: any, stream: any) => {
-                            if (err || !stream) return rej(err || new Error('stream error'));
-                            const out = fs.createWriteStream(outPath);
-                            stream.on('data', (chunk: Buffer) => {
-                                processed += chunk.length;
-                                onPct?.((processed / total) * 100);
-                            });
-                            stream.on('end', () => res());
-                            stream.on('error', rej);
-                            out.on('error', rej);
-                            stream.pipe(out);
-                        });
-                    });
+                    const onBytes = (chunk: Buffer) => {
+                        processed += chunk.length;
+                        onPct?.((processed / total) * 100);
+                    };
+                    await extractFile(zip, name, outPath, onBytes);
                 }
 
                 zip.close();

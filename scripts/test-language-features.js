@@ -605,13 +605,9 @@ async function testCompilerReleaseHighlights() {
     assert.equal(await offline.downloader.fetchCompilerReleaseSummary('2.1.0'), null);
     assert.equal(offline.requested.length, 1, 'failed fetches are cached instead of retrying on every render');
     assert.equal(h.downloader.extractCompilerReleaseHighlights("## What's Changed\n* Make one internal method faster"), null, 'technical PR titles must not masquerade as user-facing summaries');
-    const bundled = releaseHarness({}, 503);
-    assert.deepEqual(await bundled.downloader.fetchCompilerReleaseSummary('v2.0.0'), [
-        'Faster overall map builds, with less time spent compiling and packaging your map.',
-        'Compiler fixes for generics and compile-time code improve build reliability.',
-        'Stable semantic releases make compiler updates and version pinning predictable.',
-    ]);
-    assert.equal(bundled.requested.length, 0, 'AI-written highlights for the current release work offline');
+    const current = releaseHarness({ tag_name: 'v2.0.0', body: '## Highlights\n* Compiler-owned summary' });
+    assert.deepEqual(await current.downloader.fetchCompilerReleaseSummary('v2.0.0'), ['Compiler-owned summary']);
+    assert.deepEqual(current.requested, ['https://test/releases/tags/v2.0.0'], 'the current release is fetched too; the extension bundles no per-version summaries');
 }
 
 function versionInstallerHarness(version, releases, pinned) {

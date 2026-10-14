@@ -95,17 +95,7 @@ export function compilerReleaseNotesUrl(version?: string): string {
     return stable ? `${COMPILER_RELEASES_URL}/tag/v${stable}` : COMPILER_RELEASES_URL;
 }
 
-// AI-written user-facing summary of https://github.com/wurstscript/WurstScript/releases/tag/v2.0.0.
-// Keep summaries tied to exact versions; do not substitute technical PR titles for highlights.
-const COMPILER_RELEASE_HIGHLIGHTS: Readonly<Record<string, readonly string[]>> = {
-    '2.0.0': [
-        'Faster overall map builds, with less time spent compiling and packaging your map.',
-        'Compiler fixes for generics and compile-time code improve build reliability.',
-        'Stable semantic releases make compiler updates and version pinning predictable.',
-    ],
-};
-
-/** Future releases can publish an AI-written Highlights section alongside their full changelog. */
+/** Read the compiler-owned user-facing summary, never substitute technical PR titles. */
 export function extractCompilerReleaseHighlights(body: string): string[] | null {
     const lines = body.slice(0, 16_000).split(/\r?\n/).map((line) => line.trim());
     const start = lines.findIndex((line) => /^## (?:Release highlights|Highlights|What's new|What’s new)\s*$/i.test(line));
@@ -124,8 +114,6 @@ const compilerReleaseSummaries = new Map<string, Promise<string[] | null>>();
 export function fetchCompilerReleaseSummary(version: string): Promise<string[] | null> {
     const stable = stableCompilerVersion(version);
     if (!stable) return Promise.resolve(null);
-    const bundled = COMPILER_RELEASE_HIGHLIGHTS[stable];
-    if (bundled) return Promise.resolve([...bundled]);
     let pending = compilerReleaseSummaries.get(stable);
     if (!pending) {
         pending = githubJson<{ tag_name?: string; body?: string }>(`${COMPILER_RELEASES_API}/tags/v${stable}`)

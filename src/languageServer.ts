@@ -63,7 +63,7 @@ function setServerState(state: ServerState): void {
         startupFinishedAfterMs = undefined;
     }
     if (startupStartedAt !== undefined) {
-        if ((state.kind === 'loading' || state.kind === 'ready') && initializedAfterMs === undefined) {
+        if (state.kind === 'loading' && initializedAfterMs === undefined) {
             initializedAfterMs = now - startupStartedAt;
         }
         if ((state.kind === 'ready' || state.kind === 'failed' || state.kind === 'stopped') && startupFinishedAfterMs === undefined) {

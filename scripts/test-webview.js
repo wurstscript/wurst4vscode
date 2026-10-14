@@ -882,6 +882,9 @@ async function testLanguageClientHandleLifecycle() {
     await mod.startLanguageClient(context);
     const capable = clients[2];
     assert.equal(statusItem.text, '$(circle-filled) WurstScript Update', 'completion before feature initialization must survive start()');
+    assert.ok(!statusItem.tooltip.value.includes('Server initialized |'), 'ready-only startup does not reveal when initialization finished');
+    assert.ok(!statusItem.tooltip.value.includes('Initial build |'), 'early ready notifications must not invent a zero-duration build');
+    assert.ok(statusItem.tooltip.value.includes('Workspace ready |'), 'total startup timing remains available without separate phase timestamps');
     assert.equal(probes.length, oldProbeCount, 'capable startup must not probe');
     const reportBuild = capable.notifications.get('wurst/initialBuildStatus');
     capable.emitState(3);

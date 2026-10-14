@@ -791,7 +791,7 @@ async function testLanguageClientHandleLifecycle() {
             checkCustomJavaVersion: async () => undefined,
             getInstalledVersionString: async () => { versionRequests++; return versionString; },
             maybeOfferUpdate: async (onUpdateAvailable) => { reportUpdate = onUpdateAvailable; },
-            getCompilerVersionPin: () => undefined,
+            getCompilerVersionPin: () => '2.0.0',
         },
         './features/diagnostics': { appendDiagnostic() {}, formatDiagnosticError: (e) => String(e) },
         './install/downloader': {
@@ -817,6 +817,7 @@ async function testLanguageClientHandleLifecycle() {
     assert.equal(statusItem.text, '$(circle-outline) WurstScript', 'the status item must exist before any server start');
     assert.ok(!statusItem.tooltip.value.includes('Detecting version'), 'an empty window must not claim version detection is running');
     assert.ok(statusItem.tooltip.value.includes('Version check deferred'), 'version detection waits for server startup without another JVM');
+    assert.ok(statusItem.tooltip.value.includes('Pinned to 2\\.0\\.0'), 'the persisted update policy is shown before startup');
     failStart = true;
     await assert.rejects(mod.startLanguageClient(context));
     assert.equal(versionRequests, 0, 'a failed pre-client start must not boot a version-detection JVM');

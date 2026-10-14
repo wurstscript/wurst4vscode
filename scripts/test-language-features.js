@@ -747,6 +747,8 @@ function testInstallationCleanupPreservesPin() {
 }
 
 function commandHarness(getClient) {
+    let knownVersion;
+    let versionDetections = 0;
     const handlers = new Map();
     const notifications = [];
     const failures = [];
@@ -781,6 +783,7 @@ function commandHarness(getClient) {
     const vscode = {
         Disposable: TestDisposable,
         Uri: {
+            parse: (url) => ({ fsPath: url }),
             joinPath: (root, name) => ({ fsPath: require('path').join(root.fsPath, name) }),
         },
         env: { openExternal: async (uri) => { foldersOpened.push(uri.fsPath); return true; } },
@@ -820,10 +823,10 @@ function commandHarness(getClient) {
     const load = createTsLoader({ mocks: {
         vscode,
         'vscode-languageclient/node': { ExecuteCommandRequest: { type: 'executeCommand' }, WorkDoneProgress: { type: 'workDone' }, WorkDoneProgressCancelNotification: { type: 'cancelProgress' } },
-        'src/paths.ts': {},
+        'src/paths.ts': { COMPILER_RELEASES_URL: 'https://github.com/wurstscript/WurstScript/releases' },
         'src/features/diagnostics.ts': { appendDiagnostic: (...args) => diagnostics.push(args), formatDiagnosticError: String },
-        'src/languageServer.ts': {},
-        'src/install/installer.ts': {},
+        'src/languageServer.ts': { getKnownCompilerVersion: () => knownVersion },
+        'src/install/installer.ts': { getInstalledVersionString: async () => { versionDetections++; return null; } },
         'src/features/issueReporting.ts': {},
         'src/features/preview/cascStorage.ts': {},
         'src/features/agentsGuide.ts': {},
@@ -831,8 +834,22 @@ function commandHarness(getClient) {
         'src/features/assetLinks.ts': {},
     } });
     load('src/features/commands.ts').registerCommands(getClient || (async () => client));
-    const harness = { handlers, notifications, failures, completions, foldersOpened, actions, diagnostics, listeners, requests, cancellations, client, workspace: vscode.workspace };
+    load('src/features/commands.ts').registerWurstDiagnosticsCommands({ subscriptions: [] });
+    const harness = { handlers, notifications, failures, completions, foldersOpened, actions, diagnostics, listeners, requests, cancellations, client, workspace: vscode.workspace,
+        setKnownVersion: (version) => { knownVersion = version; }, get versionDetections() { return versionDetections; } };
     return harness;
+}
+
+async function testReleaseNotesCommandUsesKnownVersion() {
+    const h = commandHarness();
+    const openNotes = h.handlers.get('wurst.showCompilerReleaseNotes');
+    await openNotes();
+    assert.equal(h.versionDetections, 0, 'cold release-note commands must not launch a version-detection JVM');
+    assert.deepEqual(h.foldersOpened, ['https://github.com/wurstscript/WurstScript/releases']);
+    h.setKnownVersion('v2.0.0');
+    await openNotes();
+    assert.equal(h.foldersOpened.at(-1), 'https://github.com/wurstscript/WurstScript/releases/tag/v2.0.0');
+    assert.equal(h.versionDetections, 0, 'known versions are reused without another detector');
 }
 
 async function testMapCommandProgress() {
@@ -996,6 +1013,7 @@ async function testMapCommandCancellationAndOverlap() {
 }
 
 async function main() {
+    await testReleaseNotesCommandUsesKnownVersion();
     await testMapCommandCancellationAndOverlap();
     await testMapCommandProgress();
     await testBuildCompletionActions();

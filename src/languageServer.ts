@@ -51,6 +51,7 @@ export function showWurstStatusItem(context: ExtensionContext): void {
     item.name = 'WurstScript compiler';
     item.command = 'wurst.showDiagnosticsActions';
     statusItem = item;
+    compilerVersionPin = getCompilerVersionPin();
     context.subscriptions.push(item, { dispose: () => { if (statusItem === item) statusItem = undefined; } });
     renderStatusItem();
     item.show();
@@ -268,6 +269,11 @@ export function getLanguageClient(): Promise<LanguageClient> {
 /** The running client if there is one right now (no waiting). */
 export function getRunningLanguageClient(): LanguageClient | null {
     return !startingClient && clientRef?.isRunning() ? clientRef : null;
+}
+
+/** Version already resolved by normal startup; UI actions must not launch another detector. */
+export function getKnownCompilerVersion(): string | undefined {
+    return installedVersion;
 }
 
 // Install and repair may be called by activation itself. They stop an existing client;

@@ -9,7 +9,7 @@ import { workspace, window } from 'vscode';
 import { WURST_HOME } from '../paths';
 import { appendDiagnostic, buildDiagnosticsText, formatDiagnosticError, showDiagnosticOutput, showErrorWithLogs } from './diagnostics';
 import type { PathAlias } from './diagnostics';
-import { getRunningLanguageClient } from '../languageServer';
+import { getRunningLanguageClient, getKnownCompilerVersion } from '../languageServer';
 import { describeJavaVersion, getAvailableUpdate, getInstalledVersionString, getLanguageServerJava, chooseCompilerVersion, installWithRetry } from '../install/installer';
 import { InstallCoordinationCancelledError } from '../install/installCoordination';
 import { compilerReleaseNotesUrl } from '../install/downloader';
@@ -90,10 +90,8 @@ async function openWurstHome(): Promise<void> {
 
 export function registerWurstDiagnosticsCommands(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
-        vscode.commands.registerCommand('wurst.showCompilerReleaseNotes', async () => {
-            const version = await getInstalledVersionString().catch(() => null);
-            await vscode.env.openExternal(vscode.Uri.parse(compilerReleaseNotesUrl(version ?? undefined)));
-        }),
+        vscode.commands.registerCommand('wurst.showCompilerReleaseNotes', () =>
+            vscode.env.openExternal(vscode.Uri.parse(compilerReleaseNotesUrl(getKnownCompilerVersion())))),
         vscode.commands.registerCommand('wurst.chooseCompilerVersion', async () => {
             try {
                 const compilerRelease = await chooseCompilerVersion();

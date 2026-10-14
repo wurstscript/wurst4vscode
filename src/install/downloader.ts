@@ -97,17 +97,21 @@ export function compilerReleaseNotesUrl(version?: string): string {
 
 /** Read the compiler-owned user-facing summary, never substitute technical PR titles. */
 export function extractCompilerReleaseHighlights(body: string): string[] | null {
-    const lines = body.slice(0, 16_000).split(/\r?\n/).map((line) => line.trim());
-    const start = lines.findIndex((line) => /^## (?:Release highlights|Highlights|What's new|What’s new)\s*$/i.test(line));
+    const lines = body.slice(0, 16_000).split(/\r?\n/);
+    const start = lines.findIndex((line) => /^## (?:Release highlights|Highlights|What's new|What’s new)\s*$/i.test(line.trim()));
     if (start === -1) return null;
     const section = lines.slice(start + 1);
-    const end = section.findIndex((line) => line.startsWith('#'));
+    const end = section.findIndex((line) => line.trim().startsWith('#'));
     const highlights: string[] = [];
+    let listIndent: number | undefined;
     for (const line of section.slice(0, end === -1 ? section.length : end)) {
-        if (!line) continue;
-        const bullet = /^(?:[-*+] |\d+\. )(.*)$/.exec(line);
-        if (bullet) highlights.push(bullet[1]);
-        else if (highlights.length) highlights[highlights.length - 1] += ` ${line}`;
+        if (!line.trim()) continue;
+        const bullet = /^([ \t]*)(?:[-*+] |\d+\. )(.*)$/.exec(line);
+        const indentation = bullet?.[1].replace(/\t/g, '    ').length ?? 0;
+        if (bullet && (listIndent === undefined || indentation <= listIndent)) {
+            listIndent = indentation;
+            highlights.push(bullet[2]);
+        } else if (highlights.length) highlights[highlights.length - 1] += ` ${bullet?.[2] ?? line.trim()}`;
     }
     return highlights.slice(0, 3).map((highlight) => {
         const text = highlight.replace(/[`*]/g, '').trim();

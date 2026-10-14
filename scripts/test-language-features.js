@@ -611,6 +611,15 @@ async function testCompilerReleaseHighlights() {
         "## What's Changed", '* Full details',
     ].join('\n')), ['Faster overall map builds, including packaging.', 'Better compiler correctness.', 'Predictable versioned releases.'],
     'wrapped continuations belong to their bullet and do not consume the three-highlight limit');
+    assert.deepEqual(h.downloader.extractCompilerReleaseHighlights([
+        '## Highlights', '- Faster builds', '  - Less compile work', '    - Less packaging work',
+        '- Better reliability', '- Predictable updates',
+    ].join('\n')), ['Faster builds Less compile work Less packaging work', 'Better reliability', 'Predictable updates'],
+    'nested details belong to their parent instead of consuming top-level highlight slots');
+    assert.deepEqual(h.downloader.extractCompilerReleaseHighlights([
+        '## Highlights', '  1. Faster builds', '    - Less compile work', '  2. Better reliability',
+    ].join('\n')), ['Faster builds Less compile work', 'Better reliability'],
+    'indented numbered lists retain their top-level boundaries');
     const current = releaseHarness({ tag_name: 'v2.0.0', body: '## Highlights\n* Compiler-owned summary' });
     assert.deepEqual(await current.downloader.fetchCompilerReleaseSummary('v2.0.0'), ['Compiler-owned summary']);
     assert.deepEqual(current.requested, ['https://test/releases/tags/v2.0.0'], 'the current release is fetched too; the extension bundles no per-version summaries');

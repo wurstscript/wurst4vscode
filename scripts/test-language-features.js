@@ -793,6 +793,7 @@ function commandHarness(getClient) {
         Disposable: TestDisposable,
         Uri: {
             parse: (url) => ({ fsPath: url }),
+            file: (fsPath) => ({ fsPath }),
             joinPath: (root, name) => ({ fsPath: require('path').join(root.fsPath, name) }),
         },
         env: { openExternal: async (uri) => { foldersOpened.push(uri.fsPath); return true; } },
@@ -941,6 +942,34 @@ async function testMapCommandProgress() {
     assert.equal(h.client.outputChannel.shown, 1);
 }
 
+async function testWorldEditorObjectExport() {
+    const h = commandHarness();
+    h.completionChoice = 'Reveal Export';
+    const running = h.handlers.get('wurst.exportw3o')(['example.w3x']);
+    await tick();
+    assert.equal(h.requests[0].params.command, 'wurst.exportw3o');
+    assert.equal(h.requests[0].params.arguments[0].mappath, 'example.w3x');
+    assert.equal(h.notifications[0].options.title, 'Exporting objects for World Editor');
+    const output = require('path').resolve('project/_build/wurstCreatedObjects.w3o');
+    h.requests[0].resolve(output);
+    assert.equal(await running, output);
+    await tick();
+    assert.ok(h.completions[0].message.includes('Import All Object Data'));
+    assert.ok(h.completions[0].message.includes(output));
+    assert.deepEqual(h.actions, ['revealFileInOS']);
+
+    const canceled = h.handlers.get('wurst.exportw3o')(['example.w3x']);
+    await tick();
+    h.requests.at(-1).resolve({});
+    await canceled;
+    assert.equal(h.completions.length, 1, 'cancellation must not reveal a stale export');
+    const failed = h.handlers.get('wurst.exportw3o')(['example.w3x']);
+    await tick();
+    h.requests.at(-1).reject(new Error('Object generation failed'));
+    await failed;
+    assert.equal(h.completions.length, 1, 'failure must not reveal a stale export');
+}
+
 async function testBuildCompletionActions() {
     const h = commandHarness();
     h.client.clientOptions.workspaceFolder = { uri: { fsPath: require('path').resolve('server-project') } };
@@ -968,7 +997,7 @@ async function testBuildCompletionActions() {
 async function testMapCommandCancellationAndOverlap() {
     const h = commandHarness();
     const running = h.handlers.get('wurst.runmap')('example.w3x');
-    for (const id of ['wurst.runmap', 'wurst.startmap', 'wurst.startlast', 'wurst.hotstartmap', 'wurst.hotreload', 'wurst.buildmap']) {
+    for (const id of ['wurst.runmap', 'wurst.startmap', 'wurst.startlast', 'wurst.hotstartmap', 'wurst.hotreload', 'wurst.buildmap', 'wurst.exportw3o']) {
         assert.equal(await h.handlers.get(id)(['example.w3x']), undefined);
     }
     await tick();
@@ -1025,6 +1054,7 @@ async function main() {
     await testReleaseNotesCommandUsesKnownVersion();
     await testMapCommandCancellationAndOverlap();
     await testMapCommandProgress();
+    await testWorldEditorObjectExport();
     await testBuildCompletionActions();
     testInstallationCleanupPreservesPin();
     await testCompilerVersionPins();

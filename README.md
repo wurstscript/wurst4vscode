@@ -123,3 +123,11 @@ npm run vscode:prepublish
 ```
 
 For compiler/client startup changes, build the compiler with `gradlew shadowJar` in its `de.peeeq.wurstscript` directory, then run `node scripts/test-lsp-readiness.js <path-to-wurstscript.jar>` here. This opt-in JSON-RPC test covers progress, clients without progress UI, legacy readiness, failed builds, and deferred unsaved buffers. It requires Java 25 on PATH (or `WURST_LSP_TEST_JAVA`).
+
+## Place generated objects in World Editor
+
+Run **wurst: Export object data (.w3o) for World Editor** from the Command Palette and select your input map. It runs compiletime generation and saves the combined map and generated object data to `_build/wurstCreatedObjects.w3o`. Use **Reveal Export**, then import the file through World Editor Object Editor: **Import All Object Data**.
+
+You can save that edited map and use it as the Wurst input map again. Keep generated custom-object rawcodes stable so placements remain valid. Wurst removes and regenerates custom objects marked `wurs = 42`; editor edits to those definitions are replaced. Overrides of existing Blizzard objects are not tagged and become part of the imported base data.
+
+This command requires a compiler with `wurst.exportw3o` support. Older compilers report an unsupported-command error.

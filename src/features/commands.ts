@@ -311,7 +311,7 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
             });
         });
 
-    const buildMap = async (args: any) => {
+    const buildMap = async (args: any, exportObjects = false) => {
         const config = vscode.workspace.getConfiguration('wurst');
         const wc3path = config.get<string>('wc3path');
 
@@ -321,7 +321,7 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
             mapPromise = Promise.resolve(mapPathFromArgs);
         } else {
             mapPromise = window.showQuickPick(findMapPaths(), {
-                title: 'Wurst: Select map to build',
+                title: exportObjects ? 'Wurst: Select map for World Editor object export' : 'Wurst: Select map to build',
                 placeHolder: 'Choose a .w3x/.w3m map file or folder',
             });
         }
@@ -332,7 +332,7 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
         }
 
         const request: ExecuteCommandParams = {
-            command: 'wurst.buildmap',
+            command: exportObjects ? 'wurst.exportw3o' : 'wurst.buildmap',
             arguments: [
                 {
                     mappath: mappath,
@@ -344,9 +344,26 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
             // The server builds relative to its workspace root, even when the input map is elsewhere.
             const root = client.clientOptions.workspaceFolder?.uri;
             const buildFolder = root ? vscode.Uri.joinPath(root, '_build') : undefined;
-            const result = await executeMapCommand(client, request, 'Building Wurst map');
+            const result = await executeMapCommand(client, request, exportObjects ? 'Exporting objects for World Editor' : 'Building Wurst map');
+            if (exportObjects) {
+                if (typeof result === 'string' && result.toLowerCase().endsWith('.w3o')) {
+                    void window.showInformationMessage(
+                        `Object data exported to ${result}. In World Editor, use Object Editor: Import All Object Data.`,
+                        'Reveal Export', 'Show Log',
+                    ).then(async (choice) => {
+                        if (choice === 'Show Log') showClientOutput(client);
+                        else if (choice === 'Reveal Export') {
+                            try {
+                                await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(result));
+                            } catch (error) {
+                                void showErrorWithLogs('Could not reveal the object data export.', error);
+                            }
+                        }
+                    });
+                }
+            }
             // Canceled commands can resolve with an empty object; only 'ok' confirms a completed build.
-            if (result === 'ok') {
+            if (!exportObjects && result === 'ok') {
                 void window.showInformationMessage(
                     buildFolder ? `Wurst map build finished. Output: ${buildFolder.fsPath}` : 'Wurst map build finished.',
                     ...(buildFolder ? ['Open Build Folder', 'Show Log'] : ['Show Log']),
@@ -475,6 +492,7 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
         vscode.commands.registerCommand('wurst.runmap', (args: any) => withMapCommand(() => runMapSmart(args))),
         vscode.commands.registerCommand('wurst.startlast', () => withMapCommand(() => startLast())),
         vscode.commands.registerCommand('wurst.buildmap', (args: any[]) => withMapCommand(() => buildMap(args))),
+        vscode.commands.registerCommand('wurst.exportw3o', (args: any[]) => withMapCommand(() => buildMap(args, true))),
         vscode.commands.registerCommand('wurst.tests', (args: any[]) => tests('all', args)),
         vscode.commands.registerCommand('wurst.tests_file', (args: any[]) => tests('file', args)),
         vscode.commands.registerCommand('wurst.tests_func', (args: any[]) => tests('func', args)),

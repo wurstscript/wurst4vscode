@@ -40,7 +40,8 @@
         "onCommand:wurst.showLogs",
         "onCommand:wurst.showExtensionLogs",
         "onCommand:wurst.insertPackageHeader",
-        "onCommand:wurst.prepareAgentsGuideUpdate"
+        "onCommand:wurst.prepareAgentsGuideUpdate",
+        "onCommand:wurst.exportw3o"
     ],
     "main": "./dist/extension",
     "browser": "./dist/web/extension.js",
@@ -750,6 +751,11 @@
             {
                 "command": "wurst.perform_code_action",
                 "title": "Perform a code action (This command is usually triggered by quick fixes in the editor).",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.exportw3o",
+                "title": "Export object data (.w3o) for World Editor",
                 "category": "wurst"
             },
             {

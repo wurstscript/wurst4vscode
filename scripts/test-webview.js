@@ -101,7 +101,7 @@ function testSignals() {
 // Regression test for the exact dependency-tracking pattern objModEditor's tree/details reactive
 // wiring relies on (see objectRowReplacementHtml/selectObject in objectTree.ts and the two effects in
 // detailsPanel.ts's setupDetails()): a "structural" signal (query/collapse state) should trigger a
-// full rebuild, while a "selection" signal read via untracked() must NOT — selection instead moves
+// full rebuild, while a "selection" signal read via untracked() must NOT; selection instead moves
 // via a separate, cheap, explicit DOM update (setActiveRow), same shape as the real webview code.
 function testObjModTreeSelectionStaysUntracked() {
     const { signal, effect, untracked } = loadTsModule('src/webview/signals.ts');
@@ -130,7 +130,7 @@ function testObjModTreeSelectionStaysUntracked() {
 // Mirrors the two-effect split in detailsPanel.ts's setupDetails(): a full rebuild reacts to
 // selection/technical-mode (which change the table's shape), while density/search/category filters
 // reroute to a separate, lighter effect that only re-applies visibility. state.ts's collapsedNodes/
-// hiddenCategories are Sets that bump a `.version` signal on mutation (see reactiveSet there) — a bare
+// hiddenCategories are Sets that bump a `.version` signal on mutation (see reactiveSet there); a bare
 // counter signal is all that's needed here to exercise the same "does mutating this dependency trigger
 // only the filter effect" property, without reimplementing that Set wrapper.
 function testObjModDetailsRebuildVsFilterEffectSplit() {
@@ -185,7 +185,7 @@ function installObjModStateDom(persistedState) {
 
 // state.ts is meant to make a reopened editor (a webview reload after our external-change auto-reload
 // or revert, or a fresh VS Code session) pick back up where the user left off, instead of resetting to
-// a blank slate — see the persistUi effect and the restoredSelectedKey logic there.
+// a blank slate, see the persistUi effect and the restoredSelectedKey logic there.
 function testObjModStateRestoresAndPersistsUiState() {
     moduleCache.clear();
     const objects = [
@@ -259,7 +259,7 @@ function testObjModStateIgnoresStaleRestoredSelection() {
     assert.equal(state.ui.selectedKey, 'Custom:0', 'a restored selection for an object that no longer exists should fall back to the host default');
 }
 
-// renderTree() reassigns tree.innerHTML on every call, which resets scrollTop to 0 in a real browser —
+// renderTree() reassigns tree.innerHTML on every call, which resets scrollTop to 0 in a real browser:
 // this exercises the explicit capture/restore in objectTree.ts that works around that, using the
 // shared moduleCache to stub out objectTree.ts's heavier sibling modules (model thumbnails/field
 // display/model preview panel) instead of actually loading them.
@@ -1106,8 +1106,9 @@ function testThumbnailLifecycleGuards() {
     const webpack = fs.readFileSync(path.join(root, 'webpack.config.js'), 'utf8');
     const assetLinks = fs.readFileSync(path.join(root, 'src/features/assetLinks.ts'), 'utf8');
     const viewer = fs.readFileSync(path.join(root, 'src/webview/mdxViewer.ts'), 'utf8');
-    const hdFragment = fs.readFileSync(path.join(root, '../war3-model/renderer/shaders/webgl/hdNew.fs.glsl'), 'utf8');
-    const hdVertex = fs.readFileSync(path.join(root, '../war3-model/renderer/shaders/webgl/hdHardwareSkinningNew.vs.glsl'), 'utf8');
+    const modelRoot = path.dirname(path.dirname(require.resolve('war3-model')));
+    const hdFragment = fs.readFileSync(path.join(modelRoot, 'renderer/shaders/webgl/hdNew.fs.glsl'), 'utf8');
+    const hdVertex = fs.readFileSync(path.join(modelRoot, 'renderer/shaders/webgl/hdHardwareSkinningNew.vs.glsl'), 'utf8');
 
     assert.ok(!host.includes('WURST_MODEL_THUMB_MAX_MODEL_BYTES'), 'thumbnail generation must not omit large models');
     assert.ok(!host.includes("reason: 'too-large'"), 'model size must not become a missing-thumbnail reason');
@@ -1234,7 +1235,7 @@ async function testIssueReportingPrivacyAndDeduplication() {
 
 function testObjModSaveCommitsFocusedEditor() {
     const host = fs.readFileSync(path.join(root, 'src/features/objModPreview.ts'), 'utf8');
-    // The objmod webview entry point delegates to src/webview/objModEditor/*.ts — concatenate the
+    // The objmod webview entry point delegates to src/webview/objModEditor/*.ts; concatenate the
     // whole split so this stays a check on the bundle's behavior, not on which file each piece lives in.
     const objModEditorDir = path.join(root, 'src/webview/objModEditor');
     const objmod = [

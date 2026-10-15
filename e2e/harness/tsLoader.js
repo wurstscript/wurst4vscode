@@ -78,7 +78,7 @@ function createTsLoader(options = {}) {
             return repoRequire(request);
         };
         // Webpack collapses all of src/ into dist/extension.js, so shipped code sees `__dirname` as
-        // <root>/dist regardless of which source file it was written in — which is how
+        // <root>/dist regardless of which source file it was written in, which is how
         // compilerKnowledgeBase.ts resolves ../resources/wc3-knowledge-base.json. Reproduce that
         // here; using the real source directory would silently break that lookup.
         const bundleDir = rel.startsWith('src/') ? path.join(root, 'dist') : path.dirname(abs);

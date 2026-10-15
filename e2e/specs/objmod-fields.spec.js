@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Field table: filters, the technical view, and the full edit round-trip — webview edit -> host
+ * Field table: filters, the technical view, and the full edit round-trip, webview edit -> host
  * document edit -> undo/redo -> save -> bytes on disk that re-parse to the edited value.
  *
  * Assertions deliberately key off field *ids* and values that come from the fixture file, never off
@@ -536,7 +536,7 @@ test('field search filters rows and reports how many matched', async ({ openObjM
     await page.fill('#field-search', 'ugol');
 
     // The field search is fuzzy (same scorer as the object search), so it narrows rather than
-    // pinpoints — the contract is that it shrinks the table, keeps the exact match, and says how many.
+    // pinpoints; the contract is that it shrinks the table, keeps the exact match, and says how many.
     await expect(page.locator('#field-match')).toHaveText(/^\d+ match(es)?$/);
     const visible = page.locator('#details tbody tr:not(.category-row):not(.hidden)');
     const after = await visible.count();

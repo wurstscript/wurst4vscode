@@ -85,7 +85,7 @@ test('typing colour codes in raw mode updates the "used colours" swatches live',
     await expect(used.locator('.tt-used-sw').nth(0)).toHaveAttribute('data-color', '00ff00');
     await expect(used.locator('.tt-used-sw').nth(1)).toHaveAttribute('data-color', 'ff0000');
 
-    // Adding a third colour has to show up without reopening the editor — the whole point of the
+    // Adding a third colour has to show up without reopening the editor, the whole point of the
     // live refresh (the group used to reflect only the value from when editing started).
     await raw.fill('|cff00ff00Green|r |cffff0000Red|r |cff0000ffBlue|r');
     await expect(used.locator('.tt-used-sw')).toHaveCount(3);
@@ -153,7 +153,7 @@ test('the Saved palette is hidden until a custom colour is picked, then persists
     await expect(pop.locator('.tt-custom-colors')).toBeHidden();
 
     // The native colour input only emits `change` on commit, which Playwright cannot click through
-    // in the OS picker — set the value and fire the event the browser would.
+    // in the OS picker, set the value and fire the event the browser would.
     await pop.locator('input.tt-color').evaluate((el) => {
         el.value = '#123456';
         el.dispatchEvent(new Event('change', { bubbles: true }));
@@ -187,7 +187,7 @@ test('the saved-palette spacing follows the density scale', async ({ openObjMod 
     await gotoHtml(host.html);
 
     // Clicking the density toggle is a click outside the editor, which closes it and takes the
-    // floating toolbar with it — so each density is measured on a freshly opened palette.
+    // floating toolbar with it, so each density is measured on a freshly opened palette.
     const measurePalette = async () => {
         const { toolbar } = await openTooltipEditor(page);
         await toolbar.locator('.tt-color-sq').click();
@@ -204,7 +204,7 @@ test('the saved-palette spacing follows the density scale', async ({ openObjMod 
     await expect(page.locator('body')).toHaveClass(/density-cozy/);
 
     // Hard-coded px here would leave this corner of the toolbar on the compact scale while the rest
-    // of the editor switched — the whole point of the :root / body.density-cozy variable pair.
+    // of the editor switched, the whole point of the :root / body.density-cozy variable pair.
     const cozy = await measurePalette();
     expect(cozy.gap).toBeGreaterThan(compact.gap);
     expect(cozy.pad).toBeGreaterThan(compact.pad);

@@ -32,7 +32,7 @@ export function installDebugApi() {
       return true;
     },
     // Drives the real click-to-edit code path (the delegated #details click handler), rather than
-    // calling internals directly — an e2e clicking through the actual DOM is the point.
+    // calling internals directly; an e2e clicking through the actual DOM is the point.
     openFirstTooltipField: function () {
       const el = document.querySelector('.tt-collapsed[data-mi]');
       if (!el) return false;
@@ -54,7 +54,7 @@ export function installDebugApi() {
       body.dispatchEvent(new Event('input', { bubbles: true }));
       return true;
     },
-    // Selection-API only (no clipboard access here) — the actual copy/cut/paste has to be a real,
+    // Selection-API only (no clipboard access here), the actual copy/cut/paste has to be a real,
     // OS-trusted keystroke (see the CDP Input.dispatchKeyEvent calls in the e2e script), since
     // execCommand('copy'/'cut') silently no-ops for script-synthesized events with no user gesture.
     selectAllInEditableBody: function () {

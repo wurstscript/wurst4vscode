@@ -78,7 +78,7 @@ export async function activate(context: ExtensionContext) {
 
 /**
  * `resetCascStorage` drops the raw game-file layer when `wurst.wc3path` changes, but everything
- * parsed out of it — SLK tables, WorldEditStrings, profiles, object catalogs — is cached separately
+ * parsed out of it (SLK tables, WorldEditStrings, profiles, object catalogs) is cached separately
  * and would keep answering with the previous installation's names, icons and models until the
  * window was reloaded. Composed here because these modules already depend on the game-data layer
  * and must not depend on each other.

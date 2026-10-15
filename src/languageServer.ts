@@ -250,7 +250,7 @@ function trackClientState(client: LanguageClient, sentDocuments: Set<string>, in
 // JVM start, so they exist in the palette even while the server is still booting or when it failed.
 // They ask for the client through getLanguageClient(), which reflects three states and nothing
 // else: running (resolve now), starting (wait for that start), or not running (reject now with the
-// reason). There is deliberately no "pending until something happens" state — an intentional stop,
+// reason). There is deliberately no "pending until something happens" state, an intentional stop,
 // a failed start and a window without a workspace folder all fall into "not running", so a command
 // can never hang on a handle that nothing will ever settle.
 let startingClient: Promise<LanguageClient> | null = null;

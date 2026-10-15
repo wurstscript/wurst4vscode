@@ -33,7 +33,7 @@ assert.equal(
 let passed = 0;
 function ok(query, text, expected, msg) {
     const got = fuzzyMatch(query, text);
-    assert.strictEqual(got, expected, `fuzzyMatch(${JSON.stringify(query)}, ${JSON.stringify(text)}) → ${got}, expected ${expected}${msg ? ' — ' + msg : ''}`);
+    assert.strictEqual(got, expected, `fuzzyMatch(${JSON.stringify(query)}, ${JSON.stringify(text)}) → ${got}, expected ${expected}${msg ? ': ' + msg : ''}`);
     passed++;
 }
 
@@ -65,7 +65,7 @@ ok('zzzzzzz', 'Graveyard', false);
 ok('peasant', 'Brilliance Aura', false);
 ok('xyzqq', 'Graveyard', false);
 
-// threshold stays low — not loose
+// threshold stays low, not loose
 ok('catapult', 'Graveyard', false, 'too many edits');
 
 const footmanCandidates = [

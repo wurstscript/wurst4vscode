@@ -16,7 +16,7 @@ import BASE_CSS from '../webview/base.css';
 import DATA_PAGE_CSS from '../webview/dataPage.css';
 
 // ---------------------------------------------------------------------------
-// Base CSS — VS Code token mapping + shared structural components
+// Base CSS, VS Code token mapping + shared structural components
 // ---------------------------------------------------------------------------
 
 export const WEBVIEW_BASE_CSS = BASE_CSS;

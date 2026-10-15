@@ -40,8 +40,8 @@ Opening a supported Warcraft III file selects a dedicated viewer or editor:
 | Map archives | Browse `.w3x`/`.w3m` MPQ contents, open entries, extract files, or export a folder-mode map |
 | Object data | Inspect and edit `.w3u`, `.w3t`, `.w3a`, `.w3b`, `.w3d`, `.w3h`, and `.w3q` |
 | Map information | Safely edit supported `.w3i` fields while preserving untouched binary data |
-| Map structures | Inspect `.doo`, `.wpm`, `.wtg`, and `.wct` files |
-| Other map data | Preview `.mmp`, `.shd`, `.w3c`, `.w3r`, `.w3e`, `.w3s`, `.w3l`, `.w3o`, and `.imp` |
+| Map structures | Edit pathing (`.wpm`), minimap icons (`.mmp`), cameras (`.w3c`), and regions (`.w3r`); inspect `.doo`, `.wtg`, and `.wct` files |
+| Other map data | Preview `.shd`, `.w3e`, `.w3s`, `.w3l`, `.w3o`, and `.imp` |
 | Images and models | Preview `.blp`, `.dds`, `.tga`, `.mdx`, and `.mdl` with 3D animation and team-color controls |
 | Audio | Play `.mp3`, `.wav`, `.ogg`, and `.flac` assets |
 
@@ -52,8 +52,6 @@ Packed `.w3x`/`.w3m` maps and Reforged folder-mode maps can both be selected, bu
 Object-data editors resolve rawcodes, game metadata, icons, base values, and trigger strings while keeping custom overrides editable.
 
 ![Edit Warcraft III unit object data](https://raw.githubusercontent.com/wurstscript/wurst4vscode/master/images/marketplace/editor_objmod.webp)
-
-The `.w3i` editor exposes supported map-information fields while preserving the remainder of the binary file unchanged.
 
 ![Edit Warcraft III map information](https://raw.githubusercontent.com/wurstscript/wurst4vscode/master/images/marketplace/editor_w3i.webp)
 
@@ -110,7 +108,7 @@ Report extension problems in the [wurst4vscode issue tracker](https://github.com
 
 ## Extension development
 
-Install a current Node.js LTS release, clone the repository, and run `npm install`. Open it in VS Code and press `F5` to launch an Extension Development Host.
+Install a current Node.js LTS release and clone this repository alongside the `casc-ts` and `war3-model` repositories. These local dependencies must be available at `../casc-ts` and `../war3-model` before running `npm install`. Open it in VS Code and press `F5` to launch an Extension Development Host.
 
 `npm run package-web` minifies release bundles and locally obfuscates the bundled `war3-model` and `casc-ts` modules. It emits no source maps; VSIX packaging excludes sources, declarations, maps and build tools. Development builds remain readable. Public APIs and model properties retain their names, and hot-path control flow is preserved. This raises the effort needed to inspect distributed code; it does not make client-side code secret. Use `npm run test:e2e:production` to test the actual protected bundles in Chromium.
 

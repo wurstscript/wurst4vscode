@@ -239,7 +239,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
                 const texPaths: string[] = rawPaths.filter((p): p is string => typeof p === 'string');
                 dbg(`texture request: ${texPaths.length} paths`);
                 // Same resolver, payload cache and concurrency limit as the object editor's inline
-                // model preview and the asset browser — this viewer used to carry its own copy.
+                // model preview and the asset browser, this viewer used to carry its own copy.
                 await postTexturesToWebview(texPaths, document.uri, webviewPanel.webview);
                 return;
             }
@@ -270,7 +270,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
   <div class="wv-header">
     <div class="meta">
       <strong id="fileName">${fileName}</strong>
-      <span id="fileMeta"> &mdash; Loading...</span>
+      <span id="fileMeta"> - Loading...</span>
     </div>
     <div class="blp-toolbar">
       <button class="wv-btn" id="zoomOutBtn" type="button" title="Zoom out">&minus;</button>
@@ -320,7 +320,7 @@ class BlpPreviewProvider implements vscode.CustomReadonlyEditorProvider<BlpDocum
       <div class="sb-divider" id="seqDivider" style="display:none"></div>
       <div class="sb-section" id="seqSection" style="display:none">
         <div class="sb-label">Timeline</div>
-        <div id="seqFrameLabel" class="frame-label">frame: &mdash;</div>
+        <div id="seqFrameLabel" class="frame-label">frame: -</div>
         <input id="seqSlider" class="seq-slider" type="range" min="0" max="1" step="1" value="0" />
         <div id="seqStats" class="seq-name"></div>
       </div>

@@ -956,7 +956,7 @@ function renderW3cList(file: W3cFile, triggerStrings: TriggerStringTable = new M
 
 function renderW3cEditor(doc: W3cDocument): string {
     return renderEditableListPage(doc, {
-        meta: `WC3 cameras — v${doc.file.version}`,
+        meta: `WC3 cameras: v${doc.file.version}`,
         count: doc.file.cameras.length,
         countLabel: 'cameras',
         listHtml: renderW3cList(doc.file, doc.wtsTable, doc.wtsEdits),
@@ -1112,7 +1112,7 @@ function renderW3rList(file: W3rFile, triggerStrings: TriggerStringTable = new M
 
 function renderW3rEditor(doc: W3rDocument): string {
     return renderEditableListPage(doc, {
-        meta: `WC3 regions — v${doc.file.version}`,
+        meta: `WC3 regions: v${doc.file.version}`,
         count: doc.file.regions.length,
         countLabel: 'regions',
         listHtml: renderW3rList(doc.file, doc.wtsTable, doc.wtsEdits),
@@ -1225,7 +1225,7 @@ function renderMmpList(file: MmpFile): string {
 
 function renderMmpEditor(doc: MmpDocument): string {
     return renderEditableListPage(doc, {
-        meta: `WC3 minimap icons — v${doc.file.version}`,
+        meta: `WC3 minimap icons: v${doc.file.version}`,
         count: doc.file.icons.length,
         countLabel: 'minimap icons',
         metric: 'Records are shown in minimap/lobby order',
@@ -1457,7 +1457,7 @@ function renderW3iEditor(doc: W3iDocument, fileName: string): string {
         : '';
 
     const body = `
-${renderHeader(fileName, `WC3 map information — v${f.version}`, true)}
+${renderHeader(fileName, `WC3 map information: v${f.version}`, true)}
 <div class="dialog">
 ${errorBanner(f.error)}
 <section class="section">

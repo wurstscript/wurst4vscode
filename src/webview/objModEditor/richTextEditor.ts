@@ -1,5 +1,5 @@
 import { renderWc3Colors } from '../webviewUtils';
-import { customSwatchesHtml, rememberCustomColor } from './fieldDisplay';
+import { customSwatchesHtml, hasColorMarkup, rememberCustomColor } from './fieldDisplay';
 
 // Current selection range for a textarea (kept fresh even after blur, so toolbar/color-picker work).
 export function taRange(ta) {
@@ -167,22 +167,14 @@ export function applyRichColor(rich, color) {
   rich.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-// Same "does this look like it has WC3 markup" check as fieldDisplay.ts's hasColorMarkup — duplicated
-// rather than imported (it's three lines, and richTextEditor.ts otherwise has no dependency on
-// fieldDisplay.ts) so pasted/copied text can be told apart from ordinary plain text.
-function looksLikeWc3Markup(v) {
-  const s = String(v == null ? '' : v).toLowerCase();
-  return s.indexOf('|c') !== -1 || s.indexOf('|n') !== -1 || s.indexOf('|r') !== -1 || s.indexOf(String.fromCharCode(10)) !== -1;
-}
-
 // Force plain-text paste into a contenteditable, EXCEPT when the pasted text itself is WC3 markup
-// (|cffRRGGBB.../|n/|r — e.g. something copied from this same tooltip editor, or straight out of game
+// (|cffRRGGBB.../|n/|r, e.g. something copied from this same tooltip editor, or straight out of game
 // data), in which case it's rendered as colors instead of showing the literal codes as text. Browser
-// paste brings in far more than richToWc3() understands (bold, fonts, images, Word markup) — that
+// paste brings in far more than richToWc3() understands (bold, fonts, images, Word markup). That
 // would render in the preview but then silently vanish from the saved value on the next input event,
 // with no indication anything changed, hence forcing everything else down to plain text.
 // `el` (the tooltip's .tt-collapsed-body) is a fixed DOM node that gets re-entered into edit mode
-// repeatedly across separate click-to-edit sessions — this only needs wiring once, ever, so a second
+// repeatedly across separate click-to-edit sessions; this only needs wiring once, ever, so a second
 // call is a no-op rather than stacking another paste listener (which would insert pasted text twice).
 export function forcePlainTextPaste(el) {
   if (el._pastePlainWired) return;
@@ -200,7 +192,7 @@ export function forcePlainTextPaste(el) {
     // transaction the same way execCommand would.
     const sel = window.getSelection();
     const hasRange = sel && sel.rangeCount && el.contains(sel.getRangeAt(0).commonAncestorContainer);
-    const markup = looksLikeWc3Markup(text);
+    const markup = hasColorMarkup(text);
     if (hasRange) {
       const range = sel.getRangeAt(0);
       range.deleteContents();
@@ -229,7 +221,7 @@ export function forcePlainTextPaste(el) {
 
 // Makes native copy/cut on a tooltip's rich contenteditable put the raw WC3 string (|cffRRGGBB.../|n/
 // |r) on the clipboard instead of the browser's default plain-text serialization (which just reads off
-// rendered characters/colors, discarding the codes that produced them) — so a copy-paste round trip,
+// rendered characters/colors, discarding the codes that produced them), so a copy-paste round trip,
 // even into a different tooltip field or a plain text editor, preserves formatting instead of silently
 // flattening it. Copies just the selection if there is one (matching the toolbar's own Copy button),
 // otherwise the whole tooltip. Cut additionally removes the selected content, same as native cut would.
@@ -260,7 +252,7 @@ export function forceWc3ColorCopy(el) {
 }
 
 // Only one tooltip/color editor is ever open at a time in practice, so a single shared listener
-// tracking whichever one was wired most recently is enough — registering a fresh `selectionchange`
+// tracking whichever one was wired most recently is enough. Registering a fresh `selectionchange`
 // listener per `wireColorBar` call (once per click-to-edit, with no matching removal) accumulated one
 // leaked, permanently-firing listener per edit for the whole session.
 let activeRichSync: any = null;
@@ -272,10 +264,10 @@ document.addEventListener('selectionchange', () => {
 });
 
 // `rich` is the contenteditable text the bar controls (always present). `getTa`, if given, is called
-// at interaction time to get the current raw-text textarea (it may not exist yet — the raw panel is
-// created lazily — so this can't be captured once up front like `rich` can).
+// at interaction time to get the current raw-text textarea (it may not exist yet; the raw panel is
+// created lazily, so this can't be captured once up front like `rich` can).
 //
-// `rich` (the tooltip's .tt-collapsed-body) is a fixed DOM node reused across separate edit sessions —
+// `rich` (the tooltip's .tt-collapsed-body) is a fixed DOM node reused across separate edit sessions:
 // `bar` is a fresh toolbar each time, though, so each call's `syncColor` closure is only valid for the
 // toolbar that was live when it was created. Without removing the previous session's listeners first,
 // they'd pile up on `rich` and keep firing (harmlessly here, but the same reuse pattern is exactly

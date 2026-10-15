@@ -5,7 +5,7 @@
  *
  * Nothing here can move to the headless suite: the thumbnails come out of a real extension host
  * resolving assets against a local Warcraft III install, rendered by a WebGL worker. What is being
- * asserted is the *scheduling* contract from AGENTS.md — visible thumbnails drain strictly in DOM
+ * asserted is the *scheduling* contract from AGENTS.md: visible thumbnails drain strictly in DOM
  * order, one complete lifecycle at a time, and each warm one lands inside its budget.
  *
  * Ported from scripts/objmod-thumbnail-e2e.js.
@@ -29,7 +29,7 @@ const CODE_ASSET_FILE = process.env.WURST_OBJMOD_E2E_CODE_FILE || '';
 const PROJECT_PATH = process.env.WURST_OBJMOD_E2E_PROJECT || path.join(root, 'e2e');
 const OBJMOD_FILE = process.env.WURST_OBJMOD_E2E_FILE || path.join(PROJECT_PATH, 'war3map.w3u');
 
-// Measure real generation, not a cache read — otherwise the timing budget proves nothing.
+// Measure real generation, not a cache read; otherwise the timing budget proves nothing.
 const THUMB_ENV = { WURST_MODEL_THUMB_DISABLE_CACHE: '1' };
 
 const terminalTypes = new Set(['loaded', 'missing', 'failed']);
@@ -53,7 +53,7 @@ function durationsByKey(events) {
     return out;
 }
 
-/** The renderer mode a thumbnail used — the first of each mode pays a one-off warm-up cost. */
+/** The renderer mode a thumbnail used, the first of each mode pays a one-off warm-up cost. */
 function rendererModeForKey(events, key) {
     const parsed = events.find((event) => event.key === key && event.type === 'profile:worker-parsed');
     if (!parsed || !parsed.detail) return 'unknown';
@@ -83,7 +83,7 @@ async function openAssetBrowser(frame) {
     }
 }
 
-/** A visible slot must be either pending or already finished — never idle in between. */
+/** A visible slot must be either pending or already finished, never idle in between. */
 function idleVisibleSlots(state, visible, initialKeys) {
     const terminals = terminalKeys(state);
     return visible
@@ -222,7 +222,7 @@ test.describe('objmod model thumbnails', () => {
         session.bringToForeground();
         await workbench.bringToFront().catch(() => undefined);
 
-        // The clickable region is the anchor inside the decoration, not the decoration box itself —
+        // The clickable region is the anchor inside the decoration, not the decoration box itself:
         // a centre-click on the container lands beside it and silently does nothing.
         const lens = workbench.locator('.codelens-decoration a', { hasText: 'Browse model' }).first();
         await lens.waitFor({ state: 'visible', timeout: 60000 });

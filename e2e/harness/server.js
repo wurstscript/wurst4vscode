@@ -4,7 +4,7 @@
  * Minimal static server standing in for VS Code's webview resource scheme.
  *
  * The page is served over a real http origin rather than `page.setContent`, because the host's own
- * Content-Security-Policy is built from `webview.cspSource` — pointing that at this origin means the
+ * Content-Security-Policy is built from `webview.cspSource`. Pointing that at this origin means the
  * shipped CSP has to genuinely admit the bundle and assets the page loads, so a CSP regression shows
  * up as a broken test instead of passing silently.
  */
@@ -48,7 +48,7 @@ async function startHarnessServer() {
             abs = decodeURIComponent(url.pathname.slice('/file/'.length));
         } else if (url.pathname.startsWith('/dist/')) {
             abs = path.join(root, url.pathname.replace(/^\//, ''));
-            // Keep served files inside the repo's dist dir — this server is only ever local, but a
+            // Keep served files inside the repo's dist dir; this server is only ever local, but a
             // traversal here would silently read arbitrary files into the page under test.
             if (!path.resolve(abs).startsWith(path.join(root, 'dist'))) return send(403, 'text/plain', 'denied');
         } else {

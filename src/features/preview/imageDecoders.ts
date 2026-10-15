@@ -33,7 +33,7 @@ export type { DecodedRasterImage };
 export type DecodedRgbaImage = Extract<DecodedRasterImage, { mode: 'rgba' }>;
 
 /**
- * MDX files are passed through as-is — they're decoded in the webview via the
+ * MDX files are passed through as-is, they're decoded in the webview via the
  * `war3-model` package. Keeps the preview-dispatcher return type uniform.
  */
 export type DecodedMdxRaw = {

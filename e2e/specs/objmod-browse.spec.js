@@ -61,7 +61,7 @@ test('renders a grouped tree and selects the first object with its field rows', 
     await expect(firstTwisty).toHaveClass(/codicon-chevron-right/);
 
     // The first object is selected on open and its fields are requested from the host, not shipped
-    // in the initial payload — that laziness is the whole point of the details protocol.
+    // in the initial payload; that laziness is the whole point of the details protocol.
     await expect(page.locator('#details .table-wrap tbody tr')).not.toHaveCount(0);
     expect(host.posted.some((m) => m.type === 'objectDetailsLoaded')).toBe(true);
     expect(pageErrors).toEqual([]);
@@ -95,7 +95,7 @@ test('search finds an object by its rawcode', async ({ openObjMod }) => {
     const allRows = await page.locator('#tree .object-row').count();
 
     // The matcher is fuzzy (see matchScore in objectTree.ts), so a rawcode query narrows rather than
-    // pinpoints — what matters is that the exact object survives the filter and the list shrinks.
+    // pinpoints; what matters is that the exact object survives the filter and the list shrinks.
     await page.fill('#search', 'h004');
     await expandAll(page);
     const matched = await page.locator('#tree .object-row').count();
@@ -122,7 +122,7 @@ test('clicking an object switches the details panel and tells the host the new s
     await expect(page.locator('#details .table-wrap tbody tr')).not.toHaveCount(0);
 
     // The host persists selection by stable rawcode identity, not by array index (see
-    // rememberSelection/objModSelectionPathKey) — that is what survives Git reordering the file.
+    // rememberSelection/objModSelectionPathKey), that is what survives Git reordering the file.
     await expect
         .poll(() => host.doc.selectedIdentity, { message: 'host should have stored the selection identity' })
         .toBeTruthy();

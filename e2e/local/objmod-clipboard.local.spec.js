@@ -7,7 +7,7 @@
  * silently no-ops for a script-synthesised event with no user gesture behind it, so calling the
  * debug hooks alone can only prove the DOM/selection state is right, never that the clipboard
  * actually moved. Playwright's `keyboard.press` dispatches through CDP Input, which the renderer
- * treats as trusted — the same mechanism the previous hand-rolled harness used.
+ * treats as trusted, the same mechanism the previous hand-rolled harness used.
  *
  * Ported from scripts/objmod-clipboard-e2e.js.
  */
@@ -22,7 +22,7 @@ const debug = (frame, expression) => frame.evaluate(expression);
 async function pressInWindow(session, frame, combo) {
     await frame.page().bringToFront().catch(() => undefined);
     session.bringToForeground();
-    // SetForegroundWindow is asynchronous from the renderer's point of view — dispatching before the
+    // SetForegroundWindow is asynchronous from the renderer's point of view; dispatching before the
     // window has actually taken focus is exactly the case where Ctrl+C silently does nothing.
     await frame.evaluate(() => new Promise((resolve) => {
         const start = Date.now();

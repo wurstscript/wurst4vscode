@@ -33,7 +33,7 @@ function writeAbilityFixture() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wurst-e2e-objmod-fixture-'));
     fs.writeFileSync(path.join(dir, 'wurst.build'), 'projectName = wurst-local-e2e\n');
 
-    // Real model bytes, not placeholder text — the asset browser has to actually parse and render
+    // Real model bytes, not placeholder text, the asset browser has to actually parse and render
     // these, and fake bytes would only ever produce a "missing" thumbnail.
     const importedModels = path.join(dir, 'imports', 'units');
     fs.mkdirSync(importedModels, { recursive: true });
@@ -121,7 +121,7 @@ const test = base.extend({
  * launch VS Code on an ordinary test run.
  */
 function skipUnlessEnabled() {
-    test.skip(!enabled, 'local VS Code e2e is opt-in — set WURST_OBJMOD_E2E=1 to run it');
+    test.skip(!enabled, 'local VS Code e2e is opt-in: set WURST_OBJMOD_E2E=1 to run it');
 }
 
 module.exports = { test, expect, waitFor, root, enabled, skipUnlessEnabled, CLIPBOARD_TEST_VALUE };

@@ -67,7 +67,6 @@ const MIN_ZOOM = 0.05, MAX_ZOOM = 64;
 function persistView() { api.setState({ camX, camY, zoom, tool, brushSize }); }
 
 function clampCam() {
-  const vw = canvas.width, vh = canvas.height;
   camX = Math.max(0, Math.min(W, camX));
   camY = Math.max(0, Math.min(H, camY));
 }
@@ -80,7 +79,7 @@ function fitToView() {
 }
 
 // ── Draw ───────────────────────────────────────────────────────────────────
-// The display canvas is fixed to the viewport size — it NEVER resizes on zoom.
+// The display canvas is fixed to the viewport size; it never resizes on zoom.
 // Zoom/pan = update camera, call draw() once. Draw = one drawImage (GPU blit).
 function draw() {
   const vw = canvas.width, vh = canvas.height;
@@ -95,7 +94,7 @@ function draw() {
   ctx.imageSmoothingEnabled = zoom < 1;
   ctx.drawImage(offscreen, srcX, srcY, srcW, srcH, 0, 0, vw, vh);
 
-  // Grid — only when cells are large enough to see individually
+  // Grid, only when cells are large enough to see individually
   if (zoom >= 6) {
     ctx.strokeStyle = 'rgba(255,255,255,0.18)';
     ctx.lineWidth = 1;

@@ -117,7 +117,7 @@ test('re-entering the same value is not treated as an edit', async ({ openW3i })
     await page.selectOption('[data-select="tileset"]', 'L');
 
     // A real edit right after proves the no-op ones were already delivered and ignored, rather than
-    // merely still in flight — nothing changed, so the document must still be clean at that point.
+    // merely still in flight; nothing changed, so the document must still be clean at that point.
     await page.fill('[data-field="author"]', 'Definitely Changed');
     await page.locator('[data-field="author"]').blur();
     await expect.poll(() => host.editLabels.length).toBe(1);

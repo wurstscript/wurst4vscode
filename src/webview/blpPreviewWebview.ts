@@ -57,7 +57,7 @@ function debug(msg: string) {
   debugLines.push(line);
   if (debugLines.length > debugLimit) debugLines.shift();
   debugLog.textContent = debugLines.join('\n');
-  // don't auto-show debug log — user must toggle it
+  // Show the debug log only when the user toggles it.
   try { vscode.postMessage({ type: 'debug', message: line }); } catch { /* host gone */ }
 }
 
@@ -89,7 +89,7 @@ function setLoading(isLoading: boolean, text?: string) {
 
 function setMeta(fileName: string, metaText: string) {
   byId('fileName').textContent = fileName;
-  byId('fileMeta').textContent = ' — ' + metaText;
+  byId('fileMeta').textContent = ': ' + metaText;
   debug('meta: ' + fileName + ' | ' + metaText);
 }
 
@@ -130,7 +130,7 @@ function onModelLoaded(info: ModelLoadedInfo) {
   } else {
     for (const seq of info.sequences) {
       const opt = document.createElement('option');
-      opt.textContent = seq.name + ' [' + seq.start + '–' + seq.end + ']' + (seq.looping ? '' : ' ∅');
+      opt.textContent = seq.name + ' [' + seq.start + ' to ' + seq.end + ']' + (seq.looping ? '' : ' ∅');
       animSelect.appendChild(opt);
     }
     animSelect.selectedIndex = 0;

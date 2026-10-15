@@ -56,7 +56,7 @@ function refName(id: string, catalog: Catalog): string {
 }
 
 function renderDropSetsHtml(drops: DooDropSet[], catalog: Catalog): string {
-    if (drops.length === 0) return '—';
+    if (drops.length === 0) return '-';
     return drops.map(ds => {
         if (ds.items.length === 0) return '∅';
         return ds.items.map(it => `${refName(it.itemId, catalog)} <span class="dim">(${it.chance}%)</span>`).join(', ');
@@ -69,12 +69,12 @@ function renderDoodadTable(doodads: DooDoodad[], catalog: Catalog): string {
     if (doodads.length === 0) return '<p class="empty">No doodads</p>';
 
     const rows = doodads.map(d => {
-        const visible = (d.flags & 1) ? 'V' : '—';
-        const solid   = (d.flags & 2) ? 'S' : '—';
+        const visible = (d.flags & 1) ? 'V' : '-';
+        const solid   = (d.flags & 2) ? 'S' : '-';
 
         return `<tr>
   <td class="obj">${objCell(d.typeId, catalog)}</td>
-  <td class="id">${d.skinId && d.skinId !== d.typeId ? escapeHtml(d.skinId) : '—'}</td>
+  <td class="id">${d.skinId && d.skinId !== d.typeId ? escapeHtml(d.skinId) : '-'}</td>
   <td class="num">${d.variation}</td>
   <td class="num">${fmt1(d.x)}</td><td class="num">${fmt1(d.y)}</td><td class="num">${fmt1(d.z)}</td>
   <td class="num">${fmt3(d.angle)}</td>
@@ -124,27 +124,27 @@ function renderUnitTable(units: DooUnit[], hasSubV11: boolean, catalog: Catalog)
     const rows = units.map(u => {
         const isSloc   = u.typeId === 'sloc';
         const heroCols = hasSubV11
-            ? `<td class="num">${u.heroStr ?? '—'}</td><td class="num">${u.heroAgi ?? '—'}</td><td class="num">${u.heroInt ?? '—'}</td>`
+            ? `<td class="num">${u.heroStr ?? '-'}</td><td class="num">${u.heroAgi ?? '-'}</td><td class="num">${u.heroInt ?? '-'}</td>`
             : '';
         const hpStr   = u.lifePerc === -1 ? 'default' : `${u.lifePerc}%`;
         const mpStr   = u.manaPerc === -1 ? 'default' : `${u.manaPerc}%`;
         const drops   = renderDropSetsHtml(u.drops, catalog);
         const abils   = u.abilities.length
             ? u.abilities.map(a => `${refName(a.abilityId, catalog)} <span class="dim">L${a.level}${a.autoCast ? ' ✓' : ''}</span>`).join(', ')
-            : '—';
+            : '-';
         const objHtml = isSloc ? objCell(u.typeId, catalog, 'Start Location') : objCell(u.typeId, catalog);
 
         return `<tr${isSloc ? ' class="sloc"' : ''}>
   <td class="obj">${objHtml}</td>
-  <td class="id">${u.skinId && u.skinId !== u.typeId ? escapeHtml(u.skinId) : '—'}</td>
+  <td class="id">${u.skinId && u.skinId !== u.typeId ? escapeHtml(u.skinId) : '-'}</td>
   <td class="num">${u.variation}</td>
   <td class="num">${playerLabel(u.ownerIndex)}</td>
   <td class="num">${fmt1(u.x)}</td><td class="num">${fmt1(u.y)}</td><td class="num">${fmt1(u.z)}</td>
   <td class="num">${fmt3(u.angle)}</td>
   <td class="num">${hpStr}</td><td class="num">${mpStr}</td>
-  <td class="num">${u.heroLevel > 1 ? u.heroLevel : '—'}</td>
+  <td class="num">${u.heroLevel > 1 ? u.heroLevel : '-'}</td>
   ${heroCols}
-  <td class="num">${u.resourcesAmount > 0 ? u.resourcesAmount : '—'}</td>
+  <td class="num">${u.resourcesAmount > 0 ? u.resourcesAmount : '-'}</td>
   <td class="drops">${drops}</td>
   <td class="drops">${abils}</td>
 </tr>`;
@@ -206,7 +206,7 @@ ${renderSpecialDoodadTable(parsed.specialDoodads ?? [], catalog)}`;
         const count  = parsed.units.length;
         const slocs  = parsed.units.filter(u => u.typeId === 'sloc').length;
         const slocPlural = slocs !== 1 ? 's' : '';
-        const sub2   = slocs > 0 ? ` — ${slocs} start location${slocPlural}` : '';
+        const sub2   = slocs > 0 ? `: ${slocs} start location${slocPlural}` : '';
 
         mainSection = `<section>
 <h2>Units &amp; Items <span class="count">(${count}${sub2})</span></h2>

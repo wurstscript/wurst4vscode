@@ -47,7 +47,7 @@ function copyFixtureDir(fixtureDir, prefix) {
 /**
  * @param {object} opts
  * @param {string} opts.origin       Harness server origin. Becomes the webview's cspSource, so the
- *                                   page's real CSP has to genuinely admit the bundle it loads — a
+ *                                   page's real CSP has to genuinely admit the bundle it loads, a
  *                                   CSP regression fails the test instead of passing quietly.
  * @param {string} [opts.fixtureDir] Directory holding war3map.w3u & friends. Defaults to e2e/.
  * @param {string} [opts.fileName]   File within it to open. Defaults to war3map.w3u.

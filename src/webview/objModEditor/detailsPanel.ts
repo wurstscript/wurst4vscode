@@ -25,7 +25,7 @@ export function retryDetails(key) {
 
 // The real WC3 category vocabulary (sound/pathing/editor-only/... on top of the common abil/art/
 // combat/...) isn't something worth hand-maintaining, so the filter checklist is the union of every
-// category seen across objects loaded so far this session — accurate for whatever file is actually
+// category seen across objects loaded so far this session, accurate for whatever file is actually
 // open, and it only grows (never reshuffles/disappears) as detailCache accumulates more objects.
 const FIELD_VIEWS = {
   // The group sequence used by Warcraft III's Object Editor. Keep aliases beside their metadata
@@ -92,7 +92,7 @@ function applyFieldViewPreset(view) {
   });
 }
 
-// "Custom view" category filter — a checklist popover next to the technical toggle that hides whole
+// "Custom view" category filter, a checklist popover next to the technical toggle that hides whole
 // field-category groups (e.g. everything but Text, to focus on tooltips). Persisted like showTechnical
 // so it stays applied while browsing between objects.
 function categoryFilterHtml() {
@@ -112,8 +112,8 @@ function categoryFilterHtml() {
 }
 
 // Tracks which object's field table is currently painted (module-scope, not exported): renderDetails()
-// reassigns details.innerHTML on every call — including for reasons other than switching objects, like
-// toggling technical mode — which destroys and recreates the scrollable .table-wrap every time. Unlike
+// reassigns details.innerHTML on every call, including for reasons other than switching objects, like
+// toggling technical mode, which destroys and recreates the scrollable .table-wrap every time. Unlike
 // the object tree (see renderTree() in objectTree.ts), the right response here depends on WHY it's
 // rebuilding: same object → carry the scroll forward (nothing about the content actually changed
 // position-wise); different object → start at the top, since a saved offset means nothing for a
@@ -122,7 +122,7 @@ function categoryFilterHtml() {
 let lastRenderedKey: string | null = null;
 
 export function renderDetails() {
-  exitTooltipEdit(true); // about to rebuild #details — the in-place editor's anchor is going stale
+  exitTooltipEdit(true); // about to rebuild #details: the in-place editor's anchor is going stale
   const obj = objects.find(candidate => candidate.key === ui.selectedKey) || objects.find(matches) || objects[0];
   if (!obj) {
     details.innerHTML = '<div class="empty-state">No object modifications</div>';
@@ -135,7 +135,7 @@ export function renderDetails() {
     : (lastRenderedKey === obj.key && prevTable ? prevTable.scrollTop : 0);
   lastRenderedKey = obj.key;
   ui.selectedKey = obj.key;
-  // [label, column class]. The class drives an explicit width (see .col-* in objModPreview.ts) —
+  // [label, column class]. The class drives an explicit width (see .col-* in objModEditor.css):
   // `table-layout: fixed` ignores cell min-widths, so the header row is the only place widths can be
   // stated, and technical mode's 4-character id column must not inherit the compact Field column's
   // (far wider) proportional width.
@@ -145,7 +145,7 @@ export function renderDetails() {
       .concat([['Value', 'col-value']])
     : [['Field', 'col-field'], ['Value', 'col-value']];
   const mods = detailCache.get(obj.key);
-  // A failed load stays failed until the user asks to retry — auto-retrying every render would just
+  // A failed load stays failed until the user asks to retry; auto-retrying every render would just
   // hammer whatever broke (missing game data, a thrown parser error) in a silent loop.
   const failedReason = failedDetails.get(obj.key);
   const hasFailed = !mods && failedDetails.has(obj.key);
@@ -167,9 +167,9 @@ export function renderDetails() {
         (initial.extended ? '<td class="num">' + esc(mod.level ?? '') + '</td>' + '<td class="num">' + esc(mod.dataPt ?? '') + '</td>' : '')
       : '<td class="field">' + esc(mod.label || mod.fieldId) + levelLabel + '</td>';
     // Include the category ("Abilities", "Stats", ...) so a query like "abilities" finds a field whose
-    // own label is just "Normal" — the category is what ties it to that word, not the field name.
+    // own label is just "Normal"; the category is what ties it to that word, not the field name.
     const fsearch = esc((category + ' ' + (mod.fieldId || '') + ' ' + fieldLabel + ' ' + (mod.currentValue || '') + ' ' + (mod.editValue || '') + ' ' + (mod.displayValue || '') + ' ' + (mod.displayDetail || '')).toLowerCase());
-    // "-" is WC3's own placeholder for "no value" (asset paths, rawcode lists, ...) — treat it as blank
+    // "-" is WC3's own placeholder for "no value" (asset paths, rawcode lists, ...); treat it as blank
     // too, same as decoratedValueHtml/collapsedView already do when deciding whether to show "(empty)".
     const currentDisplay = (mod.editValue == null ? (mod.currentValue == null ? '' : String(mod.currentValue)) : String(mod.editValue)).trim();
     const isEmpty = currentDisplay === '' || currentDisplay === '-';
@@ -219,7 +219,7 @@ export function renderDetails() {
   const newTable = details.querySelector('.table-wrap');
   if (newTable) newTable.scrollTop = scrollTop;
 
-  // These three just write signals — the filterFields effect wired in setupDetails() reacts and
+  // These three just write signals; the filterFields effect wired in setupDetails() reacts and
   // re-applies the filter without rebuilding this table (technical, in contrast, changes the headers
   // themselves, so it's read tracked above and drives a full renderDetails rebuild instead). The
   // persistUi effect in state.ts picks up the write too, so there's nothing to persist here by hand.
@@ -240,7 +240,7 @@ export function renderDetails() {
   const fieldSearchClear = document.getElementById('field-search-clear');
   if (fieldSearch) {
     // Debounce the write itself (not just its effect) so rapid keystrokes don't re-filter the table
-    // once per keystroke — same rAF-coalescing convention as the object search box (see applySearch
+    // once per keystroke, same rAF-coalescing convention as the object search box (see applySearch
     // in objModEditorWebview.ts).
     let fieldFilterRaf = 0;
     fieldSearch.addEventListener('input', () => {
@@ -267,7 +267,7 @@ export function renderDetails() {
 }
 
 // Delegated details handlers, wired once. The #details element persists across renders (only its
-// innerHTML changes), so a single listener covers every collapsed cell and object-jump chip — no
+// innerHTML changes), so a single listener covers every collapsed cell and object-jump chip, no
 // more re-wiring 1000+ listeners on each object switch / search / technical toggle.
 function stepNumberInput(numStep) {
   const mi = numStep.getAttribute('data-mi');
@@ -285,13 +285,13 @@ function stepNumberInput(numStep) {
 export function setupDetails() {
   // Full rebuild: reacts to which object is selected and whether technical mode is on (both change
   // the header row / whole table shape). This is the details panel's first paint too, since effects
-  // run immediately on creation — no separate bootstrap render() call is needed.
+  // run immediately on creation; no separate bootstrap render() call is needed.
   effect(() => {
     renderDetails();
   }, 'detailsPanel.renderDetails');
 
   // Lighter re-filter: reacts to the density/search/category filters, none of which change the table's
-  // shape — just re-toggles `.hidden` on existing rows instead of rebuilding them (see filterFields).
+  // shape, just re-toggles `.hidden` on existing rows instead of rebuilding them (see filterFields).
   // Skips its own first run: renderDetails() above already ends with a filterFields() call, and both
   // effects run immediately on creation, so without this the very first paint would filter twice.
   let filterPrimed = false;
@@ -305,7 +305,7 @@ export function setupDetails() {
     else filterPrimed = true;
   }, 'detailsPanel.filterFields');
 
-  // Keep ui.detailsScrollTop live so a reopen restores the field table's scroll position too — the
+  // Keep ui.detailsScrollTop live so a reopen restores the field table's scroll position too; the
   // persistUi effect in state.ts picks it up like every other field. `scroll` doesn't bubble, so this
   // has to be a capture-phase listener on the stable #details container rather than a normal delegated
   // one (which would never see events from the .table-wrap child that's recreated on every render).
@@ -320,7 +320,7 @@ export function setupDetails() {
   }, { capture: true, passive: true });
 
   // Steppers must not steal focus from the input they adjust (mirrors the color-swatch buttons), and
-  // holding one down repeats the step (first tick immediately, then every 60ms after a 400ms delay —
+  // holding one down repeats the step (first tick immediately, then every 60ms after a 400ms delay:
   // the click handler below no-ops for .num-step since this already applied the single-click case).
   let numStepHoldTimer: ReturnType<typeof setTimeout> | null = null;
   let numStepHoldInterval: ReturnType<typeof setInterval> | null = null;
@@ -389,7 +389,7 @@ export function setupDetails() {
       updateCatFilterBadge();
       return;
     }
-    // Stepping itself already happened on mousedown (see setupDetails) — this just stops the click
+    // Stepping itself already happened on mousedown (see setupDetails); this just stops the click
     // from falling through to the row-expand/jump handling below.
     if (e.target.closest('.num-step[data-dir]')) return;
     const jump = e.target.closest('.resolved-chip[data-jump]');
@@ -423,7 +423,7 @@ export function setupDetails() {
       return;
     }
     // Raw-toggle/copy for tooltip fields live in the floating toolbar (outside #details, wired
-    // per-instance in enterTooltipEdit) — nothing to delegate here for those anymore.
+    // per-instance in enterTooltipEdit), nothing to delegate here for those anymore.
     const collapsed = e.target.closest('.tt-collapsed, .cell-edit');
     if (collapsed) {
       const mi = Number(collapsed.getAttribute('data-mi'));
@@ -454,7 +454,7 @@ export function setupDetails() {
 }
 
 // Tooltip/color fields edit in place: the exact box the user is looking at (.tt-collapsed-body)
-// becomes contenteditable, at its existing position and size — nothing is swapped for a copy
+// becomes contenteditable, at its existing position and size; nothing is swapped for a copy
 // elsewhere, so there's no layout shift and no scroll jump. Only the small color-picker/raw-text
 // toolbar floats (position: fixed, doesn't participate in table layout) beside the row.
 let activeTooltipEdit: any = null;
@@ -486,12 +486,12 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
 
   const body = collapsed.querySelector('.tt-collapsed-body');
   if (!body) return;
-  // The floating toolbar anchors to the actual tooltip box, not `collapsed` (the outer row) — that row
+  // The floating toolbar anchors to the actual tooltip box, not `collapsed` (the outer row); that row
   // also contains the source-pill/edit-hint beside the box (see fieldDisplay.ts), so its rect extends
   // well past the box itself and threw the toolbar's position off to the right.
   const box = collapsed.querySelector('.tt-collapsed-box') || collapsed;
 
-  // Same node before and after — the click's caret position is already valid for the body once it's
+  // Same node before and after; the click's caret position is already valid for the body once it's
   // made editable, no coordinate remapping needed.
   let caretOffset: number | null = null;
   let caretPrefersNext = false;
@@ -506,7 +506,7 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
   const original = mod.editValue == null ? '' : String(mod.editValue);
   const stripTemplatePrefix = isTooltipTemplateField(mod);
   const hiddenPrefixLength = stripTemplatePrefix ? original.length - tooltipPreviewText(original).length : 0;
-  // An explicit empty override may hold a "(empty)" placeholder (see collapsedView) — clear it before
+  // An explicit empty override may hold a "(empty)" placeholder (see collapsedView); clear it before
   // editing so typing doesn't start by appending to that literal text. No real content existed to click
   // into, so the captured range (if any) is meaningless here too.
   if (!original) { body.innerHTML = ''; caretOffset = null; }
@@ -519,7 +519,7 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
   forceWc3ColorCopy(body);
 
   // Raw view swaps in this textarea right beside the rich body, inside the same .tt-collapsed-box (see
-  // objModPreview.ts) — toggling never touches the floating toolbar's own size/position, so there's
+  // objModEditor.css); toggling never touches the floating toolbar's own size/position, so there's
   // nothing to reposition and nothing that can misfire the outside-click/scroll-close listeners below.
   const rawArea = document.createElement('textarea');
   rawArea.className = 'tt-collapsed-raw';
@@ -700,8 +700,8 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
     document.removeEventListener('mousedown', onOutsideDown, true);
     window.removeEventListener('resize', onScrollOrResize);
     if (scrollHost && scrollListenerArmed) scrollHost.removeEventListener('scroll', onScrollOrResize);
-    // `body` is the persistent .tt-collapsed-body node — reused for every future edit of this same
-    // field — so its listeners MUST be removed here. Leaving them meant a second edit session left
+    // `body` is the persistent .tt-collapsed-body node, reused for every future edit of this same
+    // field, so its listeners MUST be removed here. Leaving them meant a second edit session left
     // this session's stale onFocusOut (closed over this now-detached toolbar/rawArea) still firing
     // alongside the new one; since the stale one always saw `document.activeElement` as "outside" its
     // own detached toolbar, it force-closed the *new* session on its very next focus change (raw
@@ -715,7 +715,7 @@ export function enterTooltipEdit(collapsed, mi, clickEvent) {
 export function exitTooltipEdit(commit) {
   if (!activeTooltipEdit) return;
   const { collapsed, body, rawArea, toolbar, mi, cleanup } = activeTooltipEdit;
-  // Commit while activeTooltipEdit (and its rawMode flag) is still live — currentValue() inside
+  // Commit while activeTooltipEdit (and its rawMode flag) is still live; currentValue() inside
   // commit() needs it to know whether to read rawArea.value or richToWc3(body).
   if (commit && body._commitNow) body._commitNow();
   activeTooltipEdit = null;
@@ -782,7 +782,7 @@ export function wireEditRaw(el) {
 }
 
 // Swap a collapsed cell for its editor on demand. The editor collapses back when focus leaves it.
-// (Tooltip/color fields never reach this — they edit in place via enterTooltipEdit instead.)
+// (Tooltip/color fields never reach this; they edit in place via enterTooltipEdit instead.)
 export function expandEditor(c) {
   const mi = Number(c.getAttribute('data-mi'));
   const cell = c.closest('td');
@@ -803,7 +803,7 @@ export function expandEditor(c) {
         }
       });
       // The +/- stepper buttons are tabindex="-1" (they must not steal focus from the input), so
-      // Up/Down here is the only keyboard path to stepping — mirrors native <input type="number">.
+      // Up/Down here is the only keyboard path to stepping, mirrors native <input type="number">.
       ta.addEventListener('keydown', e => {
         if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
         e.preventDefault();
@@ -834,7 +834,7 @@ export function expandEditor(c) {
   }
   // Collapse back to the compact view once focus truly leaves this editor (not when clicking its own
   // color bar / popup / picker, which keep focus inside the cell). The handler is stored so collapseCell
-  // can remove it — otherwise it would linger on the collapsed cell and stack on every re-expand.
+  // can remove it; otherwise it would linger on the collapsed cell and stack on every re-expand.
   if (cell._collapseHandler) cell.removeEventListener('focusout', cell._collapseHandler);
   cell._collapseHandler = () => {
     setTimeout(() => {
@@ -861,11 +861,11 @@ export function collapseCell(cell, mi) {
   }
 }
 
-// Update a single field's cell in place (used by undo/redo — avoids rebuilding the whole table).
+// Update a single field's cell in place (used by undo/redo, avoids rebuilding the whole table).
 export function updateFieldCell(mods, mod) {
   const mi = mods.indexOf(mod);
   if (mi < 0) return;
-  // Undo/redo landed on the field currently being edited in place — drop the in-progress edit rather
+  // Undo/redo landed on the field currently being edited in place; drop the in-progress edit rather
   // than let it stomp the externally-applied value when it next commits.
   if (activeTooltipEdit && activeTooltipEdit.mi === mi) exitTooltipEdit(false);
   const el = details.querySelector('.edit-raw[data-mi="' + mi + '"]');
@@ -909,7 +909,7 @@ let lastFieldFilterFirst: Element | null = null;
 export function filterFields(q) {
   const query = String(q || '').trim().toLowerCase();
   // Split on whitespace and require every token to match somewhere in the row's haystack (category +
-  // field id/label/value) — order-independent, so "abilities normal" finds the Abilities > Normal row
+  // field id/label/value), order-independent, so "abilities normal" finds the Abilities > Normal row
   // even though "abilities" only appears via the category and "normal" only via the field label.
   const tokens = query ? query.split(/\s+/).filter(Boolean) : [];
   const table = details.querySelector('table');

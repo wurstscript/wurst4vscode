@@ -94,7 +94,7 @@ function buildWpmHtml(wpm: WpmFile, fileName: string, isDirty: boolean, scriptUr
     <span id="dirtyBadge" class="wv-dirty"${isDirty ? '' : ' hidden'}>Modified</span>
     <div class="toolbar">
       <button id="btnZoomOut" class="wv-btn" title="Zoom out">−</button>
-      <span id="zoomLabel">–</span>
+      <span id="zoomLabel">-</span>
       <button id="btnZoomIn" class="wv-btn" title="Zoom in">+</button>
       ${sep()}
       <button id="btnZoomFit" class="wv-btn">Fit</button>

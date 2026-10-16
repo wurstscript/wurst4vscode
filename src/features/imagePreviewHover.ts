@@ -59,7 +59,7 @@ class ImagePreviewHoverProvider implements vscode.HoverProvider {
         }
 
         const label = entry.origW > 0
-            ? `${entry.description} — ${entry.origW}×${entry.origH}`
+            ? `${entry.description}: ${entry.origW}×${entry.origH}`
             : path.basename(fsPath);
         const imgUri = vscode.Uri.file(entry.previewPath).toString();
         const markdown = new vscode.MarkdownString(`![${label}](${imgUri})\n\n*${label}*`);

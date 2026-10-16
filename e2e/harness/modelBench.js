@@ -5,7 +5,7 @@
  * textures they reference, and the snapshot baseline.
  *
  * The in-page half (`runModelBench`) is a plain function so Playwright can hand it straight to
- * `page.evaluate` — the previous harness had to stringify it into a CDP `Runtime.evaluate`
+ * `page.evaluate`, the previous harness had to stringify it into a CDP `Runtime.evaluate`
  * expression, which is why it was wrapped in template-literal escaping.
  */
 
@@ -94,7 +94,7 @@ function buildFixtures(modelPaths) {
     }));
 }
 
-/** The page the viewer bundle is loaded into — a 96x96 canvas, matching the real thumbnail size. */
+/** The page the viewer bundle is loaded into, a 96x96 canvas, matching the real thumbnail size. */
 const BENCH_PAGE_HTML = `<title>model thumbnail bench</title>
 <style>
 html,body{margin:0;width:100%;height:100%;background:#111;color:#ddd;font-family:sans-serif}

@@ -2,7 +2,7 @@
 
 /**
  * MDX model-thumbnail render benchmark: loads dist/webview/mdxViewer.js into a real browser, renders
- * a deterministic still frame per fixture, and checks the result is neither blank nor black — plus an
+ * a deterministic still frame per fixture, and checks the result is neither blank nor black, plus an
  * optional pixel-hash snapshot so a silent rendering change is caught.
  *
  * Local-only because the interesting fixtures are models from a Warcraft III install; the checked-in
@@ -28,7 +28,7 @@ const enabled = process.env.WURST_MODEL_E2E === '1' || process.env.WURST_LOCAL_E
 const perModelTimeoutMs = Number(process.env.WURST_MODEL_E2E_MODEL_TIMEOUT_MS || 15000);
 const updateSnapshots = process.env.WURST_MODEL_UPDATE_SNAPSHOTS === '1';
 
-test.skip(!enabled, 'local model e2e is opt-in — set WURST_MODEL_E2E=1 to run it');
+test.skip(!enabled, 'local model e2e is opt-in: set WURST_MODEL_E2E=1 to run it');
 
 test.describe('mdx model thumbnail rendering', () => {
     test.slow();
@@ -38,10 +38,10 @@ test.describe('mdx model thumbnail rendering', () => {
 
     test.beforeAll(async ({ browser }) => {
         const models = resolveModelPaths();
-        expect(models.length, 'no model fixtures found — set WURST_MODEL_BENCH_MODELS').toBeGreaterThan(0);
+        expect(models.length, 'no model fixtures found: set WURST_MODEL_BENCH_MODELS').toBeGreaterThan(0);
         expect(
             fs.existsSync(path.join(root, 'dist', 'webview', 'mdxViewer.js')),
-            'missing dist/webview/mdxViewer.js — run npm run compile-web first',
+            'missing dist/webview/mdxViewer.js: run npm run compile-web first',
         ).toBe(true);
 
         const server = await startHarnessServer();
@@ -86,7 +86,7 @@ test.describe('mdx model thumbnail rendering', () => {
         const snapshots = readSnapshots();
         test.skip(
             !Object.keys(snapshots).length,
-            `no snapshot baseline at ${SNAPSHOT_FILE} — set WURST_MODEL_UPDATE_SNAPSHOTS=1 to create one`,
+            `no snapshot baseline at ${SNAPSHOT_FILE}: set WURST_MODEL_UPDATE_SNAPSHOTS=1 to create one`,
         );
         const changed = bench.results
             .filter((result) => !result.warmup && snapshots[result.name])

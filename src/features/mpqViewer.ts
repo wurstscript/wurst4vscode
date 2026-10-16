@@ -446,7 +446,7 @@ async function offerMapFolderMigration(
 }
 
 // ---------------------------------------------------------------------------
-// HTML shell — UI logic lives in dist/webview/mpqViewerWebview.js
+// HTML shell, UI logic lives in dist/webview/mpqViewerWebview.js
 // ---------------------------------------------------------------------------
 
 function buildHtml(webview: vscode.Webview, archiveName: string, scriptUri: vscode.Uri): string {
@@ -483,7 +483,7 @@ function buildHtml(webview: vscode.Webview, archiveName: string, scriptUri: vsco
     Extract All
   </button>
   ${sep()}
-  <button class="wv-btn" id="btnExportFolder" disabled title="Export as map folder (WC3 folder mode) — creates a .w3x folder next to the archive">
+  <button class="wv-btn" id="btnExportFolder" disabled title="Export as map folder (WC3 folder mode): creates a .w3x folder next to the archive">
     <span class="btn-spinner"></span>
     <svg viewBox="0 0 16 16"><path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.672a1.5 1.5 0 0 1 1.06.44l.83.83A1.5 1.5 0 0 0 9.12 3.7H13.5A1.5 1.5 0 0 1 15 5.2V5h-1v-.8a.5.5 0 0 0-.5-.5H9.12a2.5 2.5 0 0 1-1.768-.732l-.828-.828A.5.5 0 0 0 6.172 3H2.5a.5.5 0 0 0-.5.5V5H1V3.5zm0 2.5h14v6.5A1.5 1.5 0 0 1 13.5 14h-11A1.5 1.5 0 0 1 1 12.5V6zm6 2v2.293l-.646-.647a.5.5 0 0 0-.708.708l1.5 1.5a.5.5 0 0 0 .708 0l1.5-1.5a.5.5 0 0 0-.708-.708L8 10.293V8a.5.5 0 0 0-1 0z"/></svg>
     Export to Map Folder

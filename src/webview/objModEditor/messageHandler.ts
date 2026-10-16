@@ -28,7 +28,7 @@ import { mpvViewer, mpvB64ToArrayBuffer } from './modelViewerShared';
 import { mpvStatus, mpvSetPlaying, mpvFillAnims } from './modelPreviewPanel';
 import { setAssetCatalog, handleAssetCatalogFailed } from './assetBrowser';
 
-// The in-game tooltip fill texture (see requestTooltipBackdrop in imageAssetSupport.ts) — decoded once
+// The in-game tooltip fill texture (see requestTooltipBackdrop in imageAssetSupport.ts), decoded once
 // into a data URL and set as a CSS var, so every tooltip preview box picks it up for free via the
 // `background-image: var(--wc3-tip-bg-image, none)` fallback chain already in its CSS. Left unset
 // (falling through to the plain --wc3-tip-bg color) if the game data can't be found.
@@ -48,7 +48,7 @@ function applyTooltipBackdrop(msg) {
     document.documentElement.style.setProperty('--wc3-tip-bg-image', 'url(' + canvas.toDataURL('image/png') + ')');
     console.log('[wurst-tooltip-backdrop] applied', msg.width, 'x', msg.height);
   } catch (err) {
-    // Leave --wc3-tip-bg-image unset — the plain --wc3-tip-bg color fallback already covers this.
+    // Leave --wc3-tip-bg-image unset; the plain --wc3-tip-bg color fallback already covers this.
     console.error('[wurst-tooltip-backdrop] failed to apply', err);
   }
 }
@@ -71,7 +71,7 @@ function sliceBorderTile(atlasData, atlasWidth, i) {
   return out;
 }
 
-// The atlas only has vertical edge tiles (left/right) — no horizontal top/bottom tile exists on its
+// The atlas only has vertical edge tiles (left/right); no horizontal top/bottom tile exists on its
 // own, because both the left-edge tile (given its content doesn't vary by row) and the top-edge tile
 // (which shouldn't vary by column) are the same shape once you swap their axes: a matrix transpose,
 // dst(x,y) = src(y,x). Confirmed by inspecting the corner tiles, whose top/bottom bevel exactly matches
@@ -101,12 +101,12 @@ function borderTileDataUrl(imgData) {
 }
 
 // Slices the gold-border tile atlas (see TOOLTIP_BORDER_PATH in imageAssetSupport.ts) into the 4
-// corners + 4 edges a real 9-slice border needs, and sets each as its own CSS var — the tooltip-box
+// corners + 4 edges a real 9-slice border needs, and sets each as its own CSS var. The tooltip-box
 // CSS layers all 8 as separate `background-image`s (see .tt-collapsed/.tt-preview) positioned at their
 // respective corner/edge, painted over the plain fill texture. This is a hand-reconstructed
 // approximation of the game's own frame-engine rendering (tile positions/thicknesses read off the
 // decoded atlas, not off the original FDF frame definition), so it may not line up pixel-for-pixel with
-// the real in-game border — but it's the same gold tile artwork, assembled the same way.
+// the real in-game border, but it's the same gold tile artwork, assembled the same way.
 function applyTooltipBorder(msg) {
   try {
     if (msg.mode !== 'rgba' || !msg.rgbaBase64 || !msg.width || !msg.height) {
@@ -147,11 +147,11 @@ export function setupMessageHandler() {
     } else if (msg.type === 'tooltipBackdropLoaded') {
       applyTooltipBackdrop(msg);
     } else if (msg.type === 'tooltipBackdropMissing') {
-      console.log('[wurst-tooltip-backdrop] not found — keeping the plain background color');
+      console.log('[wurst-tooltip-backdrop] not found: keeping the plain background color');
     } else if (msg.type === 'tooltipBorderLoaded') {
       applyTooltipBorder(msg);
     } else if (msg.type === 'tooltipBorderMissing') {
-      console.log('[wurst-tooltip-border] not found — keeping the plain border');
+      console.log('[wurst-tooltip-border] not found: keeping the plain border');
     } else if (msg.type === 'objectIconMissing') {
       iconLoader.handleMissing(msg.key || '');
     } else if (msg.type === 'modelThumbLoaded') {
@@ -224,7 +224,7 @@ export function setupMessageHandler() {
       }
     } else if (msg.type === 'selectObject' && msg.key) {
       // Cross-file rawcode jump landed on this already-open editor (see openObjectReference in
-      // objModPreview.ts) — switch straight to the target object, same as clicking it in the tree.
+      // objModPreview.ts), switch straight to the target object, same as clicking it in the tree.
       // selectObject() moves the highlight and writes ui.selectedKey; the details panel's reactive
       // effect (see setupDetails() in detailsPanel.ts) re-renders itself in response.
       selectObject(msg.key);
@@ -235,7 +235,7 @@ export function setupMessageHandler() {
       const oldDisplayName = objects[index].displayName;
       const oldDisplaySuffix = objects[index].displaySuffix;
       const suffixChanged = oldDisplaySuffix !== msg.object.displaySuffix;
-      // Campaign/kind/race decide which tree branch this row lives under (see renderTree) — if editing
+      // Campaign/kind/race decide which tree branch this row lives under (see renderTree). If editing
       // pushed it into a different branch, an in-place row swap would leave it under the wrong heading
       // until the next full render, so rebuild the tree instead of just patching this one row.
       const oldBranch = objects[index].race + ':' + objects[index].campaign + ':' + objects[index].kind;
@@ -293,7 +293,7 @@ export function setupMessageHandler() {
         badge.classList.toggle('dirty', !!msg.isDirty);
         badge.textContent = msg.isDirty ? '● unsaved' : 'editable';
         badge.title = msg.isDirty
-          ? 'Unsaved changes — click or Ctrl+S to save.'
+          ? 'Unsaved changes: click or Ctrl+S to save.'
           : 'Existing overrides can be edited. Click or Ctrl+S to save.';
       }
     } else if (msg.type === 'mdxModel') {
@@ -306,7 +306,7 @@ export function setupMessageHandler() {
     } else if (msg.type === 'mdxModelMissing') {
       if (mpvViewer()) mpvViewer().clearModel();
       mpvFillAnims([]);
-      mpvStatus('Not found in map or game files:\\n' + (msg.path || '') + '\\n(tried .mdx/.mdl — see "Log (Extension Host)" for CASC details)');
+      mpvStatus('Not found in map or game files:\\n' + (msg.path || '') + '\\n(tried .mdx/.mdl: see "Log (Extension Host)" for CASC details)');
     } else if (msg.type === 'modelThumbTexturesComplete') {
       handleModelThumbTexturesComplete(msg);
     } else if (msg.type === 'mdxTexture') {

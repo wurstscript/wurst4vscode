@@ -86,7 +86,7 @@ let tilesetBlightTexturesPromise: Promise<Map<string, string>> | undefined;
 
 /**
  * Drops everything parsed out of the game files. These tables describe the installation they were
- * read from, so they have to go when `wurst.wc3path` moves to another one — `resetCascStorage()`
+ * read from, so they have to go when `wurst.wc3path` moves to another one, `resetCascStorage()`
  * only clears the raw byte layer underneath them.
  */
 export function resetGameDataCaches(): void {

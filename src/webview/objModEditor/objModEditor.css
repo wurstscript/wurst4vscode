@@ -5,27 +5,27 @@
  */
 :root {
   /* WC3 tooltips render light-coloured text (white/gold) on a dark in-game backdrop, so the colour
-     preview is intentionally dark in every theme — using --input-bg would hide light text in light themes. */
+     preview is intentionally dark in every theme; using --input-bg would hide light text in light themes. */
   --wc3-tip-bg: #000;
   --wc3-tip-fg: #fff;
   /* The game's effective wrap width varies with UI scale and custom font metrics, so this maximum is
      configurable per workspace/folder through wurst.objModTooltipWidth. */
-  /* Rendered size of each gold corner/edge border tile (see the .tt-collapsed-box, .tt-preview rule) —
+  /* Rendered size of each gold corner/edge border tile (see the .tt-collapsed-box, .tt-preview rule):
      the box's own padding is set to clear this, so the frame sits flush at the edge instead of cutting
      across the text. */
   --wc3-tip-border-size: 9px;
   /* Default browse-list width. Mirrored by LIST_W_DEFAULT in objModEditorWebview.ts (the splitter's
-     fallback when nothing is persisted yet) — keep the two in sync. */
+     fallback when nothing is persisted yet); keep the two in sync. */
   --list-w: 220px;
   /* Minimum width the field table needs before the details pane starts scrolling horizontally.
-     Technical mode (5-7 columns instead of 2) raises it — see table.technical below. */
+     Technical mode (5-7 columns instead of 2) raises it, see table.technical below. */
   --table-min-w: 300px;
 }
 
 /* ── Density ─────────────────────────────────────────────────────────────────────────────────────
    Two spacing scales, selected by the #density-toggle button in the header and persisted per document
-   (see ui.density in state.ts). Compact is the default — this is a dense editor over files with
-   hundreds of objects and thousands of fields, so vertical space is the scarce resource — and
+   (see ui.density in state.ts). Compact is the default: this is a dense editor over files with
+   hundreds of objects and thousands of fields, so vertical space is the scarce resource, and
    body.density-cozy restores the original roomier spacing for anyone who prefers it.
    Every density-sensitive number lives here as a variable so the two modes stay one block of
    overrides instead of two parallel stylesheets; only the handful of genuinely structural differences
@@ -172,7 +172,7 @@ body.density-cozy {
 }
 /* One line, not two: the file name, its meta summary and the save badge share a single strip so the
    editor itself starts ~20px higher. The meta line is the part that gives (it ellipsizes, full text
-   in its title) — the name and the badge always stay legible. Items are centred, not baseline-aligned:
+   in its title); the name and the badge always stay legible. Items are centred, not baseline-aligned:
    the header controls are boxes of different content (switch track, icon, text), and baseline
    alignment staggers them vertically. */
 .md-header {
@@ -207,7 +207,7 @@ body.density-cozy {
    so it wraps below the (still single-line) name + save badge and can show its full text. */
 body.density-cozy .md-meta { order: 3; flex-basis: 100%; white-space: normal; }
 /* Without the meta strip to fill the first row, the badges need an explicit push to the right edge.
-   On the first badge only — both carry .editable-badge, and giving each an auto margin would split
+   On the first badge only: both carry .editable-badge, and giving each an auto margin would split
    the free space between them and strand one mid-header. */
 body.density-cozy #density-toggle { margin-left: auto; }
 /* The three header controls share one box height so they sit on a single centre line. */
@@ -256,7 +256,7 @@ body.density-cozy #density-toggle { margin-left: auto; }
 }
 .refresh-button:hover { background: var(--hover); color: var(--fg); }
 .refresh-button:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
-/* Same pill shape as the save badge, but a neutral (non-accent) affordance — it's a view preference,
+/* Same pill shape as the save badge, but a neutral (non-accent) affordance: it's a view preference,
    not document state. */
 .density-toggle {
   flex: 0 0 auto;
@@ -337,9 +337,9 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 /* The in-game tooltip's fill texture + gold corner/edge tiles (see requestTooltipBackdrop/
    requestTooltipBorder in imageAssetSupport.ts and applyTooltipBackdrop/applyTooltipBorder in
    messageHandler.ts), layered as 9 separate background-images: the 4 corners + 4 edges on top
-   (each only set once their tile has actually loaded — var(..., none) otherwise), the tiled fill
+   (each only set once their tile has actually loaded, var(..., none) otherwise), the tiled fill
    texture underneath, and --wc3-tip-bg as the plain-color fallback beneath everything. Shared between
-   .tt-collapsed-box and .tt-preview since both are "the tooltip box", just editable vs. read-only —
+   .tt-collapsed-box and .tt-preview since both are "the tooltip box", just editable vs. read-only:
    .tt-collapsed itself is just a plain row wrapper so the source-pill/edit-hint can sit beside the box
    instead of inside it (see the comment on .tt-collapsed below). */
 .tt-collapsed-box,
@@ -356,18 +356,18 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
     left var(--wc3-tip-border-size), right var(--wc3-tip-border-size),
     var(--wc3-tip-border-size) top, var(--wc3-tip-border-size) bottom,
     0 0;
-  /* Edges are no-repeat, not repeat-y/repeat-x — see the background-size comment below for why. */
+  /* Edges are no-repeat, not repeat-y/repeat-x, see the background-size comment below for why. */
   background-repeat:
     no-repeat, no-repeat, no-repeat, no-repeat,
     no-repeat, no-repeat, no-repeat, no-repeat,
     repeat;
   /* Each border tile is a 16x16px source, but drawn at --wc3-tip-border-size (smaller) so it reads as a
-     thin frame instead of a chunky inset block — at full 16px, two opposing corners alone (16+16=32px)
+     thin frame instead of a chunky inset block; at full 16px, two opposing corners alone (16+16=32px)
      were taller than a short single-line tooltip box, so they overlapped into a solid gold rectangle
      instead of a border. The box's own padding (below) is sized to clear this same value, so the frame
      sits at the true edge instead of cutting across the text.
      The 4 edges are sized to exactly the strip *between* the two corners on their side (100% minus both
-     corners), rather than tiled the full box length — tiling from the same origin as the corners meant
+     corners), rather than tiled the full box length; tiling from the same origin as the corners meant
      the corner's rounded/receding art didn't fully cover the straight edge tile underneath it, so the
      edge's straight line poked out past the curve at each corner like a little flag. Since none of
      these tiles vary along their own length (edgeLeft/edgeRight are solid at every row, edgeTop/
@@ -411,7 +411,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 .tt-raw-toggle:hover,
 .tt-copy-raw:hover { background: var(--hover); }
 /* In-place raw-text view: same box the rich editor occupies (.tt-collapsed-body), just swapped for a
-   plain textarea showing the literal WC3 string (color codes, |n line breaks) — so toggling Raw never
+   plain textarea showing the literal WC3 string (color codes, |n line breaks), so toggling Raw never
    resizes the floating toolbar or shifts anything else on the page. */
 .tt-collapsed-raw {
   flex: 1 1 100%; /* same full-row basis as .tt-collapsed-body, for the same reason (see its comment) */
@@ -430,7 +430,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   word-break: break-word;
 }
 /* An explicit display on the base rule above would beat the UA [hidden] default regardless of the
-   hidden DOM attribute (author styles win over UA styles even at equal specificity) — this is what
+   hidden DOM attribute (author styles win over UA styles even at equal specificity); this is what
    made both the rich box and the raw textarea show at once after toggling. This rule keeps [hidden]
    authoritative. */
 .tt-collapsed-raw[hidden] { display: none; }
@@ -439,7 +439,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   max-width: min(100%, var(--wc3-tip-width));
   vertical-align: top;
 }
-/* .tt-collapsed is just a plain row now — like the Hotkey/Name rows, the source-pill (e.g.
+/* .tt-collapsed is just a plain row now, like the Hotkey/Name rows, the source-pill (e.g.
    "TRIGSTR_2431") and edit-hint pencil sit beside the tooltip box, not inside it. They used to be
    children of the dark box itself, where they either ate into its (now width-capped, see
    --wc3-tip-width) space or, once wrapped onto their own line, still looked like part of the in-game
@@ -457,7 +457,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   min-width: 0;
   max-width: var(--wc3-tip-width);
   /* At least 2x the border tile size, so top+bottom (or left+right) corner tiles never overlap into a
-     solid block on a short single-line tooltip — see the --wc3-tip-border-size comment above. */
+     solid block on a short single-line tooltip, see the --wc3-tip-border-size comment above. */
   min-height: calc(var(--wc3-tip-border-size) * 2 + 1em);
   box-sizing: border-box;
   /* Padding clears the border tiles so text never sits under the frame art (this was the "inset
@@ -479,7 +479,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
 .tt-empty { color: var(--muted); font-style: normal; }
 .tt-collapsed-box .tt-empty,
 .tt-preview .tt-empty { font-style: italic; }
-/* Editing indicator: outline only, on the box itself — the tooltip box's own background/text colors
+/* Editing indicator: outline only, on the box itself; the tooltip box's own background/text colors
    (--wc3-tip-bg/-fg) are left completely alone, so the preview never loses contrast while being edited. */
 .tt-collapsed.tt-editing .tt-collapsed-box {
   outline: 2px solid var(--focus);
@@ -531,7 +531,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   border-color: color-mix(in srgb, var(--focus) 60%, transparent);
   outline: none;
 }
-/* Shrink-to-fit, not flex:1 — the "modified" badge and source pill cluster right after the value
+/* Shrink-to-fit, not flex:1; the "modified" badge and source pill cluster right after the value
    instead of being flung to the far edge of a wide value column. The click target is still the full
    cell (.cell-edit stays width:100%). */
 .cell-edit-val { flex: 0 1 auto; min-width: 0; font-family: var(--font); word-break: break-word; white-space: pre-wrap; }
@@ -626,7 +626,7 @@ textarea.edit-raw { min-height: 48px; line-height: 1.4; padding: 4px 6px; resize
   position: fixed;
   right: 10px;
   bottom: 10px;
-  /* Never wider than the pane it floats over — at ~300px the old fixed 220px box left almost nothing
+  /* Never wider than the pane it floats over; at ~300px the old fixed 220px box left almost nothing
      of the field table visible behind it. */
   width: min(220px, calc(100vw - 20px));
   z-index: 50;
@@ -1053,7 +1053,7 @@ tr.overridden td.field { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--acce
 tr.hidden { display: none; }
 /* Side-by-side is the layout that actually works, so it has to survive narrow panes: the browse list
    never takes more than 46% of the editor (whatever width the splitter last saved), and the details
-   pane can shrink to 0 and scroll its own table. Stacking is a last resort below ~440px — see
+   pane can shrink to 0 and scroll its own table. Stacking is a last resort below ~440px, see
    .object-editor.narrow. */
 .object-editor {
   flex: 1;
@@ -1277,10 +1277,10 @@ tr.hidden { display: none; }
   font-weight: 400;
 }
 /* Compact puts each object on one line: icon, name (+ source pill), rawcode pinned right. The rawcode
-   used to sit on a second line, which nearly doubled every row's height — on a 600-object .w3a that's
+   used to sit on a second line, which nearly doubled every row's height; on a 600-object .w3a that's
    the difference between seeing ~20 and ~35 objects at once. Long ids still win their space (the name
    ellipsizes first); the full "base -> new" pair stays in the row's tooltip/aria-label. Cozy restores
-   the stacked two-line form below — same markup, different grid. */
+   the stacked two-line form below, same markup, different grid. */
 .object-row {
   width: 100%;
   display: grid;
@@ -1300,7 +1300,7 @@ tr.hidden { display: none; }
   cursor: pointer;
 }
 /* Nested one level deeper under a kind-heading (Units/Buildings/Heroes/Special) than a plain
-   race-heading — matches kind-heading's own indent so rows still read as its children. */
+   race-heading; matches kind-heading's own indent so rows still read as its children. */
 .object-row.nested { padding-left: var(--ind-row-nested); }
 body.density-cozy .object-row {
   grid-template-columns: var(--tree-icon) minmax(0, 1fr);
@@ -1343,7 +1343,7 @@ body.density-cozy .object-id { grid-area: 2 / 2; }
   background: var(--input-bg);
   overflow: hidden;
 }
-/* Only the browse-tree thumbnails follow the density scale — the details header, field cells and
+/* Only the browse-tree thumbnails follow the density scale; the details header, field cells and
    asset-browser cards each have their own deliberate size. */
 .object-row > .object-icon { width: var(--tree-icon); height: var(--tree-icon); }
 .object-icon img {
@@ -1436,13 +1436,13 @@ table {
   table-layout: fixed; /* stable column widths so expanding an editor never reflows the table */
 }
 /* Technical mode swaps the 2-column Field/Value layout for 5-7 narrow metadata columns, so it needs
-   more room before scrolling — the compact default must not pay for that. */
+   more room before scrolling; the compact default must not pay for that. */
 table.technical { --table-min-w: 560px; }
 /* Explicit per-column widths (table-layout: fixed ignores cell min-widths, so this is the only lever).
    Previously a blanket "thead th:first-child { width: 34% }" also hit technical mode, where the first
-   column is a 4-character field id — a third of the table for "unam". */
+   column is a 4-character field id, a third of the table for "unam". */
 /* Flat percentages only: a fixed-layout table silently drops a column width that contains min()/clamp()
-   with a percentage inside it (measured in Chromium — the column falls back to an equal share), so
+   with a percentage inside it (measured in Chromium, the column falls back to an equal share), so
    there's no way to cap this proportional width without giving up the proportional part. */
 .col-field { width: 32%; }
 .col-id { width: 58px; }
@@ -1552,7 +1552,7 @@ tr.overridden td {
   word-break: break-word;
 }
 .details-error .browse-btn { padding: 4px 14px; }
-/* Stacked fallback, only below NARROW_LAYOUT_PX (see objModEditorWebview.ts) — the class is driven by
+/* Stacked fallback, only below NARROW_LAYOUT_PX (see objModEditorWebview.ts); the class is driven by
    a ResizeObserver on the editor element itself, which is what actually matters here, so there is no
    parallel @media (max-width) copy of these rules to keep in sync with that threshold. */
 .object-editor.narrow {

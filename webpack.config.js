@@ -6,7 +6,6 @@
 //@ts-check
 'use strict';
 
-//@ts-check
 /** @typedef {import('webpack').Configuration} WebpackConfig **/
 
 const path = require('path');
@@ -18,7 +17,6 @@ const webExtensionConfig = {
 	target: 'webworker', // extensions run in a webworker context
 	entry: {
 		extension: './src/webextension.ts', // source of the web extension main file
-		//'test/suite/index': './src/web/test/suite/index.ts', // source of the web extension test runner
 	},
 	output: {
 		filename: '[name].js',
@@ -28,9 +26,6 @@ const webExtensionConfig = {
 	resolve: {
 		mainFields: ['browser', 'module', 'main'], // look for `browser` entry point in imported node modules
 		extensions: ['.ts', '.js'], // support ts-files and js-files
-		alias: {
-			// provides alternate implementation for node module and source files
-		},
 		fallback: {
 			// Webpack 5 no longer polyfills Node.js core modules automatically.
 			// see https://webpack.js.org/configuration/resolve/#resolvefallback
@@ -135,7 +130,7 @@ const nodeExtensionConfig = {
 				use: [{ loader: 'ts-loader' }],
 			},
 			// The object editor loads Codicons as a separate stylesheet so its font can remain cacheable.
-			// Emit both files next to its webview bundle — node_modules is excluded from the VSIX.
+			// Emit both files next to its webview bundle; node_modules is excluded from the VSIX.
 			{
 				test: /@vscode[\\/]codicons[\\/]dist[\\/]codicon\.(css|ttf)$/,
 				type: 'asset/resource',

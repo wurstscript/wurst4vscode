@@ -20,15 +20,6 @@
 			"args": ["--extensionDevelopmentPath=${workspaceRoot}", "--extensionDevelopmentKind=web" ],
 			"sourceMaps": true,
 			"preLaunchTask": "npm: watch-web"
-		},
-		{
-			"name": "Launch Tests",
-			"type": "extensionHost",
-			"request": "launch",
-			"runtimeExecutable": "${execPath}",
-			"args": ["--extensionDevelopmentPath=${workspaceRoot}", "--extensionTestsPath=${workspaceRoot}/out/test" ],
-			"sourceMaps": true,
-			"preLaunchTask": "npm"
 		}
 	]
 }

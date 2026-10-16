@@ -39,7 +39,7 @@ function requestAssetCatalog() {
 }
 
 // Without this the grid was stuck on "Loading game assets…" forever if the host-side catalog build
-// threw (missing game data, bad CASC install) — there was no way out short of closing the editor.
+// threw (missing game data, bad CASC install); there was no way out short of closing the editor.
 export function handleAssetCatalogFailed(reason) {
   if (!isAssetBrowserOpen()) return;
   const grid = document.getElementById('ab-grid');
@@ -57,7 +57,7 @@ export function openAssetBrowser(mi) {
   if (!mod) return;
   rememberAssetBrowserFocus();
   abMi = mi;
-  // A model field defaults to Models; only icon/pathing fields default elsewhere — never offer the
+  // A model field defaults to Models; only icon/pathing fields default elsewhere, never offer the
   // wrong asset class by default.
   assetBrowserUi.activeTab = (mod.assetType === 'icon' || mod.assetType === 'sound' || mod.assetType === 'pathing') ? mod.assetType : 'model';
   assetBrowserUi.searchQuery = '';

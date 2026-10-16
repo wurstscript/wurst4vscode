@@ -224,7 +224,7 @@ async function getCandidateRootsUncached(documentFsPath: string, options: Candid
     const add = (candidate: string) => {
         // Never let generic local resolution reach into the extracted game-asset cache. Its entries
         // are namespaced by installation root and must only be read back through the game-data
-        // lookups that know which namespace is active — joining an asset path onto the cache dir (or
+        // lookups that know which namespace is active. Joining an asset path onto the cache dir (or
         // onto one installation's bucket) would serve another installation's bytes. This guards every
         // source of roots at once, including a document that itself lives inside the cache and the
         // ancestor walk below.
@@ -495,7 +495,7 @@ export async function resolveAssetPath(assetPath: string, roots: readonly string
  *
  * `kind` constrains the class: `'model'` only ever yields .mdx/.mdl, `'texture'` only
  * .blp/.dds/.tga. This matters for extension-less paths (e.g. a `umdl` value like
- * `Buildings\Undead\Graveyard\Graveyard`) — a model lookup must NOT fall back to a
+ * `Buildings\Undead\Graveyard\Graveyard`), a model lookup must NOT fall back to a
  * same-named texture and then mis-feed it to the MDX parser. `'any'` infers from the ext.
  */
 export function assetPathVariants(assetPath: string, kind: AssetKind = 'any'): string[] {
@@ -724,13 +724,13 @@ export async function requestPreviewIcon(
 }
 
 /** The in-game unit-tooltip's own subtle fill texture (a small repeatable tile, not a full illustrated
- *  panel — confirmed by decoding it directly). Used as the objmod editor's tooltip-preview background,
+ *  panel, confirmed by decoding it directly). Used as the objmod editor's tooltip-preview background,
  *  in place of a flat color, so the preview reads a little closer to the real in-game tooltip. */
 const TOOLTIP_BACKDROP_PATH = 'UI\\Widgets\\ToolTips\\Human\\human-tooltip-background.blp';
 
 /**
  * Posts `{ type: 'tooltipBackdropLoaded', mode: 'rgba', rgbaBase64, width, height }` on success, or
- * `{ type: 'tooltipBackdropMissing' }` when Warcraft III's game data can't be found — callers should
+ * `{ type: 'tooltipBackdropMissing' }` when Warcraft III's game data can't be found; callers should
  * keep whatever plain-color fallback they already show in that case.
  */
 export async function requestTooltipBackdrop(webview: vscode.Webview, documentUri: vscode.Uri): Promise<void> {
@@ -738,7 +738,7 @@ export async function requestTooltipBackdrop(webview: vscode.Webview, documentUr
     const fsPath = await resolveAssetPathWithCasc(TOOLTIP_BACKDROP_PATH, roots, 'texture');
     if (!fsPath) {
         // Silent by design everywhere else this pipeline is used (a missing icon just shows a "?"), but
-        // that makes a from-scratch failure indistinguishable from "haven't looked yet" — log it so it's
+        // that makes a from-scratch failure indistinguishable from "haven't looked yet"; log it so it's
         // at least visible in Help > Toggle Developer Tools > Console (or "Log (Extension Host)").
         console.error('[wurst-tooltip-backdrop] texture not found:', TOOLTIP_BACKDROP_PATH, 'candidate roots:', roots);
         await webview.postMessage({ type: 'tooltipBackdropMissing' });
@@ -759,10 +759,10 @@ export async function requestTooltipBackdrop(webview: vscode.Webview, documentUr
 }
 
 /**
- * The gold ornamental tooltip border, as an 8x 16px-wide tile strip (128x16 total) — not a single
+ * The gold ornamental tooltip border, as an 8x 16px-wide tile strip (128x16 total), not a single
  * panel graphic. Decoded and confirmed directly: tiles 0/2 are a plain repeatable left-edge line,
  * tiles 1/3 the same for the right edge, and tiles 4-7 are the TL/TR/BL/BR corners (each blending
- * into the matching straight-edge tile on its far side). There's no separate top/bottom edge tile —
+ * into the matching straight-edge tile on its far side). There's no separate top/bottom edge tile:
  * the game's frame engine reuses the left/right edge tiles rotated 90° for those, which the webview
  * side replicates via canvas rotation (see applyTooltipBorder in messageHandler.ts).
  */
@@ -770,7 +770,7 @@ const TOOLTIP_BORDER_PATH = 'UI\\Widgets\\ToolTips\\Human\\human-tooltip-border.
 
 /**
  * Posts `{ type: 'tooltipBorderLoaded', mode: 'rgba', rgbaBase64, width, height }` (the full, un-sliced
- * 128x16 atlas — slicing happens client-side) on success, or `{ type: 'tooltipBorderMissing' }`.
+ * 128x16 atlas, slicing happens client-side) on success, or `{ type: 'tooltipBorderMissing' }`.
  */
 export async function requestTooltipBorder(webview: vscode.Webview, documentUri: vscode.Uri): Promise<void> {
     const roots = await getCandidateRoots(documentUri.fsPath);

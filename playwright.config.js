@@ -33,7 +33,7 @@ module.exports = defineConfig({
             // that has Warcraft III installed, every host opens the install for itself
             // (parseEncoding is ~120k entries) and then builds the object catalog before the first
             // field rows can be posted. Machines without an install never feel any of this, because
-            // the knowledge-base path is cheap — which is why it only ever broke locally.
+            // the knowledge-base path is cheap, which is why it only ever broke locally.
             //
             // Serial, because running those opens concurrently starves the lazy object-details
             // requests: at the default worker count the field table renders far too late to assert

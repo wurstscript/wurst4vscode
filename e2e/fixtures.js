@@ -3,7 +3,7 @@
 /**
  * Playwright fixtures that put the real webview bundle in a real browser, talking to the real host.
  *
- * The bridge is deliberately thin — `acquireVsCodeApi()` in the page forwards straight to the host's
+ * The bridge is deliberately thin: `acquireVsCodeApi()` in the page forwards straight to the host's
  * `onDidReceiveMessage`, and everything the host posts is replayed as a `window.postMessage`. Nothing
  * between the two is stubbed, so a broken message contract on either side fails these tests.
  */
@@ -19,7 +19,7 @@ const { createBlpPreviewHost } = require('./harness/blpPreviewHost');
 const { root } = require('./harness/tsLoader');
 
 /** Mirrors the webview API surface the shipped code uses. State lives in sessionStorage so it
- *  survives a reload the same way VS Code's per-webview state does — that's what the persistence
+ *  survives a reload the same way VS Code's per-webview state does; that's what the persistence
  *  tests reload against. */
 const VSCODE_API_SHIM = `
 window.__e2eOutbox = [];
@@ -63,7 +63,7 @@ async function attachPageToHost(page, server, host) {
             try {
                 await page.evaluate((m) => window.postMessage(m, '*'), JSON.parse(JSON.stringify(message)));
             } catch {
-                // Page closed or navigating — the real webview drops these too.
+                // Page closed or navigating, the real webview drops these too.
             }
         });
     });
@@ -91,7 +91,7 @@ const test = base.extend({
         await use(async (options = {}) => {
             const bundle = path.join(root, 'dist', 'webview', 'objModEditorWebview.js');
             if (!fs.existsSync(bundle)) {
-                throw new Error(`Missing ${path.relative(root, bundle)} — run "npm run compile-web" before the e2e suite.`);
+                throw new Error(`Missing ${path.relative(root, bundle)}: run "npm run compile-web" before the e2e suite.`);
             }
             const host = await createObjModHost({ origin: server.origin, ...options });
             opened.push(host);

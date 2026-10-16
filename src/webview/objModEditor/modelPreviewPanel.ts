@@ -1,6 +1,6 @@
 import { esc } from '../webviewUtils';
 import { vscodeApi } from './state';
-import { mpvViewer, mpvB64ToArrayBuffer, pickStandSequence } from './modelViewerShared';
+import { mpvViewer, pickStandSequence } from './modelViewerShared';
 import { finishModelThumb, scheduleModelThumbQueues } from './modelThumbnails';
 
 // ── Inline model preview (control-less docked square) ────────────────────────
@@ -53,7 +53,7 @@ export function mpvFillAnims(seqs) {
 export function showModelPreview(path) {
   if (!path) return;
   // Original code only called this when a model-thumb job was in flight; finishModelThumb() is
-  // itself a no-op when there's no active job, so the equivalent guard is folded into the call -
+  // itself a no-op when there's no active job, so the equivalent guard is folded into the call:
   // modelThumbJob lives in modelThumbnails.ts and isn't exposed outside that module.
   finishModelThumb(false, 'full-preview-opened');
   const box = document.getElementById('mpv-box');

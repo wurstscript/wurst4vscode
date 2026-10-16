@@ -86,7 +86,7 @@
   flex-shrink: 0; font-family: var(--mono); text-align: right; min-width: 52px;
 }
 
-/* inline open button — only shows on hover / selection */
+/* inline open button, only shows on hover / selection */
 .row-action {
   flex-shrink: 0;
   display: inline-flex;

@@ -5,7 +5,7 @@
  * inside the host TypeScript: `.w3i`, `.mmp`, `.w3c`, `.w3r`, and `.wpm`.
  *
  * Until now that inline script was only checked by parsing it with `vm.Script` and grepping the
- * surrounding source for expected substrings — neither of which can tell whether the thing actually
+ * surrounding source for expected substrings, neither of which can tell whether the thing actually
  * works. Running the real emitted page in a browser can.
  */
 

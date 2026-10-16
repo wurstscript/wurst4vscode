@@ -5,7 +5,7 @@
  * VS Code maintains from `onDidChangeCustomDocument`, and the save call.
  *
  * Shared by every editable-format harness (objmod, .w3i, .wpm) so each one only has to say how to
- * build its provider — the lifecycle around it stays identical to what VS Code actually does.
+ * build its provider, the lifecycle around it stays identical to what VS Code actually does.
  */
 
 const path = require('path');

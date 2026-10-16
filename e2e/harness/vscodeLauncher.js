@@ -8,7 +8,7 @@
  * every target, and webviews surface as ordinary frames, so "find the objmod webview" is a frame
  * search instead of a Target/Runtime protocol dance.
  *
- * Local-only by nature — it needs an installed VS Code (and, for the thumbnail suites, a Warcraft III
+ * Local-only by nature, it needs an installed VS Code (and, for the thumbnail suites, a Warcraft III
  * install), so nothing here runs in CI.
  */
 
@@ -142,7 +142,7 @@ function killTree(child) {
  * Every binary format this extension owns a custom editor for.
  *
  * Passing such a file on the command line opens it in whichever editor VS Code considers default at
- * that moment — and on a cold `--extensionDevelopmentPath` start the extension host has usually not
+ * that moment, and on a cold `--extensionDevelopmentPath` start the extension host has usually not
  * registered its custom editors yet, so the file lands in the *text* editor ("the file is not
  * displayed... because it is either binary") and no webview is ever created. Pinning the association
  * up front makes the custom editor win regardless of activation timing.
@@ -234,7 +234,7 @@ async function launchVsCode(opts) {
         get stderr() { return stderr; },
         bringToForeground: () => bringWindowToForeground(userDataDir),
 
-        /** Every frame across every attached page — webviews included. */
+        /** Every frame across every attached page, webviews included. */
         allFrames() {
             return browser.contexts().flatMap((context) => context.pages()).flatMap((page) => page.frames());
         },

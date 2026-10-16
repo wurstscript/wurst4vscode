@@ -9,7 +9,7 @@ const globals = require('globals');
 module.exports = tseslint.config(
 	{
 		// The webview scripts are plain bundled browser JS with `// @ts-nocheck` and a very
-		// different style (inline HTML template strings) — see AGENTS.md. Lint everything else.
+		// different style (inline HTML template strings), see AGENTS.md. Lint everything else.
 		ignores: ['dist/**', 'out/**', 'node_modules/**', 'src/webview/**', '.claude/**', 'test-results/**', 'playwright-report/**'],
 	},
 	eslint.configs.recommended,
@@ -21,7 +21,7 @@ module.exports = tseslint.config(
 		},
 		rules: {
 			// Lazy/optional `require()` (native addons, avoiding upfront bundling cost) is an
-			// established pattern in this codebase — see src/languageServer.ts, imageDecoders.ts.
+			// established pattern in this codebase, see src/languageServer.ts, imageDecoders.ts.
 			'@typescript-eslint/no-require-imports': 'off',
 			'@typescript-eslint/no-explicit-any': 'off',
 			'@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
@@ -31,10 +31,10 @@ module.exports = tseslint.config(
 			'no-empty': ['error', { allowEmptyCatch: true }],
 
 			// These sonarjs rules assume an untrusted, internet-facing execution context and don't
-			// fit this codebase's actual usage — reviewed at adoption time (see AGENTS.md), not
+			// fit this codebase's actual usage, reviewed at adoption time (see AGENTS.md), not
 			// worth 24 individual inline suppressions:
 			//  - code-eval: scripts/test-*.js and test-webview.js use `new Function`/`vm.Script` to
-			//    transpile-and-run this repo's OWN TypeScript in a local test harness — not
+			//    transpile-and-run this repo's OWN TypeScript in a local test harness, not
 			//    executing untrusted input.
 			//  - no-os-command-from-path: PATH is read (never written) to locate an existing local
 			//    Java/Wurst installation for the installer/e2e scripts, not to resolve a command
@@ -42,7 +42,7 @@ module.exports = tseslint.config(
 			//  - file-permissions: the chmod calls in src/install/ set intentionally permissive
 			//    modes on files this extension itself just downloaded/wrote into `~/.wurst`.
 			//  - pseudo-random: Math.random() is only used for webview CSP nonces and non-secret
-			//    ids/jitter — not for anything security-sensitive.
+			//    ids/jitter, not for anything security-sensitive.
 			//  - hashing: MD5/SHA1 usage here is cache-key/dedup hashing of local files, not a
 			//    security boundary.
 			'sonarjs/code-eval': 'off',

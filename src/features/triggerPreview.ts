@@ -20,7 +20,7 @@ function escHtml(s: string): string {
 
 /**
  * Annotate FourCC rawcode literals (e.g. `'hfoo'`) in already-HTML-escaped JASS with the
- * resolved object name as a hover tooltip — turning opaque codes into readable references.
+ * resolved object name as a hover tooltip, turning opaque codes into readable references.
  * Single-quoted alphanumerics aren't escaped by escHtml, so matching the escaped text is safe.
  */
 function annotateJassRawcodes(escapedCode: string, catalog: Map<string, ObjectRef>): string {
@@ -132,7 +132,7 @@ function buildWtgHtml(parsed: WtgFile, fileName: string): string {
         : '';
 
     const warnBanner = parsed.trigsPartial
-        ? `<div class="warn">Trigger list is partial — ECA bodies require TriggerData.txt to parse.` +
+        ? `<div class="warn">Trigger list is partial: ECA bodies require TriggerData.txt to parse.` +
           ` Shown ${parsed.trigs.length} of ${parsed.trigCount} triggers.</div>`
         : '';
 
@@ -163,7 +163,7 @@ function buildWtgHtml(parsed: WtgFile, fileName: string): string {
             const typeStr = v.isArray
                 ? `${escHtml(v.type)}[${arraySize}]`
                 : escHtml(v.type);
-            const initStr = v.hasInitVal && v.initVal ? escHtml(v.initVal) : '<span class="dim">—</span>';
+            const initStr = v.hasInitVal && v.initVal ? escHtml(v.initVal) : '<span class="dim">-</span>';
             return `<tr>
   <td class="mono">${escHtml(v.name)}</td>
   <td class="dim">${typeStr}</td>
@@ -185,7 +185,7 @@ function buildWtgHtml(parsed: WtgFile, fileName: string): string {
         trigsSection = `<section><h2>Triggers <span class="count">(0)</span></h2><p class="empty">none</p></section>`;
     } else if (parsed.trigs.length === 0) {
         trigsSection = `<section><h2>Triggers <span class="count">(${parsed.trigCount})</span></h2>
-<p class="empty">Cannot display — ECA bodies require TriggerData.txt.</p></section>`;
+<p class="empty">Cannot display: ECA bodies require TriggerData.txt.</p></section>`;
     } else {
         const rows = parsed.trigs.map(t => {
             const catName = catNameMap.get(t.catIndex) ?? `cat ${t.catIndex}`;
@@ -203,7 +203,7 @@ function buildWtgHtml(parsed: WtgFile, fileName: string): string {
         }).join('\n');
 
         const partial = parsed.trigsPartial
-            ? ` — ${parsed.trigs.length} shown, ${parsed.trigCount - parsed.trigs.length} hidden`
+            ? `: ${parsed.trigs.length} shown, ${parsed.trigCount - parsed.trigs.length} hidden`
             : '';
 
         trigsSection = `<section>

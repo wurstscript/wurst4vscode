@@ -7,7 +7,7 @@ import { sourcePill } from './fieldDisplay';
 import { hideModelPreview } from './modelPreviewPanel';
 
 // Only the categories whose natural-case raw value doesn't already read fine capitalized (e.g. 'tech'
-// isn't 'Techtree', '-' means unset). Anything else falls through to auto-capitalization below — no
+// isn't 'Techtree', '-' means unset). Anything else falls through to auto-capitalization below, no
 // need to hand-maintain the full WC3 category vocabulary, which turned out to be bigger than expected
 // (sound/pathing/editor-only categories exist beyond the common abil/art/combat/... set).
 const CATEGORY_LABELS = {
@@ -49,11 +49,11 @@ export function raceRank(race) {
 const KNOWN_RACES = ['human', 'orc', 'nightelf', 'undead', 'neutral', 'naga', 'demon', 'other'];
 
 // Typing a race name (or a fuzzy near-miss of one) in the object search finds every object of that
-// race, not just ones whose own name/id happens to contain it — same convenience as the World
+// race, not just ones whose own name/id happens to contain it, same convenience as the World
 // Editor's race folders, but reachable from the search box.
 //
 // `matches()` below calls this once per object during a `.filter(matches)` pass, but the query is the
-// same for every object in that pass — so the last {query, hits} pair is cached here (transparent to
+// same for every object in that pass, so the last {query, hits} pair is cached here (transparent to
 // callers) instead of re-looping over KNOWN_RACES and re-running fuzzyMatch up to 8x per object.
 let racesQueryCache: { query: string | null; hits: Set<string> } = { query: null, hits: new Set<string>() };
 export function raceKeysMatchingQuery(query) {
@@ -74,7 +74,7 @@ const KIND_LABELS = { unit: 'Units', building: 'Buildings', hero: 'Heroes', spec
 const KIND_ORDER = ['unit', 'building', 'hero', 'special'];
 
 // The id shown at the end of a browse row: for a custom object that's its *new* rawcode (the one the
-// map actually uses), not the base it was derived from — the row only has space for one, and the
+// map actually uses), not the base it was derived from; the row only has space for one, and the
 // "base -> new" pair stays available in the row's title/aria-label and in the details header.
 export function idLine(obj) {
   return esc(obj.newId || obj.baseId);
@@ -113,7 +113,7 @@ export function objectIconHtml(obj, extraClass) {
 
 // Ranked match: lower is better, -1 means no match. An exact/prefix hit on the rawcode id (what
 // users usually paste in when hunting a specific object, e.g. "A0FY") always outranks a loose fuzzy
-// hit on the longer display-name/source text — otherwise a 1-edit-distance fuzzy match elsewhere in
+// hit on the longer display-name/source text; otherwise a 1-edit-distance fuzzy match elsewhere in
 // that combined haystack can bury the object whose id you typed exactly.
 export function matchScore(obj, query) {
   const q = String(query || '').trim().toLowerCase();
@@ -145,12 +145,12 @@ function headingHtml(kindClass, key, label, count, closed) {
 }
 
 // The browse tree always keeps its full Group > Race [> Melee|Campaign > Units/Buildings/Heroes/
-// Special] shape, whether searching or not — only *emptied-out* branches disappear (per-node counts
+// Special] shape, whether searching or not; only *emptied-out* branches disappear (per-node counts
 // reflect what's left). Manual collapse/expand state (collapsedNodes) is respected exactly the same
-// as when not searching — a heading a user collapsed stays collapsed, still showing its filtered count,
+// as when not searching; a heading a user collapsed stays collapsed, still showing its filtered count,
 // so it can be expanded or re-collapsed same as always instead of being forced open by the search.
 // Reassigning tree.innerHTML (below) destroys and recreates every row, which resets scrollTop to 0 in
-// every browser — so every render (not just the first) has to explicitly carry it forward. `false`
+// every browser, so every render (not just the first) has to explicitly carry it forward. `false`
 // until the first render so that one restores the persisted position (see state.ts's treeScrollTop)
 // instead of the live (always-0, nothing painted yet) tree.scrollTop.
 let treeRenderedOnce = false;
@@ -168,13 +168,13 @@ export function renderTree() {
 
   const groups = ['Original', 'Custom'];
   // Single bucketing pass over `visible` instead of a cascading `.filter()` at each tree level (group ->
-  // race -> campaign -> kind) — the old version rescanned its parent array at every level, which on a
+  // race -> campaign -> kind), the old version rescanned its parent array at every level, which on a
   // large .w3u file (600+ objects) multiplies out across all four nesting depths on every keystroke.
   const raceBucketsByGroup = new Map(); // group -> Map<race, { all: obj[], camp: Map<campToken, Map<kind, obj[]>> }>
   for (const group of groups) raceBucketsByGroup.set(group, new Map());
   for (const obj of visible) {
     const raceBuckets = raceBucketsByGroup.get(obj.group);
-    if (!raceBuckets) continue; // group isn't 'Original'/'Custom' — excluded, same as the old .filter()
+    if (!raceBuckets) continue; // group isn't 'Original'/'Custom': excluded, same as the old .filter()
     const race = obj.race || 'other';
     let bucket = raceBuckets.get(race);
     if (!bucket) { bucket = { all: [], camp: new Map() }; raceBuckets.set(race, bucket); }
@@ -211,7 +211,7 @@ export function renderTree() {
       if (raceClosed) continue;
 
       // World Editor-style subgrouping only applies where buildObject computed a `kind` for these
-      // objects (units files) — every object in a document shares the same ext, so checking one is enough.
+      // objects (units files), every object in a document shares the same ext, so checking one is enough.
       if (raceObjects[0].kind === undefined) {
         for (const obj of raceObjects) html += objectRowReplacementHtml(obj);
         continue;
@@ -245,16 +245,16 @@ export function renderTree() {
   observeModelThumbs(tree);
 }
 
-// Move the selection highlight in place — rebuilding the whole tree (hundreds of rows) just to shift
+// Move the selection highlight in place, rebuilding the whole tree (hundreds of rows) just to shift
 // one '.active' class made object switching feel sluggish on large .w3a files.
 export function objectRowReplacementHtml(obj) {
   // Read untracked: selection changes move the '.active' class via setActiveRow() instead of a full
   // tree rebuild (see selectObject), so renderTree()'s reactive effect must NOT re-run just because
-  // the selected object changed — only because the query or collapse state changed.
+  // the selected object changed, only because the query or collapse state changed.
   const active = obj.key === untracked(() => ui.selectedKey) ? ' active' : '';
-  // Objects with a `kind` (units files — see buildObject) always render nested one level deeper, under
+  // Objects with a `kind` (units files, see buildObject) always render nested one level deeper, under
   // a kind-heading (Units/Buildings/Heroes/Special), whether in the grouped browse tree or a solo
-  // row-refresh — so this can key off the object alone rather than needing render-context passed in.
+  // row-refresh, so this can key off the object alone rather than needing render-context passed in.
   const nested = obj.kind !== undefined ? ' nested' : '';
   const source = obj.displaySource ? sourcePill({ source: obj.displaySource }) : '';
   const label = displayNameWithSuffix(obj) + ' - ' + (obj.newId ? obj.baseId + ' to ' + obj.newId : obj.baseId);
@@ -307,7 +307,7 @@ export function setActiveRow(key) {
 //
 // The guard is what makes this usable while typing: filtering re-renders the tree on every keystroke,
 // and a row that's already on screen must not be nudged around. It's also why clearing a search works
-// at all — renderTree() carries the previous scrollTop forward, but a filtered tree is only a few rows
+// at all, renderTree() carries the previous scrollTop forward, but a filtered tree is only a few rows
 // tall, so that value has already been clamped to ~0 by the browser. Restoring it once the full tree
 // is back therefore dumps the user at the top with their selection hundreds of rows below, which is
 // exactly the state this recovers from. Centred rather than 'nearest' for that case: after a jump this
@@ -322,16 +322,16 @@ export function revealRow(row) {
 
 export function selectObject(key) {
   if (!key) return;
-  // Writing the signal is enough to drive the details panel — see the renderDetails effect wired in
+  // Writing the signal is enough to drive the details panel, see the renderDetails effect wired in
   // setupDetails() (detailsPanel.ts), which reacts to ui.selectedKey automatically. The tree itself
   // deliberately stays untracked of selection (see objectRowReplacementHtml) for perf on large trees,
   // so the highlight still needs this explicit, cheap DOM update.
   ui.selectedKey = key;
   setActiveRow(key);
-  hideModelPreview(); // the open preview belongs to the previous object — don't leave it stale
+  hideModelPreview(); // the open preview belongs to the previous object; don't leave it stale
 }
 
-// Delegated tree handlers, wired once — survive innerHTML rebuilds, no per-row listener churn.
+// Delegated tree handlers, wired once, survive innerHTML rebuilds, no per-row listener churn.
 export function setupTree() {
   // Reactive browse tree: rebuilds whenever the search query or the collapse state changes. Runs
   // immediately on creation (this is the tree's first paint), so no separate bootstrap call is needed.
@@ -371,7 +371,7 @@ export function setupTree() {
     target.scrollIntoView({ block: 'nearest' });
   });
   // Keep ui.treeScrollTop live so a reopen (or our external-change auto-reload) restores roughly where
-  // the user was browsing — the persistUi effect in state.ts picks this up like every other field.
+  // the user was browsing, the persistUi effect in state.ts picks this up like every other field.
   // rAF-coalesced: scroll fires continuously while dragging the scrollbar/wheeling.
   let treeScrollRaf = 0;
   tree.addEventListener('scroll', () => {

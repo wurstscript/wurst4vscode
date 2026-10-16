@@ -4,10 +4,10 @@
  * Shared scaffolding for the binary-format custom editors.
  *
  * Two layers:
- *  - `registerParsedPreviewer` — read-only viewers (doo, wct/wtg, map-data): parse bytes, render HTML,
+ *  - `registerParsedPreviewer`, read-only viewers (doo, wct/wtg, map-data): parse bytes, render HTML,
  *    optionally answer webview messages. Removes the CustomDocument / CustomReadonlyEditorProvider
  *    boilerplate that was identical across every previewer.
- *  - `EditableBinaryEditorProvider` — editable formats (wpm, w3c, ...): the CustomEditorProvider
+ *  - `EditableBinaryEditorProvider`, editable formats (wpm, w3c, ...): the CustomEditorProvider
  *    lifecycle VS Code expects (undo/redo via revision counters, dirty tracking, save, save-as, revert,
  *    hot-exit backup) implemented once. A format supplies `parse`, a `serialize` that includes its own
  *    round-trip safety gate, how to render, and how to turn webview messages into edits.

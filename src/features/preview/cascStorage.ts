@@ -24,7 +24,7 @@ interface GameDataRoot {
     kind: GameStorageKind;
     /** The installation directory as detected, and what the storage openers are given. */
     root: string;
-    /** `root` resolved through `realpath` — the spelling the disk cache is namespaced by. */
+    /** `root` resolved through `realpath`, the spelling the disk cache is namespaced by. */
     canonicalRoot: string;
 }
 
@@ -220,7 +220,7 @@ class MpqGameStorage implements GameStorage {
 
 // ---------------------------------------------------------------------------
 // Diagnostics: everything about "where did we look for the WC3 install and
-// what did we find" goes here, visible via "Wurst: Show WC3 Data Log" — the
+// what did we find" goes here, visible via "Wurst: Show WC3 Data Log"; the
 // per-call `log` callbacks passed around this file are often console-only (or
 // no-ops), which left multi-drive/custom-install-path detection failures with
 // no way for a user to see what was actually tried.
@@ -284,7 +284,7 @@ async function getWindowsDriveRoots(): Promise<string[]> {
 
 /**
  * Warcraft III's installer (both the classic installer and Battle.net) has always registered its
- * install location here, regardless of which drive or folder the user picked — the fixed relative
+ * install location here, regardless of which drive or folder the user picked. The fixed relative
  * paths below only cover the *default* locations, so a custom install (a second/third drive, a
  * Steam-library-style folder, a renamed directory) is invisible to them. `reg.exe` ships with every
  * Windows install, so this needs no new dependency.
@@ -371,9 +371,9 @@ async function computeDefaultWarcraftPaths(): Promise<string[]> {
 
 /**
  * Builds the detection result, pairing the root as discovered with the canonical spelling used to
- * key its cache bucket. The same install arrives here spelled several ways — a hand-typed
- * `wurst.wc3path`, an uppercase drive letter from the default-path scan, a registry value, a symlink
- * — and hashing the spelling verbatim would give each one its own bucket, re-extracting the same
+ * key its cache bucket. The same install arrives here spelled several ways: a hand-typed
+ * `wurst.wc3path`, an uppercase drive letter from the default-path scan, a registry value, a symlink.
+ * Hashing the spelling verbatim would give each one its own bucket, re-extracting the same
  * install into another full copy on disk. `realpath` settles them on the filesystem's own canonical
  * form without guessing at case sensitivity, falling back to the path as given if it can't be
  * canonicalised. Only the cache tag uses it: `root` stays exactly as detected, since that is what
@@ -468,7 +468,7 @@ function getCachedAssetPath(cacheDir: string, normalizedAssetPath: string): stri
  * a PTR next to retail) can't serve assets that were extracted from the other one. The path is hashed
  * exactly as resolved, with no case folding: two spellings that differ only in case are separate
  * directories on a case-sensitive filesystem and must never share a bucket. On a case-insensitive one
- * they can at worst produce two buckets for the same install, which costs a re-extraction — the safe
+ * they can at worst produce two buckets for the same install, which costs a re-extraction, the safe
  * direction, and not worth a filesystem-behaviour probe to avoid.
  */
 function installRootTag(root: string): string {
@@ -482,7 +482,7 @@ function getSourceCachePath(root: GameDataRoot, normalizedAssetPath: string): st
 export async function findCachedGameAsset(assetPath: string): Promise<string | undefined> {
     const normalized = normalizeCascAssetPath(assetPath);
     const root = await getGameDataRoot(defaultCascLog);
-    // No live root, no namespace to check — see the comment on readCachedGameBuffer.
+    // No live root, no namespace to check, see the comment on readCachedGameBuffer.
     if (!root) return undefined;
     const candidate = getSourceCachePath(root, normalized);
     try {
@@ -536,7 +536,7 @@ function getGameDataRoot(log: (msg: string) => void): Promise<GameDataRoot | nul
         const generation = storageGeneration;
         gameDataRootPromise = detectGameDataRoot(log).then((root) => {
             // A reset while detection was in flight (wurst.wc3path changed) invalidates this answer
-            // for everyone still awaiting it — hand them the current generation's detection instead
+            // for everyone still awaiting it, hand them the current generation's detection instead
             // of a root that would then open the superseded installation.
             if (generation !== storageGeneration) return getGameDataRoot(log);
             return root;
@@ -558,8 +558,8 @@ async function detectGameDataRoot(log: (msg: string) => void): Promise<GameDataR
             logCascRootOnce(`Legacy MPQ root: ${mpqRoot} (from ${wc3path})`, log);
             return makeGameDataRoot('mpq', mpqRoot);
         }
-        log(`CASC wurst.wc3path "${wc3path}" has no WC3 CASC root — falling back to default paths`);
-        channelLog(`wurst.wc3path "${wc3path}" has no WC3 CASC root (looked for Data/ + .build.info|.build.db) — falling back to default paths`);
+        log(`CASC wurst.wc3path "${wc3path}" has no WC3 CASC root: falling back to default paths`);
+        channelLog(`wurst.wc3path "${wc3path}" has no WC3 CASC root (looked for Data/ + .build.info|.build.db): falling back to default paths`);
     }
     const defaultPaths = await getDefaultWarcraftPaths();
     for (const p of defaultPaths) {
@@ -581,7 +581,7 @@ async function detectGameDataRoot(log: (msg: string) => void): Promise<GameDataR
 }
 
 // ---------------------------------------------------------------------------
-// In-process CASC singleton — open once, reuse for all extractions.
+// In-process CASC singleton, open once, reuse for all extractions.
 // This eliminates the per-file child-process spawn + repeated index loading.
 // ---------------------------------------------------------------------------
 
@@ -590,7 +590,7 @@ let cascStorageRoot: string | null = null;
 let cascStorageOpening: Promise<CascStorage | null> | null = null;
 /**
  * Bumped by `resetCascStorage`. An open that was in flight when the reset happened completes
- * against an older generation and must not publish its result into the shared singletons — it would
+ * against an older generation and must not publish its result into the shared singletons: it would
  * otherwise re-install the previous WC3 root and clear the newer open's promise.
  */
 let storageGeneration = 0;
@@ -602,7 +602,7 @@ async function getCascStorageInstance(wc3Root: string, log: (msg: string) => voi
     if (cascStorageOpening && cascStorageRoot === wc3Root) {
         return cascStorageOpening;
     }
-    // Root changed or first open — (re-)initialise
+    // Root changed or first open, (re-)initialise
     cascStorageInstance = null;
     cascStorageRoot = wc3Root;
     const generation = storageGeneration;
@@ -738,7 +738,7 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
     if (fallbackBlpPath) cacheCandidates.push([fallbackBlpPath, 'blp']);
     if (fallbackTgaPath) cacheCandidates.push([fallbackTgaPath, 'tga']);
     // Disk-cache paths are namespaced by install root, so a lookup needs a live root to know which
-    // bucket to check — without one we can't tell which install a stale cache entry came from.
+    // bucket to check; without one we can't tell which install a stale cache entry came from.
     if (gameRoot) {
         for (const [rel, ext] of cacheCandidates) {
             const cachePath = getSourceCachePath(gameRoot, rel);
@@ -786,7 +786,7 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
         }
     }
 
-    // Last resort: texture path drifted — find by basename (try both .dds and .blp endings).
+    // Last resort: texture path drifted, find by basename (try both .dds and .blp endings).
     const storage = await getGameStorageInstance(gameRoot!, log);
     if (storage) {
         const baseNoExt = basePath.split('\\').pop() ?? '';
@@ -811,7 +811,7 @@ export async function findCascTexture(texPath: string, log: (msg: string) => voi
 export const findGameTexture = findCascTexture;
 
 async function readCachedGameBuffer(assetPath: string, root: GameDataRoot | null): Promise<{ buf: Buffer; cachePath: string } | null> {
-    // Namespaced cache paths need a known install root — without a live one we can't tell whose
+    // Namespaced cache paths need a known install root; without a live one we can't tell whose
     // cache we would be reading, so there is nothing safe to check.
     if (!root) return null;
     const normalized = normalizeCascAssetPath(assetPath);
@@ -862,7 +862,7 @@ async function writeGameCache(root: GameDataRoot, assetPath: string, data: Buffe
 /**
  * Returns the cache path alongside the buffer so callers that need the on-disk location (e.g.
  * `ensureCascAssetCached`) use exactly the path this lookup actually read from or wrote to, instead
- * of re-deriving it from the live game-data root afterwards — which can have moved on if
+ * of re-deriving it from the live game-data root afterwards, which can have moved on if
  * `wurst.wc3path` changed in between.
  */
 async function findCascAssetWithPath(assetPath: string, log: (msg: string) => void): Promise<{ buf: Buffer; cachePath: string } | null> {

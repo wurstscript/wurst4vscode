@@ -101,7 +101,7 @@ export function colorBarHtml(mi) {
   '</div>';
 }
 
-// Distinct |cffRRGGBB colors already present in a WC3 raw string, in first-seen order — lets the
+// Distinct |cffRRGGBB colors already present in a WC3 raw string, in first-seen order. Lets the
 // toolbar offer "colors already used here" for one-click consistency (e.g. reapplying the same gold
 // used on a keyword elsewhere in the same tooltip) without opening the full preset/custom picker.
 export function extractUsedColors(text, max = undefined) {
@@ -140,7 +140,7 @@ function usedColorsHtml(v) {
 }
 
 // Floating toolbar mounted beside a tooltip field while it's being edited in place (see
-// enterTooltipEdit in detailsPanel.ts) — just the color swatch, a Raw/Rich toggle, and a Copy button.
+// enterTooltipEdit in detailsPanel.ts), just the color swatch, a Raw/Rich toggle, and a Copy button.
 // Toggling Raw swaps the in-place edit box itself (see enterRawView/enterRichView in detailsPanel.ts)
 // rather than opening a second floating panel, so the toolbar never resizes/repositions itself and
 // nothing else on the page shifts.
@@ -213,7 +213,7 @@ export function assetMiniHtml(mod, mi) {
 // Every resolved rawcode (an ability/unit/item/etc. id referenced from another object's field, e.g. a
 // unit's Abilities list) is clickable: data-jump selects it right away when it's in this same file's
 // object list; data-xref asks the extension to find which sibling war3map.* file actually customizes
-// it (see locateObjectAcrossSiblings in objModPreview.ts) and jump there — or, for a rawcode that's
+// it (see locateObjectAcrossSiblings in objModPreview.ts) and jump there, or, for a rawcode that's
 // never been customized anywhere, to say so instead of silently doing nothing.
 export function resolvedItemsHtml(mod) {
   const items = mod.resolvedItems || [];
@@ -313,7 +313,7 @@ export function decoratedValueHtml(mod, mi, raw) {
   refreshDecoratedValue(mod);
   if (mod.displayKind === 'rawcodes' && mod.resolvedItems && mod.resolvedItems.length) return resolvedItemsHtml(mod);
   // Asset fields (icon/model/sound/pathing) always get their mini preview badge, even when there's
-  // no friendlier label to show alongside the raw path — the badge itself is the point (icon swatch,
+  // no friendlier label to show alongside the raw path; the badge itself is the point (icon swatch,
   // cached model thumbnail). Only skip the badge for genuinely plain fields with nothing to add.
   const isAsset = mod.displayKind === 'asset' && !!mod.assetPath;
   const hasFriendlyLabel = !!mod.displayValue && String(mod.displayValue) !== String(raw);
@@ -350,7 +350,7 @@ function numberStepFor(varType) {
   return varType === 'int' ? 1 : 0.05;
 }
 
-// NOTE: the value input stays type="text" (not type="number") so the '.' decimal is locale-independent —
+// NOTE: the value input stays type="text" (not type="number") so the '.' decimal is locale-independent:
 // these are raw float/int game values, not locale-formatted numbers (German shows 1,5 for a number
 // input, which corrupts the value). The +/- steppers give integer-safe increments without that risk;
 // inputmode hints a numeric keypad on touch.
@@ -365,8 +365,8 @@ function numberEditorHtml(mod, mi, v) {
   '</div>';
 }
 
-// Editor shown on click for non-tooltip fields (tooltip/color fields edit in place — see
-// enterTooltipEdit in detailsPanel.ts — and never reach this function). Text fields get a plain
+// Editor shown on click for non-tooltip fields (tooltip/color fields edit in place, see
+// enterTooltipEdit in detailsPanel.ts, and never reach this function). Text fields get a plain
 // input; number fields get a stepper-enhanced input; picker fields get a datalist/select.
 export function editorHtml(mod, mi) {
   refreshDecoratedValue(mod);
@@ -381,8 +381,8 @@ export function editorHtml(mod, mi) {
 // Compact, click-to-edit view shown by default for every editable cell (keeps the 700-row table light).
 // Tooltip/color fields always render as the dark WC3 tooltip box (.tt-collapsed-box), whether or not
 // they currently contain color codes, so the box a user clicks on is the exact same box they edit in
-// place — no swap to a differently-shaped container. The source-pill/edit-hint sit beside the box (in
-// the plain .tt-collapsed row), not inside it — same placement as every other field's Hotkey/Name-style
+// place, no swap to a differently-shaped container. The source-pill/edit-hint sit beside the box (in
+// the plain .tt-collapsed row), not inside it, same placement as every other field's Hotkey/Name-style
 // annotations, rather than looking like part of the in-game tooltip.
 export function collapsedView(mod, mi) {
   const dv = mod.editValue == null ? (mod.currentValue == null ? '' : String(mod.currentValue)) : String(mod.editValue);
@@ -408,7 +408,7 @@ export function valueCell(mod, mi) {
   if (mod.editable) return collapsedView(mod, mi);
   // Read-only (non-editable, e.g. TRIGSTR with missing wts): still render WC3 color codes when present.
   let extra = (mod.overridden ? '<span class="override-badge">modified</span>' : '') + sourcePill(mod);
-  if (mod.missingWts) extra += ' <span class="readonly-trigstr">(externalized – war3map.wts missing)</span>';
+  if (mod.missingWts) extra += ' <span class="readonly-trigstr">(externalized: war3map.wts missing)</span>';
   const ro = mod.currentValue == null ? '' : String(mod.currentValue);
   if (hasColorMarkup(ro)) {
     return '<div class="tt-preview tt-readonly">' + renderWc3Colors(tooltipPreviewText(ro, isTooltipTemplateField(mod))) + '</div>' + extra;

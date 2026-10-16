@@ -71,7 +71,7 @@ const MAX_TOOLTIP_WIDTH_PX = 1200;
 
 // Inline string fields in objmod files are length-capped by the World Editor; longer
 // values must be externalized into war3map.wts as a TRIGSTR_ reference. The exact cap
-// isn't authoritatively documented (community reports ~512–1024 bytes); 1024 is a safe
+// isn't authoritatively documented (community reports ~512 to 1024 bytes); 1024 is a safe
 // upper bound that avoids needless externalization of normal-length names/tooltips.
 // Tune here if WE rejects a value as too long.
 const INLINE_STRING_LIMIT_BYTES = 1024;
@@ -99,7 +99,7 @@ const NAME_FIELDS = new Set(['unam', 'inam', 'anam', 'bnam', 'dnam', 'fnam', 'gn
 const EDITOR_SUFFIX_FIELDS = new Set(['unsf', 'ansf', 'bsuf', 'fnsf', 'gnsf']);
 const ICON_FIELDS = new Set(['uico', 'iico', 'aart', 'fart', 'gico']);
 const SUMMARY_MODEL_FIELDS = new Set(['umdl', 'amdl', 'ifil', 'bfil', 'dfil']);
-// "Categorization - Campaign"/"Categorization - Special" — these decide which Melee|Campaign and
+// "Categorization - Campaign"/"Categorization - Special": these decide which Melee|Campaign and
 // Units/Buildings/Heroes/Special tree branch a unit falls under (see resolveObjectKind), so an edit
 // to either needs to refresh the object summary the same way a name/icon change does.
 const CLASSIFICATION_FIELDS = new Set(['ucam', 'uspe']);
@@ -182,7 +182,7 @@ interface PreviewObject {
     overridesCount: number;
     iconPath?: string;
     modelPath?: string;
-    // World Editor-style unit classification (units file only — see resolveObjectKind): which of the
+    // World Editor-style unit classification (units file only, see resolveObjectKind): which of the
     // Melee/Campaign x Units/Buildings/Heroes/Special buckets this object's tree row belongs to.
     // Undefined for every other object kind (abilities, items, ...), where that grouping isn't meaningful.
     campaign?: boolean;
@@ -264,7 +264,7 @@ interface MetaField {
     data: number;
     canBeEmpty?: boolean;
     index?: number; // for fields packed into a comma-list cell (e.g. Buttonpos "x,y": ubpx=0, ubpy=1)
-    // Per-object applicability (parity with the World Editor — which fields a given object shows).
+    // Per-object applicability (parity with the World Editor, which fields a given object shows).
     useSpecific?: string[]; // ability codes/aliases this field applies to (empty = common)
     notSpecific?: string[];
     useUnit: boolean;
@@ -293,11 +293,11 @@ export function resetObjModGameDataCaches(): void {
     objCatalogCache.clear();
 }
 
-/** Live obj-mod editors, keyed by their main file's uri — lets a cross-reference jump (see
+/** Live obj-mod editors, keyed by their main file's uri, lets a cross-reference jump (see
  *  locateObjectAcrossSiblings) find an already-open sibling editor and select the target object in
  *  it directly, instead of only being able to affect a freshly-opened one. */
 const openObjModDocuments = new Map<string, ObjModDocument>();
-/** Object key to select once a given uri's editor finishes loading — set right before
+/** Object key to select once a given uri's editor finishes loading, set right before
  *  `vscode.openWith` opens (or reveals) that file for a cross-reference jump. */
 const pendingObjectSelection = new Map<string, string>();
 const OBJMOD_SELECTIONS_STATE_KEY = 'wurst.objModSelectionsByRelativePath.v1';
@@ -561,7 +561,7 @@ function buildObject(
     const baseName = summaryData ? resolveBaseDisplayName(entry.baseId, summaryData) : undefined;
     const nameOverridden = resolvedName?.value !== undefined && resolvedName.value !== '';
     // The Melee/Campaign x Units/Buildings/Heroes/Special browse grouping (see objectTree.ts on the
-    // webview side) only makes sense for units — items/abilities/etc. don't have these Categorization
+    // webview side) only makes sense for units; items/abilities/etc. don't have these Categorization
     // fields at all, so `kind`/`campaign` stay undefined there and the tree falls back to its plain
     // Race grouping.
     const isUnitFile = ext === '.w3u';
@@ -585,7 +585,7 @@ function buildObject(
     };
 }
 
-/** Find a mod by exact (fieldId, level, dataPt) — the editing identity shared by render and the host. */
+/** Find a mod by exact (fieldId, level, dataPt), the editing identity shared by render and the host. */
 function locateMod(entry: ObjModEntry | undefined, fieldId: string, level?: number, dataPt?: number): ObjModMod | undefined {
     if (!entry) return undefined;
     const norm = (v: number | undefined) => (v === undefined ? null : v);
@@ -618,7 +618,7 @@ function annotateEditable(row: PreviewMod, mod: ObjModMod | undefined, wts: Trig
 }
 
 /**
- * Per-object field applicability + level count — parity with the World Editor, which only shows the
+ * Per-object field applicability + level count, parity with the World Editor, which only shows the
  * fields a given object actually uses (abilities filter by useSpecific/code; units by hero/building).
  */
 interface ObjectContext {
@@ -994,9 +994,9 @@ function resolveObjectRace(entry: ObjModEntry, summaryData: ObjSummaryData): str
 }
 
 /**
- * True/false for a bool-typed field (stored as int 0/1) — an override wins over the base profile
+ * True/false for a bool-typed field (stored as int 0/1), an override wins over the base profile
  * value. Overrides are keyed by the short field *id* (e.g. "ucam", as used in war3map.w3u), while the
- * base profile row is keyed by the schema's longer field *name* (e.g. "campaign") — these are two
+ * base profile row is keyed by the schema's longer field *name* (e.g. "campaign"). These are two
  * different strings for the same field, both needed here.
  */
 function resolveObjectBoolField(entry: ObjModEntry, overrideFieldId: string, profileFieldName: string, summaryData: ObjSummaryData): boolean {
@@ -1007,7 +1007,7 @@ function resolveObjectBoolField(entry: ObjModEntry, overrideFieldId: string, pro
 
 /** World Editor-style Units/Buildings/Heroes/Special classification for a unit-file object (see the
  *  "ucam"/"campaign" and "uspe"/"special" Categorization fields, and the compiler's hero/building id
- *  sets) — mirrors makeObjectContext's isHero/isBuilding fallback heuristics so tree grouping and field
+ *  sets), mirrors makeObjectContext's isHero/isBuilding fallback heuristics so tree grouping and field
  *  applicability never disagree about what an object is. */
 function resolveObjectKind(entry: ObjModEntry, summaryData: ObjSummaryData): 'unit' | 'building' | 'hero' | 'special' {
     if (resolveObjectBoolField(entry, 'uspe', 'special', summaryData)) return 'special';
@@ -1327,7 +1327,7 @@ async function loadObjSummaryDataUncached(ext: string): Promise<ObjSummaryData |
 
     const worldStrings = await loadWorldEditStrings();
     const profile = await loadObjProfileData(ext);
-    // An empty profile table here means every CASC read for it came back null — i.e. no WC3 install
+    // An empty profile table here means every CASC read for it came back null, i.e. no WC3 install
     // was found at all (not just this one file missing). Naming the file we *tried* without this
     // check made the header claim a metadata source that in fact contributed nothing.
     const gameDataMissing = profile.size === 0;
@@ -1498,7 +1498,7 @@ function dedupeCompilerSchemas(schemas: CompilerFieldSchema[]): CompilerFieldSch
 
 function makeCompilerMetaField(schema: CompilerFieldSchema, worldStrings: Map<string, string>): MetaField {
     // The knowledge base's displayName is sometimes itself a WESTRING_ reference (e.g. "Abilities ->
-    // Skin Normal"/"Skin Hero" report as WESTRING_UEVAL_UABS/UHAS) rather than plain English — resolve
+    // Skin Normal"/"Skin Hero" report as WESTRING_UEVAL_UABS/UHAS) rather than plain English. Resolve
     // it the same way object names are resolved, or the field's row label is just that raw token.
     const displayName = schema.displayName ? resolveWorldEditString(schema.displayName, worldStrings) : undefined;
     return {
@@ -1581,7 +1581,7 @@ function catalogWithDocumentObjects(
 /**
  * Fills in friendly names for rawcodes that reference custom objects defined in a *different*
  * war3map.<ext> file than the one currently open (e.g. a unit's Abilities list pointing at a custom
- * ability in war3map.w3a while viewing war3map.w3u) — otherwise resolveRawcodeList has no name for
+ * ability in war3map.w3a while viewing war3map.w3u), otherwise resolveRawcodeList has no name for
  * them (the base game catalog only knows stock ids) and the field falls back to showing raw codes.
  * These entries never get an `objectKey`: jumping to them goes through the openObjectReference
  * command (see locateObjectAcrossSiblings) rather than the local same-document jump.
@@ -1612,7 +1612,7 @@ async function catalogWithSiblingObjects(
         if (!summaryData) continue;
         const addEntry = (entry: ObjModEntry) => {
             const id = entry.newId || entry.baseId;
-            // A local entry (from catalogWithDocumentObjects) already has a jump-capable objectKey —
+            // A local entry (from catalogWithDocumentObjects) already has a jump-capable objectKey:
             // don't clobber it with a same-named cross-file entry that lacks one.
             if (objects.get(id.toLowerCase())?.objectKey) return;
             const nameOverride = resolveObjectNameOverride(entry, triggerStrings);
@@ -1684,7 +1684,7 @@ function normalizeProfileModelPath(key: string, value: string): string | undefin
     if (!/(file|model)/.test(key.toLowerCase())) return undefined;
     const first = firstAssetPath(value);
     if (!first || (!/[\\/]/.test(first) && !/\.(mdx|mdl)$/i.test(first))) return undefined;
-    // A texture/sound/image in a file-keyed field is not a model — don't fabricate "x.blp.mdl".
+    // A texture/sound/image in a file-keyed field is not a model; don't fabricate "x.blp.mdl".
     if (/\.(blp|dds|tga|png|jpe?g|wav|mp3|ogg|flac|txt|slk|fdf|toc)$/i.test(first)) return undefined;
     return normalizeModelPath(first);
 }
@@ -1918,7 +1918,7 @@ async function buildHtml(
         ? Math.min(MAX_TOOLTIP_WIDTH_PX, Math.max(MIN_TOOLTIP_WIDTH_PX, Math.round(configuredTooltipWidth)))
         : DEFAULT_TOOLTIP_WIDTH_PX;
     // A cross-reference jump (see locateObjectAcrossSiblings) stashes the object to land on here before
-    // opening/revealing this file — consumed once so a later plain reopen falls back to the first object.
+    // opening/revealing this file, consumed once so a later plain reopen falls back to the first object.
     // `isPendingJump` tells the webview this really is a deliberate navigation (state.ts uses it to
     // override a restored last-session selection, which should otherwise win over the plain fallback).
     const pendingKey = pendingObjectSelection.get(context.uri.toString());
@@ -1939,7 +1939,7 @@ async function buildHtml(
     const summary = `${objects.length} object${objects.length === 1 ? '' : 's'} - ${overrides} override${overrides === 1 ? '' : 's'}`;
     const combinedMeta = combined?.skinName ? ` - combined ${combined.mainName} + ${combined.skinName}` : '';
     // Single line, escaped once at the point of use (it doubles as the strip's own title attribute,
-    // since it ellipsizes rather than wrapping — see .md-meta).
+    // since it ellipsizes rather than wrapping, see .md-meta).
     const metaLine = `WC3 ${typeLabel} object data - v${parsed.version} - ${summary} - ${metadataSource}` +
         `${parsed.extended ? ' - extended (level/dataPt)' : ''}${combinedMeta}`;
     const errorBanner = parsed.error
@@ -1949,11 +1949,11 @@ async function buildHtml(
         ? `<div class="warning">${escapeHtml(wtsWarning)}</div>`
         : '';
     // metadataSource is tagged "(not found)" by loadObjSummaryDataUncached when the profile/wts
-    // lookups behind it came back completely empty — i.e. no WC3 install was found at all, not just
+    // lookups behind it came back completely empty, i.e. no WC3 install was found at all, not just
     // this one file. Surface that plainly instead of leaving raw field ids as the only clue.
     const registrySuffix = process.platform === 'win32' ? ' and the Windows registry' : '';
     const gameDataBanner = metadataSource.endsWith('(not found)')
-        ? `<div class="warning">Warcraft III game data not found — showing raw field ids only (no icons, categories, or friendly labels). Checked the default install locations${registrySuffix}; if Warcraft III is installed somewhere unusual, set the "wurst.wc3path" setting to its folder and reopen this file. Run "Wurst: Show WC3 Data Log" from the Command Palette to see exactly what was checked.</div>`
+        ? `<div class="warning">Warcraft III game data not found: showing raw field ids only (no icons, categories, or friendly labels). Checked the default install locations${registrySuffix}; if Warcraft III is installed somewhere unusual, set the "wurst.wc3path" setting to its folder and reopen this file. Run "Wurst: Show WC3 Data Log" from the Command Palette to see exactly what was checked.</div>`
         : '';
 
     const tooltipFontCss = tooltipFontUri ? `
@@ -2168,7 +2168,7 @@ function findFileEntryForKey(doc: ObjModDocument, key: string): { entry: ObjModE
 /**
  * Parse a numeric field edit without destroying data: empty clears to 0, a valid number is used
  * (truncated for ints), and unparseable input keeps the previous numeric value rather than silently
- * collapsing to 0 — `Number('1.2.3') || 0` would have lost the original value.
+ * collapsing to 0, `Number('1.2.3') || 0` would have lost the original value.
  */
 function parseNumericEdit(raw: string, prev: number | string, truncate: boolean): number {
     if (raw.trim() === '') return 0;
@@ -2341,7 +2341,7 @@ function computeWtsWarning(model: ObjModFile, wtsExists: boolean): string | unde
     const hasTrig = [...model.origObjs, ...model.customObjs].some((entry) =>
         entry.mods.some((mod) => typeof mod.value === 'string' && /^TRIGSTR_\d+$/i.test(mod.value)));
     return hasTrig
-        ? 'war3map.wts was not found next to this file — externalized (TRIGSTR_) strings cannot be resolved or edited. Other fields remain editable.'
+        ? 'war3map.wts was not found next to this file: externalized (TRIGSTR_) strings cannot be resolved or edited. Other fields remain editable.'
         : undefined;
 }
 
@@ -2356,7 +2356,7 @@ interface EditableObjMod {
 
 /**
  * Parse the opened objmod plus its war3map/war3mapSkin sibling. The returned `displayFile` is the
- * merge used for both display AND editing — its mods alias the per-file mod objects, so an edit to
+ * merge used for both display and editing. Its mods alias the per-file mod objects, so an edit to
  * a merged mod mutates whichever sibling owns it. Both files are written back on save.
  */
 async function loadEditableObjMod(uri: vscode.Uri): Promise<EditableObjMod> {
@@ -2396,7 +2396,7 @@ async function loadEditableObjMod(uri: vscode.Uri): Promise<EditableObjMod> {
  * for a single map all sit beside each other as war3map.<ext> (see getObjModSiblingFileName), so this
  * just tries each known kind's file in the same folder as `sourceUri` and searches its merged object
  * list for a customized entry with a matching id. Returns undefined for stock (never-customized)
- * rawcodes — there's no file to jump to for those.
+ * rawcodes; there's no file to jump to for those.
  */
 async function locateObjectAcrossSiblings(sourceUri: vscode.Uri, rawcode: string): Promise<{ uri: vscode.Uri; key: string } | undefined> {
     const dir = vscode.Uri.joinPath(sourceUri, '..');
@@ -2440,9 +2440,9 @@ class ObjModDocument implements vscode.CustomDocument {
     nextRevision = 1;
     /** Bytes we last read or wrote for each watched file (mainUri/skinUri/wtsUri), keyed by uri string.
         Lets an external-change check tell a real edit from another app apart from the echo of our own
-        write — see ObjModEditorProvider.snapshotKnownBytes/checkExternalChange. */
+        write, see ObjModEditorProvider.snapshotKnownBytes/checkExternalChange. */
     knownBytes = new Map<string, Buffer>();
-    /** Disposed on panel close — see ObjModEditorProvider.watchExternalChanges. */
+    /** Disposed on panel close, see ObjModEditorProvider.watchExternalChanges. */
     watcherDisposables: vscode.Disposable[] = [];
     /** Coalesces bursts of fs-watcher events (e.g. a `git pull` touching main+skin+wts together) into
         one combined check instead of one prompt per file. */
@@ -2477,7 +2477,7 @@ class ObjModDocument implements vscode.CustomDocument {
         };
     }
 
-    /** Stops the external-change file watchers — called both when the panel closes (they'd otherwise
+    /** Stops the external-change file watchers, called both when the panel closes (they'd otherwise
      *  keep firing against a document nothing is displaying) and when the document itself is disposed. */
     disposeWatchers(): void {
         for (const d of this.watcherDisposables) d.dispose();
@@ -2611,7 +2611,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         const codiconCssUri = panel.webview.asWebviewUri(
             vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview', path.basename(CODICON_CSS_BUNDLE)),
         ).toString();
-        // Show a spinner immediately — buildHtml awaits CASC game-data and can exceed 200ms.
+        // Show a spinner immediately: buildHtml awaits CASC game-data and can exceed 200ms.
         panel.webview.html = buildLoadingHtml(fileName);
         doc.reload = async () => {
             panel.webview.html = await buildHtml(
@@ -2635,7 +2635,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
 
     // Thin safety net around the real handler: an uncaught throw here previously vanished into an
     // unhandled promise rejection (the caller does `void this.handleMessage(...)`), leaving whatever
-    // the webview was waiting on — a save, an edit, a thumbnail — stuck with no feedback at all.
+    // the webview was waiting on, a save, an edit, a thumbnail, stuck with no feedback at all.
     private async handleMessage(message: unknown, webview: vscode.Webview, doc: ObjModDocument): Promise<void> {
         try {
             await this.handleMessageUnsafe(message, webview, doc);
@@ -2701,14 +2701,14 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
                 void webview.postMessage({
                     type: 'assetCatalog',
                     models: dedupeByPathOrCatalogBasename([...imp.model, ...cat.models]),
-                    // Icons repeat across SD/HD and .blp/.dds/.tga variants — collapse same-named ones.
+                    // Icons repeat across SD/HD and .blp/.dds/.tga variants; collapse same-named ones.
                     icons: dedupeByPathOrCatalogBasename([...imp.icon, ...cat.icons]),
                     sounds: dedupeByPathOrCatalogBasename([...imp.sound, ...cat.sounds]),
                     pathing: cat.pathing,
                 });
             } catch (err) {
                 // Without this, a CASC/game-data failure left the asset browser stuck on
-                // "Loading game assets…" forever — the only way out was closing the whole editor.
+                // "Loading game assets…" forever; the only way out was closing the whole editor.
                 console.error('[wurst-objmod] failed to load asset catalog', err);
                 void webview.postMessage({ type: 'assetCatalogFailed', reason: err instanceof Error ? err.message : String(err) });
             }
@@ -2879,7 +2879,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
                     void webview.postMessage({ type: 'invalidateDetails', key });
                 }
             };
-            // Targeted in-place update on undo/redo — avoids rebuilding the whole (700+ row) table.
+            // Targeted in-place update on undo/redo, avoids rebuilding the whole (700+ row) table.
             const post = () => {
                 const display = modDisplayValue(edit.mod, doc.wtsTable);
                 const overridden = !!locateMod(findEntryByKey(doc.displayFile, key), fieldId, level ?? undefined, dataPt ?? undefined);
@@ -2916,7 +2916,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         void this.workspaceState.update(OBJMOD_SELECTIONS_STATE_KEY, selections);
     }
 
-    /** A rawcode chip (e.g. an ability on a unit) that isn't overridden in the currently open file —
+    /** A rawcode chip (e.g. an ability on a unit) that isn't overridden in the currently open file:
      *  try to find which sibling war3map.* file actually customizes it and jump there. Stock/never-
      *  customized rawcodes have nothing to open, so that's reported back as a plain info message. */
     private async openObjectReference(doc: ObjModDocument, rawcode: string, label?: string): Promise<void> {
@@ -2924,7 +2924,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         if (!found) {
             const displayLabel = label ? `${label} (${rawcode})` : rawcode;
             void vscode.window.showInformationMessage(
-                `${displayLabel} is a stock Warcraft III object — it isn't customized anywhere in this map, so there's nothing to open.`,
+                `${displayLabel} is a stock Warcraft III object: it isn't customized anywhere in this map, so there's nothing to open.`,
             );
             return;
         }
@@ -2946,7 +2946,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
                 ? serializeValidated(doc.skinFile, doc.skinUri.path)
                 : undefined;
             const wtsBytes = await buildWtsBytes(doc.wtsEdits, doc.wtsUri, doc.wtsExists);
-            // writeBytesIfChanged hands back the bytes now on disk (written, or found unchanged) —
+            // writeBytesIfChanged hands back the bytes now on disk (written, or found unchanged):
             // record those directly instead of re-reading every file back with
             // snapshotKnownBytes, so the file watcher doesn't mistake this save's own fs events for an
             // external change (see checkExternalChange).
@@ -3008,7 +3008,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         return { id: context.destination.toString(), delete: () => vscode.workspace.fs.delete(context.destination).then(() => undefined, () => undefined) };
     }
 
-    /** Re-parses main/skin/wts from disk and rebuilds the webview — the shared body behind both VS
+    /** Re-parses main/skin/wts from disk and rebuilds the webview, the shared body behind both VS
      *  Code's own revert (revertCustomDocument) and the "no local edits at risk" branch of an external
      *  change (checkExternalChange). */
     private async reloadDocFromDisk(doc: ObjModDocument): Promise<void> {
@@ -3056,14 +3056,14 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
             try {
                 doc.knownBytes.set(key, Buffer.from(await vscode.workspace.fs.readFile(uri)));
             } catch {
-                doc.knownBytes.delete(key); // file doesn't exist (yet) — nothing to compare against
+                doc.knownBytes.delete(key); // file doesn't exist (yet): nothing to compare against
             }
         }));
     }
 
     /** Watches this document's main/skin/wts files for changes made outside this editor (another
      *  editor, `git pull`, a teammate's overwrite) and reacts once bytes on disk actually differ from
-     *  what we last read/wrote — see checkExternalChange for what happens once one is confirmed. */
+     *  what we last read/wrote, see checkExternalChange for what happens once one is confirmed. */
     private watchExternalChanges(doc: ObjModDocument): void {
         doc.disposeWatchers();
         for (const uri of watchedUris(doc)) {
@@ -3093,7 +3093,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
 
     private async checkExternalChange(doc: ObjModDocument): Promise<void> {
         doc.externalChangeDebounce = undefined;
-        // Independent files — read them in parallel rather than one after another before comparing.
+        // Independent files: read them in parallel rather than one after another before comparing.
         const uris = watchedUris(doc);
         const current = await Promise.all(uris.map(async (uri) => {
             try { return Buffer.from(await vscode.workspace.fs.readFile(uri)); } catch { return undefined; }
@@ -3106,13 +3106,13 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
 
         const label = uriBaseName(doc.mainUri);
         if (doc.currentRevision === doc.savedRevision) {
-            // Nothing of yours is at risk — just pick up the new content and say so, no prompt needed.
+            // Nothing of yours is at risk; just pick up the new content and say so, no prompt needed.
             await this.reloadDocFromDisk(doc);
-            vscode.window.setStatusBarMessage(`$(sync) ${label} changed on disk — reloaded.`, 4000);
+            vscode.window.setStatusBarMessage(`$(sync) ${label} changed on disk: reloaded.`, 4000);
             return;
         }
 
-        // Dirty: reloading would silently discard in-progress edits, so ask. No field-level merge — WC3
+        // Dirty: reloading would silently discard in-progress edits, so ask. No field-level merge: WC3
         // object files carry no diff/patch metadata to merge against, so the only two data-safe options
         // are "take theirs" or "take mine."
         const choice = await vscode.window.showWarningMessage(
@@ -3122,7 +3122,7 @@ class ObjModEditorProvider implements vscode.CustomEditorProvider<ObjModDocument
         );
         if (choice === 'Reload from Disk') {
             // Goes through VS Code's own revert command (rather than reloadDocFromDisk directly) so the
-            // tab's dirty flag and undo stack — which we don't own — get cleared correctly too.
+            // tab's dirty flag and undo stack, which we don't own, get cleared correctly too.
             doc.panel?.reveal();
             await vscode.commands.executeCommand('workbench.action.files.revert');
         } else if (choice === 'Keep Mine (Overwrite Disk)') {

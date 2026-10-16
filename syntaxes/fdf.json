@@ -36,7 +36,7 @@
         },
 
         "flag_only_prop": {
-            "comment": "Properties that stand alone with no value — treated as boolean flags",
+            "comment": "Properties that stand alone with no value, treated as boolean flags",
             "match": "^\\s*(UseActiveContext|DecorateFileNames|BackdropTileBackground|BackdropBlendAll|BackdropTileNoFill|UseFrameDefinedFont|FontJustifyCenter|FontJustifyLeft|FontJustifyRight|FontJustifyTop|FontJustifyBottom|AbsWidth|AbsHeight|Protected)\\b",
             "captures": {
                 "1": { "name": "constant.language.flag.fdf" }

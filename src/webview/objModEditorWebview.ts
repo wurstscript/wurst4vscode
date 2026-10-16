@@ -14,7 +14,7 @@ function applySearch() {
   searchRaf = 0;
   // Writing ui.query drives the tree's own reactive effect (see setupTree() in objectTree.ts), which
   // rebuilds it synchronously right here. ui.selectedKey deliberately isn't a tracked dependency of
-  // that rebuild (selection normally moves via the cheap setActiveRow(), not a full tree rebuild) —
+  // that rebuild (selection normally moves via the cheap setActiveRow(), not a full tree rebuild):
   // so if the query change knocked the selection out of the results, the freshly rebuilt tree still
   // needs its active row fixed up explicitly, same as a normal click would via selectObject().
   ui.query = search.value.trim().toLowerCase();
@@ -35,13 +35,13 @@ function applySearch() {
 // Restore the last search query for this file (state.ts seeds ui.query from persisted vscodeApi
 // state) so the search box and its match-count/clear-button indicators don't visually reset to empty
 // on every reopen. Runs before setupTree()/setupDetails() further down are called, so their reactive
-// effects' very first render already reflects the restored query — no separate re-render needed.
+// effects' very first render already reflects the restored query; no separate re-render needed.
 if (ui.query) {
   search.value = ui.query;
   applySearch();
 }
 
-// Coalesce rapid keystrokes into one render per frame — typing stays smooth on large lists.
+// Coalesce rapid keystrokes into one render per frame so typing stays smooth on large lists.
 search.addEventListener('input', () => {
   if (searchRaf) cancelAnimationFrame(searchRaf);
   searchRaf = requestAnimationFrame(applySearch);
@@ -315,8 +315,8 @@ document.addEventListener('keydown', event => {
 // layout it falls back to is much worse to work in, so it stays a genuine last resort.
 const NARROW_LAYOUT_PX = 440;
 const LIST_MIN_PX = 130;
-const LIST_W_DEFAULT = 220; // keep in sync with --list-w in objModPreview.ts
-// Matches the 46% cap in the .object-editor grid — dragging past it would detach the splitter from
+const LIST_W_DEFAULT = 220; // keep in sync with --list-w in objModEditor.css
+// Matches the 46% cap in the .object-editor grid; dragging past it would detach the splitter from
 // the pointer, since CSS would keep clamping the column while --list-w kept growing.
 const LIST_MAX_RATIO = 0.46;
 
@@ -349,11 +349,11 @@ function setupSplitter() {
     updateSplitterAria();
   };
   // The ResizeObserver below measures the editor element itself and fires on its first observation,
-  // so it covers both the initial layout and every later resize — no separate window 'resize'
+  // so it covers both the initial layout and every later resize, no separate window 'resize'
   // listener (which could only ever fire alongside it) and no bootstrap call needed.
   if (typeof ResizeObserver === 'function') {
     // Only re-read/apply the persisted width when the layout actually flips between side-by-side and
-    // stacked — otherwise this ran once per frame for the whole of a window drag-resize.
+    // stacked; otherwise this ran once per frame for the whole of a window drag-resize.
     let stacked: boolean | null = null;
     const ro = new ResizeObserver(entries => {
       const rect = entries[0] && entries[0].contentRect;
@@ -434,7 +434,7 @@ function saveNow() {
   vscodeApi.postMessage({ type: 'save' });
 }
 
-// Forward undo/redo to the host (so the custom-document edit stack drives them) — except while a
+// Forward undo/redo to the host (so the custom-document edit stack drives them), except while a
 // text field is focused, where the browser's native text undo should win.
 document.addEventListener('keydown', e => {
   if (!(e.ctrlKey || e.metaKey)) return;
@@ -450,7 +450,7 @@ document.addEventListener('keydown', e => {
   else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); vscodeApi.postMessage({ type: 'redo' }); }
 });
 
-// The dirty badge doubles as a Save button — Ctrl+S is invisible to a mouse-only user, and "editable"
+// The dirty badge doubles as a Save button: Ctrl+S is invisible to a mouse-only user, and "editable"
 // on its own gives no hint that clicking it does anything.
 const editableBadge = document.getElementById('editable-badge');
 if (editableBadge) editableBadge.addEventListener('click', saveNow);
@@ -462,7 +462,7 @@ if (refreshEditor) refreshEditor.addEventListener('click', () => {
 });
 
 // Density is a document-wide spacing scale (tree, header, field table all retune at once), so it's a
-// single class on <body> driving the :root / body.density-cozy variable pair in objModPreview.ts —
+// single class on <body> driving the :root / body.density-cozy variable pair in objModEditor.css:
 // nothing has to re-render. The effect runs immediately on creation, which is what applies a restored
 // 'cozy' preference on load.
 const densityToggle = document.getElementById('density-toggle');
@@ -478,7 +478,7 @@ if (densityToggle) {
   densityToggle.addEventListener('click', () => { ui.density = ui.density === 'cozy' ? 'compact' : 'cozy'; });
 }
 
-// setupTree()/setupDetails() each wire a reactive effect that runs immediately on creation — that
+// setupTree()/setupDetails() each wire a reactive effect that runs immediately on creation. That
 // first run *is* the tree/details panel's initial paint, so no separate bootstrap render() call is
 // needed here.
 setupTree();
@@ -489,7 +489,7 @@ setupMessageHandler();
 setTimeout(() => { try { modelThumbEnsureInit(); } catch (e) {} }, 0);
 
 // The in-game tooltip's own fill texture and gold border tiles, applied over the plain --wc3-tip-bg
-// color / border once they load (see applyTooltipBackdrop/applyTooltipBorder in messageHandler.ts) —
+// color / border once they load (see applyTooltipBackdrop/applyTooltipBorder in messageHandler.ts):
 // requested once per document open since neither changes, rather than per tooltip field like icons/
 // model thumbs.
 vscodeApi.postMessage({ type: 'requestTooltipBackdrop' });

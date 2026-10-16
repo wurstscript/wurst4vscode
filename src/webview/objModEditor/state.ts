@@ -22,13 +22,13 @@ export function invalidateDetailCache(): void {
 }
 
 // Everything below is restored from vscodeApi's per-document persisted state (survives a webview
-// reload — including our own external-change auto-reload/revert, see objModPreview.ts — and a full
+// reload, including our own external-change auto-reload/revert, see objModPreview.ts, and a full
 // VS Code restart) so reopening a file doesn't dump the user back to a blank slate: same object
 // selected, same search text, same collapsed tree branches, same category/technical/density filters.
 const persisted = vscodeApi.getState() || {};
 
 // A Set whose mutations bump a signal, so an effect that reads `.version` (once, anywhere in its run)
-// gets re-run whenever the set's membership changes — without every consumer having to switch from
+// gets re-run whenever the set's membership changes, without every consumer having to switch from
 // `.has()`/`.add()`/`.delete()` to signal `.value` reads/writes.
 function reactiveSet<T>(initialValues: Iterable<T>) {
   const version = signal(0);
@@ -45,7 +45,7 @@ function reactiveSet<T>(initialValues: Iterable<T>) {
 }
 
 // Collapse state for every browse-tree heading (group/race/campaign/kind), keyed by that node's own
-// path string (see nodeKey() in objectTree.ts) — one Set instead of one per tree level, since the
+// path string (see nodeKey() in objectTree.ts), one Set instead of one per tree level, since the
 // tree can now be up to 4 levels deep (Group > Race > Melee|Campaign > Units/Buildings/Heroes/Special).
 export const collapsedNodes = reactiveSet(Array.isArray(persisted.collapsedNodes) ? persisted.collapsedNodes : []);
 // Keys whose field-row load failed on the host (missing game data, thrown parser error, etc). Kept
@@ -58,7 +58,7 @@ export const details = document.getElementById('details') as HTMLElement;
 export const search = document.getElementById('search') as HTMLInputElement;
 
 // A cross-file rawcode jump (see locateObjectAcrossSiblings in objModPreview.ts) always wins over a
-// restored selection — the user just asked to look at a specific object, so honor that over whatever
+// restored selection: the user just asked to look at a specific object, so honor that over whatever
 // was open last time. Otherwise resolve the stable rawcode identity to this parse's transient array
 // key, falling back only if that object was deleted by an edit made elsewhere.
 const restoredSelectedIdentity = typeof persisted.selectedIdentity === 'string' ? persisted.selectedIdentity : '';
@@ -72,7 +72,7 @@ const initialSelectedKey = initial.isPendingJump ? initial.selectedKey : (restor
 // keeps working unchanged at every call site while making the field a real reactive primitive: a `computed`
 // or `effect` elsewhere can read `ui.selectedKey` and stay in sync automatically instead of relying on
 // every writer to remember to call the right render function. The underlying signals are module-private
-// (not exported) — every consumer goes through the `ui.*` accessors below, never the raw signal.
+// (not exported); every consumer goes through the `ui.*` accessors below, never the raw signal.
 const selectedKeySignal = signal(initialSelectedKey);
 const querySignal = signal(typeof persisted.query === 'string' ? persisted.query : '');
 const fieldQuerySignal = signal(typeof persisted.fieldQuery === 'string' ? persisted.fieldQuery : '');
@@ -83,17 +83,17 @@ const fieldViewSignal = signal(
   persisted.fieldView === 'practical' || persisted.fieldView === 'overrides' ? persisted.fieldView : 'world-editor',
 );
 // Only consulted once, to restore scroll position on the tree's first paint (see renderTree() in
-// objectTree.ts) — every scroll after that just updates this via the listener in setupTree(), which
+// objectTree.ts); every scroll after that just updates this via the listener in setupTree(), which
 // the persistUi effect below picks up like every other field.
 const treeScrollTopSignal = signal(typeof persisted.treeScrollTop === 'number' ? persisted.treeScrollTop : 0);
-// Same idea, for the field table's own scroll container (.table-wrap, inside #details) — see
+// Same idea, for the field table's own scroll container (.table-wrap, inside #details), see
 // renderDetails() in detailsPanel.ts. Unlike the tree, this one only applies on the very first paint:
 // switching objects afterward should reset to the top of the new object's fields, not inherit whatever
 // the previous object happened to be scrolled to.
 const detailsScrollTopSignal = signal(typeof persisted.detailsScrollTop === 'number' ? persisted.detailsScrollTop : 0);
-// 'compact' (default) or 'cozy' — the spacing scale applied document-wide as a body class (see the
+// 'compact' (default) or 'cozy', the spacing scale applied document-wide as a body class (see the
 // density effect in objModEditorWebview.ts and the :root/body.density-cozy variable pair in
-// objModPreview.ts). Persisted like every other view preference.
+// objModEditor.css). Persisted like every other view preference.
 const densitySignal = signal(persisted.density === 'cozy' ? 'cozy' : 'compact');
 const e2eForcedNarrowLayoutSignal = signal(false);
 
@@ -109,7 +109,7 @@ export const ui = {
   // Field categories hidden from the details table (the "focus on tooltips" custom view). Persisted
   // across objects/sessions like showTechnical. Reactive like `collapsedNodes` above.
   hiddenCategories: reactiveSet(Array.isArray(persisted.hiddenCategories) ? persisted.hiddenCategories : []),
-  // Density/noise filters for the field table — hide blank fields, or hide everything but overridden
+  // Density/noise filters for the field table, hide blank fields, or hide everything but overridden
   // (customized) ones. Persisted like showTechnical.
   get hideEmpty() { return hideEmptySignal.value; },
   set hideEmpty(v) { hideEmptySignal.value = v; },
@@ -149,7 +149,7 @@ export const assetBrowserUi = {
 };
 
 // One place that persists every restorable field above, instead of every mutation site remembering to
-// call vscodeApi.setState itself — write it here once and every future reactive field is covered for
+// call vscodeApi.setState itself; write it here once and every future reactive field is covered for
 // free. Merges onto whatever's already persisted (e.g. the splitter width in objModEditorWebview.ts)
 // rather than replacing it outright.
 effect(() => {

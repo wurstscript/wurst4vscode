@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Inline image decorations — renders a tiny thumbnail before image path strings
+ * Inline image decorations: render a tiny thumbnail before image path strings
  * in Wurst/JASS files, similar to VS Code's colour swatch decorators.
  *
  * Recognises two forms:
@@ -604,7 +604,7 @@ async function updateDecorations(editor: vscode.TextEditor, generation: number):
                         log(`thumb ready (casc): ${path.basename(cachedPath)} (queue ${thumbStartedAt2 - thumbQueuedAt2}ms, gen ${thumbElapsed2}ms)`);
                         const currentActive = vscode.window.activeTextEditor;
                         if (!currentActive || currentActive.document !== document) return;
-                        // Use the ranges captured at scan time — no re-scan needed.
+                        // Use the ranges captured at scan time, no re-scan needed.
                         let type = activeTypes.get(cachedPath);
                         if (type) type.dispose();
                         type = makeDecorationType(iconUri);

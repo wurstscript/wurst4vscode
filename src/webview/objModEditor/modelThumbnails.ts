@@ -40,9 +40,9 @@ export function getActiveModelThumbJobKey() {
 }
 
 // Scope the scan to the just-rendered subtree (tree / details / a single cell) instead of the whole
-// document — a .w3a file can have hundreds of icons and a full-document scan ran on every render.
+// document, a .w3a file can have hundreds of icons and a full-document scan ran on every render.
 
-// Decode an icon to a data URL using the browser — same pipeline as the BLP viewer (handles BGR
+// Decode an icon to a data URL using the browser, same pipeline as the BLP viewer (handles BGR
 // jpeg-content BLPs by swapping R/B after decode, plus 4-component jpegs the browser supports).
 export function observeModelThumbs(root) {
   if (!modelThumbObserver) {
@@ -518,7 +518,7 @@ export function applyMdxTexture(msg) {
 }
 
 // Handles the 'mdxTexture' host message. Kept here (rather than inlined in the message listener)
-// because it reads/writes modelThumbJob internals directly — those aren't exposed outside this module.
+// because it reads/writes modelThumbJob internals directly, those aren't exposed outside this module.
 export function handleMdxTextureMessage(msg) {
   if (modelThumbWorker && msg.thumbKey) {
     if (!modelThumbJob || msg.thumbKey !== modelThumbJob.key) return;

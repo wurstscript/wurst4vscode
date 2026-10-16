@@ -1,6 +1,6 @@
 'use strict';
 
-// MPQ Viewer webview script — compiled separately and loaded via asWebviewUri.
+// MPQ Viewer webview script, compiled separately and loaded via asWebviewUri.
 // Messages FROM extension: { type:'init', entries, archiveSize, archiveName }
 //                          { type:'error', message }
 //                          { type:'extractDone' }
@@ -257,7 +257,7 @@ function renderFile(node: TreeNode, indent: number, container: HTMLElement): voi
     selectBtn.setAttribute('aria-label', description ? `${node.fullPath} - ${description}` : node.fullPath);
     selectBtn.setAttribute('aria-pressed', 'false');
 
-    // Action button — only visible on hover/selection
+    // Action button, only visible on hover/selection
     const openBtn = document.createElement('button');
     openBtn.className = 'row-action';
     openBtn.title = 'Open in editor';

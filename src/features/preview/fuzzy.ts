@@ -3,11 +3,10 @@
 /**
  * Typo-tolerant search used by every webview search box.
  *
- * Pure, dependency-free, and self-contained on purpose: `webviewShared.ts` ships this exact function
- * to the webview via `fuzzyMatch.toString()`, and `scripts/test-fuzzy.js` unit-tests it. Do not add
- * imports or closures it can't carry into the webview.
+ * Host code and bundled webviews share this implementation. Keep fuzzyMatch self-contained:
+ * scripts/test-fuzzy.js also executes its string form in isolation, without imports or captured state.
  *
- * Strategy: case-insensitive substring (fast path), else an approximate-substring edit distance —
+ * Strategy: case-insensitive substring (fast path), else an approximate-substring edit distance:
  * the minimum edits to turn `query` into SOME substring of `text` (row 0 = all zeros lets the match
  * start anywhere). This finds "brilliance" inside "BTNBrillianceAura" for the query "billiance",
  * which a word-length-bounded check would miss. The budget stays low (≤2 edits) so it only forgives

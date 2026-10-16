@@ -112,13 +112,7 @@ Install a current Node.js LTS release and clone this repository alongside the `c
 
 `npm run package-web` minifies release bundles and locally obfuscates the bundled `war3-model` and `casc-ts` modules. It emits no source maps; VSIX packaging excludes sources, declarations, maps and build tools. Development builds remain readable. Public APIs and model properties retain their names, and hot-path control flow is preserved. This raises the effort needed to inspect distributed code; it does not make client-side code secret. Use `npm run test:e2e:production` to test the actual protected bundles in Chromium.
 
-Before submitting a change:
-
-```sh
-npm test
-npx tsc -p . --noEmit
-npm run vscode:prepublish
-```
+Before submitting a change, follow the [validation checklist in AGENTS.md](AGENTS.md#validation-checklist). For release packaging, also run `npm run vscode:prepublish`.
 
 For compiler/client startup changes, build the compiler with `gradlew shadowJar` in its `de.peeeq.wurstscript` directory, then run `node scripts/test-lsp-readiness.js <path-to-wurstscript.jar>` here. This opt-in JSON-RPC test covers progress, clients without progress UI, legacy readiness, failed builds, and deferred unsaved buffers. It requires Java 25 on PATH (or `WURST_LSP_TEST_JAVA`).
 

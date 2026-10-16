@@ -69,11 +69,7 @@ export class ReactiveCycleException extends Error {
  * `ReactiveCycleException` is raised. Generous by default - a healthy effect runs once (occasionally a few
  * times) per flush - so hitting it means a genuine cycle.
  */
-export let maxEffectRunsPerFlush = 1000;
-
-export function setMaxEffectRunsPerFlush(value: number): void {
-  maxEffectRunsPerFlush = value;
-}
+const maxEffectRunsPerFlush = 1000;
 
 // ---------------------------------------------------------------------------------------------------------------
 // Internals

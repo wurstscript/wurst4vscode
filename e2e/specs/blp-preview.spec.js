@@ -3,7 +3,7 @@
 /**
  * The readonly image/model preview (BLP/DDS/TGA/MDX). Its page loads two bundles, mdxViewer.js
  * and blpPreviewWebview.js, under a nonce, so these also prove the shipped CSP admits both.
- * Model rendering needs WebGL and real model data and stays in the local tier; the raster path
+ * Model rendering is covered in model-rendering.spec.js; the raster path
  * and the shared toolbar run here.
  */
 

@@ -15,7 +15,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.meta strong { color: var(--text); font-size: 13px; }
+.meta strong { color: var(--fg); font-size: 13px; }
 .blp-toolbar {
   display: flex;
   align-items: center;
@@ -57,7 +57,7 @@
   color: var(--muted);
   opacity: 0.7;
 }
-.sb-name { font-weight: 600; font-size: 13px; color: var(--text); word-break: break-word; }
+.sb-name { font-weight: 600; font-size: 13px; color: var(--fg); word-break: break-word; }
 .sb-info { font-size: 11px; color: var(--muted); line-height: 1.4; }
 .sb-divider { height: 1px; background: var(--border); opacity: 0.5; margin: 2px 0; }
 .anim-select {
@@ -85,7 +85,7 @@
 .seq-slider { width: 100%; cursor: pointer; }
 .seq-name {
   font-size: 11px;
-  color: var(--text);
+  color: var(--fg);
   opacity: 0.8;
   word-break: break-word;
 }

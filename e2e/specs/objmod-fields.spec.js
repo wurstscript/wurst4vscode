@@ -370,9 +370,9 @@ test('missing ability base fields use World Editor typed defaults and optional f
     await selectObject(page, 'Z902');
     await page.check('#technical-toggle');
 
-    await expect(rowForField(page, 'abpx').locator('td').last()).toHaveText('0');
-    await expect(rowForField(page, 'acdn').locator('td').last()).toHaveText('0.000');
-    await expect(rowForField(page, 'aare').locator('td').last()).toHaveText('0.000');
+    await expect(rowForField(page, 'abpx').locator('.cell-edit-val')).toHaveText('0');
+    await expect(rowForField(page, 'acdn').locator('.cell-edit-val')).toHaveText('0.000');
+    await expect(rowForField(page, 'aare').locator('.cell-edit-val')).toHaveText('0.000');
     await expect(rowForField(page, 'amho').locator('td').last()).toContainText('False');
     await expect(rowForField(page, 'amat').locator('.tt-empty')).toHaveCount(0);
     await expect(rowForField(page, 'aart').locator('.tt-empty')).toHaveCount(1);

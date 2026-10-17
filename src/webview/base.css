@@ -8,7 +8,6 @@
   --bg:           var(--vscode-editor-background);
   --sidebar:      var(--vscode-sideBar-background, var(--vscode-editor-background));
   --fg:           var(--vscode-editor-foreground);
-  --text:         var(--fg); /* legacy alias of --fg */
   --muted:        var(--vscode-descriptionForeground);
   --accent:       var(--vscode-textLink-foreground, #3794ff);
   --warn:         var(--vscode-editorWarning-foreground, #cca700);

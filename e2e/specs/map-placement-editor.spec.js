@@ -73,6 +73,25 @@ async function pickType(page, kind, rawcode) {
 
 const diskUnits = (host) => parseDoo(host.readFile(), 'war3mapUnits.doo').units;
 
+/**
+ * The fixture map saved by a given World Editor build into a w3i v25 header: no game-version block
+ * and no player list to lean on. Owners are moved to 12..15 so none of them reveals the layout.
+ */
+function legacyHeaderFixture(editorVersion) {
+    const fixtureDir = makePlacementMapFixtureDir();
+    const header = Buffer.alloc(12);
+    header.writeInt32LE(25, 0);
+    header.writeInt32LE(1, 4);
+    header.writeInt32LE(editorVersion, 8);
+    fs.writeFileSync(path.join(fixtureDir, 'war3map.w3i'), header);
+    const unitsPath = path.join(fixtureDir, 'war3mapUnits.doo');
+    const parsed = parseDoo(fs.readFileSync(unitsPath), 'war3mapUnits.doo');
+    parsed.units[ITEM].ownerIndex = 15;
+    parsed.units[CUSTOM].ownerIndex = 12;
+    fs.writeFileSync(unitsPath, serializeDoo(parsed));
+    return fixtureDir;
+}
+
 test('renders the terrain and every placement from the fixture', async ({ openMapPlacement }) => {
     const { page, host, pageErrors } = await openEditor(openMapPlacement);
 
@@ -212,6 +231,28 @@ test('places items as Neutral Passive and names custom items through war3map.wts
     await expect.poll(() => host.doc.file.units.length).toBe(6);
     expect(host.doc.file.units[5]).toMatchObject({ typeId: 'I000', ownerIndex: 27, z: 0 });
 });
+
+for (const { editorVersion, players, ownerTwelve, passive } of [
+    { editorVersion: 6052, players: 12, ownerTwelve: 'Neutral Hostile', passive: 15 },
+    { editorVersion: 6061, players: 24, ownerTwelve: 'Player 13', passive: 27 },
+]) {
+    test(`a map saved by editor build ${editorVersion} uses the ${players}-player owner layout`, async ({ openMapPlacement }) => {
+        const fixtureDir = legacyHeaderFixture(editorVersion);
+        try {
+            const { page, host } = await openEditor(openMapPlacement, { fixtureDir });
+            await expect(page.locator('#mp-owner option')).toHaveCount(players + 2);
+            await clickPlacement(page, host, CUSTOM);
+            await expect(page.locator('#mp-sel-owner option:checked')).toHaveText(ownerTwelve);
+
+            await pickType(page, 'item', 'I000');
+            await clickGround(page, ON_GROUND);
+            await expect.poll(() => host.doc.file.units.length).toBe(6);
+            expect(host.doc.file.units[5].ownerIndex).toBe(passive);
+        } finally {
+            fs.rmSync(fixtureDir, { recursive: true, force: true });
+        }
+    });
+}
 
 test('changing the owner of the selected unit is one undoable edit', async ({ openMapPlacement }) => {
     const { page, host } = await openEditor(openMapPlacement);

@@ -13,7 +13,7 @@ context:
 | `war3map.doo` | doodad / destructable placement (read-only) | `parseDoo` in `casc-ts/formats/doo.ts` |
 | `war3mapUnits.doo` | unit / item / start-location placement (edited) | `parseDoo` / `serializeDoo` in `casc-ts/formats/doo.ts` |
 | `war3map.w3u` / `.w3t` | custom units / items for the placement picker | `parseObjMod` in `casc-ts` |
-| `war3map.w3i` | only the version, to pick the player-index layout | first i32 |
+| `war3map.w3i` | version, editor build and player slots, to pick the player-index layout | `parseW3i` in `casc-ts` |
 
 All multi-byte integers/floats are little-endian. `id` means four ASCII bytes
 (a rawcode, for example `Hpea`). Offsets below are sequential; there is no
@@ -180,8 +180,10 @@ acquisition -1, hero level 1 with zero attribute overrides, random block
 `01 00 00 00`, colour and waygate -1, and creation number = highest existing + 1.
 They get a skin id when the map's existing units (or, with none, its doodads, or
 with neither, a w3i version >= 31) use skin ids. The player-index layout is the
-24-player one when the w3i version is >= 28 or any owner index exceeds 15, so a
-1.29/1.30 map (w3i 25) with no neutral placements yet gets the old indices.
+24-player one when the map was saved by a World Editor newer than build 6060 (the
+last pre-1.29 editor; the 12/24 player limit follows this build), when the w3i
+version is >= 28, or when a w3i player slot above 12 or an owner index above 15
+exists.
 
 Safety: when the file is opened, `serializeDoo(parseDoo(bytes))` must equal the
 original bytes, otherwise the editor opens read-only (for example a

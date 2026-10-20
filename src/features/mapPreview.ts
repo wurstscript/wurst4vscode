@@ -14,7 +14,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { DooFile, DooUnit, parseDoo, parseObjMod, serializeDoo } from 'casc-ts/formats';
+import { DooFile, DooUnit, parseDoo, parseObjMod, parseW3i, serializeDoo } from 'casc-ts/formats';
 import { buildPage, scriptSafeJson } from './webviewShared';
 import { escapeHtml, makeNonce } from './webviewUtils';
 import { findGameTexture } from './preview/cascStorage';
@@ -366,6 +366,8 @@ const UNITS_FILE = 'war3mapUnits.doo';
 const START_LOCATION = 'sloc';
 /** Facing World Editor gives freshly placed units and items (270°), as the f32 it writes. */
 const DEFAULT_FACING = Math.fround(Math.PI * 1.5);
+/** Last World Editor build before 1.29. The player limit (12 or 24) follows the build a map was saved with. */
+const LAST_12_PLAYER_EDITOR = 6060;
 
 type PlacementKind = 'unit' | 'item' | 'start';
 
@@ -374,6 +376,13 @@ interface PlacementType {
     name: string;
     kind: 'unit' | 'item';
     custom: boolean;
+}
+
+/** What the placement editor needs from `war3map.w3i`. */
+interface MapInfo {
+    version: number;
+    editorVersion: number;
+    playerNumbers: number[];
 }
 
 /** Player slots and neutral owner indices as `war3mapUnits.doo` stores them. */
@@ -455,18 +464,24 @@ function serializeValidatedPlacements(file: PlacementFile, name: string): Buffer
     return bytes;
 }
 
-function readW3iVersion(dir: string): number {
+function readMapInfo(dir: string): MapInfo {
     const w3iPath = findFileCI(dir, 'war3map.w3i');
     try {
-        return w3iPath ? fs.readFileSync(w3iPath).readInt32LE(0) : 0;
+        // The header is read before anything that can fail; players are best-effort and may be missing.
+        const w3i = w3iPath ? parseW3i(fs.readFileSync(w3iPath)) : undefined;
+        return { version: w3i?.version ?? 0, editorVersion: w3i?.editorVersion ?? 0, playerNumbers: (w3i?.players ?? []).map((p) => p.num) };
     } catch {
-        return 0;
+        return { version: 0, editorVersion: 0, playerNumbers: [] };
     }
 }
 
-/** 1.31+ maps (w3i v28) keep neutrals at 24/27 and older ones at 12/15; an owner above 15 also gives a newer map away. */
-function ownerLayout(w3iVersion: number, units: DooUnit[]): OwnerLayout {
-    return w3iVersion >= 28 || units.some((u) => u.ownerIndex > 15)
+/**
+ * Maps saved by a 1.29+ editor have 24 players and keep the neutrals at 24/27; older ones at 12/15.
+ * A player slot above 12 or an owner above 15 gives a 24-player map away even without a usable w3i.
+ */
+function ownerLayout(info: MapInfo, units: DooUnit[]): OwnerLayout {
+    return info.editorVersion > LAST_12_PLAYER_EDITOR || info.version >= 28 ||
+        info.playerNumbers.some((n) => n > 11) || units.some((u) => u.ownerIndex > 15)
         ? { players: 24, neutralHostile: 24, neutralPassive: 27 }
         : { players: 12, neutralHostile: 12, neutralPassive: 15 };
 }
@@ -540,14 +555,14 @@ async function loadScene(doc: MapPlacementDocument): Promise<void> {
         const catalog = await getObjectCatalog().catch(() => new Map<string, ObjectRef>());
         const [materials, types] = await Promise.all([buildTerrainMaterials(terrain), loadPlacementTypes(doc.uri, dir, catalog)]);
         const doodads = readDoodads(dir, catalog);
-        const w3iVersion = readW3iVersion(dir);
+        const mapInfo = readMapInfo(dir);
         const units = doc.units;
         doc.scene = {
             terrain, materials, types, catalog,
             doodads: doodads.markers,
-            owners: ownerLayout(w3iVersion, units),
+            owners: ownerLayout(mapInfo, units),
             // Reforged (w3i v31) added skin ids; follow the map's own files before guessing from the version.
-            usesSkins: units.length ? units.some((u) => u.skinId !== undefined) : doodads.usesSkins ?? w3iVersion >= 31,
+            usesSkins: units.length ? units.some((u) => u.skinId !== undefined) : doodads.usesSkins ?? mapInfo.version >= 31,
         };
     } catch (e) {
         const message = e instanceof Error ? e.message : String(e);

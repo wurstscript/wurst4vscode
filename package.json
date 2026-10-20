@@ -508,6 +508,19 @@
                 "priority": "default"
             },
             {
+                "viewType": "wurst.mapPlacementEditor",
+                "displayName": "WC3 Map Terrain & Placement Editor (experimental)",
+                "selector": [
+                    {
+                        "filenamePattern": "war3mapUnits.doo"
+                    },
+                    {
+                        "filenamePattern": "war3mapunits.doo"
+                    }
+                ],
+                "priority": "option"
+            },
+            {
                 "viewType": "wurst.wpmPreview",
                 "displayName": "WC3 Pathing Map (editable)",
                 "selector": [
@@ -830,7 +843,7 @@
             },
             {
                 "command": "wurst.previewMap",
-                "title": "Preview Map Terrain (experimental)",
+                "title": "Open Map Terrain & Placement Editor (experimental)",
                 "category": "wurst"
             },
             {

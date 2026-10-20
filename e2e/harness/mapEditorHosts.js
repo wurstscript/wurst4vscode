@@ -1,10 +1,10 @@
 'use strict';
 
 /**
- * Harnesses for the editable map-data formats whose webview JS ships as an inline `<script>`
- * inside the host TypeScript: `.w3i`, `.mmp`, `.w3c`, `.w3r`, and `.wpm`.
+ * Harnesses for the editable map-data formats (`.w3i`, `.mmp`, `.w3c`, `.w3r`, `.wpm`) and the map
+ * terrain and placement editor on `war3mapUnits.doo`.
  *
- * Until now that inline script was only checked by parsing it with `vm.Script` and grepping the
+ * Their page scripts used to be checked only by parsing them with `vm.Script` and grepping the
  * surrounding source for expected substrings, neither of which can tell whether the thing actually
  * works. Running the real emitted page in a browser can.
  */
@@ -14,16 +14,27 @@ const fs = require('fs');
 const { createTsLoader, root } = require('./tsLoader');
 const { createVscodeMock, fileUri } = require('./vscodeMock');
 const { mountCustomEditor } = require('./customEditorHost');
-const { makeMapFixtureDir } = require('./makeFixtures');
+const { makeMapFixtureDir, makePlacementMapFixtureDir } = require('./makeFixtures');
 
 const W3I_INTERNALS = `export const __e2e = { W3iEditorProvider, W3iDocument, renderW3iEditor };`;
 const WPM_INTERNALS = `export const __e2e = { WpmEditorProvider, WpmDocument, buildWpmHtml };`;
 const MMP_INTERNALS = `export const __e2e = { MmpEditorProvider, MmpDocument, renderMmpEditor, parseMmpFile };`;
 const W3C_INTERNALS = `export const __e2e = { W3cEditorProvider, W3cDocument, renderW3cEditor, parseW3cFile };`;
 const W3R_INTERNALS = `export const __e2e = { W3rEditorProvider, W3rDocument, renderW3rEditor, parseW3rFile };`;
+const MAP_PLACEMENT_INTERNALS = `export const __e2e = { MapPlacementEditorProvider, MapPlacementDocument, terrainHeightAt };`;
 
-async function createEditorHost(opts, sourceFile, internals, fileName, providerFactory, isDirty) {
-    const fixtureDir = opts.fixtureDir || makeMapFixtureDir();
+/** No game data: terrain tiles fall back to their deterministic colours on every machine, and the
+ *  placement picker lists only knowledge-base and map-local types. */
+const NO_GAME_DATA = {
+    'src/features/preview/cascStorage.ts': {
+        findGameTexture: async () => null,
+        findGameAsset: async () => null,
+        logGameData: () => {},
+    },
+};
+
+async function createEditorHost(opts, sourceFile, internals, fileName, providerFactory, isDirty, setup = {}) {
+    const fixtureDir = opts.fixtureDir || (setup.makeFixtureDir || makeMapFixtureDir)();
     const ownsFixtureDir = !opts.fixtureDir;
     const target = `${fixtureDir}/${opts.fileName || fileName}`;
 
@@ -40,7 +51,7 @@ async function createEditorHost(opts, sourceFile, internals, fileName, providerF
         },
     });
 
-    const load = createTsLoader({ mocks: { vscode: vscodeMock }, augment: { [sourceFile]: internals } });
+    const load = createTsLoader({ mocks: { vscode: vscodeMock, ...setup.mocks }, augment: { [sourceFile]: internals } });
     const mod = load(sourceFile);
     const provider = providerFactory(mod.__e2e);
 
@@ -105,4 +116,13 @@ function createW3rHost(opts) {
     );
 }
 
-module.exports = { createW3iHost, createWpmHost, createMmpHost, createW3cHost, createW3rHost };
+function createMapPlacementHost(opts) {
+    return createEditorHost(
+        opts, 'src/features/mapPreview.ts', MAP_PLACEMENT_INTERNALS, 'war3mapUnits.doo',
+        (e2e) => new e2e.MapPlacementEditorProvider(fileUri(root)),
+        (doc) => doc.currentRevision !== doc.savedRevision,
+        { mocks: NO_GAME_DATA, makeFixtureDir: makePlacementMapFixtureDir },
+    );
+}
+
+module.exports = { createW3iHost, createWpmHost, createMmpHost, createW3cHost, createW3rHost, createMapPlacementHost };

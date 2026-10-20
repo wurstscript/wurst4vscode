@@ -1,25 +1,32 @@
 'use strict';
 
 /**
- * Experimental 3D map terrain preview (`wurst.previewMap`).
+ * Experimental map terrain and placement editor (`wurst.mapPlacementEditor`, opened by `wurst.previewMap`).
  *
- * Renders an exploded map's `war3map.w3e` terrain with WC3 terrain tile
- * textures, cliff/ramp data, and hoverable placement markers from `.doo`.
+ * A custom editor on an exploded map's `war3mapUnits.doo`: the document is the unit/item placement
+ * list (casc-ts `parseDoo`/`serializeDoo`) on the shared `EditableBinaryEditorProvider`, so select,
+ * move, place and delete go through VS Code undo/redo, dirty state and save. The rest of the map
+ * folder is read-only scene context: `war3map.w3e` terrain with WC3 tile textures and cliff/ramp
+ * data, `war3map.doo` doodads, `.w3u`/`.w3t` custom objects for the placement picker and
+ * `war3map.w3i` for the player layout. The page script is src/webview/mapPreviewWebview.ts.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { parseDoo } from 'casc-ts/formats';
-import { buildPage, PREVIEW_ICON_CSP, scriptSafeJson } from './webviewShared';
-import { escapeHtml } from './webviewUtils';
+import { DooFile, DooUnit, parseDoo, parseObjMod, parseW3i, serializeDoo } from 'casc-ts/formats';
+import { buildPage, scriptSafeJson } from './webviewShared';
+import { escapeHtml, makeNonce } from './webviewUtils';
 import { findGameTexture } from './preview/cascStorage';
 import { loadTerrainWaterLevel, loadTilesetBlightTexture, parseSlk, readGameData, slkField } from './preview/wc3Data';
 import { decodeToRgba } from './preview/imageDecoders';
 import { encodePng, scaleDown } from './imageAssetSupport';
-import { getObjectCatalog } from './preview/objectCatalog';
+import { getObjectCatalog, ObjectRef } from './preview/objectCatalog';
+import { loadCompilerKnowledgeBase } from './preview/compilerKnowledgeBase';
+import { loadTriggerStringsForUri, resolveTriggerString, TriggerStringTable } from './preview/triggerStrings';
+import { buildErrorHtml, buildLoadingHtml, EditableBinaryDocument, EditableBinaryEditorProvider } from './preview/framework';
 import { offerIssueReport } from './issueReporting';
-import { showErrorWithLogs } from './diagnostics';
+import MAP_PREVIEW_CSS from '../webview/mapPreview.css';
 
 const TILE = 128;
 const GROUND_CENTER = 0x2000;
@@ -47,15 +54,11 @@ interface Terrain {
     max: number;
 }
 
-interface Marker {
-    kind: 'doodad' | 'unit' | 'start';
+interface DoodadMarker {
     x: number;
     y: number;
-    z: number;
-    typeId: string;
+    id: string;
     label: string;
-    owner?: number;
-    flags?: number;
 }
 
 interface TileTexture {
@@ -166,72 +169,21 @@ async function parseW3eTerrain(data: Buffer): Promise<Terrain> {
     return { version, tileset, customTileset, width, height, centerX, centerY, groundTiles, cliffTiles, heights, water, ground, cliff, layer, flags, detail, waterMask, min, max };
 }
 
-// eslint-disable-next-line sonarjs/cognitive-complexity -- TODO(lint-cleanup): pre-existing, tracked for a dedicated decomposition pass rather than a rushed refactor here.
-async function readDooMarkers(dir: string): Promise<Marker[]> {
-    const markers: Marker[] = [];
-    let catalog: Awaited<ReturnType<typeof getObjectCatalog>> | undefined;
-    const labelFor = async (id: string, fallback: string): Promise<string> => {
-        try {
-            catalog ??= await getObjectCatalog();
-            return catalog.get(id.toLowerCase())?.name || fallback;
-        } catch {
-            return fallback;
-        }
-    };
-
+/** Read-only doodad markers from `war3map.doo`, and whether that file stores skin ids. */
+function readDoodads(dir: string, catalog: Map<string, ObjectRef>): { markers: DoodadMarker[]; usesSkins?: boolean } {
     const dooPath = findFileCI(dir, 'war3map.doo');
-    if (dooPath) {
-        try {
-            const parsed = parseDoo(fs.readFileSync(dooPath), 'war3map.doo');
-            for (const d of parsed.doodads ?? []) {
-                markers.push({
-                    kind: 'doodad',
-                    x: d.x,
-                    y: d.y,
-                    z: d.z,
-                    typeId: d.typeId,
-                    label: await labelFor(d.typeId, d.typeId),
-                    flags: d.flags,
-                });
-            }
-            for (const d of parsed.specialDoodads ?? []) {
-                markers.push({
-                    kind: 'doodad',
-                    x: d.x,
-                    y: d.y,
-                    z: d.z,
-                    typeId: d.typeId,
-                    label: await labelFor(d.typeId, d.typeId),
-                });
-            }
-        } catch {
-            // Markers are best-effort; terrain preview should still open.
-        }
+    if (!dooPath) return { markers: [] };
+    try {
+        const parsed = parseDoo(fs.readFileSync(dooPath), 'war3map.doo');
+        const label = (id: string) => catalog.get(id.toLowerCase())?.name || id;
+        const doodads = parsed.doodads ?? [];
+        const markers = [...doodads, ...(parsed.specialDoodads ?? [])]
+            .map((d) => ({ x: d.x, y: d.y, id: d.typeId, label: label(d.typeId) }));
+        return { markers, usesSkins: doodads.length ? doodads.some((d) => d.skinId !== undefined) : undefined };
+    } catch {
+        // Doodads are context only; the editor still opens without them.
+        return { markers: [] };
     }
-
-    const unitsPath = findFileCI(dir, 'war3mapUnits.doo');
-    if (unitsPath) {
-        try {
-            const parsed = parseDoo(fs.readFileSync(unitsPath), 'war3mapUnits.doo');
-            for (const u of parsed.units ?? []) {
-                const isStart = u.typeId === 'sloc';
-                markers.push({
-                    kind: isStart ? 'start' : 'unit',
-                    x: u.x,
-                    y: u.y,
-                    z: u.z,
-                    typeId: u.typeId,
-                    label: isStart ? 'Start Location' : await labelFor(u.typeId, u.typeId),
-                    owner: u.ownerIndex,
-                    flags: u.flags,
-                });
-            }
-        } catch {
-            // Best-effort.
-        }
-    }
-
-    return markers;
 }
 
 function findFileCI(dir: string, name: string): string | undefined {
@@ -391,72 +343,294 @@ function b64(bytes: ArrayBufferView): string {
     return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64');
 }
 
-async function buildHtml(terrain: Terrain, markers: Marker[]): Promise<string> {
-    const materials = await buildTerrainMaterials(terrain);
-    const textures = materials.textures;
-    const slocCount = markers.filter((m) => m.kind === 'start').length;
-    const unitCount = markers.filter((m) => m.kind === 'unit').length;
-    const doodadCount = markers.filter((m) => m.kind === 'doodad').length;
-    const meta = `${terrain.width - 1}x${terrain.height - 1} tiles | ${terrain.groundTiles.length} ground tiles | ${terrain.cliffTiles.length} cliff tiles | ${doodadCount} doodads | ${unitCount} units | ${slocCount} starts`;
 
-    const data = {
-        version: terrain.version,
-        tileset: terrain.tileset,
-        customTileset: terrain.customTileset ? 1 : 0,
-        w: terrain.width,
-        h: terrain.height,
-        cx: terrain.centerX,
-        cy: terrain.centerY,
-        min: terrain.min,
-        max: terrain.max,
-        tile: TILE,
-        heights: b64(terrain.heights),
-        water: b64(terrain.water),
-        ground: b64(terrain.ground),
-        cliff: b64(terrain.cliff),
-        layer: b64(terrain.layer),
-        flags: b64(terrain.flags),
-        detail: b64(terrain.detail),
-        waterMask: b64(terrain.waterMask),
-        groundTiles: terrain.groundTiles,
-        cliffTiles: terrain.cliffTiles,
-        cliffToGround: materials.cliffToGround,
-        blightTexture: materials.blightTexture,
-        textures,
-        markers: markers.map((m) => ({
-            k: m.kind,
-            x: Math.round(m.x),
-            y: Math.round(m.y),
-            z: Math.round(m.z),
-            id: m.typeId,
-            label: m.label,
-            owner: m.owner ?? -1,
-            flags: m.flags ?? 0,
-        })),
-    };
 
-    const textureStatus = textures.some((t) => t.dataUri)
-        ? `${textures.filter((t) => t.dataUri).length}/${textures.length} textures`
-        : 'texture fallback colors';
+/** Terrain height at a map position: bilinear over the tilepoint grid, the same surface the page draws. */
+function terrainHeightAt(terrain: Terrain, x: number, y: number): number {
+    const gi = Math.min(Math.max((x - terrain.centerX) / TILE, 0), terrain.width - 1);
+    const gj = Math.min(Math.max((y - terrain.centerY) / TILE, 0), terrain.height - 1);
+    const i0 = Math.floor(gi);
+    const j0 = Math.floor(gj);
+    const i1 = Math.min(i0 + 1, terrain.width - 1);
+    const j1 = Math.min(j0 + 1, terrain.height - 1);
+    const tx = gi - i0;
+    const tz = gj - j0;
+    const at = (i: number, j: number) => terrain.heights[j * terrain.width + i];
+    return at(i0, j0) * (1 - tx) * (1 - tz) + at(i1, j0) * tx * (1 - tz) + at(i0, j1) * (1 - tx) * tz + at(i1, j1) * tx * tz;
+}
+
+// ── Placement editor ─────────────────────────────────────────────────────────
+
+const MAP_EDITOR_VIEW_TYPE = 'wurst.mapPlacementEditor';
+const UNITS_FILE = 'war3mapUnits.doo';
+const START_LOCATION = 'sloc';
+/** Facing World Editor gives freshly placed units and items (270°), as the f32 it writes. */
+const DEFAULT_FACING = Math.fround(Math.PI * 1.5);
+/** Last World Editor build before 1.29. The player limit (12 or 24) follows the build a map was saved with. */
+const LAST_12_PLAYER_EDITOR = 6060;
+
+type PlacementKind = 'unit' | 'item' | 'start';
+
+interface PlacementType {
+    id: string;
+    name: string;
+    kind: 'unit' | 'item';
+    custom: boolean;
+}
+
+/** What the placement editor needs from `war3map.w3i`. */
+interface MapInfo {
+    version: number;
+    editorVersion: number;
+    playerNumbers: number[];
+}
+
+/** Player slots and neutral owner indices as `war3mapUnits.doo` stores them. */
+interface OwnerLayout {
+    players: number;
+    neutralHostile: number;
+    neutralPassive: number;
+}
+
+interface MapScene {
+    terrain: Terrain;
+    materials: TerrainMaterials;
+    doodads: DoodadMarker[];
+    /** Placeable unit and item types by exact rawcode: game data plus the map's custom objects. */
+    types: Map<string, PlacementType>;
+    catalog: Map<string, ObjectRef>;
+    owners: OwnerLayout;
+    /** Whether new placements get a skin id, matching how this map stores its existing ones. */
+    usesSkins: boolean;
+}
+
+type PlacementFile = DooFile & {
+    /** Set when the file does not re-serialize byte-for-byte; the editor then refuses every edit. */
+    readOnlyReason?: string;
+};
+
+class MapPlacementDocument extends EditableBinaryDocument<PlacementFile> {
+    scene?: MapScene;
+    sceneError?: string;
+    /** Placement index the next state push selects (-1 clears the selection). */
+    selectHint?: number;
+
+    get units(): DooUnit[] {
+        return this.file.units ?? [];
+    }
+}
+
+type PlacementProvider = EditableBinaryEditorProvider<PlacementFile, MapPlacementDocument>;
+
+interface PlacementMessage {
+    type?: string;
+    index?: unknown;
+    /** Creation number of the unit at `index` when the page sent the message. */
+    editorId?: unknown;
+    x?: unknown;
+    y?: unknown;
+    typeId?: unknown;
+    owner?: unknown;
+}
+
+function parsePlacements(data: Buffer): PlacementFile {
+    const file: PlacementFile = parseDoo(data, UNITS_FILE);
+    if (!file.error && !serializeDoo(file).equals(data)) {
+        file.readOnlyReason = `${UNITS_FILE} does not re-serialize byte-for-byte, so it opened read-only instead of risking a lossy save.`;
+    }
+    return file;
+}
+
+/** Field-order independent JSON, so a re-parsed unit compares equal to the model it was written from. */
+function canonicalJson(value: unknown): string {
+    return JSON.stringify(value, (_key, v: unknown) => {
+        if (!v || typeof v !== 'object' || Array.isArray(v)) return v;
+        return Object.fromEntries(Object.entries(v).filter(([, x]) => x !== undefined).sort(([a], [b]) => (a < b ? -1 : 1)));
+    });
+}
+
+/** Safety gate: never write a unit file that does not read back as exactly the edited placements. */
+function serializeValidatedPlacements(file: PlacementFile, name: string): Buffer {
+    if (file.error) throw new Error(`Refusing to save ${name}: the source file did not parse (${file.error}).`);
+    if (file.readOnlyReason) throw new Error(`Refusing to save ${name}: ${file.readOnlyReason}`);
+    const bytes = serializeDoo(file);
+    const reparsed = parseDoo(bytes, UNITS_FILE);
+    if (reparsed.error) throw new Error(`Refusing to save ${name}: serialized data did not re-parse (${reparsed.error}).`);
+    const empty = Buffer.alloc(0);
+    if (reparsed.version !== file.version || reparsed.subVersion !== file.subVersion ||
+        canonicalJson(reparsed.units) !== canonicalJson(file.units ?? []) || !(reparsed.tail ?? empty).equals(file.tail ?? empty)) {
+        throw new Error(`Refusing to save ${name}: round-trip verification failed.`);
+    }
+    return bytes;
+}
+
+function readMapInfo(dir: string): MapInfo {
+    const w3iPath = findFileCI(dir, 'war3map.w3i');
+    try {
+        // The header is read before anything that can fail; players are best-effort and may be missing.
+        const w3i = w3iPath ? parseW3i(fs.readFileSync(w3iPath)) : undefined;
+        return { version: w3i?.version ?? 0, editorVersion: w3i?.editorVersion ?? 0, playerNumbers: (w3i?.players ?? []).map((p) => p.num) };
+    } catch {
+        return { version: 0, editorVersion: 0, playerNumbers: [] };
+    }
+}
+
+/**
+ * Maps saved by a 1.29+ editor have 24 players and keep the neutrals at 24/27; older ones at 12/15.
+ * A player slot above 12 or an owner above 15 gives a 24-player map away even without a usable w3i.
+ */
+function ownerLayout(info: MapInfo, units: DooUnit[]): OwnerLayout {
+    return info.editorVersion > LAST_12_PLAYER_EDITOR || info.version >= 28 ||
+        info.playerNumbers.some((n) => n > 11) || units.some((u) => u.ownerIndex > 15)
+        ? { players: 24, neutralHostile: 24, neutralPassive: 27 }
+        : { players: 12, neutralHostile: 12, neutralPassive: 15 };
+}
+
+function validOwner(layout: OwnerLayout, owner: unknown): number | undefined {
+    if (!Number.isInteger(owner)) return undefined;
+    const value = owner as number;
+    return (value >= 0 && value < layout.players) || value === layout.neutralHostile || value === layout.neutralPassive ? value : undefined;
+}
+
+function ownerOptions(layout: OwnerLayout): Array<{ value: number; label: string }> {
+    return [
+        ...Array.from({ length: layout.players }, (_, i) => ({ value: i, label: `Player ${i + 1}` })),
+        { value: layout.neutralHostile, label: 'Neutral Hostile' },
+        { value: layout.neutralPassive, label: 'Neutral Passive' },
+    ];
+}
+
+function stripColorCodes(text: string): string {
+    return text.replace(/\|c[0-9a-f]{8}|\|r/gi, '').trim();
+}
+
+/** Custom units (`.w3u`) or items (`.w3t`) the map defines, named by their `unam` field. */
+function readCustomTypes(dir: string, kind: 'unit' | 'item', wts: TriggerStringTable, baseName: (id: string) => string): PlacementType[] {
+    const ext = kind === 'unit' ? '.w3u' : '.w3t';
+    const filePath = findFileCI(dir, `war3map${ext}`);
+    if (!filePath) return [];
+    try {
+        const parsed = parseObjMod(fs.readFileSync(filePath), ext);
+        if (parsed.error) return [];
+        return parsed.customObjs.flatMap((entry) => {
+            if (!entry.newId) return [];
+            const nameMod = entry.mods.find((mod) => mod.fieldId === 'unam');
+            const raw = typeof nameMod?.value === 'string' ? String(resolveTriggerString(nameMod.value, wts).value ?? '') : '';
+            return [{ id: entry.newId, name: stripColorCodes(raw) || `${baseName(entry.baseId)} (custom)`, kind, custom: true }];
+        });
+    } catch {
+        return [];
+    }
+}
+
+async function loadPlacementTypes(uri: vscode.Uri, dir: string, catalog: Map<string, ObjectRef>): Promise<Map<string, PlacementType>> {
+    const kb = await loadCompilerKnowledgeBase();
+    const baseIds = kb
+        ? { unit: Object.keys(kb.objects.unit), item: Object.keys(kb.objects.item) }
+        : { unit: Array.from((await loadSlkRows('Units\\UnitData.slk')).keys()), item: Array.from((await loadSlkRows('Units\\ItemData.slk')).keys()) };
+    const types = new Map<string, PlacementType>();
+    const nameOf = (id: string) => types.get(id)?.name || catalog.get(id.toLowerCase())?.name || id;
+    for (const kind of ['unit', 'item'] as const) {
+        for (const id of baseIds[kind]) types.set(id, { id, name: nameOf(id), kind, custom: false });
+    }
+    const wts = loadTriggerStringsForUri(uri);
+    for (const kind of ['unit', 'item'] as const) {
+        for (const type of readCustomTypes(dir, kind, wts, nameOf)) types.set(type.id, type);
+    }
+    types.delete(START_LOCATION);
+    return types;
+}
+
+/** Loads everything around the placement list: terrain, doodads, object types, player layout. */
+async function loadScene(doc: MapPlacementDocument): Promise<void> {
+    if (doc.loadError || doc.file.error || doc.scene) return;
+    const dir = path.dirname(doc.uri.fsPath);
+    const w3ePath = findFileCI(dir, 'war3map.w3e');
+    if (!w3ePath) {
+        doc.sceneError = `There is no war3map.w3e next to ${doc.fileName}. The placement editor needs the exploded map folder.`;
+        return;
+    }
+    try {
+        const terrain = await parseW3eTerrain(fs.readFileSync(w3ePath));
+        const catalog = await getObjectCatalog().catch(() => new Map<string, ObjectRef>());
+        const [materials, types] = await Promise.all([buildTerrainMaterials(terrain), loadPlacementTypes(doc.uri, dir, catalog)]);
+        const doodads = readDoodads(dir, catalog);
+        const mapInfo = readMapInfo(dir);
+        const units = doc.units;
+        doc.scene = {
+            terrain, materials, types, catalog,
+            doodads: doodads.markers,
+            owners: ownerLayout(mapInfo, units),
+            // Reforged (w3i v31) added skin ids; follow the map's own files before guessing from the version.
+            usesSkins: units.length ? units.some((u) => u.skinId !== undefined) : doodads.usesSkins ?? mapInfo.version >= 31,
+        };
+    } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        doc.sceneError = `Failed to parse terrain: ${message}`;
+        offerIssueReport({
+            area: 'map placement editor',
+            message,
+            resource: vscode.Uri.file(w3ePath),
+            details: e instanceof Error ? e.stack : undefined,
+        });
+    }
+}
+
+function placementKind(scene: MapScene, typeId: string): PlacementKind {
+    if (typeId === START_LOCATION) return 'start';
+    return scene.types.get(typeId)?.kind === 'item' ? 'item' : 'unit';
+}
+
+function placementName(scene: MapScene, typeId: string): string {
+    if (typeId === START_LOCATION) return 'Start Location';
+    return scene.types.get(typeId)?.name || scene.catalog.get(typeId.toLowerCase())?.name || typeId;
+}
+
+function placementSummaries(doc: MapPlacementDocument, scene: MapScene) {
+    return doc.units.map((u) => ({
+        id: u.typeId, name: placementName(scene, u.typeId), kind: placementKind(scene, u.typeId),
+        owner: u.ownerIndex, x: u.x, y: u.y, z: u.z, editorId: u.editorId,
+    }));
+}
+
+function buildMapEditorHtml(doc: MapPlacementDocument, scene: MapScene, scriptUri: string): string {
+    const { terrain, materials } = scene;
+    const nonce = makeNonce();
+    const loadedTextures = materials.textures.filter((t) => t.dataUri).length;
+    const textureStatus = loadedTextures ? `${loadedTextures}/${materials.textures.length} textures` : 'texture fallback colors';
+    const meta = `${terrain.width - 1}x${terrain.height - 1} tiles | ${terrain.groundTiles.length} ground tiles | ${terrain.cliffTiles.length} cliff tiles | ${scene.doodads.length} doodads | ${textureStatus}`;
+    const readOnly = doc.file.readOnlyReason;
+    const initialJson = scriptSafeJson({
+        terrain: {
+            w: terrain.width,
+            h: terrain.height,
+            cx: terrain.centerX,
+            cy: terrain.centerY,
+            min: terrain.min,
+            max: terrain.max,
+            tile: TILE,
+            heights: b64(terrain.heights),
+            water: b64(terrain.water),
+            ground: b64(terrain.ground),
+            cliff: b64(terrain.cliff),
+            layer: b64(terrain.layer),
+            flags: b64(terrain.flags),
+            detail: b64(terrain.detail),
+            waterMask: b64(terrain.waterMask),
+            cliffToGround: materials.cliffToGround,
+            blightTexture: materials.blightTexture,
+            textures: materials.textures,
+        },
+        doodads: scene.doodads,
+        placements: placementSummaries(doc, scene),
+        owners: ownerOptions(scene.owners),
+        readOnly: readOnly ?? null,
+    });
 
     return buildPage({
-        csp: PREVIEW_ICON_CSP,
-        title: 'Map Preview',
-        extraCss: `
-.mp-shell { height: 100%; display: grid; grid-template-rows: auto 1fr auto; min-height: 0; }
-.mp-main { position: relative; min-height: 0; background: #090c0f; overflow: hidden; }
-#mp-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
-#mp-canvas.grabbing { cursor: grabbing; }
-.mp-err { display: none; position: absolute; inset: 0; place-items: center; color: var(--muted); }
-.mp-legend { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; min-width: 0; }
-.mp-legend label { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; user-select: none; white-space: nowrap; }
-.mp-swatch { width: 11px; height: 11px; border-radius: 50%; display: inline-block; border: 1px solid rgba(255,255,255,.35); }
-.mp-range { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); white-space: nowrap; }
-.mp-hint, .mp-meta { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mp-tip { position: fixed; z-index: 5; display: none; pointer-events: none; max-width: 280px; padding: 7px 9px; border: 1px solid var(--border); background: var(--hover-widget-bg); color: var(--fg); box-shadow: 0 4px 16px rgba(0,0,0,.35); font-size: 12px; line-height: 1.35; }
-.mp-tip-title { font-weight: 600; margin-bottom: 2px; }
-.mp-tip-sub { color: var(--muted); font-family: var(--mono); }
-`,
+        csp: `default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'nonce-${nonce}';`,
+        title: escapeHtml(doc.fileName),
+        extraCss: MAP_PREVIEW_CSS,
         body: `<div class="mp-shell">
   <div class="wv-toolbar">
     <div class="mp-legend">
@@ -465,722 +639,212 @@ async function buildHtml(terrain: Terrain, markers: Marker[]): Promise<string> {
       <label><input type="checkbox" id="t-water" checked><span class="mp-swatch" style="background:#3aa7cc"></span>Water</label>
       <label><input type="checkbox" id="t-doodads" checked><span class="mp-swatch" style="background:#5dd35d"></span>Doodads</label>
       <label><input type="checkbox" id="t-units" checked><span class="mp-swatch" style="background:#ffb14e"></span>Units</label>
+      <label><input type="checkbox" id="t-items" checked><span class="mp-swatch" style="background:#d9a6ff"></span>Items</label>
       <label><input type="checkbox" id="t-sloc" checked><span class="mp-swatch" style="background:#4ec9ff"></span>Start</label>
     </div>
     <span class="wv-sep"></span>
     <label class="mp-range">Height x<input type="range" id="mp-exag" min="0.5" max="6" step="0.25" value="1"></label>
     <button class="wv-btn" id="mp-reset" type="button">Reset view</button>
-    <span class="mp-hint">drag = orbit | scroll = zoom | right-drag = pan</span>
+    <span id="mp-dirty" class="wv-dirty"${doc.isDirty ? '' : ' hidden'}>Modified</span>
   </div>
-  <div class="mp-main">
-    <canvas id="mp-canvas"></canvas>
-    <div class="mp-tip" id="mp-tip"></div>
-    <div class="mp-err" id="mp-err">WebGL is not available in this webview.</div>
+  <div class="mp-body">
+    <div class="mp-main">
+      <canvas id="mp-canvas"></canvas>
+      <div class="mp-mode" id="mp-mode" role="status" hidden></div>
+      <div class="mp-tip" id="mp-tip"></div>
+      <div class="mp-err" id="mp-err">WebGL is not available in this webview.</div>
+    </div>
+    <aside class="mp-side" aria-label="Placements">
+      ${readOnly ? `<div class="mp-readonly" role="note">${escapeHtml(readOnly)}</div>` : ''}
+      <section class="mp-section">
+        <h2 class="mp-section-title">Selection</h2>
+        <div id="mp-selection"></div>
+      </section>
+      <section class="mp-section mp-place">
+        <h2 class="mp-section-title">Place</h2>
+        <div class="mp-kinds">
+          <button type="button" class="wv-btn active" data-kind="unit" aria-pressed="true">Units</button>
+          <button type="button" class="wv-btn" data-kind="item" aria-pressed="false">Items</button>
+        </div>
+        <input id="mp-search" class="wv-input" type="search" placeholder="Search name or rawcode" spellcheck="false" aria-label="Search object types">
+        <label class="mp-field">Owner <select id="mp-owner" class="wv-input"></select></label>
+        <div id="mp-types" class="mp-types wv-scroll" role="listbox" aria-label="Object types"></div>
+      </section>
+    </aside>
   </div>
-  <div class="wv-toolbar"><span class="mp-meta">${escapeHtml(meta)} | ${escapeHtml(textureStatus)}</span></div>
+  <div class="wv-toolbar"><span class="mp-meta">${escapeHtml(meta)}</span><span class="mp-hint">drag = orbit | right-drag = pan | scroll = zoom | drag a selected marker to move it | Del = delete | Esc = cancel</span></div>
 </div>
-<script>
-${VIEWER_SCRIPT}
-initMapPreview(${scriptSafeJson(data)});
-</script>`,
+<script nonce="${nonce}">window.__MAP_PREVIEW_INITIAL__ = ${initialJson};</script>
+<script nonce="${nonce}" src="${scriptUri}"></script>`,
     });
 }
 
-const VIEWER_SCRIPT = `
-function initMapPreview(DATA) {
-  var w = DATA.w, h = DATA.h, tile = DATA.tile;
-  function bytesFromB64(s) {
-    var bin = atob(s);
-    var bytes = new Uint8Array(bin.length);
-    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes;
-  }
-  var heights = new Int16Array(bytesFromB64(DATA.heights).buffer);
-  var water = new Int16Array(bytesFromB64(DATA.water).buffer);
-  var ground = bytesFromB64(DATA.ground);
-  var cliff = bytesFromB64(DATA.cliff);
-  var layer = bytesFromB64(DATA.layer);
-  var flags = bytesFromB64(DATA.flags);
-  var detail = bytesFromB64(DATA.detail);
-  var waterMask = bytesFromB64(DATA.waterMask);
-  var cxh = (w - 1) / 2, czh = (h - 1) / 2;
-  var cellsX = Math.max(0, w - 1), cellsZ = Math.max(0, h - 1);
-  function worldX(i) { return i - cxh; }
-  function worldZ(j) { return czh - j; }
+/**
+ * The unit a message targets, if it is a unit or item; start locations stay read-only. The creation
+ * number must still match, so a message sent against an older list (a held Delete key repeats faster
+ * than the state round trip) cannot hit whichever unit has moved into that index since.
+ */
+function editableUnit(doc: MapPlacementDocument, msg: PlacementMessage): DooUnit | undefined {
+    if (!Number.isInteger(msg.index)) return undefined;
+    const unit = doc.units[msg.index as number];
+    return unit && unit.editorId === msg.editorId && unit.typeId !== START_LOCATION ? unit : undefined;
+}
 
-  var canvas = document.getElementById('mp-canvas');
-  var tip = document.getElementById('mp-tip');
-  var gl = canvas.getContext('webgl2');
-  var isGL2 = !!gl;
-  if (!gl) gl = canvas.getContext('webgl');
-  if (!gl) { document.getElementById('mp-err').style.display = 'grid'; return; }
-  var uintOK = isGL2 || !!gl.getExtension('OES_element_index_uint');
-  var IndexArray = uintOK ? Uint32Array : Uint16Array;
-  var indexType = uintOK ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+/** A webview-supplied position clamped to the map and snapped to whole units, with z on the terrain. */
+function groundPosition(terrain: Terrain, x: unknown, y: unknown): { x: number; y: number; z: number } | undefined {
+    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) return undefined;
+    const gx = Math.round(Math.min(Math.max(x, terrain.centerX), terrain.centerX + (terrain.width - 1) * TILE));
+    const gy = Math.round(Math.min(Math.max(y, terrain.centerY), terrain.centerY + (terrain.height - 1) * TILE));
+    return { x: gx, y: gy, z: Math.fround(terrainHeightAt(terrain, gx, gy)) };
+}
 
-  var toggles = {
-    terrain: document.getElementById('t-terrain'),
-    cliffs: document.getElementById('t-cliffs'),
-    water: document.getElementById('t-water'),
-    doodads: document.getElementById('t-doodads'),
-    units: document.getElementById('t-units'),
-    sloc: document.getElementById('t-sloc')
-  };
-
-  function idx(i, j) { return j * w + i; }
-  function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
-  function hT(i, j) { return heights[idx(clamp(i,0,w-1), clamp(j,0,h-1))] / tile; }
-  function hAt(i, j) {
-    var x0 = Math.floor(i), z0 = Math.floor(j);
-    var x1 = x0 + 1, z1 = z0 + 1;
-    var tx = i - x0, tz = j - z0;
-    x0 = clamp(x0, 0, w - 1);
-    x1 = clamp(x1, 0, w - 1);
-    z0 = clamp(z0, 0, h - 1);
-    z1 = clamp(z1, 0, h - 1);
-    tx = clamp(tx, 0, 1); tz = clamp(tz, 0, 1);
-    var h00 = hT(x0, z0);
-    var h10 = hT(x1, z0);
-    var h01 = hT(x0, z1);
-    var h11 = hT(x1, z1);
-    return h00 * (1 - tx) * (1 - tz) + h10 * tx * (1 - tz) + h01 * (1 - tx) * tz + h11 * tx * tz;
-  }
-  function wT(i, j) { return water[idx(clamp(i,0,w-1), clamp(j,0,h-1))] / tile; }
-  function rampAt(i, j) { return (flags[idx(clamp(i,0,w-1), clamp(j,0,h-1))] & 0x10) ? 1 : 0; }
-  function waterAt(i, j) { return waterMask[idx(clamp(i,0,w-1), clamp(j,0,h-1))] ? 1 : 0; }
-  function blightAt(i, j) { return (flags[idx(clamp(i,0,w-1), clamp(j,0,h-1))] & 0x20) ? 1 : 0; }
-  function layerAt(i, j) { return layer[idx(clamp(i,0,w-1), clamp(j,0,h-1))]; }
-  function detailAt(i, j) { return detail[idx(clamp(i,0,w-1), clamp(j,0,h-1))]; }
-  function rawTileAt(i, j) {
-    var k = idx(clamp(i,0,w-1), clamp(j,0,h-1));
-    var t = ground[k];
-    return t < Math.max(1, DATA.textures.length) ? t : 0;
-  }
-  function isExtendedTile(t) {
-    return !!(DATA.textures[t] && DATA.textures[t].extended);
-  }
-  function get_tile_variation(ground_texture, variation) {
-    if (isExtendedTile(ground_texture)) {
-      if (variation <= 15) return 16 + variation;
-      if (variation === 16) return 15;
-      return 0;
-    }
-    return variation === 0 ? 0 : 15;
-  }
-  function cliffAt(i, j) {
-    var k = idx(clamp(i,0,w-1), clamp(j,0,h-1));
-    return cliff[k];
-  }
-  function cornerCliffAt(i, j) {
-    if (i < 0 || j < 0 || i >= w - 1 || j >= h - 1) return 0;
-    var bl = layerAt(i, j);
-    return bl !== layerAt(i + 1, j) || bl !== layerAt(i, j + 1) || bl !== layerAt(i + 1, j + 1) ? 1 : 0;
-  }
-  function tileAt(i, j) {
-    i = clamp(i, 0, w - 1); j = clamp(j, 0, h - 1);
-    var aCliff = cornerCliffAt(i, j);
-    if (i > 0) aCliff = aCliff || cornerCliffAt(i - 1, j);
-    if (j > 0) aCliff = aCliff || cornerCliffAt(i, j - 1);
-    if (i > 0 && j > 0) aCliff = aCliff || cornerCliffAt(i - 1, j - 1);
-    if (aCliff && !rampAt(i, j)) {
-      var texture = cliffAt(i, j);
-      if (texture === 15) texture -= 14;
-      var mapped = DATA.cliffToGround && DATA.cliffToGround[texture];
-      return mapped >= 0 && mapped < DATA.textures.length ? mapped : rawTileAt(i, j);
-    }
-    if (blightAt(i, j) && DATA.blightTexture >= 0) return DATA.blightTexture;
-    return rawTileAt(i, j);
-  }
-  function cellLayerAt(i, j) {
-    return Math.round((layerAt(i,j) + layerAt(i+1,j) + layerAt(i,j+1) + layerAt(i+1,j+1)) / 4);
-  }
-  function cellRampAt(i, j) {
-    return rampAt(i,j) || rampAt(i+1,j) || rampAt(i,j+1) || rampAt(i+1,j+1);
-  }
-  function cellWaterAt(i, j) {
-    return waterAt(i,j) || waterAt(i+1,j) || waterAt(i,j+1) || waterAt(i+1,j+1);
-  }
-  function tileLayers(i, j) {
-    var bl = tileAt(i, j);
-    var br = tileAt(i + 1, j);
-    var tr = tileAt(i + 1, j + 1);
-    var tl = tileAt(i, j + 1);
-
-    var unique = [bl, br, tr, tl];
-    unique.sort(function (a, b) { return a - b; });
-    var last = unique.length;
-    for (var n = 1, write = 1; n < unique.length; n++) {
-      if (unique[n] !== unique[n - 1]) unique[write++] = unique[n];
-      last = write;
-    }
-
-    var layers = [];
-    layers.push([unique[0], get_tile_variation(unique[0], detailAt(i, j) & 0x1f)]);
-    for (var u = 1; u < last; u++) {
-      var t = unique[u];
-      var mask = 0;
-      if (br === t) mask |= 1;
-      if (bl === t) mask |= 2;
-      if (tr === t) mask |= 4;
-      if (tl === t) mask |= 8;
-      if (mask !== 0) layers.push([t, mask]);
-      if (layers.length >= 4) break;
-    }
-    return layers;
-  }
-
-  function hexToRgb(hex) {
-    var m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
-    var n = m ? parseInt(m[1], 16) : 0x608050;
-    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-  }
-
-  var atlasSize = 256;
-  var atlasCount = Math.max(1, DATA.textures.length);
-  var atlasCanvas = document.createElement('canvas');
-  atlasCanvas.width = atlasSize * atlasCount;
-  atlasCanvas.height = atlasSize;
-  var atlasCtx = atlasCanvas.getContext('2d');
-  function drawFallbackTile(n) {
-    var tex = DATA.textures[n] || { color: '#5c8050', id: '' };
-    var rgb = hexToRgb(tex.color);
-    var x0 = n * atlasSize;
-    atlasCtx.fillStyle = 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')';
-    atlasCtx.fillRect(x0, 0, atlasSize, atlasSize);
-    for (var y = 0; y < atlasSize; y += 8) {
-      for (var x = 0; x < atlasSize; x += 8) {
-        var shade = ((x * 13 + y * 7 + n * 19) & 31) - 16;
-        atlasCtx.fillStyle = 'rgba(' + clamp(rgb[0] + shade,0,255) + ',' + clamp(rgb[1] + shade,0,255) + ',' + clamp(rgb[2] + shade,0,255) + ',0.35)';
-        atlasCtx.fillRect(x0 + x, y, 8, 8);
-      }
-    }
-  }
-  for (var ti = 0; ti < atlasCount; ti++) drawFallbackTile(ti);
-
-  var atlasTex = gl.createTexture();
-  function uploadAtlas() {
-    gl.bindTexture(gl.TEXTURE_2D, atlasTex);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlasCanvas);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  }
-  uploadAtlas();
-  DATA.textures.forEach(function (tex, n) {
-    if (!tex.dataUri) return;
-    var img = new Image();
-    img.onload = function () {
-      atlasCtx.clearRect(n * atlasSize, 0, atlasSize, atlasSize);
-      atlasCtx.drawImage(img, n * atlasSize, 0, atlasSize, atlasSize);
-      uploadAtlas();
-      render();
+/** A unit or item record carrying the values World Editor writes for a fresh placement. */
+function newPlacement(doc: MapPlacementDocument, scene: MapScene, typeId: string, at: { x: number; y: number; z: number }, ownerIndex: number): DooUnit {
+    const subV11 = doc.file.subVersion >= 11;
+    return {
+        typeId, variation: 0, ...at, angle: DEFAULT_FACING, scaleX: 1, scaleY: 1, scaleZ: 1,
+        skinId: scene.usesSkins ? typeId : undefined,
+        flags: 2, ownerIndex, unknownA: 0, unknownB: 0, lifePerc: -1, manaPerc: -1,
+        itemTablePtr: subV11 ? -1 : undefined, drops: [],
+        resourcesAmount: 12500, targetAcquisition: -1, heroLevel: 1,
+        heroStr: subV11 ? 0 : undefined, heroAgi: subV11 ? 0 : undefined, heroInt: subV11 ? 0 : undefined,
+        invItems: [], abilities: [], randType: 'any', randLevel: 1, randClass: 0,
+        customColor: -1, waygateTargetRectIndex: -1,
+        editorId: doc.units.reduce((max, u) => Math.max(max, u.editorId), -1) + 1,
     };
-    img.src = tex.dataUri;
-  });
-
-  function normalFor(i, j, exag) {
-    var dyI = (hAt(i + 0.5, j) - hAt(i - 0.5, j)) * exag;
-    var dyJ = (hAt(i, j + 0.5) - hAt(i, j - 0.5)) * exag;
-    var nx = -dyI, ny = 2.0, nz = dyJ;
-    var L = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
-    return [nx / L, ny / L, nz / L];
-  }
-
-  var surfVertices = Math.max(1, cellsX * cellsZ * 4);
-  var surfPositions = new Float32Array(surfVertices * 3);
-  var surfNormals = new Float32Array(surfVertices * 3);
-  var surfUvs = new Float32Array(surfVertices * 2);
-  var surfTex0 = new Float32Array(surfVertices * 3);
-  var surfTex1 = new Float32Array(surfVertices * 3);
-  var surfTex2 = new Float32Array(surfVertices * 3);
-  var surfTex3 = new Float32Array(surfVertices * 3);
-  var surfRamps = new Float32Array(surfVertices);
-  var surfLevels = new Float32Array(surfVertices);
-  var surfIndices = new IndexArray(Math.max(0, cellsX * cellsZ * 6));
-  var surfIndexCount = 0;
-
-  var cliffEdges = [];
-  for (var ej = 0; ej < cellsZ; ej++) {
-    for (var ei = 1; ei < cellsX; ei++) {
-      var ll = cellLayerAt(ei - 1, ej), lr = cellLayerAt(ei, ej);
-      if (ll !== lr) cliffEdges.push([ei, ej, ei, ej + 1, cliffAt(ei, ej), cellRampAt(ei - 1, ej) || cellRampAt(ei, ej), Math.max(ll, lr), Math.min(ll, lr)]);
-    }
-  }
-  for (var ej2 = 1; ej2 < cellsZ; ej2++) {
-    for (var ei2 = 0; ei2 < cellsX; ei2++) {
-      var ls = cellLayerAt(ei2, ej2 - 1), ln = cellLayerAt(ei2, ej2);
-      if (ls !== ln) cliffEdges.push([ei2, ej2, ei2 + 1, ej2, cliffAt(ei2, ej2), cellRampAt(ei2, ej2 - 1) || cellRampAt(ei2, ej2), Math.max(ls, ln), Math.min(ls, ln)]);
-    }
-  }
-  var cliffPositions = new Float32Array(Math.max(1, cliffEdges.length * 4 * 3));
-  var cliffNormals = new Float32Array(Math.max(1, cliffEdges.length * 4 * 3));
-  var cliffUvs = new Float32Array(Math.max(1, cliffEdges.length * 4 * 2));
-  var cliffTex0 = new Float32Array(Math.max(1, cliffEdges.length * 4 * 3));
-  var cliffTex1 = new Float32Array(Math.max(1, cliffEdges.length * 4 * 3));
-  var cliffTex2 = new Float32Array(Math.max(1, cliffEdges.length * 4 * 3));
-  var cliffTex3 = new Float32Array(Math.max(1, cliffEdges.length * 4 * 3));
-  var cliffRamps = new Float32Array(Math.max(1, cliffEdges.length * 4));
-  var cliffLevels = new Float32Array(Math.max(1, cliffEdges.length * 4));
-  var cliffIndices = new IndexArray(Math.max(0, cliffEdges.length * 6));
-  for (var ce = 0; ce < cliffEdges.length; ce++) {
-    var cb = ce * 4, ii = ce * 6;
-    cliffIndices[ii] = cb; cliffIndices[ii + 1] = cb + 1; cliffIndices[ii + 2] = cb + 2;
-    cliffIndices[ii + 3] = cb + 1; cliffIndices[ii + 4] = cb + 3; cliffIndices[ii + 5] = cb + 2;
-  }
-
-  function writeV(arr, v, x, y, z) {
-    arr[v * 3] = x; arr[v * 3 + 1] = y; arr[v * 3 + 2] = z;
-  }
-  function writeN(arr, v, n) {
-    arr[v * 3] = n[0]; arr[v * 3 + 1] = n[1]; arr[v * 3 + 2] = n[2];
-  }
-  function writeUv(arr, v, u, vv) {
-    arr[v * 2] = u; arr[v * 2 + 1] = vv;
-  }
-  function writeTex(arr, v, t, variant) {
-    arr[v * 3] = t;
-    arr[v * 3 + 1] = variant;
-    arr[v * 3 + 2] = t >= 0 && isExtendedTile(t) ? 1 : 0;
-  }
-
-  var waterCells = [];
-  for (var wj = 0; wj < cellsZ; wj++) for (var wi = 0; wi < cellsX; wi++) if (cellWaterAt(wi, wj)) waterCells.push([wi, wj]);
-  var waterVerts = Math.max(1, waterCells.length * 4);
-  var waterPositions = new Float32Array(waterVerts * 3);
-  var waterDepths = new Float32Array(waterVerts);
-  var waterIndices = new IndexArray(Math.max(0, waterCells.length * 6));
-  for (var wc = 0; wc < waterCells.length; wc++) {
-    var wb = wc * 4, wii = wc * 6;
-    waterIndices[wii] = wb; waterIndices[wii + 1] = wb + 2; waterIndices[wii + 2] = wb + 1;
-    waterIndices[wii + 3] = wb + 1; waterIndices[wii + 4] = wb + 2; waterIndices[wii + 5] = wb + 3;
-  }
-
-  function buildTerrain(exag) {
-    surfIndexCount = 0;
-    for (var j = 0; j < cellsZ; j++) {
-      for (var i = 0; i < cellsX; i++) {
-        var b = (j * cellsX + i) * 4;
-        var tiles = tileLayers(i, j);
-        var r = cellRampAt(i, j);
-        var levelTint = Math.max(0, cellLayerAt(i, j) - 2) * 0.18;
-        var corners = [[i,j,0,0],[i+1,j,1,0],[i,j+1,0,1],[i+1,j+1,1,1]];
-        for (var c = 0; c < 4; c++) {
-          var q = corners[c], v = b + c, n = normalFor(q[0], q[1], exag);
-            writeV(surfPositions, v, worldX(q[0]), hT(q[0], q[1]) * exag, worldZ(q[1]));
-          writeN(surfNormals, v, n);
-          writeUv(surfUvs, v, q[2], q[3]);
-          writeTex(surfTex0, v, tiles[0] ? tiles[0][0] : -1, tiles[0] ? tiles[0][1] : 0);
-          writeTex(surfTex1, v, tiles[1] ? tiles[1][0] : -1, tiles[1] ? tiles[1][1] : 0);
-          writeTex(surfTex2, v, tiles[2] ? tiles[2][0] : -1, tiles[2] ? tiles[2][1] : 0);
-          writeTex(surfTex3, v, tiles[3] ? tiles[3][0] : -1, tiles[3] ? tiles[3][1] : 0);
-          surfRamps[v] = r;
-          surfLevels[v] = levelTint;
-        }
-        var si2 = surfIndexCount;
-        surfIndices[si2] = b;
-        surfIndices[si2 + 1] = b + 2;
-        surfIndices[si2 + 2] = b + 1;
-        surfIndices[si2 + 3] = b + 1;
-        surfIndices[si2 + 4] = b + 2;
-        surfIndices[si2 + 5] = b + 3;
-        surfIndexCount += 6;
-      }
-    }
-
-    for (var e = 0; e < cliffEdges.length; e++) {
-      var edge = cliffEdges[e];
-      var x1 = worldX(edge[0]), z1 = worldZ(edge[1]);
-      var x2 = worldX(edge[2]), z2 = worldZ(edge[3]);
-      var yhi = Math.max(hT(edge[0], edge[1]), hT(edge[2], edge[3])) * exag;
-      var ylo = yhi - Math.max(0.35, Math.abs(edge[6] - edge[7])) * exag;
-      var dx = x2 - x1, dz = z2 - z1;
-      var len = Math.sqrt(dx * dx + dz * dz) || 1;
-      var nrm = [dz / len, 0, -dx / len];
-      var v0 = e * 4;
-      writeV(cliffPositions, v0, x1, ylo, z1);
-      writeV(cliffPositions, v0 + 1, x2, ylo, z2);
-      writeV(cliffPositions, v0 + 2, x1, yhi, z1);
-      writeV(cliffPositions, v0 + 3, x2, yhi, z2);
-      for (var cv = 0; cv < 4; cv++) {
-        writeN(cliffNormals, v0 + cv, nrm);
-        writeTex(cliffTex0, v0 + cv, 0, 0);
-        writeTex(cliffTex1, v0 + cv, -1, 0);
-        writeTex(cliffTex2, v0 + cv, -1, 0);
-        writeTex(cliffTex3, v0 + cv, -1, 0);
-        cliffRamps[v0 + cv] = edge[5] ? 1 : 0;
-        cliffLevels[v0 + cv] = 0.7;
-      }
-      writeUv(cliffUvs, v0, 0, 0); writeUv(cliffUvs, v0 + 1, 1, 0);
-      writeUv(cliffUvs, v0 + 2, 0, 1); writeUv(cliffUvs, v0 + 3, 1, 1);
-    }
-
-    for (var wc2 = 0; wc2 < waterCells.length; wc2++) {
-      var cell = waterCells[wc2], ii2 = cell[0], jj2 = cell[1], wb2 = wc2 * 4;
-      var wh = (wT(ii2,jj2) + wT(ii2+1,jj2) + wT(ii2,jj2+1) + wT(ii2+1,jj2+1)) / 4;
-      var th = (hT(ii2,jj2) + hT(ii2+1,jj2) + hT(ii2,jj2+1) + hT(ii2+1,jj2+1)) / 4;
-      var wy = Math.max(wh, th + 0.025) * exag + 0.015;
-      var depth = clamp((wh - th) * 0.8 + 0.35, 0.25, 0.85);
-      writeV(waterPositions, wb2, worldX(ii2), wy, worldZ(jj2));
-      writeV(waterPositions, wb2 + 1, worldX(ii2 + 1), wy, worldZ(jj2));
-      writeV(waterPositions, wb2 + 2, worldX(ii2), wy, worldZ(jj2 + 1));
-      writeV(waterPositions, wb2 + 3, worldX(ii2 + 1), wy, worldZ(jj2 + 1));
-      waterDepths[wb2] = depth; waterDepths[wb2 + 1] = depth; waterDepths[wb2 + 2] = depth; waterDepths[wb2 + 3] = depth;
-    }
-  }
-
-  var PLAYER = [[1,0.01,0.01],[0,0.26,1],[0.11,0.9,0.73],[0.33,0,0.5],[1,0.99,0],[1,0.54,0.06],[0.13,0.75,0],[0.9,0.36,0.69],[0.58,0.59,0.59],[0.49,0.75,0.95],[0.06,0.38,0.27],[0.31,0.16,0.02]];
-  var dprNow = window.devicePixelRatio || 1;
-  function makeGroup(kind, list) {
-    var n = list.length;
-    var basePos = new Float32Array(Math.max(1, n * 3));
-    var pos = new Float32Array(Math.max(1, n * 3));
-    var col = new Float32Array(Math.max(1, n * 3));
-    var size = new Float32Array(Math.max(1, n));
-    for (var m = 0; m < n; m++) {
-      var it = list[m];
-      var gi = (it.x - DATA.cx) / tile;
-      var gj = (it.y - DATA.cy) / tile;
-      var ii = Math.round(gi), jj = Math.round(gj);
-      basePos[m * 3] = worldX(gi);
-      basePos[m * 3 + 1] = hT(ii, jj);
-      basePos[m * 3 + 2] = worldZ(gj);
-      var rgb;
-      if (kind === 'doodad') { rgb = [0.36, 0.83, 0.36]; size[m] = 4 * dprNow; }
-      else if (kind === 'start') { rgb = [0.3, 0.8, 1.0]; size[m] = 13 * dprNow; }
-      else { rgb = PLAYER[it.owner] || [1, 0.7, 0.3]; size[m] = 7 * dprNow; }
-      col[m * 3] = rgb[0]; col[m * 3 + 1] = rgb[1]; col[m * 3 + 2] = rgb[2];
-    }
-    return { kind: kind, items: list, n: n, basePos: basePos, pos: pos, col: col, size: size, pBuf: gl.createBuffer(), cBuf: gl.createBuffer(), sBuf: gl.createBuffer() };
-  }
-  var doodads = DATA.markers.filter(function (m) { return m.k === 'doodad'; });
-  var units = DATA.markers.filter(function (m) { return m.k === 'unit'; });
-  var starts = DATA.markers.filter(function (m) { return m.k === 'start'; });
-  var gDood = makeGroup('doodad', doodads);
-  var gUnit = makeGroup('unit', units);
-  var gSloc = makeGroup('start', starts);
-  var groups = [[gDood, toggles.doodads], [gUnit, toggles.units], [gSloc, toggles.sloc]];
-
-  function liftMarkers(exag) {
-    var all = [gDood, gUnit, gSloc];
-    for (var a = 0; a < all.length; a++) {
-      var g = all[a];
-      for (var m = 0; m < g.n; m++) {
-        g.pos[m * 3] = g.basePos[m * 3];
-        g.pos[m * 3 + 1] = g.basePos[m * 3 + 1] * exag + 0.6;
-        g.pos[m * 3 + 2] = g.basePos[m * 3 + 2];
-      }
-      gl.bindBuffer(gl.ARRAY_BUFFER, g.pBuf); gl.bufferData(gl.ARRAY_BUFFER, g.pos, gl.DYNAMIC_DRAW);
-      gl.bindBuffer(gl.ARRAY_BUFFER, g.cBuf); gl.bufferData(gl.ARRAY_BUFFER, g.col, gl.STATIC_DRAW);
-      gl.bindBuffer(gl.ARRAY_BUFFER, g.sBuf); gl.bufferData(gl.ARRAY_BUFFER, g.size, gl.STATIC_DRAW);
-    }
-  }
-
-  function compile(type, src) {
-    var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s));
-    return s;
-  }
-  function program(vs, fs) {
-    var p = gl.createProgram();
-    gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
-    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
-    gl.linkProgram(p);
-    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) console.error(gl.getProgramInfoLog(p));
-    return p;
-  }
-  var terrainProg = program(
-    'attribute vec3 aPos; attribute vec3 aNormal; attribute vec2 aUv; attribute vec3 aTex0; attribute vec3 aTex1; attribute vec3 aTex2; attribute vec3 aTex3; attribute float aRamp; attribute float aLevel; uniform mat4 uMVP; varying vec3 vN; varying vec2 vUv; varying vec3 vTex0; varying vec3 vTex1; varying vec3 vTex2; varying vec3 vTex3; varying float vRamp; varying float vLevel; void main(){ vN=aNormal; vUv=aUv; vTex0=aTex0; vTex1=aTex1; vTex2=aTex2; vTex3=aTex3; vRamp=aRamp; vLevel=aLevel; gl_Position=uMVP*vec4(aPos,1.0); }',
-    'precision mediump float; varying vec3 vN; varying vec2 vUv; varying vec3 vTex0; varying vec3 vTex1; varying vec3 vTex2; varying vec3 vTex3; varying float vRamp; varying float vLevel; uniform sampler2D uAtlas; uniform float uAtlasCount; uniform float uCliff; vec4 layer(vec3 tv){ if(tv.x < -0.5) return vec4(0.0); float raw=floor(tv.y+0.5); float ext=step(0.5,tv.z); float vi=mod(raw,16.0); float side=step(16.0,raw); float cols=mix(4.0,8.0,ext); float vx=mod(vi,4.0)+side*4.0*ext; float vy=floor(vi/4.0); vec2 uv=vec2(vUv.x,1.0-vUv.y); vec2 sub=(vec2(vx,vy)+clamp(uv,vec2(0.012),vec2(0.988)))/vec2(cols,4.0); return texture2D(uAtlas,vec2((tv.x+sub.x)/uAtlasCount,sub.y)); } void main(){ vec4 base=layer(vTex3); base=mix(layer(vTex2),base,base.a); base=mix(layer(vTex1),base,base.a); base=mix(layer(vTex0),base,base.a); vec3 L=normalize(vec3(0.45,1.0,0.35)); float dif=max(dot(normalize(vN),L),0.0); vec3 col=base.rgb*(0.48+0.66*dif); col=mix(col, vec3(0.98,0.68,0.28), vRamp*0.24); col=mix(col, vec3(0.50,0.40,0.26), clamp(vLevel,0.0,0.65)); col=mix(col, vec3(0.34,0.27,0.18), uCliff); float a=base.a; if (a < 0.004) discard; gl_FragColor=vec4(col, a); }'
-  );
-  var pointProg = program(
-    'attribute vec3 aPos; attribute vec3 aColor; attribute float aSize; uniform mat4 uMVP; varying vec3 vColor; void main(){ vColor=aColor; gl_Position=uMVP*vec4(aPos,1.0); gl_PointSize=aSize; }',
-    'precision mediump float; varying vec3 vColor; void main(){ vec2 d=gl_PointCoord-vec2(0.5); if(dot(d,d)>0.25) discard; gl_FragColor=vec4(vColor,1.0); }'
-  );
-  var waterProg = program(
-    'attribute vec3 aPos; attribute float aDepth; uniform mat4 uMVP; varying float vDepth; void main(){ vDepth=aDepth; gl_Position=uMVP*vec4(aPos,1.0); }',
-    'precision mediump float; varying float vDepth; void main(){ vec3 shallow=vec3(0.18,0.58,0.67); vec3 deep=vec3(0.04,0.23,0.36); vec3 col=mix(shallow,deep,clamp(vDepth,0.0,1.0)); gl_FragColor=vec4(col,0.48); }'
-  );
-
-  var surfPosBuf = gl.createBuffer(), surfNormBuf = gl.createBuffer(), surfUvBuf = gl.createBuffer(), surfTex0Buf = gl.createBuffer(), surfTex1Buf = gl.createBuffer(), surfTex2Buf = gl.createBuffer(), surfTex3Buf = gl.createBuffer(), surfRampBuf = gl.createBuffer(), surfLevelBuf = gl.createBuffer(), surfIdxBuf = gl.createBuffer();
-  var cliffPosBuf = gl.createBuffer(), cliffNormBuf = gl.createBuffer(), cliffUvBuf = gl.createBuffer(), cliffTex0Buf = gl.createBuffer(), cliffTex1Buf = gl.createBuffer(), cliffTex2Buf = gl.createBuffer(), cliffTex3Buf = gl.createBuffer(), cliffRampBuf = gl.createBuffer(), cliffLevelBuf = gl.createBuffer(), cliffIdxBuf = gl.createBuffer();
-  var waterPosBuf = gl.createBuffer(), waterDepthBuf = gl.createBuffer(), waterIdxBuf = gl.createBuffer();
-
-  function uploadMesh() {
-    gl.bindBuffer(gl.ARRAY_BUFFER, surfPosBuf); gl.bufferData(gl.ARRAY_BUFFER, surfPositions, gl.DYNAMIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, surfNormBuf); gl.bufferData(gl.ARRAY_BUFFER, surfNormals, gl.DYNAMIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, surfUvBuf); gl.bufferData(gl.ARRAY_BUFFER, surfUvs, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, surfTex0Buf); gl.bufferData(gl.ARRAY_BUFFER, surfTex0, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, surfTex1Buf); gl.bufferData(gl.ARRAY_BUFFER, surfTex1, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, surfTex2Buf); gl.bufferData(gl.ARRAY_BUFFER, surfTex2, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, surfTex3Buf); gl.bufferData(gl.ARRAY_BUFFER, surfTex3, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, surfRampBuf); gl.bufferData(gl.ARRAY_BUFFER, surfRamps, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, surfLevelBuf); gl.bufferData(gl.ARRAY_BUFFER, surfLevels, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, surfIdxBuf); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, surfIndices, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, cliffPosBuf); gl.bufferData(gl.ARRAY_BUFFER, cliffPositions, gl.DYNAMIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, cliffNormBuf); gl.bufferData(gl.ARRAY_BUFFER, cliffNormals, gl.DYNAMIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, cliffUvBuf); gl.bufferData(gl.ARRAY_BUFFER, cliffUvs, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, cliffTex0Buf); gl.bufferData(gl.ARRAY_BUFFER, cliffTex0, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, cliffTex1Buf); gl.bufferData(gl.ARRAY_BUFFER, cliffTex1, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, cliffTex2Buf); gl.bufferData(gl.ARRAY_BUFFER, cliffTex2, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, cliffTex3Buf); gl.bufferData(gl.ARRAY_BUFFER, cliffTex3, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, cliffRampBuf); gl.bufferData(gl.ARRAY_BUFFER, cliffRamps, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, cliffLevelBuf); gl.bufferData(gl.ARRAY_BUFFER, cliffLevels, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cliffIdxBuf); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, cliffIndices, gl.STATIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, waterPosBuf); gl.bufferData(gl.ARRAY_BUFFER, waterPositions, gl.DYNAMIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, waterDepthBuf); gl.bufferData(gl.ARRAY_BUFFER, waterDepths, gl.DYNAMIC_DRAW);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waterIdxBuf); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, waterIndices, gl.STATIC_DRAW);
-  }
-
-  function mul(a, b) {
-    var o = new Float32Array(16);
-    for (var r = 0; r < 4; r++) for (var c2 = 0; c2 < 4; c2++) {
-      o[c2 * 4 + r] = a[r] * b[c2 * 4] + a[4 + r] * b[c2 * 4 + 1] + a[8 + r] * b[c2 * 4 + 2] + a[12 + r] * b[c2 * 4 + 3];
-    }
-    return o;
-  }
-  function perspective(fovy, asp, near, far) {
-    var f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
-    var o = new Float32Array(16);
-    o[0] = f / asp; o[5] = f; o[10] = (far + near) * nf; o[11] = -1; o[14] = 2 * far * near * nf;
-    return o;
-  }
-  function lookAt(eye, ctr, up) {
-    var zx = eye[0]-ctr[0], zy = eye[1]-ctr[1], zz = eye[2]-ctr[2];
-    var zl = Math.sqrt(zx*zx+zy*zy+zz*zz)||1; zx/=zl; zy/=zl; zz/=zl;
-    var xx = up[1]*zz-up[2]*zy, xy = up[2]*zx-up[0]*zz, xz = up[0]*zy-up[1]*zx;
-    var xl = Math.sqrt(xx*xx+xy*xy+xz*xz)||1; xx/=xl; xy/=xl; xz/=xl;
-    var yx = zy*xz-zz*xy, yy = zz*xx-zx*xz, yz = zx*xy-zy*xx;
-    var o = new Float32Array(16);
-    o[0]=xx; o[1]=yx; o[2]=zx; o[3]=0;
-    o[4]=xy; o[5]=yy; o[6]=zy; o[7]=0;
-    o[8]=xz; o[9]=yz; o[10]=zz; o[11]=0;
-    o[12]=-(xx*eye[0]+xy*eye[1]+xz*eye[2]);
-    o[13]=-(yx*eye[0]+yy*eye[1]+yz*eye[2]);
-    o[14]=-(zx*eye[0]+zy*eye[1]+zz*eye[2]);
-    o[15]=1;
-    return o;
-  }
-
-  var exag = parseFloat(document.getElementById('mp-exag').value) || 1;
-  var yaw, pitch, dist, target, lastMvp;
-  function midY() { return ((DATA.min + DATA.max) / 2 / tile) * exag; }
-  function resetView() {
-    yaw = 0.7; pitch = 0.85;
-    dist = Math.max(w, h) * 1.15 + 20;
-    target = [0, midY(), 0];
-  }
-  resetView();
-
-  function viewProj() {
-    var asp = canvas.width / Math.max(1, canvas.height);
-    var ex = target[0] + dist * Math.cos(pitch) * Math.sin(yaw);
-    var ey = target[1] + dist * Math.sin(pitch);
-    var ez = target[2] + dist * Math.cos(pitch) * Math.cos(yaw);
-    var proj = perspective(50 * Math.PI / 180, asp, 0.5, dist * 4 + Math.max(w, h) * 4 + 1000);
-    return mul(proj, lookAt([ex, ey, ez], target, [0, 1, 0]));
-  }
-  function bindAttr(prog, name, buf, size) {
-    var loc = gl.getAttribLocation(prog, name);
-    if (loc < 0) return;
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
-  }
-  function drawTerrainMesh(pos, norm, uv, tex0, tex1, tex2, tex3, ramp, levelBuf, idxBuf, idxCount, cliffMix) {
-    if (idxCount === 0) return;
-    gl.useProgram(terrainProg);
-    gl.uniformMatrix4fv(gl.getUniformLocation(terrainProg, 'uMVP'), false, lastMvp);
-    gl.uniform1f(gl.getUniformLocation(terrainProg, 'uAtlasCount'), atlasCount);
-    gl.uniform1f(gl.getUniformLocation(terrainProg, 'uCliff'), cliffMix);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, atlasTex);
-    gl.uniform1i(gl.getUniformLocation(terrainProg, 'uAtlas'), 0);
-    bindAttr(terrainProg, 'aPos', pos, 3);
-    bindAttr(terrainProg, 'aNormal', norm, 3);
-    bindAttr(terrainProg, 'aUv', uv, 2);
-    bindAttr(terrainProg, 'aTex0', tex0, 3);
-    bindAttr(terrainProg, 'aTex1', tex1, 3);
-    bindAttr(terrainProg, 'aTex2', tex2, 3);
-    bindAttr(terrainProg, 'aTex3', tex3, 3);
-    bindAttr(terrainProg, 'aRamp', ramp, 1);
-    bindAttr(terrainProg, 'aLevel', levelBuf, 1);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
-    gl.drawElements(gl.TRIANGLES, idxCount, indexType, 0);
-  }
-  function drawWater() {
-    if (waterIndices.length === 0) return;
-    gl.useProgram(waterProg);
-    gl.uniformMatrix4fv(gl.getUniformLocation(waterProg, 'uMVP'), false, lastMvp);
-    bindAttr(waterProg, 'aPos', waterPosBuf, 3);
-    bindAttr(waterProg, 'aDepth', waterDepthBuf, 1);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waterIdxBuf);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    gl.depthMask(false);
-    gl.drawElements(gl.TRIANGLES, waterIndices.length, indexType, 0);
-    gl.depthMask(true);
-    gl.disable(gl.BLEND);
-  }
-
-  function render() {
-    gl.viewport(0, 0, canvas.width, canvas.height);
-    gl.clearColor(0.035, 0.047, 0.059, 1);
-    gl.enable(gl.DEPTH_TEST);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    lastMvp = viewProj();
-    gl.depthFunc(gl.LEQUAL);
-
-    if (toggles.terrain.checked) drawTerrainMesh(surfPosBuf, surfNormBuf, surfUvBuf, surfTex0Buf, surfTex1Buf, surfTex2Buf, surfTex3Buf, surfRampBuf, surfLevelBuf, surfIdxBuf, surfIndexCount, 0.0);
-    if (toggles.cliffs.checked) drawTerrainMesh(cliffPosBuf, cliffNormBuf, cliffUvBuf, cliffTex0Buf, cliffTex1Buf, cliffTex2Buf, cliffTex3Buf, cliffRampBuf, cliffLevelBuf, cliffIdxBuf, cliffIndices.length, 1.0);
-    if (toggles.water.checked) drawWater();
-    gl.depthFunc(gl.LESS);
-    gl.disable(gl.BLEND);
-
-    gl.useProgram(pointProg);
-    gl.uniformMatrix4fv(gl.getUniformLocation(pointProg, 'uMVP'), false, lastMvp);
-    for (var gp = 0; gp < groups.length; gp++) {
-      var grp = groups[gp][0], tog = groups[gp][1];
-      if (!tog.checked || grp.n === 0) continue;
-      bindAttr(pointProg, 'aPos', grp.pBuf, 3);
-      bindAttr(pointProg, 'aColor', grp.cBuf, 3);
-      bindAttr(pointProg, 'aSize', grp.sBuf, 1);
-      gl.drawArrays(gl.POINTS, 0, grp.n);
-    }
-  }
-
-  function resize() {
-    var rect = canvas.getBoundingClientRect();
-    var dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.max(1, Math.round(rect.width * dpr));
-    canvas.height = Math.max(1, Math.round(rect.height * dpr));
-    render();
-  }
-
-  function project(pos) {
-    var x = pos[0], y = pos[1], z = pos[2], m = lastMvp;
-    var cx = m[0]*x + m[4]*y + m[8]*z + m[12];
-    var cy = m[1]*x + m[5]*y + m[9]*z + m[13];
-    var cz = m[2]*x + m[6]*y + m[10]*z + m[14];
-    var cw = m[3]*x + m[7]*y + m[11]*z + m[15];
-    if (cw <= 0) return null;
-    var rect = canvas.getBoundingClientRect();
-    return { x: rect.left + (cx / cw * 0.5 + 0.5) * rect.width, y: rect.top + (-cy / cw * 0.5 + 0.5) * rect.height, z: cz / cw };
-  }
-  function updateHover(e) {
-    if (!lastMvp || dragging) { tip.style.display = 'none'; return; }
-    var best = null, bestD = 14 * 14;
-    for (var gp = 0; gp < groups.length; gp++) {
-      var grp = groups[gp][0], tog = groups[gp][1];
-      if (!tog.checked) continue;
-      for (var i = 0; i < grp.n; i++) {
-        var p = project([grp.pos[i*3], grp.pos[i*3+1], grp.pos[i*3+2]]);
-        if (!p) continue;
-        var dx = p.x - e.clientX, dy = p.y - e.clientY, d = dx*dx + dy*dy;
-        if (d < bestD) { bestD = d; best = { item: grp.items[i], x: p.x, y: p.y }; }
-      }
-    }
-    if (!best) { tip.style.display = 'none'; return; }
-    var it = best.item;
-    var kind = it.k === 'start' ? 'Start location' : it.k.charAt(0).toUpperCase() + it.k.slice(1);
-    var owner = it.owner >= 0 ? ' | owner ' + it.owner : '';
-    tip.innerHTML = '<div class="mp-tip-title">' + escapeHtmlJs(it.label || it.id) + '</div><div class="mp-tip-sub">' + escapeHtmlJs(kind + ' ' + it.id + owner) + '<br>x ' + it.x + ', y ' + it.y + ', z ' + it.z + '</div>';
-    tip.style.left = Math.round(e.clientX + 14) + 'px';
-    tip.style.top = Math.round(e.clientY + 14) + 'px';
-    tip.style.display = 'block';
-  }
-  function escapeHtmlJs(s) {
-    return String(s).replace(/[&<>"']/g, function (c) { return c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;'; });
-  }
-
-  var dragging = 0, lastX = 0, lastY = 0;
-  canvas.addEventListener('mousedown', function (e) {
-    dragging = (e.button === 2) ? 2 : 1; lastX = e.clientX; lastY = e.clientY;
-    canvas.classList.add('grabbing'); tip.style.display = 'none'; e.preventDefault();
-  });
-  canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
-  window.addEventListener('mousemove', function (e) {
-    if (!dragging) { updateHover(e); return; }
-    var dx = e.clientX - lastX, dy = e.clientY - lastY;
-    lastX = e.clientX; lastY = e.clientY;
-    if (dragging === 2) {
-      var fx = -Math.cos(pitch) * Math.sin(yaw), fy = -Math.sin(pitch), fz = -Math.cos(pitch) * Math.cos(yaw);
-      var rx = -fz, rz = fx; var rl = Math.sqrt(rx*rx+rz*rz)||1; rx/=rl; rz/=rl;
-      var ux = -fx*fy, uy = fx*fx+fz*fz, uz = -fz*fy; var ul = Math.sqrt(ux*ux+uy*uy+uz*uz)||1; ux/=ul; uy/=ul; uz/=ul;
-      var ps = dist * 0.0018;
-      target[0] += (-rx * dx + ux * dy) * ps;
-      target[1] += (uy * dy) * ps;
-      target[2] += (-rz * dx + uz * dy) * ps;
-    } else {
-      yaw -= dx * 0.006; pitch += dy * 0.006;
-      if (pitch > 1.5) pitch = 1.5; else if (pitch < 0.05) pitch = 0.05;
-    }
-    render();
-  });
-  window.addEventListener('mouseup', function () { dragging = 0; canvas.classList.remove('grabbing'); });
-  canvas.addEventListener('mouseleave', function () { tip.style.display = 'none'; });
-  canvas.addEventListener('wheel', function (e) {
-    e.preventDefault();
-    dist *= (e.deltaY < 0) ? 1 / 1.12 : 1.12;
-    if (dist < 3) dist = 3; else if (dist > 8000) dist = 8000;
-    render();
-  }, { passive: false });
-
-  for (var key in toggles) toggles[key].addEventListener('change', render);
-  document.getElementById('mp-reset').addEventListener('click', function () { resetView(); render(); });
-  document.getElementById('mp-exag').addEventListener('input', function (e) {
-    exag = parseFloat(e.target.value) || 1;
-    target[1] = midY();
-    buildTerrain(exag); uploadMesh(); liftMarkers(exag); render();
-  });
-  window.addEventListener('resize', resize);
-
-  buildTerrain(exag); uploadMesh(); liftMarkers(exag);
-  resize();
 }
-`;
 
-export function registerMapPreview(_context: vscode.ExtensionContext): vscode.Disposable {
-    return vscode.commands.registerCommand('wurst.previewMap', async (resource?: vscode.Uri) => {
-        let w3ePath = findMapW3e(activeResourcePath(resource));
-        if (!w3ePath) {
-            const hits = await vscode.workspace.findFiles('**/war3map.w3e', '**/node_modules/**', 1);
-            w3ePath = hits[0]?.fsPath;
-        }
-        if (!w3ePath) {
-            vscode.window.showWarningMessage(
-                'Map preview: no war3map.w3e found near the active file or in the workspace. Open a folder containing an exploded map.',
-            );
-            return;
-        }
-
-        let terrain: Terrain;
-        try {
-            terrain = await parseW3eTerrain(fs.readFileSync(w3ePath));
-        } catch (e) {
-            const message = e instanceof Error ? e.message : String(e);
-            void showErrorWithLogs(`Map preview: failed to parse terrain - ${message}`, e);
-            offerIssueReport({
-                area: 'map terrain preview',
-                message,
-                resource: vscode.Uri.file(w3ePath),
-                details: e instanceof Error ? e.stack : undefined,
-            });
-            return;
-        }
-
-        const mapDir = path.dirname(w3ePath);
-        const markers = await readDooMarkers(mapDir);
-
-        const panel = vscode.window.createWebviewPanel(
-            'wurst.mapPreview',
-            `Map Preview - ${path.basename(mapDir)}`,
-            vscode.ViewColumn.Active,
-            { enableScripts: true, retainContextWhenHidden: true },
-        );
-        panel.webview.html = await buildHtml(terrain, markers);
+function moveUnit(doc: MapPlacementDocument, scene: MapScene, provider: PlacementProvider, msg: PlacementMessage): void {
+    const unit = editableUnit(doc, msg);
+    const to = unit && groundPosition(scene.terrain, msg.x, msg.y);
+    if (!unit || !to || (to.x === unit.x && to.y === unit.y && to.z === unit.z)) return;
+    const from = { x: unit.x, y: unit.y, z: unit.z };
+    provider.pushEdit(doc, `Move ${placementName(scene, unit.typeId)}`, {
+        apply: () => { Object.assign(unit, to); doc.selectHint = doc.units.indexOf(unit); },
+        revert: () => { Object.assign(unit, from); doc.selectHint = doc.units.indexOf(unit); },
     });
+}
+
+function deleteUnit(doc: MapPlacementDocument, scene: MapScene, provider: PlacementProvider, msg: PlacementMessage): void {
+    const unit = editableUnit(doc, msg);
+    if (!unit) return;
+    const index = doc.units.indexOf(unit);
+    provider.pushEdit(doc, `Delete ${placementName(scene, unit.typeId)}`, {
+        apply: () => { doc.units.splice(index, 1); doc.selectHint = -1; },
+        revert: () => { doc.units.splice(index, 0, unit); doc.selectHint = index; },
+    });
+}
+
+function placeUnit(doc: MapPlacementDocument, scene: MapScene, provider: PlacementProvider, msg: PlacementMessage): void {
+    const type = typeof msg.typeId === 'string' ? scene.types.get(msg.typeId) : undefined;
+    const at = type && groundPosition(scene.terrain, msg.x, msg.y);
+    if (!type || !at) return;
+    // World Editor has no owner choice for items: they always belong to Neutral Passive.
+    const owner = type.kind === 'item' ? scene.owners.neutralPassive : validOwner(scene.owners, msg.owner) ?? 0;
+    const unit = newPlacement(doc, scene, type.id, at, owner);
+    provider.pushEdit(doc, `Place ${type.name}`, {
+        apply: () => { doc.units.push(unit); doc.selectHint = doc.units.length - 1; },
+        revert: () => { doc.units.splice(doc.units.indexOf(unit), 1); doc.selectHint = -1; },
+    });
+}
+
+function setOwner(doc: MapPlacementDocument, scene: MapScene, provider: PlacementProvider, msg: PlacementMessage): void {
+    const unit = editableUnit(doc, msg);
+    const owner = validOwner(scene.owners, msg.owner);
+    if (!unit || owner === undefined || owner === unit.ownerIndex || placementKind(scene, unit.typeId) === 'item') return;
+    const before = unit.ownerIndex;
+    provider.pushEdit(doc, `Change owner of ${placementName(scene, unit.typeId)}`, {
+        apply: () => { unit.ownerIndex = owner; doc.selectHint = doc.units.indexOf(unit); },
+        revert: () => { unit.ownerIndex = before; doc.selectHint = doc.units.indexOf(unit); },
+    });
+}
+
+function postPlacementTypes(doc: MapPlacementDocument, scene: MapScene): void {
+    const types = Array.from(scene.types.values())
+        .sort((a, b) => Number(b.custom) - Number(a.custom) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+    void doc.webview?.postMessage({ type: 'placementTypes', types });
+}
+
+function handlePlacementMessage(message: unknown, doc: MapPlacementDocument, provider: PlacementProvider): void {
+    const scene = doc.scene;
+    if (!message || typeof message !== 'object' || !scene) return;
+    const msg = message as PlacementMessage;
+    if (msg.type === 'requestTypes') {
+        postPlacementTypes(doc, scene);
+        return;
+    }
+    if (doc.file.readOnlyReason) return;
+    if (msg.type === 'move') moveUnit(doc, scene, provider, msg);
+    else if (msg.type === 'delete') deleteUnit(doc, scene, provider, msg);
+    else if (msg.type === 'place') placeUnit(doc, scene, provider, msg);
+    else if (msg.type === 'setOwner') setOwner(doc, scene, provider, msg);
+}
+
+function postPlacementState(doc: MapPlacementDocument): void {
+    const select = doc.selectHint;
+    doc.selectHint = undefined;
+    if (!doc.scene) return;
+    void doc.webview?.postMessage({ type: 'placementsChanged', placements: placementSummaries(doc, doc.scene), isDirty: doc.isDirty, select });
+}
+
+class MapPlacementEditorProvider extends EditableBinaryEditorProvider<PlacementFile, MapPlacementDocument> {
+    constructor(extensionUri: vscode.Uri) {
+        const bundleDir = vscode.Uri.joinPath(extensionUri, 'dist', 'webview');
+        super({
+            label: 'unit placements',
+            parse: parsePlacements,
+            serialize: serializeValidatedPlacements,
+            createDocument: (uri, file) => new MapPlacementDocument(uri, file),
+            webviewOptions: { enableScripts: true, localResourceRoots: [bundleDir] },
+            render: (doc) => doc.scene
+                ? buildMapEditorHtml(doc, doc.scene, doc.webview!.asWebviewUri(vscode.Uri.joinPath(bundleDir, 'mapPreviewWebview.js')).toString())
+                : buildErrorHtml(doc.fileName, doc.sceneError ?? 'The map terrain did not load.', 'Could not open the map placement editor'),
+            postState: postPlacementState,
+            handleMessage: handlePlacementMessage,
+        });
+    }
+
+    override async resolveCustomEditor(doc: MapPlacementDocument, panel: vscode.WebviewPanel): Promise<void> {
+        if (!doc.scene && !doc.sceneError) {
+            panel.webview.html = buildLoadingHtml(doc.fileName);
+            await loadScene(doc);
+        }
+        await super.resolveCustomEditor(doc, panel);
+    }
+}
+
+async function openMapEditor(resource?: vscode.Uri): Promise<void> {
+    let w3ePath = findMapW3e(activeResourcePath(resource));
+    if (!w3ePath) {
+        const hits = await vscode.workspace.findFiles('**/war3map.w3e', '**/node_modules/**', 1);
+        w3ePath = hits[0]?.fsPath;
+    }
+    if (!w3ePath) {
+        vscode.window.showWarningMessage(
+            'Map editor: no war3map.w3e found near the active file or in the workspace. Open a folder containing an exploded map.',
+        );
+        return;
+    }
+    const mapDir = path.dirname(w3ePath);
+    let unitsPath = findFileCI(mapDir, UNITS_FILE);
+    if (!unitsPath) {
+        const create = `Create ${UNITS_FILE}`;
+        const choice = await vscode.window.showInformationMessage(
+            `${path.basename(mapDir)} has no ${UNITS_FILE} yet. Create an empty one to place units and items?`, create,
+        );
+        if (choice !== create) return;
+        unitsPath = path.join(mapDir, UNITS_FILE);
+        await vscode.workspace.fs.writeFile(vscode.Uri.file(unitsPath), serializeDoo({ kind: 'units', version: 8, subVersion: 11, units: [] }));
+    }
+    await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(unitsPath), MAP_EDITOR_VIEW_TYPE);
+}
+
+export function registerMapPreview(context: vscode.ExtensionContext): vscode.Disposable {
+    return vscode.Disposable.from(
+        vscode.window.registerCustomEditorProvider(MAP_EDITOR_VIEW_TYPE, new MapPlacementEditorProvider(context.extensionUri), {
+            supportsMultipleEditorsPerDocument: false,
+            webviewOptions: { retainContextWhenHidden: true },
+        }),
+        vscode.commands.registerCommand('wurst.previewMap', openMapEditor),
+    );
 }

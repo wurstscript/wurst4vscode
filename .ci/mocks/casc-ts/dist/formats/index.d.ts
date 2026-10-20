@@ -36,7 +36,7 @@ export type DooRandType = 'any' | 'group' | 'custom';
 export interface DooUnit {
     typeId: string; variation: number; x: number; y: number; z: number; angle: number;
     scaleX: number; scaleY: number; scaleZ: number; skinId?: string; flags: number;
-    ownerIndex: number; lifePerc: number; manaPerc: number; itemTablePtr?: number;
+    ownerIndex: number; unknownA?: number; unknownB?: number; lifePerc: number; manaPerc: number; itemTablePtr?: number;
     drops: DooDropSet[]; resourcesAmount: number; targetAcquisition: number; heroLevel: number;
     heroStr?: number; heroAgi?: number; heroInt?: number; invItems: DooInvItem[];
     abilities: DooAbility[]; randType: DooRandType; randLevel?: number; randClass?: number;
@@ -46,7 +46,8 @@ export interface DooUnit {
 export type DooFileKind = 'doodads' | 'units';
 export interface DooFile {
     kind: DooFileKind; version: number; subVersion: number;
-    doodads?: DooDoodad[]; specialDoodads?: DooSpecialDoodad[]; units?: DooUnit[]; error?: string;
+    doodads?: DooDoodad[]; specialDoodads?: DooSpecialDoodad[]; specialVersion?: number; units?: DooUnit[];
+    tail?: Buffer; error?: string;
 }
 
 export type ObjModVarType = 'int' | 'real' | 'unreal' | 'string';
@@ -121,5 +122,6 @@ export declare function parseW3i(buf: Buffer): W3iFile;
 export declare function parseWct(data: Buffer): WctFile;
 export declare function parseWtg(data: Buffer): WtgFile;
 export declare function parseWpm(data: Buffer): WpmFile;
+export declare function serializeDoo(file: DooFile): Buffer;
 export declare function serializeObjMod(file: ObjModFile): Buffer;
 export declare function serializeW3i(file: W3iFile): Buffer;

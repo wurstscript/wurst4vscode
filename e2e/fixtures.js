@@ -14,7 +14,7 @@ const { test: base, expect } = require('@playwright/test');
 
 const { startHarnessServer } = require('./harness/server');
 const { createObjModHost } = require('./harness/objmodHost');
-const { createW3iHost, createWpmHost, createMmpHost, createW3cHost, createW3rHost } = require('./harness/mapEditorHosts');
+const { createW3iHost, createWpmHost, createMmpHost, createW3cHost, createW3rHost, createMapPlacementHost } = require('./harness/mapEditorHosts');
 const { createBlpPreviewHost } = require('./harness/blpPreviewHost');
 const { root } = require('./harness/tsLoader');
 
@@ -158,6 +158,22 @@ const test = base.extend({
         const opened = [];
         await use(async (options = {}) => {
             const host = await createW3rHost({ origin: server.origin, ...options });
+            opened.push(host);
+            const wiring = await attachPageToHost(page, server, host);
+            return { host, page, ...wiring };
+        });
+        for (const host of opened) host.dispose();
+    },
+
+    /** Opens the map terrain and placement editor on a generated map's war3mapUnits.doo. */
+    openMapPlacement: async ({ page, server }, use) => {
+        const opened = [];
+        await use(async (options = {}) => {
+            const bundle = path.join(root, 'dist', 'webview', 'mapPreviewWebview.js');
+            if (!fs.existsSync(bundle)) {
+                throw new Error(`Missing ${path.relative(root, bundle)}: run "npm run compile-web" before the e2e suite.`);
+            }
+            const host = await createMapPlacementHost({ origin: server.origin, ...options });
             opened.push(host);
             const wiring = await attachPageToHost(page, server, host);
             return { host, page, ...wiring };

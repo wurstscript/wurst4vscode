@@ -1,13 +1,19 @@
 # Map Preview - WC3 binary data layouts
 
-Reference for the experimental map terrain preview (`wurst.previewMap`,
-`src/features/mapPreview.ts`). It renders an exploded map directory from:
+Reference for the experimental map terrain and placement editor
+(`wurst.mapPlacementEditor`, opened by the `wurst.previewMap` command). The host
+is `src/features/mapPreview.ts`; the page is `src/webview/mapPreviewWebview.ts`
+with the WebGL scene in `src/webview/mapTerrainScene.ts`. It is a custom editor
+on an exploded map's `war3mapUnits.doo` and reads the rest of the folder as
+context:
 
 | File | Contents | Parser |
 | --- | --- | --- |
 | `war3map.w3e` | terrain tilepoint grid, heights, ground tiles, cliff layers | `parseW3eTerrain` in `mapPreview.ts` |
-| `war3map.doo` | doodad / destructable placement | `parseDoo` in `casc-ts/formats/doo.ts` |
-| `war3mapUnits.doo` | unit / item / start-location placement | `parseDoo` in `casc-ts/formats/doo.ts` |
+| `war3map.doo` | doodad / destructable placement (read-only) | `parseDoo` in `casc-ts/formats/doo.ts` |
+| `war3mapUnits.doo` | unit / item / start-location placement (edited) | `parseDoo` / `serializeDoo` in `casc-ts/formats/doo.ts` |
+| `war3map.w3u` / `.w3t` | custom units / items for the placement picker | `parseObjMod` in `casc-ts` |
+| `war3map.w3i` | only the version, to pick the player-index layout | first i32 |
 
 All multi-byte integers/floats are little-endian. `id` means four ASCII bytes
 (a rawcode, for example `Hpea`). Offsets below are sequential; there is no
@@ -49,9 +55,9 @@ derives the stride from the payload size.
 | 2-3 | u16 | `waterLevel & flags` | bits 0-13 = water level, bit 14 = edge/boundary flag |
 | 4 | u8 | `flags / texture` | bits 0-3 = flags, bits 4-7 = ground texture index |
 | 5 | u8 | `textureDetails` | variation/detail |
-| 6 | u8 | `cliff / layer` | bits 0-3 = cliff texture index, bits 4-7 = `layerHeight` in classic records |
+| 6 | u8 | `cliff / layer` | bits 0-3 = `layerHeight`, bits 4-7 = cliff texture index |
 
-The preview uses byte 6 for cliff texture/layer. Wider records may contain extra
+The preview uses the last byte for cliff texture/layer. Wider records may contain extra
 detail bytes after the classic payload, but those bytes are not treated as cliff
 levels.
 
@@ -88,12 +94,42 @@ j = (doodad.y - centerOffsetY) / 128
 `war3map.doo` and `war3mapUnits.doo` both start with magic `"W3do"`, version,
 and subversion. The filename selects the doodad or unit layout in `parseDoo`.
 
-The terrain preview consumes:
+Doodads and special doodads only contribute positioned markers. Units with
+`typeId === 'sloc'` are start locations.
 
-- Doodads: `typeId`, `x`, `y`, `z`, `flags`.
-- Special doodads: `typeId`, `x`, `y`, `z`.
-- Units: `typeId`, `x`, `y`, `z`, `ownerIndex`, `flags`.
-- Units with `typeId === 'sloc'` are rendered as start-location markers.
+### 2.1 Unit record (`war3mapUnits.doo`, version 8)
+
+Header: `"W3do"`, i32 version (8), i32 subversion (11 since TFT, still 11 in
+Reforged), i32 record count. Each record:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| typeId | id | `sloc` = start location |
+| variation | i32 | |
+| x, y, z | f32 x 3 | z is the terrain height under (x, y) |
+| angle | f32 | radians; World Editor's default is 270° |
+| scale x, y, z | f32 x 3 | |
+| skinId | id, optional | Reforged only. Detected by peeking: flags never exceed 7, a rawcode byte always does |
+| flags | u8 | World Editor writes 2 for units/items, 3 for start locations |
+| owner | i32 | player index; neutral hostile / passive are 24 / 27 in 24-player maps (1.29+), 12 / 15 in older ones |
+| unknown | u8 x 2 | preserved, World Editor writes 0 |
+| life %, mana % | i32 x 2 | -1 = default |
+| item table pointer | i32 | subversion >= 11 only |
+| drop sets | i32 count, then per set i32 count + (id, i32 chance) pairs | |
+| gold amount | i32 | World Editor writes 12500 for units and items, 0 for start locations |
+| target acquisition | f32 | -1 = default, -2 = camp |
+| hero level | i32 | 1 by default |
+| hero str / agi / int | i32 x 3 | subversion >= 11 only |
+| inventory | i32 count, then (i32 slot, id) pairs | |
+| abilities | i32 count, then (id, i32 autocast, i32 level) | |
+| random type | i32 | 0: u8 x 3 level + u8 class (World Editor writes `01 00 00 00`); 1: i32 group, i32 position; 2: i32 count + (id, i32 chance) pairs. Any other value is a parse error |
+| custom color | i32 | -1 = player color |
+| waygate target | i32 | -1 = none |
+| creation number | i32 | `editorId`; the `gg_unit_<id>_<n>` suffix in generated scripts |
+
+`serializeDoo` writes the same layout back. Bytes the parser does not interpret
+(the two unknown bytes, a special-doodad section's presence, trailing data) are
+kept on the parsed object, so an untouched file round-trips byte-for-byte.
 
 ## 3. Rendering
 
@@ -114,15 +150,57 @@ visible while scanning the scene.
 Water uses the W3E water-level field plus the water flag to draw a shallow
 transparent mesh above affected terrain cells.
 
-Doodads, units, and starts are positional points sitting on the sampled terrain
-height. Hovering a marker shows the rawcode/name, owner when available, and map
-coordinates. Orbit camera: drag. Zoom: wheel. Pan: right-drag. The height slider
-applies vertical exaggeration.
+Doodads, units, items and starts are positional points sitting on the sampled
+terrain height (bilinear over the tilepoint grid). Hovering a marker shows the
+rawcode/name, owner and map coordinates. Orbit camera: drag. Zoom: wheel. Pan:
+right-drag. The height slider applies vertical exaggeration.
 
-## 4. Known limitations
+## 4. Editing
 
-- Requires an exploded map directory containing `war3map.w3e` and optionally the
-  `.doo` files. `.w3x`/MPQ archives are not extracted here.
+The document is the parsed `war3mapUnits.doo` on the shared
+`EditableBinaryEditorProvider`, so every edit is one VS Code undo step and Save
+writes the file back.
+
+- **Select**: click a unit, item or start-location marker. The side panel shows
+  name, rawcode, owner and x/y/z.
+- **Move**: drag the selected marker. The page casts a ray from the cursor onto
+  the terrain; the host rounds x/y to whole units, clamps them to the map and
+  takes z from the terrain height there.
+- **Delete**: the Delete key or the panel button.
+- **Owner**: a select in the panel for units. Items always belong to Neutral
+  Passive, as in World Editor.
+- **Place**: pick a type in the panel (game units/items from the compiler
+  knowledge base plus the map's custom `.w3u`/`.w3t` objects, named through
+  `war3map.wts` when needed), choose the owner, click the terrain. Place mode
+  stays on for repeated placement until Escape.
+
+New records copy what World Editor writes for a fresh placement: variation 0,
+facing 270°, scale 1, flags 2, life/mana -1, item table -1, gold 12500,
+acquisition -1, hero level 1 with zero attribute overrides, random block
+`01 00 00 00`, colour and waygate -1, and creation number = highest existing + 1.
+They get a skin id when the map's existing units (or, with none, its doodads, or
+with neither, a w3i version >= 31) use skin ids. The player-index layout is the
+24-player one when the w3i version is >= 28 or any owner index exceeds 15, so a
+1.29/1.30 map (w3i 25) with no neutral placements yet gets the old indices.
+
+Safety: when the file is opened, `serializeDoo(parseDoo(bytes))` must equal the
+original bytes, otherwise the editor opens read-only (for example a
+signalling-NaN float, which comes back quieted). Before every save the serialized bytes
+are re-parsed and compared field by field with the edited model; any difference
+refuses the write.
+
+Start locations stay read-only because their position also lives in
+`war3map.w3i`'s player records. Doodads are read-only: they live in
+`war3map.doo`, a second file the document does not own.
+
+## 5. Known limitations
+
+- Requires an exploded map directory containing `war3map.w3e` and
+  `war3mapUnits.doo` (the command offers to create an empty one). `.w3x`/MPQ
+  archives are not extracted here.
+- Placement is free-form: buildings are not snapped to the pathing grid, and
+  unit properties beyond owner and position (facing, hero data, drops,
+  inventory) are kept but not editable yet.
 - Markers are points, not real models. A future pass can instance doodad/unit
   models via the existing inline `mdxViewer` infrastructure.
 - Cliff rendering is structural, not the full Warcraft III cliff-model set. It

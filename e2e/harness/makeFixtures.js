@@ -14,7 +14,7 @@ const path = require('path');
 
 const { repoRequire } = require('./tsLoader');
 
-const { serializeW3i, serializeWpm, BinWriter } = repoRequire('casc-ts/formats');
+const { serializeW3i, serializeWpm, serializeDoo, serializeObjMod, BinWriter } = repoRequire('casc-ts/formats');
 
 const W3I_VERSION = 31; // Reforged-era; exercises the v28 game-version block and the v31 tail skips.
 
@@ -162,6 +162,98 @@ function buildW3r() {
     return w.toBuffer();
 }
 
+/**
+ * A 16x16-tile map for the placement editor: flat ground at z 0 with a raised plateau (cliff layer 3,
+ * z 128) over tilepoints 10..14, which is map x/y 256..768. Nothing about it needs game data.
+ */
+const PLACEMENT_MAP = { width: 17, height: 17, centerX: -1024, centerY: -1024, plateau: [10, 14], plateauZ: 128 };
+
+function buildW3e() {
+    const { width, height, centerX, centerY, plateau } = PLACEMENT_MAP;
+    const w = new BinWriter(64 + width * height * 7);
+    w.writeId('W3E!');
+    w.writeI32(11);
+    w.writeU8('L'.charCodeAt(0)); // tileset
+    w.writeI32(0);                // no custom tileset
+    w.writeI32(2); w.writeId('Ldrt'); w.writeId('Lgrs');
+    w.writeI32(1); w.writeId('CLdi');
+    w.writeI32(width); w.writeI32(height);
+    w.writeF32(centerX); w.writeF32(centerY);
+    const u16 = (value) => { w.writeU8(value & 0xff); w.writeU8(value >> 8); };
+    for (let j = 0; j < height; j++) {
+        for (let i = 0; i < width; i++) {
+            const raised = i >= plateau[0] && i <= plateau[1] && j >= plateau[0] && j <= plateau[1];
+            u16(0x2000);              // ground height: zero
+            u16(0x2000);              // water level, no boundary flag
+            w.writeU8(raised ? 0x10 : 0x00); // ground texture in the high nibble, no flags
+            w.writeU8(0);             // texture details
+            w.writeU8(raised ? 3 : 2); // cliff texture 0, layer 2 is ground level
+        }
+    }
+    return w.toBuffer();
+}
+
+/** A unit record with the values World Editor writes, so untouched records exercise every field. */
+function placedUnit(overrides) {
+    return {
+        typeId: 'hfoo', variation: 0, x: 0, y: 0, z: 0, angle: Math.fround(Math.PI * 1.5),
+        scaleX: 1, scaleY: 1, scaleZ: 1, skinId: overrides.typeId || 'hfoo', flags: 2, ownerIndex: 0, unknownA: 0, unknownB: 0,
+        lifePerc: -1, manaPerc: -1, itemTablePtr: -1, drops: [], resourcesAmount: 12500,
+        targetAcquisition: -1, heroLevel: 1, heroStr: 0, heroAgi: 0, heroInt: 0,
+        invItems: [], abilities: [], randType: 'any', randLevel: 1, randClass: 0,
+        customColor: -1, waygateTargetRectIndex: -1, editorId: 0,
+        ...overrides,
+    };
+}
+
+/** Index order matters to the specs: 0 start location, 1 footman, 2 hero, 3 item, 4 custom unit. */
+function buildPlacementUnits() {
+    return serializeDoo({
+        kind: 'units', version: 8, subVersion: 11, units: [
+            placedUnit({ typeId: 'sloc', x: -768, y: -768, flags: 3, resourcesAmount: 0, targetAcquisition: 0, heroLevel: 0, editorId: 0 }),
+            placedUnit({ typeId: 'hfoo', x: -512, y: -512, editorId: 1 }),
+            placedUnit({
+                typeId: 'Hpal', x: -256, y: -512, ownerIndex: 1, heroLevel: 3, heroStr: 25, editorId: 2,
+                drops: [{ items: [{ itemId: 'ratc', chance: 100 }] }],
+                invItems: [{ slot: 0, itemId: 'ratc' }],
+                abilities: [{ abilityId: 'AHhb', autoCast: false, level: 1 }],
+            }),
+            placedUnit({ typeId: 'ratc', x: 0, y: -512, ownerIndex: 27, editorId: 3 }),
+            placedUnit({ typeId: 'h000', x: -512, y: 0, ownerIndex: 24, editorId: 4 }),
+        ],
+    });
+}
+
+function buildPlacementDoodads() {
+    return serializeDoo({
+        kind: 'doodads', version: 8, subVersion: 11, specialVersion: 0, specialDoodads: [], doodads: [{
+            typeId: 'LTlt', variation: 0, x: -640, y: 384, z: 0, angle: 0, scaleX: 1, scaleY: 1, scaleZ: 1,
+            skinId: 'LTlt', flags: 2, lifePerc: 100, itemTablePtr: -1, drops: [], editorId: 5,
+        }],
+    });
+}
+
+/** One custom unit with an inline name, one custom item named through war3map.wts. */
+function buildCustomObjects(ext, baseId, newId, name) {
+    return serializeObjMod({
+        version: 2, ext, extended: false, origObjs: [],
+        customObjs: [{ baseId, newId, mods: [{ fieldId: 'unam', varType: 'string', value: name, endToken: '\0\0\0\0' }] }],
+    });
+}
+
+/** Writes a fresh temp dir holding the placement-editor map and returns its path. */
+function makePlacementMapFixtureDir() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wurst-e2e-placement-'));
+    fs.writeFileSync(path.join(dir, 'war3map.w3e'), buildW3e());
+    fs.writeFileSync(path.join(dir, 'war3mapUnits.doo'), buildPlacementUnits());
+    fs.writeFileSync(path.join(dir, 'war3map.doo'), buildPlacementDoodads());
+    fs.writeFileSync(path.join(dir, 'war3map.w3i'), buildW3i());
+    fs.writeFileSync(path.join(dir, 'war3map.w3u'), buildCustomObjects('.w3u', 'hfoo', 'h000', 'E2E Captain'));
+    fs.writeFileSync(path.join(dir, 'war3map.w3t'), buildCustomObjects('.w3t', 'ratc', 'I000', 'TRIGSTR_007'));
+    fs.writeFileSync(path.join(dir, 'war3map.wts'), 'STRING 7\n{\nE2E Relic\n}\n', 'utf8');
+    return dir;
+}
+
 /** Writes a fresh temp dir containing the editable map-data fixtures and returns its path. */
 function makeMapFixtureDir() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wurst-e2e-map-'));
@@ -175,4 +267,6 @@ function makeMapFixtureDir() {
     return dir;
 }
 
-module.exports = { makeMapFixtureDir, buildW3i, buildWpm, buildMmp, buildW3c, buildW3r, WTS, W3I_VERSION };
+module.exports = {
+    makeMapFixtureDir, makePlacementMapFixtureDir, buildW3i, buildWpm, buildMmp, buildW3c, buildW3r, WTS, W3I_VERSION, PLACEMENT_MAP,
+};

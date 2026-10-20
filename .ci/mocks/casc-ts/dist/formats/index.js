@@ -23,6 +23,7 @@ module.exports = {
     parseWct: unsupported('parseWct'),
     parseWtg: unsupported('parseWtg'),
     parseWpm: unsupported('parseWpm'),
+    serializeDoo: unsupported('serializeDoo'),
     serializeObjMod: unsupported('serializeObjMod'),
     serializeW3i: unsupported('serializeW3i'),
 };

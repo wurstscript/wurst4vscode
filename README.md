@@ -55,7 +55,7 @@ Object-data editors resolve rawcodes, game metadata, icons, base values, and tri
 
 ![Edit Warcraft III map information](https://raw.githubusercontent.com/wurstscript/wurst4vscode/master/images/marketplace/editor_w3i.webp)
 
-The experimental **Wurst: Preview Map Terrain** command renders terrain, cliffs, water, doodads, units, and start locations from an exploded map.
+The experimental **Wurst: Open Map Terrain & Placement Editor** command renders terrain, cliffs, water, doodads, units, items, and start locations from an exploded map, and lets you select, move, place, and delete units and items. Edits use VS Code undo/redo and save back to `war3mapUnits.doo`.
 
 ## Installed-game assets
 

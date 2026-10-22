@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
 import { randomUUID } from 'crypto';
-import { LanguageClient, ExecuteCommandParams, ExecuteCommandRequest, WorkDoneProgress, WorkDoneProgressCancelNotification } from 'vscode-languageclient/node';
+import { LanguageClient, ExecuteCommandParams, ExecuteCommandRequest, State, WorkDoneProgress, WorkDoneProgressCancelNotification } from 'vscode-languageclient/node';
 import { workspace, window } from 'vscode';
 import { WURST_HOME } from '../paths';
 import { appendDiagnostic, buildDiagnosticsText, formatDiagnosticError, showDiagnosticOutput, showErrorWithLogs } from './diagnostics';
@@ -138,7 +138,8 @@ function showClientOutput(client: LanguageClient): void {
     } catch {}
 }
 
-async function executeMapCommand(client: LanguageClient, request: ExecuteCommandParams, title: string): Promise<unknown> {
+async function executeMapCommand(client: LanguageClient, request: ExecuteCommandParams, title: string,
+    onSuccess?: () => void): Promise<unknown> {
     let canceled = false;
     try {
         const cancellable = client.initializeResult?.capabilities.experimental?.wurstMapCancellation === true;
@@ -168,7 +169,10 @@ async function executeMapCommand(client: LanguageClient, request: ExecuteCommand
             try {
                 progress.report({ message: 'Waiting for compiler' });
                 const result = await client.sendRequest(ExecuteCommandRequest.type, { ...request, workDoneToken: token });
-                return cancellation.isCancellationRequested ? undefined : result;
+                if (cancellation.isCancellationRequested) return undefined;
+                // A run answers null when it succeeds, so success is reported here rather than read off the result.
+                onSuccess?.();
+                return result;
             } finally {
                 listener.dispose();
                 cancellationListener.dispose();
@@ -219,6 +223,29 @@ function runTests(client: LanguageClient, request: ExecuteCommandParams): Thenab
 export function registerCommands(getClient: () => Promise<LanguageClient>): vscode.Disposable {
     let _lastMapConfig: string | undefined = undefined;
     let mapCommandRunning = false;
+    // A map started with hot run is reloaded on every save of a Wurst file, until another run starts or it is stopped.
+    let hotRunActive = false;
+    // A save arrived while a map command ran (the hot run's own start included), which may have compiled the file
+    // before it was saved: reload once that command is done, if a hot run is active then.
+    let reloadPending = false;
+    const hotRunStatus = window.createStatusBarItem(vscode.StatusBarAlignment.Left);
+    hotRunStatus.text = '$(flame) Wurst hot run';
+    hotRunStatus.tooltip = 'Saving a Wurst file reloads the running map. Click to stop.';
+    hotRunStatus.command = 'wurst.stopHotRun';
+    let hotRunClientState: vscode.Disposable | undefined;
+    const setHotRun = (active: boolean, client?: LanguageClient) => {
+        hotRunActive = active;
+        hotRunClientState?.dispose();
+        hotRunClientState = undefined;
+        if (active && client) {
+            // A server which stops or restarts ends the hot run: it holds the session, and saves would only fail.
+            hotRunClientState = client.onDidChangeState(({ newState }) => {
+                if (newState !== State.Running) setHotRun(false);
+            });
+        }
+        if (active) hotRunStatus.show();
+        else hotRunStatus.hide();
+    };
 
     const withMapCommand = async (action: () => Promise<unknown>): Promise<unknown> => {
         if (mapCommandRunning) {
@@ -232,6 +259,10 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
             return await action();
         } finally {
             mapCommandRunning = false;
+            if (reloadPending) {
+                reloadPending = false;
+                void reloadAfterSave();
+            }
         }
     };
 
@@ -416,7 +447,8 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
             ],
         };
         _lastMapConfig = mappath;
-        return withClient((client) => executeMapCommand(client, request, 'Running Wurst map'));
+        return withClient((client) => executeMapCommand(client, request, 'Running Wurst map',
+            () => setHotRun(cmd === 'wurst.hotstartmap', client)));
     };
 
     const reloadMap = async () => {
@@ -424,7 +456,16 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
             command: 'wurst.hotreload',
             arguments: [{}],
         };
-        return withClient((client) => executeMapCommand(client, request, 'Reloading Wurst map'));
+        return withClient((client) => executeMapCommand(client, request, 'Reloading Wurst map',
+            () => vscode.window.setStatusBarMessage('$(flame) Wurst: reloaded the running map', 4000)));
+    };
+
+    const reloadAfterSave = async (): Promise<void> => {
+        if (mapCommandRunning) {
+            reloadPending = true;
+            return;
+        }
+        if (hotRunActive) await withMapCommand(() => reloadMap());
     };
 
     const startLast = () => {
@@ -489,6 +530,14 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
         vscode.commands.registerCommand('wurst.startmap', (args: any[]) => withMapCommand(() => startMap('wurst.startmap', args))),
         vscode.commands.registerCommand('wurst.hotstartmap', (args: any[]) => withMapCommand(() => startMap('wurst.hotstartmap', args))),
         vscode.commands.registerCommand('wurst.hotreload', () => withMapCommand(() => reloadMap())),
+        vscode.commands.registerCommand('wurst.stopHotRun', () => setHotRun(false)),
+        workspace.onDidSaveTextDocument((document) => {
+            if (document.languageId === 'wurst' && workspace.getConfiguration('wurst').get<boolean>('hotReloadOnSave') !== false) {
+                void reloadAfterSave();
+            }
+        }),
+        hotRunStatus,
+        { dispose: () => hotRunClientState?.dispose() },
         vscode.commands.registerCommand('wurst.runmap', (args: any) => withMapCommand(() => runMapSmart(args))),
         vscode.commands.registerCommand('wurst.startlast', () => withMapCommand(() => startLast())),
         vscode.commands.registerCommand('wurst.buildmap', (args: any[]) => withMapCommand(() => buildMap(args))),

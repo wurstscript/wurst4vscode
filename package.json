@@ -719,12 +719,17 @@
             },
             {
                 "command": "wurst.hotstartmap",
-                "title": "Hot run wurstscript map with Jass Hot Code Reload (JHCR)",
+                "title": "Hot run wurstscript map (saving reloads the running map; JHCR on Jass)",
+                "category": "wurst"
+            },
+            {
+                "command": "wurst.stopHotRun",
+                "title": "Stop hot run (saving no longer reloads the running map)",
                 "category": "wurst"
             },
             {
                 "command": "wurst.hotreload",
-                "title": "Hot reload code for wurstscript map started with Jass Hot Code Reload (JHCR)",
+                "title": "Hot reload code of the wurstscript map started with hot run",
                 "category": "wurst"
             },
             {
@@ -919,6 +924,11 @@
                     "type": "boolean",
                     "default": true,
                     "description": "Turn this off to see Wurst Exceptions as vscode notifications"
+                },
+                "wurst.hotReloadOnSave": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "While a map started with hot run is running, reload its code each time a Wurst file is saved. On Lua maps this replaces function bodies in the running game; an edit outside the bodies is reported and needs a restart."
                 },
                 "wurst.wc3path": {
                     "type": "string",

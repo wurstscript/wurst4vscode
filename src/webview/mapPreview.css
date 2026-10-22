@@ -53,3 +53,18 @@
   .mp-body { flex-direction: column; }
   .mp-side { width: 100%; flex: 0 0 auto; max-height: 45%; border-left: 0; border-top: 1px solid var(--border); }
 }
+
+#mp-selection-ring { position: fixed; width: 22px; height: 22px; border: 2px solid var(--focus); border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 0 2px var(--widget-bg); pointer-events: none; }
+
+.mp-side { overflow-y: auto; }
+.mp-browse { display: flex; flex-direction: column; gap: 6px; }
+#mp-objects { max-height: 180px; overflow-y: auto; }
+.mp-shell > .wv-toolbar { flex-wrap: wrap; }
+.mp-object { display: block; width: 100%; text-align: left; border: 1px solid transparent; background: transparent; color: var(--fg); padding: 7px; cursor: pointer; }
+.mp-object:hover { background: var(--hover); }
+.mp-object[aria-pressed="true"] { border-color: var(--focus); background: var(--active); color: var(--active-fg); }
+.mp-object span { display: block; overflow-wrap: anywhere; }
+.mp-object small { display: block; line-height: 1.4; color: var(--muted); }
+#mp-more[hidden] { display: none; }
+.mp-details { overflow-wrap: anywhere; font-size: 12px; }
+.mp-actions { display: flex; gap: 8px; }

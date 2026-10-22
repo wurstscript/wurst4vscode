@@ -209,3 +209,11 @@ Start locations stay read-only because their position also lives in
   shows cliff levels, blockers, corners, and ramps well enough to navigate the
   map, but it does not instance the game's cliff pieces yet.
 - Requires WebGL; WebGL2 is preferred for large maps.
+
+### Animated placement models
+
+Units, items and doodads render their MDX/MDL models with placement facing, scale, owner colour and map/skin overrides. Missing and subpixel assets retain markers. Models toggles geometry; Animate freezes/resumes Stand animation. Shared placements share one renderer and animation phase.
+
+Terrain/model drawing runs in a scene worker; a separate asset worker parses and decodes models/textures. The visible-first queue shares textures, yields between GPU uploads and defers preparation during camera movement. Animation targets 30 fps with a soft 4 ms pose budget, culling, bounded elapsed time and hidden-page suspension. Individual pose updates/draws cannot be interrupted, so expensive scenes may run slower.
+
+The placed-object browser searches names/rawcodes, filters owners/categories, isolates a selection and focuses it with F. Top view looks down at the current target. Placement creation, movement, deletion, undo/redo and saves retain the custom-editor safety gates.

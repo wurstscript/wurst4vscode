@@ -25,6 +25,7 @@ export interface ObjectRef {
     name?: string;
     iconPath?: string;
     modelPath?: string;
+    modelScale?: number;
 }
 
 const ALL_PROFILE_PATHS = [
@@ -88,6 +89,8 @@ async function buildCatalog(): Promise<Map<string, ObjectRef>> {
 function addProfileEntries(catalog: Map<string, ObjectRef>, profile: ProfileTable, worldStrings: Map<string, string>): void {
     for (const [id, row] of profile) {
         const ref = ensureRef(catalog, id);
+        const modelScale = Number(pickFirst(row, ['modelScale', 'modelScale:sd', 'scale', 'defScale']));
+        if (ref.modelScale === undefined && Number.isFinite(modelScale) && modelScale >= 0) ref.modelScale = modelScale;
         if (!ref.name) {
             const raw = pickFirst(row, DISPLAY_NAME_FIELDS);
             const name = raw ? resolveWorldEditString(raw, worldStrings) : undefined;
@@ -115,6 +118,8 @@ function addSlkEntries(
 ): void {
     for (const [id, row] of rows) {
         const ref = ensureRef(catalog, id);
+        const modelScale = Number(pickFirst(row, ['modelScale', 'modelScale:sd', 'scale', 'defScale']));
+        if (ref.modelScale === undefined && Number.isFinite(modelScale) && modelScale >= 0) ref.modelScale = modelScale;
         if (!ref.name) {
             const raw = pickFirst(row, DISPLAY_NAME_FIELDS);
             const name = raw ? resolveWorldEditString(raw, worldStrings) : undefined;

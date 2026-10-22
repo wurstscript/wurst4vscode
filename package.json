@@ -1055,6 +1055,7 @@
     "dependencies": {
         "@vscode/codicons": "^0.0.36",
         "casc-ts": "file:../casc-ts",
+        "gl-matrix": "^3.4.3",
         "node-stream-zip": "^1.15.0",
         "vscode-languageclient": "^10.1.2"
     },

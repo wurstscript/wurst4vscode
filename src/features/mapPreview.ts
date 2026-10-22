@@ -14,18 +14,20 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { DooFile, DooUnit, parseDoo, parseObjMod, parseW3i, serializeDoo } from 'casc-ts/formats';
+import { DooDoodad, DooFile, DooUnit, ObjModEntry, parseDoo, parseObjMod, parseW3i, serializeDoo } from 'casc-ts/formats';
 import { buildPage, scriptSafeJson } from './webviewShared';
 import { escapeHtml, makeNonce } from './webviewUtils';
 import { findGameTexture } from './preview/cascStorage';
 import { loadTerrainWaterLevel, loadTilesetBlightTexture, parseSlk, readGameData, slkField } from './preview/wc3Data';
 import { decodeToRgba } from './preview/imageDecoders';
 import { encodePng, scaleDown } from './imageAssetSupport';
-import { getObjectCatalog, ObjectRef } from './preview/objectCatalog';
+import { getObjectCatalog, normalizeModelPath, ObjectRef } from './preview/objectCatalog';
 import { loadCompilerKnowledgeBase } from './preview/compilerKnowledgeBase';
 import { loadTriggerStringsForUri, resolveTriggerString, TriggerStringTable } from './preview/triggerStrings';
 import { buildErrorHtml, buildLoadingHtml, EditableBinaryDocument, EditableBinaryEditorProvider } from './preview/framework';
 import { offerIssueReport } from './issueReporting';
+import { postModelToWebview, postTexturesToWebview } from './preview/modelPreviewHost';
+import { normalizeAssetPath } from '../webview/assetPathUtils';
 import MAP_PREVIEW_CSS from '../webview/mapPreview.css';
 
 const TILE = 128;
@@ -54,11 +56,56 @@ interface Terrain {
     max: number;
 }
 
-interface DoodadMarker {
+interface ModelPlacement {
+    modelPath?: string;
+    modelFallback?: string;
+    angle?: number;
+    scale?: number[];
+}
+
+interface DoodadMarker extends ModelPlacement {
+    z?: number;
     x: number;
     y: number;
     id: string;
     label: string;
+}
+
+/** Map overrides and skin overrides sit on top of the shared stock catalog. */
+async function mapObjectCatalog(dir: string): Promise<Map<string, ObjectRef>> {
+    const catalog = new Map(await getObjectCatalog());
+    for (const ext of ['w3u', 'w3t', 'w3b', 'w3d']) {
+        for (const prefix of ['war3map', 'war3mapSkin']) {
+            const file = findFileCI(dir, `${prefix}.${ext}`);
+            if (!file) continue;
+            try {
+                const parsed = parseObjMod(await fs.promises.readFile(file), `.${ext}`);
+                for (const entry of [...parsed.origObjs, ...parsed.customObjs]) mergeMapObject(catalog, entry);
+            } catch { /* A broken optional object-data file must not hide the terrain. */ }
+        }
+    }
+    return catalog;
+}
+
+function mergeMapObject(catalog: Map<string, ObjectRef>, entry: ObjModEntry): void {
+    const id = (entry.newId || entry.baseId).toLowerCase();
+    const ref = { ...catalog.get(entry.baseId.toLowerCase()), ...catalog.get(id) };
+    for (const mod of entry.mods) {
+        if (['umdl', 'ifil', 'bfil', 'dfil'].includes(mod.fieldId)) ref.modelPath = normalizeModelPath(String(mod.value));
+        if (['unam', 'inam', 'bnam', 'dnam'].includes(mod.fieldId)) ref.name = String(mod.value);
+        if (['usca', 'isca', 'bsca', 'dsca'].includes(mod.fieldId) && typeof mod.value === 'number') ref.modelScale = mod.value;
+    }
+    catalog.set(id, ref);
+}
+
+function markerModel(ref: ObjectRef | undefined, placement: { angle?: number; scaleX?: number; scaleY?: number; scaleZ?: number; variation?: number }, doodad: boolean): ModelPlacement {
+    const base = ref?.modelPath;
+    return {
+        modelPath: base && doodad ? base.replace(/\.(mdx|mdl)$/i, `${placement.variation ?? 0}.$1`) : base,
+        modelFallback: doodad ? base : undefined,
+        angle: placement.angle ?? 0,
+        scale: [placement.scaleX ?? 1, placement.scaleY ?? 1, placement.scaleZ ?? 1].map(value => value * (ref?.modelScale ?? 1)),
+    };
 }
 
 interface TileTexture {
@@ -178,7 +225,9 @@ function readDoodads(dir: string, catalog: Map<string, ObjectRef>): { markers: D
         const label = (id: string) => catalog.get(id.toLowerCase())?.name || id;
         const doodads = parsed.doodads ?? [];
         const markers = [...doodads, ...(parsed.specialDoodads ?? [])]
-            .map((d) => ({ x: d.x, y: d.y, id: d.typeId, label: label(d.typeId) }));
+            .map((d) => ({ x: d.x, y: d.y, z: d.z, id: d.typeId, label: label(d.typeId),
+                ...markerModel(catalog.get(('skinId' in d && typeof d.skinId === 'string' ? d.skinId : d.typeId).toLowerCase()) ?? catalog.get(d.typeId.toLowerCase()), 'variation' in d ? d as DooDoodad : {}, 'variation' in d),
+            }));
         return { markers, usesSkins: doodads.length ? doodads.some((d) => d.skinId !== undefined) : undefined };
     } catch {
         // Doodads are context only; the editor still opens without them.
@@ -552,7 +601,7 @@ async function loadScene(doc: MapPlacementDocument): Promise<void> {
     }
     try {
         const terrain = await parseW3eTerrain(fs.readFileSync(w3ePath));
-        const catalog = await getObjectCatalog().catch(() => new Map<string, ObjectRef>());
+        const catalog = await mapObjectCatalog(dir).catch(() => new Map<string, ObjectRef>());
         const [materials, types] = await Promise.all([buildTerrainMaterials(terrain), loadPlacementTypes(doc.uri, dir, catalog)]);
         const doodads = readDoodads(dir, catalog);
         const mapInfo = readMapInfo(dir);
@@ -590,10 +639,11 @@ function placementSummaries(doc: MapPlacementDocument, scene: MapScene) {
     return doc.units.map((u) => ({
         id: u.typeId, name: placementName(scene, u.typeId), kind: placementKind(scene, u.typeId),
         owner: u.ownerIndex, x: u.x, y: u.y, z: u.z, editorId: u.editorId,
+        ...(u.typeId === START_LOCATION ? {} : markerModel(scene.catalog.get((u.skinId || u.typeId).toLowerCase()) ?? scene.catalog.get(u.typeId.toLowerCase()), u, false)),
     }));
 }
 
-function buildMapEditorHtml(doc: MapPlacementDocument, scene: MapScene, scriptUri: string): string {
+function buildMapEditorHtml(doc: MapPlacementDocument, scene: MapScene, scriptUri: string, cspSource = "'self'"): string {
     const { terrain, materials } = scene;
     const nonce = makeNonce();
     const loadedTextures = materials.textures.filter((t) => t.dataUri).length;
@@ -620,6 +670,8 @@ function buildMapEditorHtml(doc: MapPlacementDocument, scene: MapScene, scriptUr
             cliffToGround: materials.cliffToGround,
             blightTexture: materials.blightTexture,
             textures: materials.textures,
+            sceneWorkerUri: scriptUri.replace('mapPreviewWebview.js', 'mapSceneWorker.js'),
+            assetWorkerUri: scriptUri.replace('mapPreviewWebview.js', 'mapAssetWorker.js'),
         },
         doodads: scene.doodads,
         placements: placementSummaries(doc, scene),
@@ -628,7 +680,7 @@ function buildMapEditorHtml(doc: MapPlacementDocument, scene: MapScene, scriptUr
     });
 
     return buildPage({
-        csp: `default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'nonce-${nonce}';`,
+        csp: `default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'nonce-${nonce}'; worker-src blob:; connect-src ${cspSource} data:;`,
         title: escapeHtml(doc.fileName),
         extraCss: MAP_PREVIEW_CSS,
         body: `<div class="mp-shell">
@@ -637,6 +689,9 @@ function buildMapEditorHtml(doc: MapPlacementDocument, scene: MapScene, scriptUr
       <label><input type="checkbox" id="t-terrain" checked> Terrain</label>
       <label><input type="checkbox" id="t-cliffs" checked><span class="mp-swatch" style="background:#7a6a50"></span>Cliffs</label>
       <label><input type="checkbox" id="t-water" checked><span class="mp-swatch" style="background:#3aa7cc"></span>Water</label>
+      <label><input type="checkbox" id="mp-models" checked>Models</label>
+      <label><input type="checkbox" id="mp-animate" checked>Animate</label>
+      <label><input type="checkbox" id="mp-xray">Markers through terrain</label>
       <label><input type="checkbox" id="t-doodads" checked><span class="mp-swatch" style="background:#5dd35d"></span>Doodads</label>
       <label><input type="checkbox" id="t-units" checked><span class="mp-swatch" style="background:#ffb14e"></span>Units</label>
       <label><input type="checkbox" id="t-items" checked><span class="mp-swatch" style="background:#d9a6ff"></span>Items</label>
@@ -645,17 +700,34 @@ function buildMapEditorHtml(doc: MapPlacementDocument, scene: MapScene, scriptUr
     <span class="wv-sep"></span>
     <label class="mp-range">Height x<input type="range" id="mp-exag" min="0.5" max="6" step="0.25" value="1"></label>
     <button class="wv-btn" id="mp-reset" type="button">Reset view</button>
+    <button class="wv-btn" id="mp-top" type="button">Top view</button>
     <span id="mp-dirty" class="wv-dirty"${doc.isDirty ? '' : ' hidden'}>Modified</span>
   </div>
   <div class="mp-body">
     <div class="mp-main">
-      <canvas id="mp-canvas"></canvas>
+      <canvas id="mp-canvas" aria-label="Map view. F focuses selection; Escape clears it."></canvas>
+      <div id="mp-selection-ring" hidden></div>
       <div class="mp-mode" id="mp-mode" role="status" hidden></div>
       <div class="mp-tip" id="mp-tip"></div>
       <div class="mp-err" id="mp-err">WebGL is not available in this webview.</div>
     </div>
     <aside class="mp-side" aria-label="Placements">
       ${readOnly ? `<div class="mp-readonly" role="note">${escapeHtml(readOnly)}</div>` : ''}
+      <section class="mp-section mp-browse">
+    <label for="mp-placement-search">Placed objects</label>
+    <input class="wv-input" id="mp-placement-search" type="search" placeholder="Search name or rawcode" aria-label="Search placed objects">
+    <label for="mp-placement-owner">Owner</label>
+    <select class="wv-input" id="mp-placement-owner"><option value="all">All owners</option></select>
+    <label><input type="checkbox" id="mp-isolate">Only selected placement</label>
+    <div id="mp-count" role="status"></div>
+    <div id="mp-objects" role="group" aria-label="Matching placements"></div>
+    <button class="wv-btn" id="mp-more" type="button" hidden>Show more</button>
+    <div class="mp-details" id="mp-details">Select a marker or a placement in the list.</div>
+    <div class="mp-actions">
+      <button class="wv-btn wv-btn-primary" id="mp-focus" type="button" disabled>Focus (F)</button>
+      <button class="wv-btn" id="mp-clear" type="button" disabled>Clear</button>
+    </div>
+      </section>
       <section class="mp-section">
         <h2 class="mp-section-title">Selection</h2>
         <div id="mp-selection"></div>
@@ -672,7 +744,7 @@ function buildMapEditorHtml(doc: MapPlacementDocument, scene: MapScene, scriptUr
       </section>
     </aside>
   </div>
-  <div class="wv-toolbar"><span class="mp-meta">${escapeHtml(meta)}</span><span class="mp-hint">drag = orbit | right-drag = pan | scroll = zoom | drag a selected marker to move it | Del = delete | Esc = cancel</span></div>
+  <div class="wv-toolbar"><span class="mp-meta">${escapeHtml(meta)}</span><span id="mp-model-status" role="status">Loading scene…</span><span class="mp-hint">drag = orbit | right-drag = pan | scroll = zoom | drag a selected marker to move it | Del = delete | Esc = cancel</span></div>
 </div>
 <script nonce="${nonce}">window.__MAP_PREVIEW_INITIAL__ = ${initialJson};</script>
 <script nonce="${nonce}" src="${scriptUri}"></script>`,
@@ -764,11 +836,32 @@ function postPlacementTypes(doc: MapPlacementDocument, scene: MapScene): void {
         .sort((a, b) => Number(b.custom) - Number(a.custom) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
     void doc.webview?.postMessage({ type: 'placementTypes', types });
 }
+async function postSceneAsset(message: { type?: unknown; path?: unknown; paths?: unknown }, doc: MapPlacementDocument): Promise<void> {
+    const scene = doc.scene, webview = doc.webview;
+    if (!scene || !webview || typeof message.path !== 'string') return;
+    const requested = message.path;
+    const key = normalizeAssetPath(requested);
+    const doodad = scene.doodads.find(d => d.modelPath && normalizeAssetPath(d.modelPath) === key);
+    const allowed = doodad || [...scene.catalog.values()].some(ref => ref.modelPath && normalizeAssetPath(ref.modelPath) === key);
+    try {
+        if (!allowed) throw new Error('Unknown scene model');
+        if (message.type === 'loadMapModel') {
+            await postModelToWebview(requested, doc.uri, webview, doodad?.modelFallback ? [doodad.modelFallback] : []);
+        } else if (Array.isArray(message.paths) && message.paths.every(p => typeof p === 'string')) {
+            await postTexturesToWebview(message.paths, doc.uri, webview, requested, true, 256);
+        }
+    } catch {
+        void webview.postMessage(message.type === 'loadMapModel'
+            ? { type: 'mdxModelMissing', path: requested }
+            : { type: 'modelThumbTexturesComplete', thumbKey: requested });
+    }
+}
 
 function handlePlacementMessage(message: unknown, doc: MapPlacementDocument, provider: PlacementProvider): void {
     const scene = doc.scene;
     if (!message || typeof message !== 'object' || !scene) return;
     const msg = message as PlacementMessage;
+    if (msg.type === 'loadMapModel' || msg.type === 'loadMapTextures') { void postSceneAsset(message, doc); return; }
     if (msg.type === 'requestTypes') {
         postPlacementTypes(doc, scene);
         return;
@@ -797,7 +890,7 @@ class MapPlacementEditorProvider extends EditableBinaryEditorProvider<PlacementF
             createDocument: (uri, file) => new MapPlacementDocument(uri, file),
             webviewOptions: { enableScripts: true, localResourceRoots: [bundleDir] },
             render: (doc) => doc.scene
-                ? buildMapEditorHtml(doc, doc.scene, doc.webview!.asWebviewUri(vscode.Uri.joinPath(bundleDir, 'mapPreviewWebview.js')).toString())
+                ? buildMapEditorHtml(doc, doc.scene, doc.webview!.asWebviewUri(vscode.Uri.joinPath(bundleDir, 'mapPreviewWebview.js')).toString(), doc.webview!.cspSource)
                 : buildErrorHtml(doc.fileName, doc.sceneError ?? 'The map terrain did not load.', 'Could not open the map placement editor'),
             postState: postPlacementState,
             handleMessage: handlePlacementMessage,

@@ -51,6 +51,8 @@ Preview features are split across these focused modules:
 - **src/features/preview/cascStorage.ts**: CASC singleton and WC3 game-file extraction.
   Touch for: new WC3 install paths, CASC API changes, disk-cache invalidation.
 
+- **Map terrain models:** `mapTerrainScene.ts` owns camera math and the worker bridge; `mapSceneWorker.ts` renders terrain/models in one OffscreenCanvas. `mapAssetWorker.ts` parses models/decodes textures and transfers directly to the scene worker. `mapSceneModels.ts` shares model/texture resources, defers GPU preparation, culls placements, and budgets visible Stand animation at up to 30 fps. Preserve placement editing and keep heavy asset work off the UI thread.
+
 - **src/features/blpPreview.ts**: VS Code custom editor provider + webview HTML for BLP/DDS/TGA/MDX. The page script is **src/webview/blpPreviewWebview.ts** (loaded after `mdxViewer.js`, driving `window.War3Viewer`), styled by **src/webview/blpPreview.css**.
   Touch for: UI changes, preview toolbar controls, message protocol between host and webview.
 

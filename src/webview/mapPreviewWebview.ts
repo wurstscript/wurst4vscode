@@ -29,6 +29,9 @@ interface Placement {
   y: number;
   z: number;
   editorId: number;
+  modelPath?: string;
+  angle?: number;
+  scale?: number[];
 }
 
 interface PlacementType {
@@ -40,7 +43,7 @@ interface PlacementType {
 
 interface MapPreviewInitial {
   terrain: TerrainData;
-  doodads: Array<{ x: number; y: number; id: string; label: string }>;
+  doodads: Array<{ x: number; y: number; z?: number; id: string; label: string; modelPath?: string; angle?: number; scale?: number[] }>;
   placements: Placement[];
   owners: Array<{ value: number; label: string }>;
   readOnly: string | null;
@@ -90,7 +93,7 @@ const scene = createTerrainScene(canvas, initial.terrain, () => ({
   terrain: toggles.terrain.checked,
   cliffs: toggles.cliffs.checked,
   water: toggles.water.checked,
-}));
+}), api);
 
 let placements: Placement[] = initial.placements;
 let selected = -1;
@@ -141,19 +144,20 @@ function placementPosition(index: number): { x: number; y: number } {
 function markerFor(p: Placement, index: number): MarkerPoint {
   const pos = placementPosition(index);
   const ring = index === selected;
-  if (p.kind === 'start') return { x: pos.x, y: pos.y, color: START_COLOR, size: ring ? 17 : 13, ring };
-  if (p.kind === 'item') return { x: pos.x, y: pos.y, color: ITEM_COLOR, size: ring ? 12 : 6, ring };
-  return { x: pos.x, y: pos.y, color: ownerColor(p.owner), size: ring ? 13 : 7, ring };
+  const model = { ...p, label: p.name, ...pos, z: index === selected && dragPosition ? undefined : p.z };
+  if (p.kind === 'start') return { ...model, color: START_COLOR, size: ring ? 17 : 13, ring };
+  if (p.kind === 'item') return { ...model, color: ITEM_COLOR, size: ring ? 12 : 6, ring };
+  return { ...model, color: ownerColor(p.owner), size: ring ? 13 : 7, ring };
 }
 
 function refreshMarkers(): void {
   if (!scene) return;
   const points: MarkerPoint[] = [];
   if (toggles.doodads.checked) {
-    for (const d of initial.doodads) points.push({ x: d.x, y: d.y, color: DOODAD_COLOR, size: 4 });
+    for (const d of initial.doodads.filter(matchesDoodad)) points.push({ ...d, kind: 'doodad', ring: d === selectedDoodad, color: DOODAD_COLOR, size: 4 });
   }
   placements.forEach((p, index) => {
-    if (kindVisible(p.kind) || index === selected) points.push(markerFor(p, index));
+    if (kindVisible(p.kind) && matchesPlacement(p, index)) points.push(markerFor(p, index));
   });
   if (placing && ghost) points.push({ x: ghost.x, y: ghost.y, color: GHOST_COLOR, size: 9, ring: true });
   scene.setMarkers(points);
@@ -165,7 +169,7 @@ function pickPlacement(clientX: number, clientY: number): number {
   let best = -1;
   let bestD = PICK_RADIUS * PICK_RADIUS;
   placements.forEach((p, index) => {
-    if (!kindVisible(p.kind) && index !== selected) return;
+    if (!kindVisible(p.kind) || !matchesPlacement(p, index)) return;
     const pos = placementPosition(index);
     const s = scene.markerScreenPosition(pos.x, pos.y);
     if (!s) return;
@@ -179,7 +183,7 @@ function pickDoodad(clientX: number, clientY: number): { id: string; label: stri
   if (!scene || !toggles.doodads.checked) return null;
   let best = null;
   let bestD = PICK_RADIUS * PICK_RADIUS;
-  for (const d of initial.doodads) {
+  for (const d of initial.doodads.filter(matchesDoodad)) {
     const s = scene.markerScreenPosition(d.x, d.y);
     if (!s) continue;
     const dist = (s.x - clientX) ** 2 + (s.y - clientY) ** 2;
@@ -224,8 +228,10 @@ ${note}<button type="button" class="wv-btn-secondary" id="mp-delete"${editable ?
 }
 
 function select(index: number): void {
+  if (index >= 0) selectedDoodad = null;
   selected = index >= 0 && index < placements.length ? index : -1;
   renderSelection();
+  renderPlacedList();
   refreshMarkers();
 }
 
@@ -393,6 +399,7 @@ window.addEventListener('mouseup', (e) => {
     const at = scene.groundAt(e.clientX, e.clientY);
     if (at && !readOnly) api.postMessage({ type: 'place', typeId: placing.id, owner: Number(ownerSelect.value), x: at.x, y: at.y });
   } else if (finished.hit < 0) {
+    selectedDoodad = null;
     select(-1);
   }
 });
@@ -425,19 +432,73 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Delete' || e.key === 'Backspace') {
     e.preventDefault();
     deleteSelected();
+  } else if (e.key.toLowerCase() === 'f') {
+    e.preventDefault(); focusSelection();
   } else if (e.key === 'Escape') {
     if (cancelDrag()) return;
     if (placing) setPlacing(null);
-    else select(-1);
+    else { selectedDoodad = null; select(-1); }
   }
 });
 
 for (const key of Object.keys(toggles)) toggles[key].addEventListener('change', () => { refreshMarkers(); });
+document.getElementById('mp-top').addEventListener('click', () => scene?.topView());
 document.getElementById('mp-reset').addEventListener('click', () => scene?.resetView());
 document.getElementById('mp-exag').addEventListener('input', (e) => {
   scene?.setExaggeration(parseFloat((e.target as HTMLInputElement).value) || 1);
 });
 window.addEventListener('resize', () => scene?.resize());
+
+
+const placedSearch = document.getElementById('mp-placement-search') as HTMLInputElement;
+const placedOwner = document.getElementById('mp-placement-owner') as HTMLSelectElement;
+const isolate = document.getElementById('mp-isolate') as HTMLInputElement;
+const objectList = document.getElementById('mp-objects');
+let listed = 100, selectedDoodad: MapPreviewInitial['doodads'][number] | null = null;
+for (const owner of initial.owners) placedOwner.add(new Option(owner.label, String(owner.value)));
+function matches(name: string, id: string, owner?: number): boolean {
+  const query = placedSearch.value.trim().toLowerCase();
+  return (!query || (name + ' ' + id).toLowerCase().includes(query)) &&
+    (placedOwner.value === 'all' || String(owner) === placedOwner.value);
+}
+function matchesPlacement(p: Placement, index: number): boolean {
+  return matches(p.name, p.id, p.owner) && (!isolate.checked || selected < 0 && !selectedDoodad || index === selected);
+}
+function matchesDoodad(d: MapPreviewInitial['doodads'][number]): boolean {
+  return matches(d.label, d.id) && (!isolate.checked || selected < 0 && !selectedDoodad || d === selectedDoodad);
+}
+function focusSelection(): void {
+  const p = selectedDoodad || placements[selected];
+  if (p) scene?.focus(p.x, p.y);
+}
+function renderPlacedList(): void {
+  const rows = [...placements.map((p, index) => ({ p, index, name: p.name, visible: kindVisible(p.kind) && matchesPlacement(p, index) })),
+    ...initial.doodads.map((p, index) => ({ p, index: -index - 1, name: p.label, visible: toggles.doodads.checked && matchesDoodad(p) }))].filter(r => r.visible);
+  objectList.innerHTML = rows.slice(0, listed).map(({ p, index, name }) =>
+    '<button class="mp-object" type="button" data-marker="' + index + '" aria-pressed="' + (index >= 0 ? index === selected : p === selectedDoodad) + '"><span>' +
+    esc(name || p.id) + '</span><small>' + esc(p.id) + '</small><small>x ' + p.x + ', y ' + p.y + '</small></button>').join('');
+  if (!rows.length) objectList.textContent = 'No matching placements.';
+  document.getElementById('mp-count').textContent = rows.length + ' / ' + (placements.length + initial.doodads.length) + ' placements';
+  (document.getElementById('mp-more') as HTMLButtonElement).hidden = rows.length <= listed;
+  const p = selectedDoodad || placements[selected];
+  (document.getElementById('mp-focus') as HTMLButtonElement).disabled = !p;
+  (document.getElementById('mp-clear') as HTMLButtonElement).disabled = !p;
+  document.getElementById('mp-details').textContent = p ? ('label' in p ? p.label : p.name) + ' · ' + p.id + ' · x ' + p.x + ', y ' + p.y + ', z ' + p.z +
+    (rows.some(r => r.p === p) ? '' : ' · Selection hidden by filters.') : 'Select a marker or a placement in the list.';
+}
+objectList.addEventListener('click', event => {
+  const button = (event.target as HTMLElement).closest<HTMLElement>('[data-marker]');
+  if (!button) return;
+  const index = Number(button.dataset.marker);
+  selectedDoodad = index < 0 ? initial.doodads[-index - 1] : null;
+  select(index >= 0 ? index : -1);
+});
+objectList.addEventListener('dblclick', focusSelection);
+for (const [element, event] of [[placedSearch, 'input'], [placedOwner, 'change'], [isolate, 'change']] as const) element.addEventListener(event, () => { listed = 100; renderPlacedList(); refreshMarkers(); });
+for (const toggle of Object.values(toggles)) toggle.addEventListener('change', renderPlacedList);
+document.getElementById('mp-more').addEventListener('click', () => { listed += 100; renderPlacedList(); });
+document.getElementById('mp-focus').addEventListener('click', focusSelection);
+document.getElementById('mp-clear').addEventListener('click', () => { selectedDoodad = null; select(-1); });
 
 // ── Host messages ────────────────────────────────────────────────────────────
 
@@ -472,5 +533,6 @@ if (!scene) {
   refreshMarkers();
 }
 renderSelection();
+renderPlacedList();
 renderTypes();
 api.postMessage({ type: 'requestTypes' });

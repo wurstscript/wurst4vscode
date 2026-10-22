@@ -25,6 +25,10 @@ export interface ObjectRef {
     name?: string;
     iconPath?: string;
     modelPath?: string;
+    modelScale?: number;
+    modelVariations?: number;
+    replaceableId?: number;
+    replaceableTexture?: string;
 }
 
 const ALL_PROFILE_PATHS = [
@@ -88,6 +92,9 @@ async function buildCatalog(): Promise<Map<string, ObjectRef>> {
 function addProfileEntries(catalog: Map<string, ObjectRef>, profile: ProfileTable, worldStrings: Map<string, string>): void {
     for (const [id, row] of profile) {
         const ref = ensureRef(catalog, id);
+        addModelArt(ref, row);
+        const modelScale = Number(pickFirst(row, ['modelScale', 'modelScale:sd', 'scale', 'defScale']));
+        if (ref.modelScale === undefined && Number.isFinite(modelScale) && modelScale >= 0) ref.modelScale = modelScale;
         if (!ref.name) {
             const raw = pickFirst(row, DISPLAY_NAME_FIELDS);
             const name = raw ? resolveWorldEditString(raw, worldStrings) : undefined;
@@ -115,6 +122,9 @@ function addSlkEntries(
 ): void {
     for (const [id, row] of rows) {
         const ref = ensureRef(catalog, id);
+        addModelArt(ref, row);
+        const modelScale = Number(pickFirst(row, ['modelScale', 'modelScale:sd', 'scale', 'defScale']));
+        if (ref.modelScale === undefined && Number.isFinite(modelScale) && modelScale >= 0) ref.modelScale = modelScale;
         if (!ref.name) {
             const raw = pickFirst(row, DISPLAY_NAME_FIELDS);
             const name = raw ? resolveWorldEditString(raw, worldStrings) : undefined;
@@ -127,6 +137,14 @@ function addSlkEntries(
             }
         }
     }
+}
+
+function addModelArt(ref: ObjectRef, row: Record<string, string>): void {
+    const variations = Number(row.numVar);
+    const replaceableId = Number(row.texID);
+    if (ref.modelVariations === undefined && Number.isInteger(variations) && variations > 0) ref.modelVariations = variations;
+    if (ref.replaceableId === undefined && Number.isInteger(replaceableId) && replaceableId > 0) ref.replaceableId = replaceableId;
+    ref.replaceableTexture ??= firstAssetPath(row.texFile);
 }
 
 function ensureRef(catalog: Map<string, ObjectRef>, id: string): ObjectRef {
@@ -160,7 +178,7 @@ function profileIconPath(key: string, value: string): string | undefined {
 }
 
 function profileModelPath(key: string, value: string): string | undefined {
-    if (!/(file|model)/i.test(key)) return undefined;
+    if (!/(file|model)/i.test(key) || /tex/i.test(key)) return undefined;
     const first = firstAssetPath(value);
     if (!first || (!/[\\/]/.test(first) && !/\.(mdx|mdl)$/i.test(first))) return undefined;
     return normalizeModelPath(first);

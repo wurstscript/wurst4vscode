@@ -134,6 +134,9 @@ test('clicking a marker selects it and shows rawcode, name, owner and position',
 
 test('dragging a unit onto the plateau moves it and snaps z to the terrain', async ({ openMapPlacement }) => {
     const { page, host } = await openEditor(openMapPlacement);
+    // Zoom in so rounding a mouse coordinate to a screen pixel stays within the map-unit tolerance.
+    await page.locator('#mp-canvas').hover();
+    for (let i = 0; i < 6; i++) await page.mouse.wheel(0, -120);
     await clickPlacement(page, host, FOOTMAN);
 
     await dragPlacementTo(page, host, FOOTMAN, ON_PLATEAU);

@@ -1095,6 +1095,78 @@ function testScriptSafeJson() {
     assert.deepEqual(JSON.parse(out), value, 'script-safe JSON must still parse back to the same value');
 }
 
+function testMapIdleMotionDetection() {
+    const load = createTsLoader({
+        mocks: { 'war3-model': {}, 'gl-matrix': {} },
+        augment: { 'src/webview/mapSceneModels.ts': 'export const __test = { hasMotion };' },
+    });
+    const { hasMotion } = load('src/webview/mapSceneModels.ts').__test;
+    const model = { Sequences: [{ Interval: new Uint32Array([0, 1000]) }], GlobalSequences: [400], GeosetAnims: [] };
+    assert.strictEqual(hasMotion(model, 0), false, 'sequence duration alone must not animate static props');
+    const track = { Frames: new Int32Array([2000, 3000]), GlobalSeqId: null };
+    model.GeosetAnims = [{ Alpha: track }];
+    assert.strictEqual(hasMotion(model, 0), false, 'Death-only keyframes must not animate Stand');
+    track.Frames = new Int32Array([500]);
+    assert.strictEqual(hasMotion(model, 0), false, 'one idle key holds a constant pose');
+    track.Frames = new Int32Array([0, 1000]);
+    assert.strictEqual(hasMotion(model, 0), true, 'idle keyframes must advance');
+    track.Values = new Float32Array([1, 1]); track.VectorSize = 1;
+    assert.strictEqual(hasMotion(model, 0), false, 'identical linear/step keys hold a static pose');
+    track.Values[1] = 0;
+    assert.strictEqual(hasMotion(model, 0), true, 'changing idle values must animate');
+    track.Values[1] = 1; track.LineType = 2;
+    assert.strictEqual(hasMotion(model, 0), true, 'cubic tangents may animate identical endpoints');
+    delete track.Values; delete track.LineType;
+    track.GlobalSeqId = 0; track.Frames = new Int32Array([0, 400]);
+    assert.strictEqual(hasMotion(model, 0), true, 'global animation tracks use their own interval');
+    track.Frames = new Int32Array([500, 900]);
+    assert.strictEqual(hasMotion(model, 0), false, 'keys outside the global interval cannot animate');
+    model.ParticleEmitters2 = [{}];
+    assert.strictEqual(hasMotion(model, 0), true, 'emitting effects need simulation without keyframed bones');
+}
+
+function testBoundedModelTextureMips() {
+    const load = createTsLoader({
+        mocks: { vscode: {}, 'src/features/imageAssetSupport.ts': {}, 'src/features/preview/cascStorage.ts': {}, 'src/features/preview/imageDecoders.ts': {} },
+        augment: { 'src/features/preview/modelPreviewHost.ts': 'export const __test = { buildWorkerTexturePayload };' },
+    });
+    const { buildWorkerTexturePayload } = load('src/features/preview/modelPreviewHost.ts').__test;
+    const ddsMips = [], blpMips = [];
+    for (let size = 512, level = 0; size >= 1; size >>= 1, level++) {
+        ddsMips.push(Buffer.alloc(Math.max(1, Math.ceil(size / 4)) ** 2 * 8, level + 11));
+        blpMips.push(Buffer.alloc(size * size, level + 11));
+    }
+    const ddsHeader = Buffer.alloc(128);
+    ddsHeader.write('DDS '); ddsHeader.writeUInt32LE(124, 4);
+    ddsHeader.writeUInt32LE(512, 12); ddsHeader.writeUInt32LE(512, 16);
+    ddsHeader.writeUInt32LE(ddsMips.length, 28);
+    ddsHeader.writeUInt32LE(32, 76); ddsHeader.writeUInt32LE(4, 80); ddsHeader.write('DXT1', 84);
+    const dds = Buffer.concat([ddsHeader, ...ddsMips]);
+    const blpHeader = Buffer.alloc(156 + 1024);
+    blpHeader.write('BLP1'); blpHeader.writeUInt32LE(1, 4);
+    blpHeader.writeUInt32LE(512, 12); blpHeader.writeUInt32LE(512, 16);
+    let offset = blpHeader.length;
+    blpMips.forEach((mip, level) => {
+        blpHeader.writeUInt32LE(offset, 28 + level * 4); blpHeader.writeUInt32LE(mip.length, 92 + level * 4);
+        offset += mip.length;
+    });
+    const blp = Buffer.concat([blpHeader, ...blpMips]);
+    for (const [limit, firstLevel] of [[undefined, 2], [256, 1]]) {
+        const compressed = Buffer.from(buildWorkerTexturePayload(dds, 'dds', limit).textureBytes);
+        assert.equal(compressed.readUInt32LE(12), limit ?? 128);
+        assert.equal(compressed.readUInt32LE(16), limit ?? 128);
+        assert.equal(compressed.readUInt32LE(28), ddsMips.length - firstLevel);
+        assert.deepEqual(compressed.subarray(128), Buffer.concat(ddsMips.slice(firstLevel)), 'DDS transfer must retain the exact bounded mip chain');
+        const paletted = Buffer.from(buildWorkerTexturePayload(blp, 'blp', limit).textureBytes);
+        assert.equal(paletted.readUInt32LE(12), limit ?? 128);
+        assert.equal(paletted.readUInt32LE(16), limit ?? 128);
+        assert.equal(paletted.readUInt32LE(28), blpHeader.length);
+        assert.equal(paletted.readUInt32LE(92), blpMips[firstLevel].length);
+        assert.deepEqual(paletted.subarray(blpHeader.length), blpMips[firstLevel], 'BLP transfer must contain the exact selected mip');
+        assert.equal(paletted.readUInt32LE(32), 0, 'compacted BLP must not retain stale secondary offsets');
+    }
+}
+
 function testThumbnailLifecycleGuards() {
     const host = fs.readFileSync(path.join(root, 'src/features/preview/modelPreviewHost.ts'), 'utf8');
     const objmod = fs.readFileSync(path.join(root, 'src/webview/objModEditor/modelThumbnails.ts'), 'utf8');
@@ -1139,10 +1211,6 @@ function testThumbnailLifecycleGuards() {
     assert.ok(host.includes('thumbnail-diagnostics.jsonl'), 'thumbnail runs should produce a compact inspectable diagnostic file');
     assert.ok(host.includes('textureBytes:'), 'worker-decodable textures should cross the webview as binary data rather than base64');
     assert.ok(!thumbnailWorker.includes('fetch(message.textureUri)'), 'blob workers must not fetch authenticated VS Code resource URLs');
-    assert.ok(
-        host.includes('compactDdsForThumbnail(bytes)'),
-        'large DDS textures must transfer only thumbnail-sized mip levels to the worker and GPU',
-    );
     assert.ok(assetBrowser.includes('e.ctrlKey || e.metaKey'), 'Ctrl+clicking a model card should open its full preview');
     assert.ok(viewer.includes('applyCachedTexture(texturePath)'), 'the warm thumbnail viewer should reuse decoded textures');
     assert.ok(viewer.includes('clearModel()'), 'the model viewer should expose an explicit stale-preview reset');
@@ -1595,6 +1663,8 @@ async function main() {
     testWurstProcessMatching();
     await testModelThumbnailRequestsTexturesByDefault();
     testAssetBrowserForwardsModelTextures();
+    testMapIdleMotionDetection();
+    testBoundedModelTextureMips();
     testThumbnailLifecycleGuards();
     testStaticMdxWithoutSequences();
     await testIssueReportingPrivacyAndDeduplication();

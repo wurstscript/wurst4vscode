@@ -13,7 +13,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getCandidateRoots, resolveAssetPathWithCasc, assetPathVariants, fastByteHash, requestPreviewIcon, scaleDown } from '../imageAssetSupport';
+import { getCandidateRoots, resolveAssetPath, resolveAssetPathWithCasc, assetPathVariants, fastByteHash, requestPreviewIcon, scaleDown } from '../imageAssetSupport';
 import { getModelThumbCacheDir } from './cascStorage';
 import { decodeToRgba } from './imageDecoders';
 
@@ -266,10 +266,10 @@ function getDdsDimensions(bytes: Buffer): { width: number; height: number } | un
     return { height: bytes.readUInt32LE(12), width: bytes.readUInt32LE(16) };
 }
 
-function compactDdsForThumbnail(bytes: Buffer): Buffer {
+function compactDdsForThumbnail(bytes: Buffer, maximum = MODEL_THUMB_TEXTURE_MAX_DIMENSION): Buffer {
     const format = getCompressedDdsFormat(bytes);
     const dimensions = getDdsDimensions(bytes);
-    if (!format || !dimensions || Math.max(dimensions.width, dimensions.height) <= MODEL_THUMB_TEXTURE_MAX_DIMENSION) {
+    if (!format || !dimensions || Math.max(dimensions.width, dimensions.height) <= maximum) {
         return bytes;
     }
     const blockBytes = format === 'DXT1' ? 8 : 16;
@@ -278,7 +278,7 @@ function compactDdsForThumbnail(bytes: Buffer): Buffer {
     let height = dimensions.height;
     let offset = 128;
     let level = 0;
-    while (level + 1 < mipCount && Math.max(width, height) > MODEL_THUMB_TEXTURE_MAX_DIMENSION) {
+    while (level + 1 < mipCount && Math.max(width, height) > maximum) {
         offset += Math.max(1, Math.ceil(width / 4)) * Math.max(1, Math.ceil(height / 4)) * blockBytes;
         width = Math.max(1, width >> 1);
         height = Math.max(1, height >> 1);
@@ -304,7 +304,7 @@ function compactDdsForThumbnail(bytes: Buffer): Buffer {
     return compact;
 }
 
-function compactBlpForThumbnail(bytes: Buffer): Buffer {
+function compactBlpForThumbnail(bytes: Buffer, maximum = MODEL_THUMB_TEXTURE_MAX_DIMENSION): Buffer {
     if (bytes.length < 160 || bytes.toString('ascii', 0, 4) !== 'BLP1') return bytes;
     const content = bytes.readUInt32LE(4);
     const width = bytes.readUInt32LE(12);
@@ -312,7 +312,7 @@ function compactBlpForThumbnail(bytes: Buffer): Buffer {
     let level = 0;
     while (
         level < 15 &&
-        Math.max(Math.max(1, width >> level), Math.max(1, height >> level)) > MODEL_THUMB_TEXTURE_MAX_DIMENSION &&
+        Math.max(Math.max(1, width >> level), Math.max(1, height >> level)) > maximum &&
         bytes.readUInt32LE(92 + (level + 1) * 4) > 0
     ) level++;
     if (level === 0) return bytes;
@@ -335,7 +335,7 @@ function compactBlpForThumbnail(bytes: Buffer): Buffer {
     return compact;
 }
 
-function buildTexturePayload(bytes: Buffer, ext: string, thumbnail: boolean): { payload?: TexturePayload; decodedDds: boolean } {
+function buildTexturePayload(bytes: Buffer, ext: string, thumbnail: boolean, maximum = MODEL_THUMB_TEXTURE_MAX_DIMENSION): { payload?: TexturePayload; decodedDds: boolean } {
     // Keep the renderer's proven BLP decoder in the loop. Decoding every BLP through the
     // generic host-side preview decoder caused some paletted/JPEG-content textures to become
     // black before they ever reached WebGL. The compressed source is also cheaper to transfer
@@ -349,7 +349,7 @@ function buildTexturePayload(bytes: Buffer, ext: string, thumbnail: boolean): { 
     }
     if (thumbnail) {
         const dec = decodeToRgba(new Uint8Array(bytes), `.${ext}`);
-        const scaled = scaleDown(dec.rgba, dec.width, dec.height, MODEL_THUMB_TEXTURE_MAX_DIMENSION);
+        const scaled = scaleDown(dec.rgba, dec.width, dec.height, maximum);
         return {
             payload: {
                 rgbaBase64: Buffer.from(scaled.rgba).toString('base64'),
@@ -375,9 +375,18 @@ function buildTexturePayload(bytes: Buffer, ext: string, thumbnail: boolean): { 
 }
 
 /** Resolve a model path and push its bytes to the webview for `War3Viewer.loadModel`. */
-export async function postModelToWebview(modelPath: string, documentUri: vscode.Uri, webview: vscode.Webview): Promise<void> {
+export async function postModelToWebview(modelPath: string, documentUri: vscode.Uri, webview: Pick<vscode.Webview, 'postMessage'>, fallbackPaths: readonly string[] = []): Promise<void> {
     const roots = await getCandidateRoots(documentUri.fsPath);
-    const resolved = await resolveAssetPathWithCasc(modelPath, roots, 'model');
+    let resolved: string | undefined;
+    const candidates = [modelPath, ...fallbackPaths];
+    for (const candidate of candidates.flatMap(candidate => assetPathVariants(candidate, 'model'))) {
+        resolved = await resolveAssetPath(candidate, roots, 'model');
+        if (resolved) break;
+    }
+    for (const candidate of resolved ? [] : candidates) {
+        resolved = await resolveAssetPathWithCasc(candidate, roots, 'model');
+        if (resolved) break;
+    }
     if (!resolved) {
         const tried = assetPathVariants(modelPath, 'model');
         console.log(`[wurst-model-preview] not found: ${modelPath} (tried: ${tried.join(', ')})`);
@@ -534,21 +543,22 @@ export async function cacheModelThumbnail(key: string, cacheKey: string, webpBas
     }
 }
 
-function buildWorkerTexturePayload(bytes: Buffer, ext: string): TexturePayload | undefined {
+function buildWorkerTexturePayload(bytes: Buffer, ext: string, maximum = MODEL_THUMB_TEXTURE_MAX_DIMENSION): TexturePayload | undefined {
     const exactBytes = (source: Buffer) =>
         new Uint8Array(source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength));
-    if (ext === 'blp') return { textureBytes: exactBytes(compactBlpForThumbnail(bytes)), textureExt: 'blp' };
+    if (ext === 'blp') return { textureBytes: exactBytes(compactBlpForThumbnail(bytes, maximum)), textureExt: 'blp' };
     if (ext !== 'dds' || !getCompressedDdsFormat(bytes)) return undefined;
-    return { textureBytes: exactBytes(compactDdsForThumbnail(bytes)), textureExt: 'dds' };
+    return { textureBytes: exactBytes(compactDdsForThumbnail(bytes, maximum)), textureExt: 'dds' };
 }
 
 /** Resolve model textures and push them to the webview for `War3Viewer.onTexture` / `onTextureImageData`. */
 export async function postTexturesToWebview(
     texPaths: string[],
     documentUri: vscode.Uri,
-    webview: vscode.Webview,
+    webview: Pick<vscode.Webview, 'postMessage'>,
     thumbKey?: string,
     useBinaryTexturePayload = false,
+    maximumTextureDimension = MODEL_THUMB_TEXTURE_MAX_DIMENSION,
 ): Promise<void> {
     const totalStart = Date.now();
     const post = (message: Record<string, unknown>) => webview.postMessage(thumbKey ? { ...message, thumbKey } : message);
@@ -603,7 +613,7 @@ export async function postTexturesToWebview(
             const cacheKey = texturePayloadKey(
                 resolved,
                 stat,
-                thumbKey ? `thumb-${MODEL_THUMB_TEXTURE_MAX_DIMENSION}` : 'full',
+                thumbKey ? `thumb-${maximumTextureDimension}` : 'full',
             );
             const cachedPayload = texturePayloadCache.get(cacheKey);
             if (cachedPayload) {
@@ -615,10 +625,10 @@ export async function postTexturesToWebview(
                 return;
             }
             const bytes = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(resolved)));
-            const workerPayload = useBinaryTexturePayload ? buildWorkerTexturePayload(bytes, ext) : undefined;
+            const workerPayload = useBinaryTexturePayload ? buildWorkerTexturePayload(bytes, ext, maximumTextureDimension) : undefined;
             const built = workerPayload
                 ? { payload: workerPayload, decodedDds: false }
-                : buildTexturePayload(bytes, ext, !!thumbKey);
+                : buildTexturePayload(bytes, ext, !!thumbKey, maximumTextureDimension);
             if (!built.payload) {
                 stats.unsupported++;
                 await post({ type: 'mdxTexture', path: texPath, unsupported: true });

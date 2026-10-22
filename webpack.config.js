@@ -105,6 +105,8 @@ const thumbnailWorkerConfig = {
 	target: 'webworker',
 	entry: {
 		mdxThumbnailWorker: './src/webview/mdxThumbnailWorker.ts',
+		mapSceneWorker: './src/webview/mapSceneWorker.ts',
+		mapAssetWorker: './src/webview/mapAssetWorker.ts',
 	},
 };
 

@@ -39,6 +39,7 @@ function hasMotion(model: ParsedModel, sequence: number): boolean {
 /** One renderer per unique model, shared by all its placements in this map's GL context. */
 export class MapModels {
   private assets = new Map<string, Asset>();
+  private references = new Set<string>();
   private textures = new Map<string, Texture>();
   private active: Asset;
   private parsed: ParsedModel;
@@ -69,6 +70,7 @@ export class MapModels {
   }
   setMarkers(markers: any[]): void {
     this.data.markers = markers;
+    this.references = new Set(markers.filter(item => item.modelPath).map(item => normalizeAssetPath(item.modelPath)));
     for (const item of markers) if (item.modelPath && !this.assets.has(normalizeAssetPath(item.modelPath))) {
       this.assets.set(normalizeAssetPath(item.modelPath), { path: item.modelPath, state: 'queued', radius: 2 });
     }
@@ -93,13 +95,21 @@ export class MapModels {
   }
   private status(): void {
     let ready = 0, missing = 0;
-    for (const entry of this.assets.values()) { if (entry.state === 'ready') ready++; if (entry.state === 'missing') missing++; }
-    this.post({ type: 'modelStatus', text: `${ready}/${this.assets.size} models${missing ? ` · ${missing} unavailable` : ''}` });
+    for (const key of this.references) {
+      const entry = this.assets.get(key);
+      if (entry?.state === 'ready') ready++;
+      if (entry?.state === 'missing') missing++;
+    }
+    this.post({ type: 'modelStatus', text: `${ready}/${this.references.size} models${missing ? ` · ${missing} unavailable` : ''}` });
   }
   private async pump(): Promise<void> {
     if (!this.state || this.state.paused || !this.state.models) return;
     if (this.active) {
       if (!this.parsed || this.pending.size || this.waitingForDecode) return;
+      if (!this.references.has(normalizeAssetPath(this.active.path))) {
+        this.active.state = 'queued'; this.active = undefined; this.parsed = undefined;
+        this.status(); this.schedule(); return;
+      }
       // Parsing and decoding happen in the asset worker. Avoid starting GL preparation mid-drag.
       if (performance.now() - this.lastMove < 80) { this.schedule(); return; }
       const asset = this.active, model = this.parsed;
@@ -123,6 +133,7 @@ export class MapModels {
         let uploadTurn = Promise.resolve();
         await renderer.loadTextures(texture => {
           const turn = uploadTurn.then(() => {
+            if (!this.references.has(normalizeAssetPath(asset.path))) throw new Error('Placement removed');
             const source = this.textures.get(normalizeAssetPath(texture.Image))?.source;
             if (!source) throw new Error('Texture unavailable');
             return source;
@@ -131,6 +142,7 @@ export class MapModels {
           uploadTurn = turn.then(() => undefined, () => undefined).then(() => new Promise<void>(resolve => setTimeout(resolve, 0)));
           return turn;
         }, { allowMissingTextures: true });
+        if (!this.references.has(normalizeAssetPath(asset.path))) throw new Error('Placement removed');
         await this.prepare(renderer);
         // Cache the uploaded object too: another model using this texture borrows it directly.
         for (const texture of model.Textures) {
@@ -145,7 +157,8 @@ export class MapModels {
         asset.radius = Math.max(0.1, (model.Info.BoundsRadius || 256) / this.data.tile);
         asset.state = 'ready';
       } catch {
-        asset.renderer?.destroy(); asset.renderer = undefined; asset.state = 'missing';
+        asset.renderer?.destroy(); asset.renderer = undefined;
+        asset.state = this.references.has(normalizeAssetPath(asset.path)) ? 'missing' : 'queued';
       }
       this.active = undefined; this.status(); this.redraw(); this.schedule();
       return;
@@ -157,7 +170,7 @@ export class MapModels {
       const asset = item && this.assets.get(normalizeAssetPath(item.modelPath || ''));
       if (asset?.state === 'queued' && this.inView(item, 3)) { next = asset; break; }
     }
-    next ||= [...this.assets.values()].find(asset => asset.state === 'queued');
+    next ||= [...this.assets.values()].find(asset => asset.state === 'queued' && this.references.has(normalizeAssetPath(asset.path)));
     if (!next) return;
     this.active = next; next.state = 'loading';
     this.post({ type: 'loadMapModel', path: next.path });
@@ -201,6 +214,10 @@ export class MapModels {
       this.status(); this.redraw(); this.schedule();
     } else if (message.type === 'parsedModel') {
       if (message.path !== this.active?.path) return;
+      if (!this.references.has(normalizeAssetPath(message.path))) {
+        this.active.state = 'queued'; this.active = undefined;
+        this.status(); this.schedule(); return;
+      }
       this.parsed = message.model;
       this.pending.clear();
       const paths = [];
@@ -219,7 +236,7 @@ export class MapModels {
       const key = normalizeAssetPath(message.path);
       if (!this.pending.delete(key)) return;
       this.textures.set(key, { ...this.textures.get(key), source: message.source, missing: !!message.error });
-      if (!this.pending.size) { this.waitingForDecode = false; this.schedule(); }
+      // Wait for the ordered terminal reply before retiring a removed asset or retrying it.
     } else if (message.type === 'decodedTexturesComplete') {
       if (message.thumbKey !== this.active?.path) return;
       // This message travels through the decode worker, behind every individual texture reply.

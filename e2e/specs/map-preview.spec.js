@@ -337,6 +337,7 @@ test('keeps animation and camera input responsive while the next model loads', a
     await expect.poll(() => result.requests.filter(m => m.type === 'loadMapModel').length).toBe(2);
     await page.locator('#mp-placement-search').fill('Tree');
     await page.locator('.mp-object').click(); await page.locator('#mp-focus').click();
+    await page.locator('#mp-placement-search').fill('');
     await expect.poll(() => greenPixels(page), { intervals: [100] }).toBeGreaterThan(150);
     await expect.poll(() => greenPixels(page), { intervals: [100] }).toBeLessThan(60);
     await page.evaluate(() => {
@@ -355,6 +356,23 @@ test('keeps animation and camera input responsive while the next model loads', a
     expect(await page.evaluate(() => Math.max(...window.frameTimes))).toBeLessThan(150);
     expect(await page.evaluate(() => window.sceneLatencies.length)).toBeGreaterThan(3);
     expect(await page.evaluate(() => Math.max(...window.sceneLatencies))).toBeLessThan(150);
+    expect(result.pageErrors).toEqual([]); expect(result.consoleErrors).toEqual([]);
+});
+
+test('removing the last references drops queued models and undo loads them on demand', async ({ page, server }) => {
+    const result = await openMap(page, server, 4, { models: true, holdTextures: true });
+    await expect.poll(() => result.requests.filter(m => m.type === 'loadMapTextures').length).toBe(1);
+    await page.evaluate(() => {
+        window.savedPlacements = window.__wurstMapEditorDebug.state().placements;
+        window.postMessage({ type: 'placementsChanged', placements: window.savedPlacements.filter(p => p.kind === 'start'), isDirty: true, select: -1 }, '*');
+    });
+    await expect(page.locator('#mp-model-status')).toHaveText('0/1 models');
+    result.releaseTextures();
+    await expect(page.locator('#mp-model-status')).toHaveText('1/1 models');
+    expect(result.requests.filter(m => m.type === 'loadMapModel')).toHaveLength(1);
+    await page.evaluate(() => window.postMessage({ type: 'placementsChanged', placements: window.savedPlacements, isDirty: false, select: -1 }, '*'));
+    await expect(page.locator('#mp-model-status')).toHaveText('2/2 models');
+    expect(result.requests.filter(m => m.type === 'loadMapModel')).toHaveLength(2);
     expect(result.pageErrors).toEqual([]); expect(result.consoleErrors).toEqual([]);
 });
 

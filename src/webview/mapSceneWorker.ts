@@ -416,6 +416,7 @@ function initScene(DATA: any, canvas: OffscreenCanvas) {
   var waterPosBuf = gl.createBuffer(), waterDepthBuf = gl.createBuffer(), waterIdxBuf = gl.createBuffer();
 
   function uploadMesh() {
+    gl.bindVertexArray(null);
     gl.bindBuffer(gl.ARRAY_BUFFER, surfPosBuf); gl.bufferData(gl.ARRAY_BUFFER, surfPositions, gl.DYNAMIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, surfNormBuf); gl.bufferData(gl.ARRAY_BUFFER, surfNormals, gl.DYNAMIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, surfUvBuf); gl.bufferData(gl.ARRAY_BUFFER, surfUvs, gl.STATIC_DRAW);
@@ -523,6 +524,11 @@ function initScene(DATA: any, canvas: OffscreenCanvas) {
     if (state.paused) return;
     const started = performance.now();
     gl.bindVertexArray(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.disable(gl.CULL_FACE);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.colorMask(true, true, true, true);
+    gl.clearDepth(1);
     gl.depthMask(true);
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(0.035, 0.047, 0.059, 1);
@@ -537,6 +543,7 @@ function initScene(DATA: any, canvas: OffscreenCanvas) {
     if (toggles.cliffs.checked) drawTerrainMesh(cliffPosBuf, cliffNormBuf, cliffUvBuf, cliffTex0Buf, cliffTex1Buf, cliffTex2Buf, cliffTex3Buf, cliffRampBuf, cliffLevelBuf, cliffIdxBuf, cliffIndices.length, 1.0);
     const animating = models.draw(lastMvp, exag, state);
     gl.bindVertexArray(null);
+    gl.disable(gl.CULL_FACE);
     gl.depthMask(true);
     gl.enable(gl.DEPTH_TEST);
     if (toggles.water.checked) drawWater();
@@ -585,6 +592,7 @@ function initScene(DATA: any, canvas: OffscreenCanvas) {
     const key = next.visible.join(',');
     const visibilityChanged = markersChanged || visibleKey !== key;
     if (visibilityChanged) {
+      gl.bindVertexArray(null);
       visibleKey = key;
       for (const group of [gDood, gUnit, gSloc]) { gl.deleteBuffer(group.iBuf); gl.deleteBuffer(group.pBuf); gl.deleteBuffer(group.cBuf); gl.deleteBuffer(group.sBuf); }
       const list = next.visible.map(i => DATA.markers[i]);

@@ -59,6 +59,8 @@ interface Terrain {
 interface ModelPlacement {
     modelPath?: string;
     modelFallback?: string;
+    replaceableId?: number;
+    replaceableTexture?: string;
     angle?: number;
     scale?: number[];
 }
@@ -90,19 +92,26 @@ async function mapObjectCatalog(dir: string): Promise<Map<string, ObjectRef>> {
 function mergeMapObject(catalog: Map<string, ObjectRef>, entry: ObjModEntry): void {
     const id = (entry.newId || entry.baseId).toLowerCase();
     const ref = { ...catalog.get(entry.baseId.toLowerCase()), ...catalog.get(id) };
+    const numericArt: Record<string, 'modelScale' | 'modelVariations' | 'replaceableId'> = {
+        usca: 'modelScale', isca: 'modelScale', bsca: 'modelScale', dsca: 'modelScale', bvar: 'modelVariations', btxi: 'replaceableId',
+    };
     for (const mod of entry.mods) {
         if (['umdl', 'ifil', 'bfil', 'dfil'].includes(mod.fieldId)) ref.modelPath = normalizeModelPath(String(mod.value));
         if (['unam', 'inam', 'bnam', 'dnam'].includes(mod.fieldId)) ref.name = String(mod.value);
-        if (['usca', 'isca', 'bsca', 'dsca'].includes(mod.fieldId) && typeof mod.value === 'number') ref.modelScale = mod.value;
+        if (numericArt[mod.fieldId] && typeof mod.value === 'number') ref[numericArt[mod.fieldId]] = mod.value;
+        if (mod.fieldId === 'btxf') ref.replaceableTexture = String(mod.value);
     }
     catalog.set(id, ref);
 }
 
 function markerModel(ref: ObjectRef | undefined, placement: { angle?: number; scaleX?: number; scaleY?: number; scaleZ?: number; variation?: number }, doodad: boolean): ModelPlacement {
     const base = ref?.modelPath;
+    const varied = doodad && ref?.modelVariations !== 1;
     return {
-        modelPath: base && doodad ? base.replace(/\.(mdx|mdl)$/i, `${placement.variation ?? 0}.$1`) : base,
-        modelFallback: doodad ? base : undefined,
+        modelPath: base && varied ? base.replace(/\.(mdx|mdl)$/i, `${placement.variation ?? 0}.$1`) : base,
+        modelFallback: varied ? base : undefined,
+        replaceableId: ref?.replaceableId,
+        replaceableTexture: ref?.replaceableTexture,
         angle: placement.angle ?? 0,
         scale: [placement.scaleX ?? 1, placement.scaleY ?? 1, placement.scaleZ ?? 1].map(value => value * (ref?.modelScale ?? 1)),
     };
@@ -836,24 +845,29 @@ function postPlacementTypes(doc: MapPlacementDocument, scene: MapScene): void {
         .sort((a, b) => Number(b.custom) - Number(a.custom) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
     void doc.webview?.postMessage({ type: 'placementTypes', types });
 }
-async function postSceneAsset(message: { type?: unknown; path?: unknown; paths?: unknown }, doc: MapPlacementDocument): Promise<void> {
+async function postSceneAsset(message: { type?: unknown; path?: unknown; paths?: unknown; key?: unknown }, doc: MapPlacementDocument): Promise<void> {
     const scene = doc.scene, webview = doc.webview;
     if (!scene || !webview || typeof message.path !== 'string') return;
     const requested = message.path;
     const key = normalizeAssetPath(requested);
+    const replyKey = typeof message.key === 'string' ? message.key : requested;
+    const target = { postMessage: (payload: Record<string, unknown>) => webview.postMessage({ ...payload,
+        ...(payload.type === 'mdxModel' || payload.type === 'mdxModelMissing' ? { path: replyKey } : {}),
+        ...(payload.thumbKey ? { thumbKey: replyKey } : {}),
+    }) };
     const doodad = scene.doodads.find(d => d.modelPath && normalizeAssetPath(d.modelPath) === key);
     const allowed = doodad || [...scene.catalog.values()].some(ref => ref.modelPath && normalizeAssetPath(ref.modelPath) === key);
     try {
         if (!allowed) throw new Error('Unknown scene model');
         if (message.type === 'loadMapModel') {
-            await postModelToWebview(requested, doc.uri, webview, doodad?.modelFallback ? [doodad.modelFallback] : []);
+            await postModelToWebview(requested, doc.uri, target, doodad?.modelFallback ? [doodad.modelFallback] : []);
         } else if (Array.isArray(message.paths) && message.paths.every(p => typeof p === 'string')) {
-            await postTexturesToWebview(message.paths, doc.uri, webview, requested, true, 256);
+            await postTexturesToWebview(message.paths, doc.uri, target, replyKey, true, 256);
         }
     } catch {
         void webview.postMessage(message.type === 'loadMapModel'
-            ? { type: 'mdxModelMissing', path: requested }
-            : { type: 'modelThumbTexturesComplete', thumbKey: requested });
+            ? { type: 'mdxModelMissing', path: replyKey }
+            : { type: 'modelThumbTexturesComplete', thumbKey: replyKey });
     }
 }
 

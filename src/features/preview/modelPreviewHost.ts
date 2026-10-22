@@ -375,7 +375,7 @@ function buildTexturePayload(bytes: Buffer, ext: string, thumbnail: boolean, max
 }
 
 /** Resolve a model path and push its bytes to the webview for `War3Viewer.loadModel`. */
-export async function postModelToWebview(modelPath: string, documentUri: vscode.Uri, webview: vscode.Webview, fallbackPaths: readonly string[] = []): Promise<void> {
+export async function postModelToWebview(modelPath: string, documentUri: vscode.Uri, webview: Pick<vscode.Webview, 'postMessage'>, fallbackPaths: readonly string[] = []): Promise<void> {
     const roots = await getCandidateRoots(documentUri.fsPath);
     let resolved: string | undefined;
     const candidates = [modelPath, ...fallbackPaths];
@@ -555,7 +555,7 @@ function buildWorkerTexturePayload(bytes: Buffer, ext: string, maximum = MODEL_T
 export async function postTexturesToWebview(
     texPaths: string[],
     documentUri: vscode.Uri,
-    webview: vscode.Webview,
+    webview: Pick<vscode.Webview, 'postMessage'>,
     thumbKey?: string,
     useBinaryTexturePayload = false,
     maximumTextureDimension = MODEL_THUMB_TEXTURE_MAX_DIMENSION,

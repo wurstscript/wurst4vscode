@@ -13,7 +13,7 @@ const { serializeObjMod } = require('casc-ts/formats');
 const cleanups = [];
 test.afterEach(() => { while (cleanups.length) cleanups.pop()(); });
 
-function sceneFiles(animated = false) {
+function sceneFiles(animated = false, treeSkins = false, opaque = false) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wurst-map-models-'));
     fs.mkdirSync(path.join(dir, 'models'));
     fs.mkdirSync(path.join(dir, 'textures'));
@@ -23,6 +23,7 @@ function sceneFiles(animated = false) {
     const extent = Math.max(...model.Geosets.map(geoset => Math.max(...geoset.Vertices.map(Math.abs))));
     for (const geoset of model.Geosets) for (let i = 0; i < geoset.Vertices.length; i++) geoset.Vertices[i] *= 128 / extent;
     for (const texture of model.Textures) { texture.Image = 'textures\\shared.tga'; texture.ReplaceableId = 0; }
+    if (opaque) model.Materials.flatMap(material => material.Layers).forEach(layer => { layer.Shading = 0; layer.FilterMode = 0; });
     model.Info.BoundsRadius = 256;
     if (animated) {
         model.Sequences = ['Death', 'Stand'].map((Name, index) => ({ ...model.Info, Name,
@@ -38,24 +39,29 @@ function sceneFiles(animated = false) {
         }));
     }
     fs.writeFileSync(path.join(dir, 'models/shared.mdx'), Buffer.from(generateMDX(model)));
+    for (let i = 4; i < 8; i++) fs.writeFileSync(path.join(dir, `models/extra${i}.mdx`), Buffer.from(generateMDX(model)));
+    if (treeSkins) for (const texture of model.Textures) { texture.Image = ''; texture.ReplaceableId = 31; }
     fs.writeFileSync(path.join(dir, 'models/other.mdl'), generateMDL(model));
     const tga = Buffer.alloc(18 + 4 * 4 * 4);
     tga[2] = 2; tga.writeUInt16LE(4, 12); tga.writeUInt16LE(4, 14); tga[16] = 32; tga[17] = 0x28;
     for (let i = 18; i < tga.length; i += 4) { tga[i] = 80; tga[i + 1] = 240; tga[i + 2] = 20; tga[i + 3] = 255; }
     fs.writeFileSync(path.join(dir, 'textures/shared.tga'), tga);
+    for (let i = 18; i < tga.length; i += 4) { tga[i] = 230; tga[i + 1] = 20; tga[i + 2] = 230; }
+    fs.writeFileSync(path.join(dir, 'textures/purple.tga'), tga);
     return dir;
 }
 
 async function openMap(page, server, count = 4, options = {}) {
-    const dir = options.models ? sceneFiles(options.animated) : undefined;
+    const dir = options.models ? sceneFiles(options.animated, options.treeSkins, options.opaque) : undefined;
     let disposed = false, releaseTextures, releaseModels;
     const textureGate = options.holdTextures ? new Promise(resolve => { releaseTextures = resolve; }) : Promise.resolve();
     const modelGate = options.holdUnitModel ? new Promise(resolve => { releaseModels = resolve; }) : Promise.resolve();
     cleanups.push(() => { disposed = true; releaseTextures?.(); releaseModels?.(); if (dir) fs.rmSync(dir, { recursive: true, force: true }); });
     const load = createTsLoader({
         mocks: { vscode: createVscodeMock({ workspaceFolders: dir ? [{ uri: fileUri(dir), name: 'fixture', index: 0 }] : [] }) },
-        augment: { 'src/features/mapPreview.ts': `export const __e2e = { mapObjectCatalog, markerModel, async buildHtml(terrain, markers, scriptUri) {
-            const catalog = new Map(markers.map(m => [m.typeId.toLowerCase(), { name: m.label, modelPath: m.modelPath }]));
+        augment: { 'src/features/mapPreview.ts': `export const __e2e = { mapObjectCatalog, markerModel, postSceneAsset, async buildHtml(terrain, markers, scriptUri) {
+            const catalog = new Map(markers.map(m => [m.typeId.toLowerCase(), { name: m.label, modelPath: m.modelPath,
+                replaceableId: m.replaceableId, replaceableTexture: m.replaceableTexture }]));
             const units = markers.filter(m => m.kind !== 'doodad').map((m, editorId) => ({ ...m, typeId: m.typeId,
                 ownerIndex: m.owner, editorId, scaleX: m.scale?.[0], scaleY: m.scale?.[1], scaleZ: m.scale?.[2] }));
             const scene = { terrain, materials: await buildTerrainMaterials(terrain), catalog,
@@ -88,8 +94,13 @@ async function openMap(page, server, count = 4, options = {}) {
         markers[0].modelPath = 'models\\shared.mdx';
         markers[1].modelPath = 'models\\shared.mdx'; markers[1].scale = [2, 2, 2]; markers[1].angle = 0.9;
         markers[2].modelPath = 'models\\other.mdl';
-        if (options.buried) for (const marker of markers) { marker.x = 0; marker.y = 0; marker.z = -512; }
+        if (options.buried) markers.forEach(marker => Object.assign(marker, { x: 0, y: 0, z: -512 }));
         if (count > 4) { markers[4].modelPath = 'models\\missing.mdx'; markers[4].label = 'Missing asset'; }
+        if (options.extraModels) markers.slice(4).forEach((marker, index) => { marker.modelPath = `models\\extra${index + 4}.mdx`; marker.label = `Extra ${index + 4}`; });
+    }
+    if (options.treeSkins) {
+        markers[2].replaceableId = 31; markers[2].replaceableTexture = 'textures\\shared.tga';
+        Object.assign(markers[1], { modelPath: 'models\\other.mdl', replaceableId: 31, replaceableTexture: 'textures\\purple.tga' });
     }
     const html = await buildHtml(terrain, markers, `${server.origin}/dist/webview/mapPreviewWebview.js`);
     const pageErrors = [], consoleErrors = [];
@@ -106,11 +117,12 @@ async function openMap(page, server, count = 4, options = {}) {
         if (!dir || disposed) return;
         if (message.type === 'loadMapModel') {
             if (message.path.endsWith('shared.mdx')) await modelGate;
-            if (!disposed) await host.postModelToWebview(message.path, fileUri(path.join(dir, 'war3map.w3e')), webview);
+            const target = { postMessage: payload => webview.postMessage({ ...payload, path: message.key || message.path }) };
+            if (!disposed) await host.postModelToWebview(message.path, fileUri(path.join(dir, 'war3map.w3e')), target);
         }
         else if (message.type === 'loadMapTextures') {
             await textureGate;
-            if (!disposed) await host.postTexturesToWebview(message.paths, fileUri(path.join(dir, 'war3map.w3e')), webview, message.path, true, 256);
+            if (!disposed) await host.postTexturesToWebview(message.paths, fileUri(path.join(dir, 'war3map.w3e')), webview, message.key || message.path, true, 256);
         }
     });
     await page.addInitScript(() => {
@@ -152,17 +164,19 @@ async function openMap(page, server, count = 4, options = {}) {
     return { html, pageErrors, consoleErrors, requests, releaseTextures, releaseModels, dir, internals: load('src/features/mapPreview.ts').__e2e };
 }
 
-async function greenPixels(page) {
+async function greenPixels(page, color = 'green') {
     const png = await page.locator('#mp-canvas').screenshot();
-    return page.evaluate(async base64 => {
+    return page.evaluate(async ({ base64, color }) => {
         const bitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(base64), c => c.charCodeAt(0))], { type: 'image/png' }));
         const canvas = new OffscreenCanvas(bitmap.width, bitmap.height), ctx = canvas.getContext('2d');
         ctx.drawImage(bitmap, 0, 0); bitmap.close();
         const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
         let green = 0;
-        for (let i = 0; i < pixels.length; i += 4) if (pixels[i + 1] > 150 && pixels[i] < 110 && pixels[i + 2] < 160) green++;
+        for (let i = 0; i < pixels.length; i += 4) if (color === 'purple'
+            ? pixels[i] > 150 && pixels[i + 1] < 100 && pixels[i + 2] > 150
+            : pixels[i + 1] > 150 && pixels[i] < 110 && pixels[i + 2] < 160) green++;
         return green;
-    }, png.toString('base64'));
+    }, { base64: png.toString('base64'), color });
 }
 
 async function expectFrozen(page) {
@@ -285,7 +299,7 @@ test('draws real MDX and MDL placements with shared assets, filters and placemen
 test('keeps camera rendering responsive while texture loading is deferred and settles missing models', async ({ page, server }) => {
     const result = await openMap(page, server, 5, { models: true, holdTextures: true });
     await expect.poll(() => result.requests.filter(m => m.type === 'loadMapTextures').length).toBe(1);
-    expect(result.requests.filter(m => m.type === 'loadMapModel')).toHaveLength(1);
+    await expect.poll(() => result.requests.filter(m => m.type === 'loadMapModel').length).toBe(3);
     await page.evaluate(() => {
         window.frameTimes = []; let previous = performance.now();
         const tick = now => { window.frameTimes.push(now - previous); previous = now; requestAnimationFrame(tick); };
@@ -359,8 +373,8 @@ test('keeps animation and camera input responsive while the next model loads', a
     expect(result.pageErrors).toEqual([]); expect(result.consoleErrors).toEqual([]);
 });
 
-test('removing the last references drops queued models and undo loads them on demand', async ({ page, server }) => {
-    const result = await openMap(page, server, 4, { models: true, holdTextures: true });
+test('removing the last references skips GPU preparation and undo loads them on demand', async ({ page, server }) => {
+    const result = await openMap(page, server, 4, { models: true, holdTextures: true, holdUnitModel: true });
     await expect.poll(() => result.requests.filter(m => m.type === 'loadMapTextures').length).toBe(1);
     await page.evaluate(() => {
         window.savedPlacements = window.__wurstMapEditorDebug.state().placements;
@@ -369,10 +383,39 @@ test('removing the last references drops queued models and undo loads them on de
     await expect(page.locator('#mp-model-status')).toHaveText('0/1 models');
     result.releaseTextures();
     await expect(page.locator('#mp-model-status')).toHaveText('1/1 models');
-    expect(result.requests.filter(m => m.type === 'loadMapModel')).toHaveLength(1);
+    expect(result.requests.filter(m => m.type === 'loadMapModel')).toHaveLength(2);
     await page.evaluate(() => window.postMessage({ type: 'placementsChanged', placements: window.savedPlacements, isDirty: false, select: -1 }, '*'));
+    result.releaseModels();
     await expect(page.locator('#mp-model-status')).toHaveText('2/2 models');
     expect(result.requests.filter(m => m.type === 'loadMapModel')).toHaveLength(2);
+    expect(result.pageErrors).toEqual([]); expect(result.consoleErrors).toEqual([]);
+});
+
+test('prefetches at most three assets and keeps preparing models while one read is held', async ({ page, server }) => {
+    const result = await openMap(page, server, 8, { models: true, extraModels: true, holdTextures: true, holdUnitModel: true });
+    await expect.poll(() => result.requests.filter(m => m.type === 'loadMapModel').length).toBe(3);
+    await expect.poll(() => result.requests.filter(m => m.type === 'loadMapTextures').length).toBe(1);
+    expect(result.requests.filter(m => m.type === 'loadMapModel')).toHaveLength(3);
+    result.releaseTextures();
+    await expect(page.locator('#mp-model-status')).toHaveText('5/6 models');
+    result.releaseModels();
+    await expect(page.locator('#mp-model-status')).toHaveText('6/6 models');
+    expect(result.requests.filter(m => m.type === 'loadMapTextures')).toHaveLength(1);
+    expect(result.pageErrors).toEqual([]); expect(result.consoleErrors).toEqual([]);
+});
+
+test('renders different replaceable tree skins on the same model without sharing the wrong renderer', async ({ page, server }) => {
+    const result = await openMap(page, server, 4, { models: true, treeSkins: true });
+    await expect(page.locator('#mp-model-status')).toHaveText('3/3 models');
+    expect(result.requests.filter(m => m.type === 'loadMapModel' && m.path.endsWith('other.mdl'))).toHaveLength(2);
+    await page.locator('#mp-placement-search').fill('Tree');
+    await page.locator('.mp-object').click(); await page.locator('#mp-focus').click();
+    await expect.poll(() => greenPixels(page)).toBeGreaterThan(150);
+    await page.locator('#mp-placement-search').fill('Item');
+    await page.locator('.mp-object').click(); await page.locator('#mp-focus').click();
+    await expect.poll(() => greenPixels(page)).toBeLessThan(60);
+    await expect.poll(() => greenPixels(page, 'purple')).toBeGreaterThan(150);
+    expect(result.requests.filter(m => m.type === 'loadMapTextures').flatMap(m => m.paths)).toContain('textures\\purple.tga');
     expect(result.pageErrors).toEqual([]); expect(result.consoleErrors).toEqual([]);
 });
 
@@ -384,6 +427,36 @@ test('models share terrain depth and become visible when the covering terrain is
     await expect.poll(() => greenPixels(page)).toBeGreaterThan(150);
 });
 
+test('loading single-sided models and redrawing the camera does not erase terrain', async ({ page, server }) => {
+    const result = await openMap(page, server, 4, { models: true, holdTextures: true, opaque: true });
+    await page.locator('#mp-animate').uncheck();
+    await page.locator('#mp-models').uncheck();
+    await page.locator('#mp-top').click();
+    const baseline = (await page.locator('#mp-canvas').screenshot()).toString('base64');
+    result.releaseTextures();
+    await page.locator('#mp-models').check();
+    await expect(page.locator('#mp-model-status')).toHaveText('2/2 models');
+    for (let frame = 0; frame < 4; frame++) {
+        await page.locator('#mp-xray').setChecked(frame % 2 === 0);
+        const after = (await page.locator('#mp-canvas').screenshot()).toString('base64');
+        const dropout = await page.evaluate(async ({ baseline, after }) => {
+            const decode = async base64 => {
+                const bitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(base64), c => c.charCodeAt(0))], { type: 'image/png' }));
+                const canvas = new OffscreenCanvas(bitmap.width, bitmap.height), ctx = canvas.getContext('2d');
+                ctx.drawImage(bitmap, 0, 0); bitmap.close();
+                return ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            };
+            const [before, current] = await Promise.all([decode(baseline), decode(after)]);
+            let lost = 0;
+            for (let i = 0; i < before.length; i += 4) if (Math.max(before[i], before[i + 1], before[i + 2]) > 50 &&
+                current[i] < 20 && current[i + 1] < 20 && current[i + 2] < 25) lost++;
+            return lost;
+        }, { baseline, after });
+        expect(dropout).toBeLessThan(40);
+    }
+    expect(result.pageErrors).toEqual([]); expect(result.consoleErrors).toEqual([]);
+});
+
 test('map and skin model overrides inherit stock data and preserve placement transforms', async ({ page, server }) => {
     const { dir, internals } = await openMap(page, server, 4, { models: true });
     const file = mods => serializeObjMod({ version: 2, ext: '.w3u', extended: false, origObjs: [],
@@ -392,6 +465,9 @@ test('map and skin model overrides inherit stock data and preserve placement tra
     fs.writeFileSync(path.join(dir, 'war3map.w3u'), file([['umdl', 'models\\shared.mdx'], ['usca', 1.5]]));
     fs.writeFileSync(path.join(dir, 'war3mapSkin.w3u'), file([['umdl', 'models\\other.mdl']]));
     const catalog = await internals.mapObjectCatalog(dir);
+    expect(catalog.get('ltlt')).toMatchObject({ modelVariations: 10, replaceableId: 31,
+        replaceableTexture: 'ReplaceableTextures\\LordaeronTree\\LordaeronSummerTree' });
+    expect(internals.markerModel(catalog.get('ltlt'), { variation: 2 }, true).modelPath).toMatch(/LordaeronTree2\.mdl$/);
     const custom = catalog.get('h001');
     expect(custom.modelPath).toBe('models\\other.mdl');
     expect(custom.name).toBe(catalog.get('hfoo').name);

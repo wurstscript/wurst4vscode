@@ -53,6 +53,8 @@ export interface MarkerPoint {
   z?: number;
   owner?: number;
   modelPath?: string;
+  replaceableId?: number;
+  replaceableTexture?: string;
   angle?: number;
   scale?: number[];
 }

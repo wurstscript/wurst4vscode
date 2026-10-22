@@ -79,7 +79,7 @@ Search for **Wurst** in the Command Palette to:
 - Create, install, update, or repair a Wurst project
 - Build and run `.w3x`/`.w3m` maps or map folders
 - Run all tests, the current file's tests, or the test under the cursor
-- Start and update maps with Jass Hot Code Reload
+- Hot run a map and reload its code on every save: Lua maps replace function bodies in the running game, Jass maps use Jass Hot Code Reload
 - Configure the Warcraft III executable and launch arguments
 - Inspect logs or stop stale Wurst language-server processes
 

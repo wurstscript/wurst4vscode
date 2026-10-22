@@ -768,6 +768,9 @@ function commandHarness(getClient) {
     const listeners = new Map();
     const requests = [];
     const cancellations = [];
+    const statusBarItems = [];
+    const statusMessages = [];
+    const saveListeners = [];
     const client = {
         initializeResult: { capabilities: { experimental: { wurstMapCancellation: true } } },
         clientOptions: { workspaceFolder: { uri: { fsPath: require('path').resolve('project') } } },
@@ -798,8 +801,19 @@ function commandHarness(getClient) {
         },
         env: { openExternal: async (uri) => { foldersOpened.push(uri.fsPath); return true; } },
         ProgressLocation: { Notification: 15 },
-        workspace: { workspaceFolders: [{ uri: { fsPath: require('path').resolve('project') } }], getConfiguration: () => ({ get: () => undefined }) },
+        StatusBarAlignment: { Left: 1 },
+        workspace: {
+            workspaceFolders: [{ uri: { fsPath: require('path').resolve('project') } }],
+            getConfiguration: () => ({ get: (key) => harness.config?.[key] }),
+            onDidSaveTextDocument: (listener) => { saveListeners.push(listener); return new TestDisposable(); },
+        },
         window: {
+            createStatusBarItem: () => {
+                const item = { visible: false, show() { this.visible = true; }, hide() { this.visible = false; }, dispose() {} };
+                statusBarItems.push(item);
+                return item;
+            },
+            setStatusBarMessage: (message) => { statusMessages.push(message); return new TestDisposable(); },
             withProgress(options, task) {
                 const notification = { options, reports: [], closed: false };
                 const listeners = new Set();
@@ -846,6 +860,7 @@ function commandHarness(getClient) {
     load('src/features/commands.ts').registerCommands(getClient || (async () => client));
     load('src/features/commands.ts').registerWurstDiagnosticsCommands({ subscriptions: [] });
     const harness = { handlers, notifications, failures, completions, foldersOpened, actions, diagnostics, listeners, requests, cancellations, client, workspace: vscode.workspace,
+        statusBarItems, statusMessages, save: (languageId) => { for (const listener of saveListeners) listener({ languageId }); },
         setKnownVersion: (version) => { knownVersion = version; }, get versionDetections() { return versionDetections; } };
     return harness;
 }
@@ -994,6 +1009,71 @@ async function testBuildCompletionActions() {
     assert.equal(h.client.outputChannel.shown, 1);
 }
 
+/** After a hot run starts, each save of a Wurst file reloads the map; saves during a reload collapse into one more. */
+async function testHotRunReloadsOnSave() {
+    const h = commandHarness();
+    const status = h.statusBarItems[0];
+    h.save('wurst');
+    await tick();
+    assert.equal(h.requests.length, 0, 'no reload before a hot run');
+
+    const hotRun = h.handlers.get('wurst.hotstartmap')(['example.w3x']);
+    await tick();
+    h.save('wurst');
+    await tick();
+    assert.equal(h.requests.length, 1, 'a save during the start waits for it');
+    h.requests[0].resolve(null);
+    await hotRun;
+    await tick();
+    assert.equal(status.visible, true, 'a started hot run shows its status');
+    assert.equal(h.requests.length, 2, 'the save made during the start reloads once the start is done');
+    assert.equal(h.requests[1].params.command, 'wurst.hotreload');
+
+    h.save('wurst');
+    h.save('wurst');
+    await tick();
+    assert.equal(h.requests.length, 2, 'saves during a reload do not start another one at once');
+    h.requests[1].resolve('ok');
+    await tick();
+    await tick();
+    assert.equal(h.requests.length, 3, 'saves during a reload collapse into one more reload');
+    h.requests[2].resolve('ok');
+    await tick();
+    await tick();
+    assert.equal(h.requests.length, 3);
+    assert.ok(h.statusMessages.includes('$(flame) Wurst: reloaded the running map'));
+
+    h.save('plaintext');
+    h.config = { hotReloadOnSave: false };
+    h.save('wurst');
+    await tick();
+    assert.equal(h.requests.length, 3, 'other files, or the setting off, reload nothing');
+    h.config = undefined;
+
+    h.handlers.get('wurst.stopHotRun')();
+    assert.equal(status.visible, false);
+    h.save('wurst');
+    await tick();
+    assert.equal(h.requests.length, 3, 'a stopped hot run reloads nothing');
+
+    const failedHotRun = h.handlers.get('wurst.hotstartmap')(['example.w3x']);
+    await tick();
+    h.requests.at(-1).reject(new Error('Could not compile'));
+    await failedHotRun;
+    await tick();
+    assert.equal(status.visible, false, 'a hot run which failed to start is not active');
+
+    const hotAgain = h.handlers.get('wurst.hotstartmap')(['example.w3x']);
+    await tick();
+    h.requests.at(-1).resolve(null);
+    await hotAgain;
+    const plainRun = h.handlers.get('wurst.startmap')(['example.w3x']);
+    await tick();
+    h.requests.at(-1).resolve(null);
+    await plainRun;
+    assert.equal(status.visible, false, 'an ordinary run ends the hot run');
+}
+
 async function testMapCommandCancellationAndOverlap() {
     const h = commandHarness();
     const running = h.handlers.get('wurst.runmap')('example.w3x');
@@ -1054,6 +1134,7 @@ async function main() {
     await testReleaseNotesCommandUsesKnownVersion();
     await testMapCommandCancellationAndOverlap();
     await testMapCommandProgress();
+    await testHotRunReloadsOnSave();
     await testWorldEditorObjectExport();
     await testBuildCompletionActions();
     testInstallationCleanupPreservesPin();

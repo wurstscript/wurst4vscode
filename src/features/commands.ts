@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
 import { randomUUID } from 'crypto';
-import { LanguageClient, ExecuteCommandParams, ExecuteCommandRequest, WorkDoneProgress, WorkDoneProgressCancelNotification } from 'vscode-languageclient/node';
+import { LanguageClient, ExecuteCommandParams, ExecuteCommandRequest, State, WorkDoneProgress, WorkDoneProgressCancelNotification } from 'vscode-languageclient/node';
 import { workspace, window } from 'vscode';
 import { WURST_HOME } from '../paths';
 import { appendDiagnostic, buildDiagnosticsText, formatDiagnosticError, showDiagnosticOutput, showErrorWithLogs } from './diagnostics';
@@ -232,8 +232,17 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
     hotRunStatus.text = '$(flame) Wurst hot run';
     hotRunStatus.tooltip = 'Saving a Wurst file reloads the running map. Click to stop.';
     hotRunStatus.command = 'wurst.stopHotRun';
-    const setHotRun = (active: boolean) => {
+    let hotRunClientState: vscode.Disposable | undefined;
+    const setHotRun = (active: boolean, client?: LanguageClient) => {
         hotRunActive = active;
+        hotRunClientState?.dispose();
+        hotRunClientState = undefined;
+        if (active && client) {
+            // A server which stops or restarts ends the hot run: it holds the session, and saves would only fail.
+            hotRunClientState = client.onDidChangeState(({ newState }) => {
+                if (newState !== State.Running) setHotRun(false);
+            });
+        }
         if (active) hotRunStatus.show();
         else hotRunStatus.hide();
     };
@@ -439,7 +448,7 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
         };
         _lastMapConfig = mappath;
         return withClient((client) => executeMapCommand(client, request, 'Running Wurst map',
-            () => setHotRun(cmd === 'wurst.hotstartmap')));
+            () => setHotRun(cmd === 'wurst.hotstartmap', client)));
     };
 
     const reloadMap = async () => {
@@ -528,6 +537,7 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
             }
         }),
         hotRunStatus,
+        { dispose: () => hotRunClientState?.dispose() },
         vscode.commands.registerCommand('wurst.runmap', (args: any) => withMapCommand(() => runMapSmart(args))),
         vscode.commands.registerCommand('wurst.startlast', () => withMapCommand(() => startLast())),
         vscode.commands.registerCommand('wurst.buildmap', (args: any[]) => withMapCommand(() => buildMap(args))),

@@ -771,7 +771,12 @@ function commandHarness(getClient) {
     const statusBarItems = [];
     const statusMessages = [];
     const saveListeners = [];
+    const stateListeners = new Set();
     const client = {
+        onDidChangeState(handler) {
+            stateListeners.add(handler);
+            return new TestDisposable(() => stateListeners.delete(handler));
+        },
         initializeResult: { capabilities: { experimental: { wurstMapCancellation: true } } },
         clientOptions: { workspaceFolder: { uri: { fsPath: require('path').resolve('project') } } },
         outputChannel: { lines: [], shown: 0, appendLine(line) { this.lines.push(line); }, show() { this.shown++; } },
@@ -846,7 +851,7 @@ function commandHarness(getClient) {
     };
     const load = createTsLoader({ mocks: {
         vscode,
-        'vscode-languageclient/node': { ExecuteCommandRequest: { type: 'executeCommand' }, WorkDoneProgress: { type: 'workDone' }, WorkDoneProgressCancelNotification: { type: 'cancelProgress' } },
+        'vscode-languageclient/node': { ExecuteCommandRequest: { type: 'executeCommand' }, State: { Stopped: 1, Running: 2, Starting: 3 }, WorkDoneProgress: { type: 'workDone' }, WorkDoneProgressCancelNotification: { type: 'cancelProgress' } },
         'src/paths.ts': { COMPILER_RELEASES_URL: 'https://github.com/wurstscript/WurstScript/releases' },
         'src/features/diagnostics.ts': { appendDiagnostic: (...args) => diagnostics.push(args), formatDiagnosticError: String },
         'src/languageServer.ts': { getKnownCompilerVersion: () => knownVersion },
@@ -861,6 +866,7 @@ function commandHarness(getClient) {
     load('src/features/commands.ts').registerWurstDiagnosticsCommands({ subscriptions: [] });
     const harness = { handlers, notifications, failures, completions, foldersOpened, actions, diagnostics, listeners, requests, cancellations, client, workspace: vscode.workspace,
         statusBarItems, statusMessages, save: (languageId) => { for (const listener of saveListeners) listener({ languageId }); },
+        changeState: (newState) => { for (const listener of [...stateListeners]) listener({ newState }); }, stateListeners,
         setKnownVersion: (version) => { knownVersion = version; }, get versionDetections() { return versionDetections; } };
     return harness;
 }
@@ -1072,6 +1078,21 @@ async function testHotRunReloadsOnSave() {
     h.requests.at(-1).resolve(null);
     await plainRun;
     assert.equal(status.visible, false, 'an ordinary run ends the hot run');
+
+    for (const newState of [1, 3]) {
+        const restarted = h.handlers.get('wurst.hotstartmap')(['example.w3x']);
+        await tick();
+        h.requests.at(-1).resolve(null);
+        await restarted;
+        assert.equal(status.visible, true);
+        const requestsBefore = h.requests.length;
+        h.changeState(newState);
+        assert.equal(status.visible, false, 'a server which stops or restarts ends the hot run');
+        assert.equal(h.stateListeners.size, 0, 'the ended hot run stops following the server');
+        h.save('wurst');
+        await tick();
+        assert.equal(h.requests.length, requestsBefore, 'saves after the server stopped reload nothing');
+    }
 }
 
 async function testMapCommandCancellationAndOverlap() {

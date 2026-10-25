@@ -769,6 +769,7 @@ async function testLanguageClientHandleLifecycle() {
             return { dispose: () => this.notifications.delete(method) };
         }
     }
+    let workspaceTrusted = true;
     const mod = loadTsModuleWithMocks('src/languageServer.ts', {
         vscode: {
             MarkdownString,
@@ -777,6 +778,7 @@ async function testLanguageClientHandleLifecycle() {
             window: { createStatusBarItem: () => statusItem },
             StatusBarAlignment: { Right: 2 },
             workspace: {
+                get isTrusted() { return workspaceTrusted; },
                 textDocuments: [],
                 getConfiguration: () => ({ get: (_key, fallback) => fallback }),
                 createFileSystemWatcher: () => ({ onDidCreate() {}, onDidChange() {}, onDidDelete() {}, dispose() {} }),
@@ -811,6 +813,9 @@ async function testLanguageClientHandleLifecycle() {
 
     assert.equal(await settled(mod.getLanguageClient()), 'rejected', 'with no start underway (e.g. an empty window) a command must fail fast, not wait forever');
     await assert.rejects(mod.getLanguageClient(), /Open a folder/);
+    workspaceTrusted = false;
+    await assert.rejects(mod.getLanguageClient(), /Trust this workspace/);
+    workspaceTrusted = true;
     assert.equal(await mod.stopLanguageServerIfRunning(), false, 'stopping with no client is a no-op');
 
     mod.showWurstStatusItem(context);

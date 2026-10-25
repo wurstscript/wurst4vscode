@@ -260,6 +260,9 @@ let unavailableReason: Error = new Error(
 
 /** Resolves with the running language client, or rejects with why there is none. */
 export function getLanguageClient(): Promise<LanguageClient> {
+    if (workspace.isTrusted === false) {
+        return Promise.reject(new Error('Trust this workspace to enable the WurstScript language server. Asset previews remain available in Restricted Mode.'));
+    }
     if (startingClient) return startingClient;
     const client = getRunningLanguageClient();
     if (client) return Promise.resolve(client);

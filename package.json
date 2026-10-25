@@ -41,7 +41,62 @@
         "onCommand:wurst.showExtensionLogs",
         "onCommand:wurst.insertPackageHeader",
         "onCommand:wurst.prepareAgentsGuideUpdate",
-        "onCommand:wurst.exportw3o"
+        "onCommand:wurst.exportw3o",
+        "onLanguage:wc3-image",
+        "onLanguage:wc3-model",
+        "onLanguage:wc3-audio",
+        "onLanguage:wc3-map",
+        "onLanguage:wc3-archive",
+        "onLanguage:wc3-objdata",
+        "onLanguage:wc3-map-info",
+        "onLanguage:wc3-cameras",
+        "onLanguage:wc3-regions",
+        "onLanguage:wc3-sounds",
+        "onLanguage:wc3-lights",
+        "onLanguage:wc3-units",
+        "onLanguage:wc3-items",
+        "onLanguage:wc3-abilities",
+        "onLanguage:wc3-destructibles",
+        "onLanguage:wc3-doodads",
+        "onLanguage:wc3-buffs",
+        "onLanguage:wc3-upgrades",
+        "onLanguage:wc3-trigger",
+        "onLanguage:wc3-wts",
+        "onLanguage:wc3-slk",
+        "onLanguage:wc3-terrain",
+        "onLanguage:wc3-fdf",
+        "onLanguage:wc3-toc",
+        "onCustomEditor:wurst.blpPreview",
+        "onCustomEditor:wurst.dooPreview",
+        "onCustomEditor:wurst.mapPlacementEditor",
+        "onCustomEditor:wurst.wpmPreview",
+        "onCustomEditor:wurst.wtgPreview",
+        "onCustomEditor:wurst.wctPreview",
+        "onCustomEditor:wurst.mapDataArchivePreview",
+        "onCustomEditor:wurst.w3cEditor",
+        "onCustomEditor:wurst.w3rEditor",
+        "onCustomEditor:wurst.mmpEditor",
+        "onCustomEditor:wurst.mapDataPreview",
+        "onCustomEditor:wurst.w3iEditor",
+        "onCustomEditor:wurst.mpqViewer",
+        "onCommand:wurst.startmap",
+        "onCommand:wurst.hotstartmap",
+        "onCommand:wurst.stopHotRun",
+        "onCommand:wurst.hotreload",
+        "onCommand:wurst.startlast",
+        "onCommand:wurst.runmap",
+        "onCommand:wurst.tests",
+        "onCommand:wurst.tests_file",
+        "onCommand:wurst.tests_func",
+        "onCommand:wurst.fix_all_quickfixes",
+        "onCommand:wurst.perform_code_action",
+        "onCommand:wurst.buildmap",
+        "onCommand:wurst.chooseGameExecutable",
+        "onCommand:wurst.installOrUpdate",
+        "onCommand:wurst.stopAllProcesses",
+        "onCommand:wurst.testCascExtraction",
+        "onCommand:wurst.showWc3DataLog",
+        "onCommand:wurst.newProject"
     ],
     "main": "./dist/extension",
     "browser": "./dist/web/extension.js",
@@ -55,7 +110,9 @@
                 "extensions": [
                     ".wurst",
                     ".jurst",
-                    ".j"
+                    ".j",
+                    ".jass",
+                    ".JASS"
                 ],
                 "configuration": "./wurst.configuration.json"
             },
@@ -120,6 +177,17 @@
                     ".W3X",
                     ".w3m",
                     ".W3M"
+                ],
+                "icon": {
+                    "light": "./images/icons/w3map.svg",
+                    "dark": "./images/icons/w3map.svg"
+                }
+            },
+            {
+                "id": "wc3-archive",
+                "extensions": [
+                    ".mpq",
+                    ".MPQ"
                 ],
                 "icon": {
                     "light": "./images/icons/w3map.svg",
@@ -379,7 +447,7 @@
         "customEditors": [
             {
                 "viewType": "wurst.blpPreview",
-                "displayName": "WC3 Image Preview",
+                "displayName": "WC3 Image & Model Preview",
                 "selector": [
                     {
                         "filenamePattern": "*.blp"
@@ -694,6 +762,12 @@
                     },
                     {
                         "filenamePattern": "*.W3M"
+                    },
+                    {
+                        "filenamePattern": "*.mpq"
+                    },
+                    {
+                        "filenamePattern": "*.MPQ"
                     }
                 ],
                 "priority": "default"
@@ -1062,5 +1136,19 @@
     "extensionPack": [
         "redhat.vscode-yaml",
         "vscode-icons-team.vscode-icons"
-    ]
+    ],
+    "capabilities": {
+        "untrustedWorkspaces": {
+            "supported": "limited",
+            "description": "Warcraft III asset previews are available in Restricted Mode. The WurstScript language server and map build/run commands require a trusted workspace.",
+            "restrictedConfigurations": [
+                "wurst.javaExecutable",
+                "wurst.javaOpts",
+                "wurst.debugMode",
+                "wurst.gameExePath",
+                "wurst.wc3RunArgs",
+                "wurst.jhcrExe"
+            ]
+        }
+    }
 }

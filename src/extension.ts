@@ -176,6 +176,15 @@ function registerBasicCommands(context: ExtensionContext) {
 }
 
 async function startLanguageClientWhenWorkspaceIsOpen(context: ExtensionContext): Promise<void> {
+    if (!workspace.isTrusted) {
+        const listener = workspace.onDidGrantWorkspaceTrust(() => {
+            listener.dispose();
+            void startLanguageClientWhenWorkspaceIsOpen(context);
+        });
+        context.subscriptions.push(listener);
+        return;
+    }
+
     if (!workspace.workspaceFolders?.length) {
         const listener = workspace.onDidChangeWorkspaceFolders(() => {
             if (workspace.workspaceFolders?.length) {

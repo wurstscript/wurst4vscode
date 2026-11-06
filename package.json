@@ -1131,7 +1131,8 @@
         "casc-ts": "file:../casc-ts",
         "gl-matrix": "^3.4.3",
         "node-stream-zip": "^1.15.0",
-        "vscode-languageclient": "^10.1.2"
+        "vscode-languageclient": "^10.1.2",
+        "yaml": "^2.9.0"
     },
     "extensionPack": [
         "redhat.vscode-yaml",

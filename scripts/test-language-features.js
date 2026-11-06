@@ -770,6 +770,7 @@ function commandHarness(getClient) {
     const cancellations = [];
     const statusBarItems = [];
     const statusMessages = [];
+    const modeChoices = [];
     const saveListeners = [];
     const stateListeners = new Set();
     const client = {
@@ -810,6 +811,12 @@ function commandHarness(getClient) {
         workspace: {
             workspaceFolders: [{ uri: { fsPath: require('path').resolve('project') } }],
             getConfiguration: () => ({ get: (key) => harness.config?.[key] }),
+            getWorkspaceFolder: () => vscode.workspace.workspaceFolders[0],
+            fs: { readFile: async (uri) => {
+                const name = require('path').basename(uri.fsPath);
+                const files = { 'wurst.build': harness.projectConfig, 'wurst_run.args': harness.runArgs, 'hotreload-receipt.txt': harness.receipt };
+                return Buffer.from(files[name] ?? '');
+            } },
             onDidSaveTextDocument: (listener) => { saveListeners.push(listener); return new TestDisposable(); },
         },
         window: {
@@ -819,6 +826,7 @@ function commandHarness(getClient) {
                 return item;
             },
             setStatusBarMessage: (message) => { statusMessages.push(message); return new TestDisposable(); },
+            showQuickPick: async (items) => { modeChoices.push(items); return items.find(item => item.label === harness.runMode); },
             withProgress(options, task) {
                 const notification = { options, reports: [], closed: false };
                 const listeners = new Set();
@@ -865,7 +873,7 @@ function commandHarness(getClient) {
     load('src/features/commands.ts').registerCommands(getClient || (async () => client));
     load('src/features/commands.ts').registerWurstDiagnosticsCommands({ subscriptions: [] });
     const harness = { handlers, notifications, failures, completions, foldersOpened, actions, diagnostics, listeners, requests, cancellations, client, workspace: vscode.workspace,
-        statusBarItems, statusMessages, save: (languageId) => { for (const listener of saveListeners) listener({ languageId }); },
+        statusBarItems, statusMessages, modeChoices, save: (languageId) => { for (const listener of saveListeners) listener({ languageId }); },
         changeState: (newState) => { for (const listener of [...stateListeners]) listener({ newState }); }, stateListeners,
         setKnownVersion: (version) => { knownVersion = version; }, get versionDetections() { return versionDetections; } };
     return harness;
@@ -1016,6 +1024,48 @@ async function testBuildCompletionActions() {
 }
 
 /** After a hot run starts, each save of a Wurst file reloads the map; saves during a reload collapse into one more. */
+async function testReloadStatusRequiresMatchingGameReceipt() {
+    const h = commandHarness();
+    const token = '0123456789abcdef0123456789abcdef';
+    const receiptFile = require('path').resolve('project', 'hotreload-receipt.txt');
+    h.receipt = 'call Preload( "wurst-hot-reload-receipt:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:applied" )';
+    const reload = h.handlers.get('wurst.hotreload')();
+    await tick();
+    h.requests[0].resolve({ token, receiptFile, version: 1 });
+    await reload;
+    assert.deepEqual(h.statusMessages, ['$(flame) Wurst: reload payload sent']);
+    h.receipt = 'call Preload( "wurst-hot-reload-receipt:' + token + ':rejected" )';
+    await new Promise(resolve => setTimeout(resolve, 350));
+    assert.equal(h.statusMessages.at(-1), '$(warning) Wurst: game rejected reload #1');
+}
+
+async function testRunMenuUsesProjectBackend() {
+    for (const [config, choice, command, runArgs, hasPicker = true] of [
+        ['scriptMode: "lua" # development', 'Hot Run', 'wurst.hotstartmap'],
+        ['scriptMode: LUA', 'Run', 'wurst.startmap'],
+        ['scriptMode: LUA', undefined, undefined],
+        ['scriptMode: JASS', undefined, 'wurst.startmap', '-lua', false],
+        ['projectName: LegacyLua', 'Hot Run', 'wurst.hotstartmap', '# comment\n -lua\n'],
+        ['projectName: BuildOnlyLua', undefined, 'wurst.startmap', '+lua', false],
+    ]) {
+        const h = commandHarness();
+        h.projectConfig = config;
+        h.runArgs = runArgs;
+        h.runMode = choice;
+        const running = h.handlers.get('wurst.runmap')(['example.w3x']);
+        await tick();
+        assert.equal(h.modeChoices.length, Number(hasPicker));
+        if (command) {
+            assert.equal(h.requests[0]?.params.command, command);
+            assert.equal(h.requests[0]?.params.arguments[0].mappath, 'example.w3x');
+            h.requests[0].resolve(null);
+        } else {
+            assert.equal(h.requests.length, 0);
+        }
+        await running;
+    }
+}
+
 async function testHotRunReloadsOnSave() {
     const h = commandHarness();
     const status = h.statusBarItems[0];
@@ -1047,7 +1097,7 @@ async function testHotRunReloadsOnSave() {
     await tick();
     await tick();
     assert.equal(h.requests.length, 3);
-    assert.ok(h.statusMessages.includes('$(flame) Wurst: reloaded the running map'));
+    assert.ok(h.statusMessages.includes('$(flame) Wurst: reload payload sent'));
 
     h.save('plaintext');
     h.config = { hotReloadOnSave: false };
@@ -1155,6 +1205,8 @@ async function main() {
     await testReleaseNotesCommandUsesKnownVersion();
     await testMapCommandCancellationAndOverlap();
     await testMapCommandProgress();
+    await testReloadStatusRequiresMatchingGameReceipt();
+    await testRunMenuUsesProjectBackend();
     await testHotRunReloadsOnSave();
     await testWorldEditorObjectExport();
     await testBuildCompletionActions();

@@ -3,7 +3,9 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
+import { parse as parseYaml } from 'yaml';
 import { randomUUID } from 'crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { LanguageClient, ExecuteCommandParams, ExecuteCommandRequest, State, WorkDoneProgress, WorkDoneProgressCancelNotification } from 'vscode-languageclient/node';
 import { workspace, window } from 'vscode';
 import { WURST_HOME } from '../paths';
@@ -139,7 +141,7 @@ function showClientOutput(client: LanguageClient): void {
 }
 
 async function executeMapCommand(client: LanguageClient, request: ExecuteCommandParams, title: string,
-    onSuccess?: () => void): Promise<unknown> {
+    onSuccess?: (result: unknown) => void): Promise<unknown> {
     let canceled = false;
     try {
         const cancellable = client.initializeResult?.capabilities.experimental?.wurstMapCancellation === true;
@@ -171,7 +173,7 @@ async function executeMapCommand(client: LanguageClient, request: ExecuteCommand
                 const result = await client.sendRequest(ExecuteCommandRequest.type, { ...request, workDoneToken: token });
                 if (cancellation.isCancellationRequested) return undefined;
                 // A run answers null when it succeeds, so success is reported here rather than read off the result.
-                onSuccess?.();
+                onSuccess?.(result);
                 return result;
             } finally {
                 listener.dispose();
@@ -214,6 +216,52 @@ function runTests(client: LanguageClient, request: ExecuteCommandParams): Thenab
     );
 }
 
+async function readOptionalProjectFile(root: vscode.Uri, name: string): Promise<string> {
+    try {
+        const file = await workspace.fs.readFile(vscode.Uri.joinPath(root, name));
+        return Buffer.from(file).toString('utf8');
+    } catch (error) {
+        if (error instanceof vscode.FileSystemError && error.code === 'FileNotFound') return '';
+        throw error;
+    }
+}
+
+interface ReloadReceipt {
+    token: string;
+    receiptFile: string;
+    version: number;
+}
+
+async function reportGameReceipt(receipt: ReloadReceipt, signal: AbortSignal): Promise<void> {
+    const uri = vscode.Uri.file(receipt.receiptFile);
+    const marker = new RegExp('"wurst-hot-reload-receipt:' + receipt.token + ':(applied|applied-with-warnings|rejected)"');
+    const messages: Record<string, string> = {
+        applied: '$(check) Wurst: game applied reload',
+        rejected: '$(warning) Wurst: game rejected reload',
+        'applied-with-warnings': '$(warning) Wurst: game applied reload with warnings',
+    };
+    const deadline = Date.now() + 10000;
+    while (!signal.aborted && Date.now() < deadline) {
+        let outcome: string | undefined;
+        try {
+            const file = await workspace.fs.readFile(uri);
+            outcome = marker.exec(Buffer.from(file).toString('utf8'))?.[1];
+        } catch (error) {
+            if (!(error instanceof vscode.FileSystemError && error.code === 'FileNotFound')) {
+                appendDiagnostic('VS Code extension', `Could not read the hot reload receipt: ${formatDiagnosticError(error)}`);
+                break;
+            }
+        }
+        if (signal.aborted) return;
+        if (outcome) {
+            window.setStatusBarMessage(`${messages[outcome]} #${receipt.version}`, 6000);
+            return;
+        }
+        await delay(250);
+    }
+    if (!signal.aborted) window.setStatusBarMessage(`$(warning) Wurst: no game response for reload #${receipt.version}`, 6000);
+}
+
 /**
  * Registers the commands that forward to the language server. `getClient` resolves once the server
  * is running (and rejects if it could not start), so these can be registered at activation and
@@ -233,7 +281,9 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
     hotRunStatus.tooltip = 'Saving a Wurst file reloads the running map. Click to stop.';
     hotRunStatus.command = 'wurst.stopHotRun';
     let hotRunClientState: vscode.Disposable | undefined;
+    let receiptObserver: AbortController | undefined;
     const setHotRun = (active: boolean, client?: LanguageClient) => {
+        receiptObserver?.abort();
         hotRunActive = active;
         hotRunClientState?.dispose();
         hotRunClientState = undefined;
@@ -451,13 +501,24 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
             () => setHotRun(cmd === 'wurst.hotstartmap', client)));
     };
 
+    const showReloadDelivery = (result: unknown) => {
+        receiptObserver?.abort();
+        window.setStatusBarMessage('$(flame) Wurst: reload payload sent', 4000);
+        const receipt = result as Partial<ReloadReceipt> | null;
+        if (!receipt || typeof receipt.token !== 'string' || !/^[0-9a-f]{32}$/.test(receipt.token)
+            || typeof receipt.receiptFile !== 'string' || !Number.isSafeInteger(receipt.version)) return;
+        const observer = new AbortController();
+        receiptObserver = observer;
+        void reportGameReceipt(receipt as ReloadReceipt, observer.signal);
+    };
+
     const reloadMap = async () => {
         const request: ExecuteCommandParams = {
             command: 'wurst.hotreload',
             arguments: [{}],
         };
         return withClient((client) => executeMapCommand(client, request, 'Reloading Wurst map',
-            () => vscode.window.setStatusBarMessage('$(flame) Wurst: reloaded the running map', 4000)));
+            showReloadDelivery));
     };
 
     const reloadAfterSave = async (): Promise<void> => {
@@ -468,28 +529,43 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
         if (hotRunActive) await withMapCommand(() => reloadMap());
     };
 
-    const startLast = () => {
-        if (_lastMapConfig) {
-            return startMap('wurst.startmap', [_lastMapConfig]);
-        } else {
-            return startMap('wurst.startmap', []);
+    const startLast = () => startMap('wurst.startmap', _lastMapConfig ? [_lastMapConfig] : []);
+
+    const isLuaProject = async (): Promise<boolean> => {
+        // Map commands use the same first workspace folder as the language server.
+        const root = workspace.workspaceFolders?.[0]?.uri;
+        if (!root) return false;
+        try {
+            const config = await readOptionalProjectFile(root, 'wurst.build');
+            const mode: unknown = parseYaml(config)?.scriptMode;
+            if (typeof mode === 'string') {
+                const backend = mode.trim().toUpperCase();
+                if (backend === 'LUA' || backend === 'JASS') return backend === 'LUA';
+            }
+            // Older projects select Lua through a shared run option. Build-only +lua does not affect Run.
+            const args = await readOptionalProjectFile(root, 'wurst_run.args');
+            return args.split(/\r?\n/).some(arg => arg.trim() === '-lua');
+        } catch (error) {
+            appendDiagnostic('VS Code extension', `Could not read the Wurst project script mode: ${formatDiagnosticError(error)}`);
+            return false;
         }
     };
 
-    const runMapSmart = (args: any) => {
+    const runMapSmart = async (args: any) => {
         const fromInvocation = getMapPathFromInvocation(args);
-        if (isMapFilePath(fromInvocation)) {
-            return startMap('wurst.startmap', [fromInvocation]);
-        }
-
         const activePath = window.activeTextEditor?.document?.uri?.fsPath;
-        if (isMapFilePath(activePath)) {
-            return startMap('wurst.startmap', [activePath]);
+        const mapPath = [fromInvocation, activePath, _lastMapConfig].find(isMapFilePath);
+        let command: 'wurst.startmap' | 'wurst.hotstartmap' = 'wurst.startmap';
+        if (await isLuaProject()) {
+            const choice = await window.showQuickPick([
+                { label: 'Run', description: 'Start the map normally' },
+                { label: 'Hot Run', description: 'Reload compatible Wurst edits on save in single-player' },
+            ], { title: 'Wurst: Run map' });
+            if (!choice) return;
+            if (choice.label === 'Hot Run') command = 'wurst.hotstartmap';
         }
-
-        return startLast();
+        return startMap(command, mapPath ? [mapPath] : []);
     };
-
     const tests = (mode: 'all' | 'file' | 'func', args: any) => {
         if (!args) {
             const data: any = {};
@@ -537,7 +613,7 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
             }
         }),
         hotRunStatus,
-        { dispose: () => hotRunClientState?.dispose() },
+        { dispose: () => { hotRunClientState?.dispose(); receiptObserver?.abort(); } },
         vscode.commands.registerCommand('wurst.runmap', (args: any) => withMapCommand(() => runMapSmart(args))),
         vscode.commands.registerCommand('wurst.startlast', () => withMapCommand(() => startLast())),
         vscode.commands.registerCommand('wurst.buildmap', (args: any[]) => withMapCommand(() => buildMap(args))),

@@ -602,6 +602,20 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
         return withClient((client) => client.sendRequest(ExecuteCommandRequest.type, request));
     };
 
+    const restoreBattleNetLaunch = () => withClient(async (client) => {
+        if (client.initializeResult?.capabilities.experimental?.wurstBattleNetLaunch !== true) {
+            void window.showWarningMessage('Update the Wurst compiler to restore Battle.net launch settings from VS Code.');
+            return;
+        }
+        const restored = await client.sendRequest(ExecuteCommandRequest.type, {
+            command: 'wurst.restoreBattleNetLaunch',
+            arguments: [],
+        });
+        void window.showInformationMessage(restored === true
+            ? 'Warcraft III launch settings restored. You can use Play in Battle.net again.'
+            : 'There are no Wurst-managed Battle.net launch settings to restore.');
+    });
+
     return vscode.Disposable.from(
         vscode.commands.registerCommand('wurst.startmap', (args: any[]) => withMapCommand(() => startMap('wurst.startmap', args))),
         vscode.commands.registerCommand('wurst.hotstartmap', (args: any[]) => withMapCommand(() => startMap('wurst.hotstartmap', args))),
@@ -616,6 +630,7 @@ export function registerCommands(getClient: () => Promise<LanguageClient>): vsco
         { dispose: () => { hotRunClientState?.dispose(); receiptObserver?.abort(); } },
         vscode.commands.registerCommand('wurst.runmap', (args: any) => withMapCommand(() => runMapSmart(args))),
         vscode.commands.registerCommand('wurst.startlast', () => withMapCommand(() => startLast())),
+        vscode.commands.registerCommand('wurst.restoreBattleNetLaunch', () => withMapCommand(restoreBattleNetLaunch)),
         vscode.commands.registerCommand('wurst.buildmap', (args: any[]) => withMapCommand(() => buildMap(args))),
         vscode.commands.registerCommand('wurst.exportw3o', (args: any[]) => withMapCommand(() => buildMap(args, true))),
         vscode.commands.registerCommand('wurst.tests', (args: any[]) => tests('all', args)),

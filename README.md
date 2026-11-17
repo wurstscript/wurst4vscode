@@ -81,6 +81,10 @@ Search for **Wurst** in the Command Palette to:
 - Run all tests, the current file's tests, or the test under the cursor
 - Hot run a map and reload its code on every save: Lua maps replace function bodies in the running game, Jass maps use Jass Hot Code Reload
 - Configure the Warcraft III executable and launch arguments
+
+On Windows, Run Map uses the signed-in Battle.net app for its Warcraft III 3.x installation. If the app is closed, open it and choose **Retry**, or choose **Use Legacy Launch** for this run. Legacy launch may prompt you to sign in in-game. Set `wurst.wc3LaunchMode` to `legacy` to always launch directly.
+
+Setup restarts Battle.net once to apply the test map arguments. Run **Wurst: Restore Battle.net Launch Settings** from the Command Palette to return the Play button to regular launches.
 - Inspect logs or stop stale Wurst language-server processes
 
 ## Configuration

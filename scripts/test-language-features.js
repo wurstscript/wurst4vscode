@@ -847,6 +847,7 @@ function commandHarness(getClient) {
                 completions.push({ message, buttons });
                 return harness.completionDialog ? harness.completionDialog.promise : harness.completionChoice;
             },
+            showWarningMessage: async () => undefined,
             showErrorMessage: async (message, ...buttons) => {
                 failures.push({ message, buttons });
                 return harness.errorDialog ? harness.errorDialog.promise : harness.choice;
@@ -889,6 +890,21 @@ async function testReleaseNotesCommandUsesKnownVersion() {
     await openNotes();
     assert.equal(h.foldersOpened.at(-1), 'https://github.com/wurstscript/WurstScript/releases/tag/v2.0.0');
     assert.equal(h.versionDetections, 0, 'known versions are reused without another detector');
+}
+
+async function testRestoreBattleNetLaunch() {
+    const h = commandHarness();
+    const restore = h.handlers.get('wurst.restoreBattleNetLaunch');
+    await restore();
+    assert.equal(h.requests.length, 0, 'older compilers do not support restoring the settings');
+
+    h.client.initializeResult.capabilities.experimental.wurstBattleNetLaunch = true;
+    const restoring = restore();
+    await tick();
+    assert.deepEqual(h.requests[0].params, { command: 'wurst.restoreBattleNetLaunch', arguments: [] });
+    h.requests[0].resolve(true);
+    await restoring;
+    assert.match(h.completions.at(-1).message, /launch settings restored/);
 }
 
 async function testMapCommandProgress() {
@@ -1203,6 +1219,7 @@ async function testMapCommandCancellationAndOverlap() {
 
 async function main() {
     await testReleaseNotesCommandUsesKnownVersion();
+    await testRestoreBattleNetLaunch();
     await testMapCommandCancellationAndOverlap();
     await testMapCommandProgress();
     await testReloadStatusRequiresMatchingGameReceipt();

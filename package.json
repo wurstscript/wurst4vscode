@@ -84,6 +84,7 @@
         "onCommand:wurst.stopHotRun",
         "onCommand:wurst.hotreload",
         "onCommand:wurst.startlast",
+        "onCommand:wurst.restoreBattleNetLaunch",
         "onCommand:wurst.runmap",
         "onCommand:wurst.tests",
         "onCommand:wurst.tests_file",
@@ -812,6 +813,11 @@
                 "category": "wurst"
             },
             {
+                "command": "wurst.restoreBattleNetLaunch",
+                "title": "Restore Battle.net Launch Settings",
+                "category": "Wurst"
+            },
+            {
                 "command": "wurst.runmap",
                 "title": "Run wurstscript Map",
                 "category": "wurst",
@@ -1032,6 +1038,16 @@
                     "type": "string",
                     "default": "",
                     "description": "Custom run arguments passed to the warcraft executable (such as -windowmode and -graphicsapi) which will replace the default wurst arguments."
+                },
+                "wurst.wc3LaunchMode": {
+                    "type": "string",
+                    "enum": ["auto", "legacy"],
+                    "default": "auto",
+                    "enumDescriptions": [
+                        "Use the signed-in Battle.net launcher for its Warcraft III 3.x installation on Windows. Ask what to do if Battle.net is closed.",
+                        "Start Warcraft III directly. The game may prompt you to sign in."
+                    ],
+                    "description": "How Wurst starts Warcraft III when running a map."
                 },
                 "wurst.mapDocumentPath": {
                     "type": "string",
